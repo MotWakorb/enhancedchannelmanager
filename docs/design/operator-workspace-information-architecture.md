@@ -290,6 +290,62 @@ At 200% zoom the 1280 layout may reflow, but every destination and required acti
 - Channel Manager remains two-pane. Do not solve pressure by changing it to a single pane, hiding assigned streams, shrinking text below the established ECM scale, or allowing content behind the sidebar.
 - Vertical space goes first to working data. Footer/status chrome may compact, but required API/error feedback remains reachable.
 
+### Implemented layout budget
+
+The shared shell enforces the following measurable budget for every primary
+route:
+
+| Constraint | 1280×720 | 1920×1080 |
+|---|---:|---:|
+| Route header maximum height | 190px | 210px |
+| Visible working-surface height above the fold | at least 160px | at least 260px |
+| Navigation width | 244px expanded / 68px collapsed | 244px expanded / 68px collapsed |
+| Document and main-region horizontal overflow | none | none |
+
+At the compact height, the purpose statement is one ellipsized line with its
+complete text retained in the DOM and native tooltip. The title scale is not
+reduced. Primary actions, source-backed status, controls, and contextual links
+retain DOM/focus order and wrap when necessary. Dense-screen secondary actions
+use their labelled overflow menus; no required task action is removed.
+
+The footer and route-header padding compact at 1280×720, and Dashboard outer
+padding reduces to return height to task content. At 1920×1080 the spacious
+padding and untruncated purpose statement remain. Channel Manager is an
+intentional exception to generic content flow: its two `minmax(0)` panes and
+independent pane scrolling remain, with fixed artwork, number, status/warning,
+and action allocations. No responsive font shrinking or single-pane fallback
+is permitted.
+
+At 200% zoom, wrapping is preferred to hidden controls. The shell may scroll
+vertically, but must not require two-dimensional document scrolling. Sticky
+regions reserve focus clearance, and browser tests focus each route's exact
+primary control to verify it remains within the visible main region.
+
+### Rendered state coverage
+
+The exact-build `operator-shell.spec.ts` suite enumerates the primary-route
+inventory rather than sampling it:
+
+| Route | Populated task surface | Relevant alternate rendered state |
+|---|---|---|
+| Dashboard | six-card system summary | independent card empty/error/permission |
+| Channel Manager | channels, assigned streams, source inventory | empty/loading/error panes |
+| Guide | populated guide grid | empty/unavailable API data |
+| M3U Manager | configured account controls | empty accounts and unavailable source |
+| EPG Manager | configured source controls | empty sources and unavailable source |
+| Logo Manager | populated logo inventory | loading/empty/error/permission |
+| Channel Pipeline | rule controls and status summary | empty rules and unavailable rules |
+| M3U Changes | populated retained history | loading/empty/error/permission/stale |
+| Stats | populated summary panels | independently unavailable metrics |
+| Journal | populated retained entries | loading/empty/error/permission/stale |
+| Settings | populated General configuration | reload/save error with retained edits |
+
+Every row runs through the shared 1280×720 and 1920×1080 hierarchy/geometry
+loop. State-specific journeys then verify the applicable recovery control and
+that protected or stale content is handled correctly. Channel Manager and the
+dense history/inventory routes receive additional state-specific geometry
+assertions because their data density makes them the highest overflow risk.
+
 ## Testable hypotheses
 
 These are hypotheses to measure in moderated task-path review or instrument only with explicit telemetry approval; they are not claims of observed improvement.

@@ -35,6 +35,7 @@ interface OverflowMenuProps {
  */
 export function OverflowMenu({ items, label = 'More actions', icon = 'more_vert' }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
+  const [focusEdge, setFocusEdge] = useState<'first' | 'last'>('first');
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -54,6 +55,17 @@ export function OverflowMenu({ items, label = 'More actions', icon = 'more_vert'
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !dropdownRef.current) return;
+    const enabledItems = [...dropdownRef.current.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
+    (focusEdge === 'last' ? enabledItems[enabledItems.length - 1] : enabledItems[0])?.focus();
+  }, [focusEdge, open]);
+
+  const closeAndRestoreFocus = () => {
+    setOpen(false);
+    btnRef.current?.focus();
+  };
+
   return (
     <>
       <button
@@ -64,6 +76,14 @@ export function OverflowMenu({ items, label = 'More actions', icon = 'more_vert'
         aria-haspopup="menu"
         aria-expanded={open}
         title={label}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          setPosition({ top: rect.bottom + 2, left: rect.right });
+          setFocusEdge(event.key === 'ArrowUp' ? 'last' : 'first');
+          setOpen(true);
+        }}
         onClick={(e) => {
           e.stopPropagation();
           if (open) {
@@ -84,6 +104,24 @@ export function OverflowMenu({ items, label = 'More actions', icon = 'more_vert'
           role="menu"
           style={{ top: position.top, left: position.left }}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(event) => {
+            const enabledItems = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
+            const currentIndex = enabledItems.indexOf(document.activeElement as HTMLButtonElement);
+            let nextIndex: number | null = null;
+            if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % enabledItems.length;
+            if (event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + enabledItems.length) % enabledItems.length;
+            if (event.key === 'Home') nextIndex = 0;
+            if (event.key === 'End') nextIndex = enabledItems.length - 1;
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              closeAndRestoreFocus();
+              return;
+            }
+            if (nextIndex !== null && enabledItems.length > 0) {
+              event.preventDefault();
+              enabledItems[nextIndex]?.focus();
+            }
+          }}
         >
           {items.map((item) => (
             <button

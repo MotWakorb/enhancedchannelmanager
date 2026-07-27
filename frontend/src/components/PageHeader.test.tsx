@@ -21,7 +21,8 @@ describe('PageHeader', () => {
     const action = screen.getByRole('button', { name: 'Edit Mode' });
     expect(heading).toHaveTextContent('OPERATIONS / CHANNEL MANAGER');
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    expect(screen.getByText('Build and maintain the channel lineup and its assigned streams.')).toBeVisible();
+    expect(screen.getByText('Build and maintain the channel lineup and its assigned streams.'))
+      .toHaveAttribute('title', 'Build and maintain the channel lineup and its assigned streams.');
     expect(ref.current).toBe(heading);
     expect(heading.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

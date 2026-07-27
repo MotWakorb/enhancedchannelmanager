@@ -40,3 +40,35 @@
   outline: 2px solid var(--accent-primary);
   outline-offset: 2px;
 }
+
+/*
+ * 1280x720 route budget (enhancedchannelmanager-2896r.7)
+ *
+ * Keep the established type scale. Recover working height by tightening
+ * chrome and collapsing explanatory copy to one recoverable line; the full
+ * text remains in the DOM and in its native title tooltip. Actions, status,
+ * and controls continue in DOM order and wrap instead of being hidden.
+ */
+@media (max-width: 1280px), (max-height: 800px) {
+  .route-page-header.page-header {
+    row-gap: 0.5rem;
+  }
+
+  .route-page-header .header-description {
+    max-width: 72ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .route-page-header .page-header-related-links {
+    gap: 0.5rem;
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .route-page-header .header-description {
+    max-width: 100%;
+  }
+}

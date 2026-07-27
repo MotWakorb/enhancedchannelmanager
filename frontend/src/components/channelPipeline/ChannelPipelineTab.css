@@ -9,6 +9,20 @@
   overflow-y: auto;
 }
 
+.channel-pipeline-compact-actions {
+  display: none;
+}
+
+@media (max-width: 1280px), (max-height: 800px) {
+  .channel-pipeline-secondary-action {
+    display: none;
+  }
+
+  .channel-pipeline-compact-actions {
+    display: inline-flex;
+  }
+}
+
 /* .tab-header, .header-actions are defined in shared/common.css */
 .channel-pipeline-tab .tab-header {
   align-items: center;

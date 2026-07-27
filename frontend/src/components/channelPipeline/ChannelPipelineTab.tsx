@@ -34,6 +34,7 @@ import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { OverflowMenu } from '../OverflowMenu';
 import '../ModalBase.css';
 import './ChannelPipelineTab.css';
 
@@ -926,7 +927,7 @@ export function ChannelPipelineTab() {
             )}
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={() => handleRun(true)}
             disabled={!hasEnabledRules || runningPipeline}
             aria-label="Dry run"
@@ -935,7 +936,7 @@ export function ChannelPipelineTab() {
             Dry Run
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={() => setShowImportDialog(true)}
             aria-label="Import"
           >
@@ -943,7 +944,7 @@ export function ChannelPipelineTab() {
             Import
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={handleExport}
             aria-label="Export"
           >
@@ -951,7 +952,7 @@ export function ChannelPipelineTab() {
             Export
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={handleDebugBundle}
             disabled={debugBundleLoading}
             aria-label="Pipeline Debug Bundle"
@@ -960,6 +961,36 @@ export function ChannelPipelineTab() {
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
             {debugBundleLoading ? 'Generating...' : 'Pipeline Debug Bundle'}
           </button>
+          <span className="channel-pipeline-compact-actions">
+            <OverflowMenu
+              label="More Channel Pipeline actions"
+              items={[
+                {
+                  label: 'Dry Run',
+                  icon: 'visibility',
+                  onClick: () => handleRun(true),
+                  disabled: !hasEnabledRules || runningPipeline,
+                },
+                {
+                  label: 'Import',
+                  icon: 'upload',
+                  onClick: () => setShowImportDialog(true),
+                },
+                {
+                  label: 'Export',
+                  icon: 'download',
+                  onClick: handleExport,
+                },
+                {
+                  label: debugBundleLoading ? 'Generating Pipeline Debug Bundle…' : 'Pipeline Debug Bundle',
+                  icon: debugBundleLoading ? 'hourglass_empty' : 'bug_report',
+                  onClick: handleDebugBundle,
+                  disabled: debugBundleLoading,
+                  title: 'Download a debug bundle scoped to Channel Pipeline rules and execution history. For a whole-app bundle, see Settings → General.',
+                },
+              ]}
+            />
+          </span>
         </div></RouteHeaderSlot>
       </header>
 

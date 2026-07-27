@@ -297,6 +297,97 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       }
     })
 
+    test('every primary route preserves the audited vertical working-area budget', async ({ page }) => {
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+      for (const consumer of routeConsumers) {
+        await page.getByRole('link', { name: consumer.name }).click()
+        const settled = await expectSettledRoute(page, consumer)
+        const budget = await page.evaluate(() => {
+          const main = document.querySelector<HTMLElement>('#main-content')!
+          const header = main.querySelector<HTMLElement>('.route-page-header')!
+          const description = header.querySelector<HTMLElement>('.header-description')!
+          const workingSurface = [...main.children]
+            .find((element): element is HTMLElement => (
+              element instanceof HTMLElement
+              && !element.classList.contains('route-page-header')
+              && getComputedStyle(element).display !== 'none'
+            ))!
+          const headerRect = header.getBoundingClientRect()
+          const surfaceRect = workingSurface.getBoundingClientRect()
+          return {
+            headerHeight: headerRect.height,
+            workingSurfaceVisibleHeight: Math.max(
+              0,
+              Math.min(surfaceRect.bottom, window.innerHeight) - Math.max(surfaceRect.top, 0),
+            ),
+            descriptionSingleLine: description.scrollHeight <= description.clientHeight + 1,
+            descriptionRecoverable: description.title === description.textContent?.trim(),
+            noDocumentXOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            noMainXOverflow: main.scrollWidth <= main.clientWidth + 1,
+          }
+        })
+        expect(budget.headerHeight, `${consumer.name} route chrome must preserve working height`).toBeLessThanOrEqual(
+          viewport.height === 720 ? 190 : 210,
+        )
+        expect(budget.workingSurfaceVisibleHeight, `${consumer.name} must expose meaningful working content above fold`)
+          .toBeGreaterThanOrEqual(viewport.height === 720 ? 160 : 260)
+        expect(budget.descriptionRecoverable).toBe(true)
+        if (viewport.height === 720) expect(budget.descriptionSingleLine).toBe(true)
+        expect(budget.noDocumentXOverflow).toBe(true)
+        expect(budget.noMainXOverflow).toBe(true)
+
+        await settled.focus()
+        expect(await settled.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
+          return rect.top >= main.top && rect.bottom <= main.bottom
+        }), `${consumer.name} primary control focus must not be obscured`).toBe(true)
+      }
+    })
+
+    if (viewport.width === 1280) {
+      test('collapsed navigation recovers width for every primary route without losing controls', async ({ page }) => {
+        await openShellWithPipelineFixture(page)
+        await dismissFirstRunPromptIfPresent(page)
+        await page.getByRole('button', { name: 'Collapse navigation' }).click()
+        for (const consumer of routeConsumers) {
+          await page.getByRole('link', { name: consumer.name }).click()
+          const settled = await expectSettledRoute(page, consumer)
+          await expect(settled).toBeVisible()
+          expect(await page.evaluate(() => (
+            document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+          )), `${consumer.name} must fit after operator width recovery`).toBe(true)
+        }
+      })
+
+      test('Channel Pipeline recovers every compact secondary action by keyboard', async ({ page }) => {
+        await openShellWithPipelineFixture(page)
+        await dismissFirstRunPromptIfPresent(page)
+        await page.getByRole('link', { name: 'Channel Pipeline' }).click()
+        await expectSettledRoute(page, routeConsumers.find((consumer) => consumer.name === 'Channel Pipeline')!)
+
+        await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeVisible()
+        for (const name of ['Dry run', 'Import', 'Export', 'Pipeline Debug Bundle']) {
+          await expect(page.getByRole('button', { name, exact: true })).toBeHidden()
+        }
+
+        const recovery = page.getByRole('button', { name: 'More Channel Pipeline actions' })
+        await recovery.press('ArrowDown')
+        const menu = page.getByRole('menu')
+        await expect(menu).toBeVisible()
+        for (const name of ['Dry Run', 'Import', 'Export', 'Pipeline Debug Bundle']) {
+          await expect(menu.getByRole('menuitem', { name })).toBeAttached()
+        }
+        await expect(menu.getByRole('menuitem', { name: 'Import' })).toBeFocused()
+        await menu.press('End')
+        await expect(menu.getByRole('menuitem', { name: 'Pipeline Debug Bundle' })).toBeFocused()
+        await menu.press('Escape')
+        await expect(menu).toHaveCount(0)
+        await expect(recovery).toBeFocused()
+      })
+    }
+
     test('Dashboard renders the approved compact inventory with actionable links above the fold', async ({ page }) => {
       await seedChannelWorkspace(page, true, 2)
       await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill({

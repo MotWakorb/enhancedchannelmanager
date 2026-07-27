@@ -271,6 +271,20 @@
   overflow: auto;
 }
 
+@media (max-width: 1280px), (max-height: 800px) {
+  .main > .route-page-header {
+    padding: 0.625rem 1rem;
+  }
+
+  .footer {
+    padding-block: 0.25rem;
+  }
+
+  .dashboard-route {
+    padding: 1rem;
+  }
+}
+
 
 .footer-left {
   display: flex;

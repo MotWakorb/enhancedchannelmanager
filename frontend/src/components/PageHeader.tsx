@@ -61,7 +61,14 @@ export function PageHeader({
         {headingLevel === 1
           ? <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>
           : <h2 ref={headingRef}>{heading}</h2>}
-        {description && <p className="header-description">{description}</p>}
+        {description && (
+          <p
+            className="header-description"
+            title={typeof description === 'string' ? description : undefined}
+          >
+            {description}
+          </p>
+        )}
       </div>
       {actions && <div className="header-actions" data-page-header-slot="primary-action">{actions}</div>}
       {status && (
