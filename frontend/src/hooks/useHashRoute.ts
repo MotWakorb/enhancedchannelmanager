@@ -4,7 +4,7 @@ import type { TabId } from '../components/TabNavigation';
 export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
 
 const VALID_TABS: Set<string> = new Set([
-  'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
+  'dashboard', 'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
   'stats', 'settings',
 ]);
@@ -96,14 +96,12 @@ export function useHashRoute(): UseHashRouteReturn {
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
     const nextSettingsPage = settingsPage ?? null;
-    setRoute((prev) => {
-      if (prev.tab === tab && prev.settingsPage === nextSettingsPage) {
-        return prev;
-      }
-      window.history.pushState(null, '', buildHash(tab, settingsPage));
-      return { tab, settingsPage: nextSettingsPage };
-    });
-  }, []);
+    if (route.tab === tab && route.settingsPage === nextSettingsPage) {
+      return;
+    }
+    window.history.pushState(null, '', buildHash(tab, settingsPage));
+    setRoute({ tab, settingsPage: nextSettingsPage });
+  }, [route]);
 
   // Update just the settings sub-page
   const setSettingsPage = useCallback((page: SettingsPage) => {
@@ -112,20 +110,22 @@ export function useHashRoute(): UseHashRouteReturn {
 
   // Listen for popstate (back/forward buttons)
   useEffect(() => {
-    const handlePopState = () => {
+    const canonicalizeCurrentHash = () => {
       const parsed = parseHash(window.location.hash);
-      setRoute(parsed);
+      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage);
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(null, '', canonicalHash);
+      }
+      return parsed;
     };
 
+    const handlePopState = () => {
+      setRoute(canonicalizeCurrentHash());
+    };
+
+    setRoute(canonicalizeCurrentHash());
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  // Set initial hash if none present (so URL reflects current tab)
-  useEffect(() => {
-    if (!window.location.hash) {
-      window.history.replaceState(null, '', buildHash(DEFAULT_TAB));
-    }
   }, []);
 
   return { activeTab: route.tab, settingsPage: route.settingsPage, setHash, setSettingsPage };

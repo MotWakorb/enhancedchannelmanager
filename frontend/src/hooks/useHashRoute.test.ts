@@ -12,6 +12,7 @@ describe('parseHash', () => {
   });
 
   it('parses valid tab hashes', () => {
+    expect(_parseHash('#dashboard')).toEqual({ tab: 'dashboard', settingsPage: null });
     expect(_parseHash('#m3u-manager')).toEqual({ tab: 'm3u-manager', settingsPage: null });
     expect(_parseHash('#epg-manager')).toEqual({ tab: 'epg-manager', settingsPage: null });
     expect(_parseHash('#channel-manager')).toEqual({ tab: 'channel-manager', settingsPage: null });
@@ -59,6 +60,7 @@ describe('legacy hash alias (Security page removal, bead 09x38.12)', () => {
 
 describe('buildHash', () => {
   it('builds simple tab hashes', () => {
+    expect(_buildHash('dashboard')).toBe('#dashboard');
     expect(_buildHash('channel-manager')).toBe('#channel-manager');
     expect(_buildHash('m3u-manager')).toBe('#m3u-manager');
     expect(_buildHash('settings')).toBe('#settings');
@@ -167,5 +169,20 @@ describe('useHashRoute', () => {
     window.location.hash = '#guide';
     renderHook(() => useHashRoute());
     expect(replaceStateSpy).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes the legacy top-level alias with replaceState', () => {
+    window.location.hash = '#auto-creation';
+    const { result } = renderHook(() => useHashRoute());
+    expect(result.current.activeTab).toBe('channel-pipeline');
+    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '#channel-pipeline');
+    expect(pushStateSpy).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes settings aliases and invalid routes without adding history', () => {
+    window.location.hash = '#settings/auto-creation';
+    renderHook(() => useHashRoute());
+    expect(replaceStateSpy).toHaveBeenCalledWith(null, '', '#settings/channel-pipeline');
+    expect(pushStateSpy).not.toHaveBeenCalled();
   });
 });

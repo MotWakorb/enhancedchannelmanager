@@ -32,7 +32,6 @@ import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
 } from './services/clientErrorReporter';
-import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // All known sort criteria - used to merge new criteria into saved settings
@@ -2215,11 +2214,9 @@ function App() {
     <NotificationProvider position="top-right">
     <BackupDestinationPromptProvider>
     <div className="app">
+      <a className="skip-link" href="#main-content">Skip to main content</a>
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>
-          <img src={ECMLogo} alt="ECM Logo" className="header-logo" />
-          Enhanced Channel Manager
-        </h1>
+        <span className="header-context">Operator workspace</span>
         <div className="header-actions">
           {/* Edit Mode Controls - only show on Channel Manager tab */}
           {activeTab === 'channel-manager' && (
@@ -2346,8 +2343,14 @@ function App() {
         onCancel={dedupOnDrop.handleCancel}
       />
 
-      <main className="main">
+      <main id="main-content" className="main" tabIndex={-1}>
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
+          {activeTab === 'dashboard' && (
+            <section className="dashboard-route">
+              <h1>Dashboard</h1>
+              <p>Operational overview is coming in the next workspace increment.</p>
+            </section>
+          )}
           {activeTab === 'channel-manager' && (
             <ErrorBoundary key="tab-channel-manager" scopeLabel="Channel Manager tab" reloadMode="reset">
             <ChannelManagerTab
