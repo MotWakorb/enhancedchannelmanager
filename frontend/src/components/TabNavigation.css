@@ -80,11 +80,12 @@
   font: inherit;
   font-size: 0.875rem;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.navigation-destination:hover:not(:disabled),
+.navigation-destination:hover:not([aria-disabled="true"]),
 .navigation-collapse:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
@@ -101,7 +102,7 @@
   box-shadow: inset 3px 0 0 var(--accent-secondary);
 }
 
-.navigation-destination:disabled { opacity: 0.5; cursor: not-allowed; }
+.navigation-destination[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
 .navigation-destination:focus-visible,
 .navigation-collapse:focus-visible {

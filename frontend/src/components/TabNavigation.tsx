@@ -76,20 +76,23 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
             <ul>
               {group.destinations.map((destination) => (
                 <li key={destination.id}>
-                  <button
-                    type="button"
+                  <a
+                    href={`#${destination.id}`}
                     data-tab={destination.id}
                     className={`navigation-destination tab-button ${activeTab === destination.id ? 'active' : ''}`}
                     aria-label={destination.label}
                     aria-current={activeTab === destination.id ? 'page' : undefined}
                     aria-describedby={disabled ? 'navigation-disabled-reason' : undefined}
                     title={disabled ? `${destination.label} — unavailable while changes are being saved` : destination.label}
-                    onClick={() => onTabChange(destination.id)}
-                    disabled={disabled}
+                    aria-disabled={disabled ? 'true' : undefined}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      if (!disabled) onTabChange(destination.id);
+                    }}
                   >
                     <span className="material-icons" aria-hidden="true">{destination.icon}</span>
                     <span className="navigation-label">{destination.label}</span>
-                  </button>
+                  </a>
                 </li>
               ))}
             </ul>

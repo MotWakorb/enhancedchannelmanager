@@ -15,17 +15,18 @@ describe('grouped primary navigation', () => {
     expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual([
       'Overview', 'Operations', 'Automation', 'Insights', 'System',
     ]);
-    expect(within(nav).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+    expect(within(nav).getAllByRole('link').map((link) => link.getAttribute('aria-label'))).toEqual([
       'Dashboard', 'Channel Manager', 'Guide', 'M3U Manager', 'EPG Manager',
       'Logo Manager', 'Channel Pipeline', 'M3U Changes', 'Stats', 'Journal', 'Settings',
     ]);
-    expect(within(nav).getByRole('button', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
+    expect(within(nav).getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
+    expect(within(nav).getByRole('link', { name: 'Guide' })).toHaveAttribute('href', '#guide');
   });
 
   it('activates destinations by pointer and keyboard', async () => {
     const onTabChange = vi.fn();
     render(<TabNavigation activeTab="channel-manager" onTabChange={onTabChange} />);
-    const guide = screen.getByRole('button', { name: 'Guide' });
+    const guide = screen.getByRole('link', { name: 'Guide' });
 
     await userEvent.click(guide);
     guide.focus();
@@ -43,7 +44,7 @@ describe('grouped primary navigation', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
     expect(sidebar).toHaveClass('is-collapsed');
     expect(localStorage.getItem('ecm.navigation.collapsed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Guide' })).toHaveAttribute('title', 'Guide');
+    expect(screen.getByRole('link', { name: 'Guide' })).toHaveAttribute('title', 'Guide');
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toHaveAttribute('aria-expanded', 'false');
 
     unmount();
@@ -56,10 +57,19 @@ describe('grouped primary navigation', () => {
 
   it('keeps all destinations disabled with explanatory names during guarded work', () => {
     render(<TabNavigation activeTab="channel-manager" onTabChange={vi.fn()} disabled />);
-    for (const button of screen.getByRole('navigation', { name: 'Primary' }).querySelectorAll('button')) {
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute('title');
+    for (const link of screen.getByRole('navigation', { name: 'Primary' }).querySelectorAll('a')) {
+      expect(link).toHaveAttribute('aria-disabled', 'true');
+      expect(link).toHaveAttribute('title');
     }
+  });
+
+  it('falls back to expanded navigation when localStorage is unavailable', () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage unavailable');
+    });
+    const { container } = render(<TabNavigation activeTab="channel-manager" onTabChange={vi.fn()} />);
+    expect(container.querySelector('.primary-sidebar')).not.toHaveClass('is-collapsed');
+    getItem.mockRestore();
   });
 
   it('does not move focus when toggled', () => {

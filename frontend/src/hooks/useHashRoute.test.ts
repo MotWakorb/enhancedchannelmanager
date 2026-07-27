@@ -122,6 +122,15 @@ describe('useHashRoute', () => {
     expect(pushStateSpy).toHaveBeenCalledWith(null, '', '#epg-manager');
   });
 
+  it('keeps setHash stable while observing the latest route', () => {
+    const { result } = renderHook(() => useHashRoute());
+    const initialSetHash = result.current.setHash;
+    act(() => result.current.setHash('guide'));
+    expect(result.current.setHash).toBe(initialSetHash);
+    act(() => result.current.setHash('guide'));
+    expect(pushStateSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('setHash with settings page', () => {
     const { result } = renderHook(() => useHashRoute());
 

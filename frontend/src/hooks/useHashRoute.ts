@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { TabId } from '../components/TabNavigation';
 
 export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
@@ -92,16 +92,19 @@ export interface UseHashRouteReturn {
 
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
+  const routeRef = useRef(route);
 
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
     const nextSettingsPage = settingsPage ?? null;
-    if (route.tab === tab && route.settingsPage === nextSettingsPage) {
+    if (routeRef.current.tab === tab && routeRef.current.settingsPage === nextSettingsPage) {
       return;
     }
     window.history.pushState(null, '', buildHash(tab, settingsPage));
-    setRoute({ tab, settingsPage: nextSettingsPage });
-  }, [route]);
+    const nextRoute = { tab, settingsPage: nextSettingsPage };
+    routeRef.current = nextRoute;
+    setRoute(nextRoute);
+  }, []);
 
   // Update just the settings sub-page
   const setSettingsPage = useCallback((page: SettingsPage) => {
@@ -120,10 +123,14 @@ export function useHashRoute(): UseHashRouteReturn {
     };
 
     const handlePopState = () => {
-      setRoute(canonicalizeCurrentHash());
+      const nextRoute = canonicalizeCurrentHash();
+      routeRef.current = nextRoute;
+      setRoute(nextRoute);
     };
 
-    setRoute(canonicalizeCurrentHash());
+    const initialRoute = canonicalizeCurrentHash();
+    routeRef.current = initialRoute;
+    setRoute(initialRoute);
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);

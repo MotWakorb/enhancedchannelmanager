@@ -40,6 +40,34 @@
   transform: translateY(0);
 }
 
+.route-page-heading {
+  position: fixed;
+  z-index: 9999;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.route-page-heading:focus {
+  top: 0.5rem;
+  left: calc(244px + 1rem);
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  overflow: visible;
+  clip: auto;
+  border-radius: 4px;
+  outline: 2px solid var(--accent-primary);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -245,9 +273,6 @@
   overflow: auto;
 }
 
-.dashboard-route h1 {
-  margin: 0 0 0.5rem;
-}
 
 .footer-left {
   display: flex;

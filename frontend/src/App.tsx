@@ -28,6 +28,8 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPromptContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { RoutePageHeading, SkipToMainContent } from './components/AppLandmarks';
+import { ROUTE_TITLES } from './components/routeTitles';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -278,6 +280,16 @@ function App() {
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
   const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
+  const routeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const focusHeadingOnRouteChangeRef = useRef(false);
+
+  useEffect(() => {
+    document.title = `${ROUTE_TITLES[activeTab]} | Enhanced Channel Manager`;
+    if (focusHeadingOnRouteChangeRef.current) {
+      focusHeadingOnRouteChangeRef.current = false;
+      routeHeadingRef.current?.focus();
+    }
+  }, [activeTab]);
 
   // Stream group drop trigger (for opening bulk create modal from channels pane)
   // Supports multiple groups being dropped at once
@@ -507,10 +519,17 @@ function App() {
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
     setPendingTabChange(null);
+    focusHeadingOnRouteChangeRef.current = false;
   }, []);
 
   // Handle tab change - check for edit mode with pending changes
   const handleTabChange = useCallback((newTab: TabId) => {
+    if (newTab === activeTab) {
+      routeHeadingRef.current?.focus();
+      return;
+    }
+    focusHeadingOnRouteChangeRef.current = true;
+
     if (isEditMode && stagedOperationCount > 0 && newTab !== 'channel-manager') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
@@ -525,7 +544,7 @@ function App() {
     }
 
     setHash(newTab);
-  }, [isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
+  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
 
   // Listen for task editor navigation events from NotificationCenter
   useEffect(() => {
@@ -2214,7 +2233,7 @@ function App() {
     <NotificationProvider position="top-right">
     <BackupDestinationPromptProvider>
     <div className="app">
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <SkipToMainContent />
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <span className="header-context">Operator workspace</span>
         <div className="header-actions">
@@ -2344,10 +2363,10 @@ function App() {
       />
 
       <main id="main-content" className="main" tabIndex={-1}>
+        <RoutePageHeading ref={routeHeadingRef} activeTab={activeTab} />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'dashboard' && (
             <section className="dashboard-route">
-              <h1>Dashboard</h1>
               <p>Operational overview is coming in the next workspace increment.</p>
             </section>
           )}
