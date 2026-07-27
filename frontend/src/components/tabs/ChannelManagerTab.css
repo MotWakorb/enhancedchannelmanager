@@ -19,6 +19,34 @@
   overflow: hidden;
 }
 
+.channel-workspace-permission {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.channel-workspace-state {
+  display: flex;
+  min-width: 0;
+  min-height: 12rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-right: 1px solid var(--border-primary);
+}
+
+.channel-workspace-state h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .channel-manager-subnav {
   display: flex;
   align-items: center;

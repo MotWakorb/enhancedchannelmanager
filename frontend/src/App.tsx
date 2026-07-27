@@ -34,6 +34,7 @@ import { ROUTE_TITLES } from './components/routeTitles';
 import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
 import type { SettingsPage } from './hooks/useHashRoute';
 import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
+import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -188,6 +189,10 @@ function App() {
     streams: true,
     epgData: false,
   });
+  const [channelWorkspaceErrors, setChannelWorkspaceErrors] = useState<{
+    channels: Extract<SourceLoadState, 'error' | 'permission'> | null;
+    streams: Extract<SourceLoadState, 'error' | 'permission'> | null;
+  }>({ channels: null, streams: null });
 
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -899,8 +904,13 @@ function App() {
     try {
       const groups = await api.getChannelGroups();
       setChannelGroups(groups);
+      setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
     } catch (err) {
       logger.error('Failed to load channel groups:', err);
+      setChannelWorkspaceErrors((current) => ({
+        ...current,
+        channels: classifySourceLoadError(err),
+      }));
     }
   };
 
@@ -980,10 +990,15 @@ function App() {
       }
 
       setChannels(allChannels);
+      setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
     } catch (err) {
       // Don't log errors for aborted requests
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error('Failed to load channels:', err);
+        setChannelWorkspaceErrors((current) => ({
+          ...current,
+          channels: classifySourceLoadError(err),
+        }));
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, channels: false }));
@@ -1035,8 +1050,13 @@ function App() {
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
+      setChannelWorkspaceErrors((current) => ({ ...current, streams: null }));
     } catch (err) {
       logger.error('Failed to load stream groups:', err);
+      setChannelWorkspaceErrors((current) => ({
+        ...current,
+        streams: classifySourceLoadError(err),
+      }));
     }
   };
 
@@ -2258,7 +2278,9 @@ function App() {
     ? [...channelGroups, ...stagedGroups]
     : channelGroups;
 
-  const channelManagerPageAction = activeTab === 'channel-manager' && (
+  const channelManagerPageAction = activeTab === 'channel-manager'
+    && channelWorkspaceErrors.channels !== 'permission'
+    && channelWorkspaceErrors.streams !== 'permission' && (
     isEditMode ? (
       <div className="edit-mode-header-controls">
         <span className="edit-mode-label">
@@ -2451,6 +2473,11 @@ function App() {
               onCreateChannel={handleCreateChannel}
               onDeleteChannel={handleDeleteChannel}
               channelsLoading={loadingStates.channels}
+              channelsError={channelWorkspaceErrors.channels}
+              onRetryChannels={async () => {
+                setChannelWorkspaceErrors((current) => ({ ...current, channels: null }));
+                await Promise.all([loadChannelGroups(), loadChannels()]);
+              }}
 
               // Channel Search & Filter
               channelSearch={channelFilters.search}
@@ -2529,6 +2556,20 @@ function App() {
               providers={providers}
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
+              streamsError={channelWorkspaceErrors.streams}
+              onRetryStreams={async () => {
+                setChannelWorkspaceErrors((current) => ({ ...current, streams: null }));
+                setLoadingStates((current) => ({ ...current, streams: true }));
+                try {
+                  await loadStreamGroups(
+                    streamFilters.selectedProviders.length === 1
+                      ? streamFilters.selectedProviders[0]
+                      : null,
+                  );
+                } finally {
+                  setLoadingStates((current) => ({ ...current, streams: false }));
+                }
+              }}
 
               // Stream Search & Filter (server-side search via useEffect debounce)
               streamSearch={streamFilters.search}

@@ -278,3 +278,42 @@ describe('ChannelManagerTab — Pending Merges subnav (BD-J / bd-gfxrz)', () => 
     expect(screen.queryByTestId('split-pane')).toBeNull();
   });
 });
+
+describe('ChannelManagerTab — workspace source states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+    });
+  });
+
+  it('keeps both panes present for populated and true-empty settled data', () => {
+    render(<ChannelManagerTab {...makeMinimalProps()} />);
+    expect(screen.getByTestId('channels-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('streams-pane')).toBeInTheDocument();
+  });
+
+  it('names a channel error and retries only that source', () => {
+    const onRetryChannels = vi.fn();
+    render(
+      <ChannelManagerTab
+        {...makeMinimalProps()}
+        channelsError="error"
+        onRetryChannels={onRetryChannels}
+      />,
+    );
+    expect(screen.getByText('Channels unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading channels' }));
+    expect(onRetryChannels).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('streams-pane')).toBeInTheDocument();
+  });
+
+  it('hides both protected panes and all pane actions for permission denial', () => {
+    render(<ChannelManagerTab {...makeMinimalProps()} streamsError="permission" />);
+    expect(screen.queryByTestId('channels-pane')).toBeNull();
+    expect(screen.queryByTestId('streams-pane')).toBeNull();
+    expect(screen.getAllByText('Channels require administrator access')).toHaveLength(1);
+    expect(screen.getAllByText('Streams require administrator access')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /Retry loading/i })).toBeNull();
+  });
+});

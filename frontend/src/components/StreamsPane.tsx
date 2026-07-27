@@ -1511,6 +1511,20 @@ export function StreamsPane({
     await handleCopy(url, `stream URL for "${streamName}"`);
   };
 
+  const inventoryCount = searchTerm.trim()
+    ? streams.length
+    : selectedStreamGroups.length > 0
+      ? streamGroups
+        .filter((group) => selectedStreamGroups.includes(group.name))
+        .reduce((total, group) => total + group.count, 0)
+      : streamGroups.reduce((total, group) => total + group.count, 0);
+  const inventoryCountKind = searchTerm.trim()
+    ? 'matching'
+    : selectedStreamGroups.length > 0
+      ? 'filtered'
+      : 'total';
+  const inventoryCountLabel = `${inventoryCount} ${inventoryCountKind} ${inventoryCount === 1 ? 'stream' : 'streams'}`;
+
   return (
     <div className="streams-pane" aria-labelledby="streams-pane-heading">
       {/* Copy feedback notifications */}
@@ -1542,8 +1556,8 @@ export function StreamsPane({
             </button>
           )}
         </h2>
-        <span className="pane-item-count" aria-label={`${streamGroups.reduce((total, group) => total + group.count, 0)} streams`}>
-          {streamGroups.reduce((total, group) => total + group.count, 0)}
+        <span className="pane-item-count" aria-label={inventoryCountLabel}>
+          {inventoryCount}
         </span>
         {selectedCount > 0 && (
           <div className="selection-info">

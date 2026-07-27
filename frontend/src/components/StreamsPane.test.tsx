@@ -176,6 +176,61 @@ describe('StreamsPane category headers', () => {
   });
 });
 
+describe('StreamsPane inventory count semantics', () => {
+  it('labels the provider-wide total when no result search or group filter is active', () => {
+    renderPane({
+      streams: STREAMS.slice(0, 1),
+      streamGroups: [{ name: 'CA | Documentary', count: 87 }],
+    });
+    expect(screen.getByLabelText('87 total streams')).toHaveTextContent('87');
+  });
+
+  it('uses the current server-search result set instead of the provider-wide total', () => {
+    renderPane({
+      searchTerm: 'documentary',
+      streams: STREAMS.slice(0, 1),
+      streamGroups: [{ name: 'CA | Documentary', count: 87 }],
+    });
+    expect(screen.getByLabelText('1 matching stream')).toHaveTextContent('1');
+    expect(screen.queryByLabelText('87 total streams')).toBeNull();
+  });
+
+  it('sums only selected inventory groups and returns to total when cleared', () => {
+    const { rerender } = renderPane({
+      selectedStreamGroups: ['CA | Documentary', 'UK | Sports'],
+      onSelectedStreamGroupsChange: vi.fn(),
+      streamGroups: [
+        { name: 'CA | Documentary', count: 12 },
+        { name: 'UK | Sports', count: 8 },
+        { name: 'US | News', count: 50 },
+      ],
+    });
+    expect(screen.getByLabelText('20 filtered streams')).toHaveTextContent('20');
+
+    rerender(
+      <StreamsPane
+        streams={STREAMS}
+        providers={PROVIDERS}
+        streamGroups={[
+          { name: 'CA | Documentary', count: 12 },
+          { name: 'UK | Sports', count: 8 },
+          { name: 'US | News', count: 50 },
+        ]}
+        searchTerm=""
+        onSearchChange={vi.fn()}
+        providerFilter={null}
+        onProviderFilterChange={vi.fn()}
+        groupFilter={null}
+        onGroupFilterChange={vi.fn()}
+        loading={false}
+        selectedStreamGroups={[]}
+        onSelectedStreamGroupsChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('70 total streams')).toHaveTextContent('70');
+  });
+});
+
 describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696)', () => {
   const STALE_STREAMS: Stream[] = [
     makeStream({ id: 101, name: 'Stale Stream', channel_group_name: 'UK | Sports', is_stale: true, last_seen: '2026-07-01T00:00:00Z' }),

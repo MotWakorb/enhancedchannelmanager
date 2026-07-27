@@ -6,6 +6,8 @@ import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import type { SourceLoadState } from '../sourceLoadState';
 import './ChannelManagerTab.css';
 
 /**
@@ -52,6 +54,8 @@ export interface ChannelManagerTabProps {
   onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   channelsLoading: boolean;
+  channelsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
+  onRetryChannels?: () => void;
 
   // Channel Search & Filter
   channelSearch: string;
@@ -130,6 +134,8 @@ export interface ChannelManagerTabProps {
   providers: M3UAccount[];
   streamGroups: StreamGroupInfo[];
   streamsLoading: boolean;
+  streamsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
+  onRetryStreams?: () => void;
 
   // Stream Search & Filter
   streamSearch: string;
@@ -244,6 +250,8 @@ export function ChannelManagerTab({
   onCreateChannel,
   onDeleteChannel,
   channelsLoading,
+  channelsError = null,
+  onRetryChannels,
 
   // Channel Search & Filter
   channelSearch,
@@ -322,6 +330,8 @@ export function ChannelManagerTab({
   providers,
   streamGroups,
   streamsLoading,
+  streamsError = null,
+  onRetryStreams,
 
   // Stream Search & Filter
   streamSearch,
@@ -441,6 +451,23 @@ export function ChannelManagerTab({
   // operator is already on the page (so a single-resolve doesn't strand the
   // operator on a view with no way back to the default panes via the subnav).
   const showSubnavLink = pendingMergesCount > 0 || view === 'pending-merges';
+  const permissionDenied = channelsError === 'permission' || streamsError === 'permission';
+
+  const unavailablePane = (
+    heading: 'Channels' | 'Streams',
+    state: Extract<SourceLoadState, 'error' | 'permission'>,
+    onRetry?: () => void,
+  ) => (
+    <section className="channel-workspace-state" aria-labelledby={`${heading.toLowerCase()}-state-heading`}>
+      <h2 id={`${heading.toLowerCase()}-state-heading`}>{heading}</h2>
+      <SourceLoadStatus
+        state={state}
+        successText={`${heading} loaded`}
+        sourceName={heading.toLowerCase()}
+        onRetry={state === 'error' ? onRetry : undefined}
+      />
+    </section>
+  );
 
   return (
     <div className="channel-manager-tab">
@@ -478,12 +505,17 @@ export function ChannelManagerTab({
 
       {view === 'pending-merges' ? (
         <PendingMergesPage />
+      ) : permissionDenied ? (
+        <div className="channel-workspace-permission">
+          {unavailablePane('Channels', 'permission')}
+          {unavailablePane('Streams', 'permission')}
+        </div>
       ) : (
         <SplitPane
       leftLabel="Channels"
       rightLabel="Streams"
       left={
-        <ChannelsPane
+        channelsError === 'error' ? unavailablePane('Channels', 'error', onRetryChannels) : <ChannelsPane
           channelGroups={channelGroups}
           channels={channels}
           streams={allStreams}
@@ -567,7 +599,7 @@ export function ChannelManagerTab({
         />
       }
       right={
-        <StreamsPane
+        streamsError === 'error' ? unavailablePane('Streams', 'error', onRetryStreams) : <StreamsPane
           streams={streams}
           providers={providers}
           streamGroups={streamGroups}

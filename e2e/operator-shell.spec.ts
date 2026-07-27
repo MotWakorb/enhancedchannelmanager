@@ -32,7 +32,7 @@ async function shellMetrics(page: Page) {
 
 async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'guide') {
   const selectors = ['.route-page-header', '#main-content h1', ...(route === 'channel-manager'
-    ? ['.route-page-header .enter-edit-mode-btn', '.channel-manager-tab', '.channels-pane', '.streams-pane', '.channels-pane h2', '.streams-pane h2', 'input[placeholder="Search streams..."]']
+    ? ['.route-page-header .enter-edit-mode-btn', '.channel-manager-tab', '.split-pane']
     : ['.guide-tab', '.guide-controls', 'button[title="Refresh program data"]', 'button[title="Print channel guide"]', '.guide-container', '.guide-footer'])]
 
   for (const selector of selectors) {
@@ -76,7 +76,11 @@ async function expectSettledRoute(page: Page, consumer: typeof routeConsumers[nu
   return settled
 }
 
-async function openShellWithPipelineFixture(page: Page, rulesStatus = 200) {
+async function openShellWithPipelineFixture(
+  page: Page,
+  rulesStatus = 200,
+  providers: Array<Record<string, unknown>> = [],
+) {
   await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -91,7 +95,7 @@ async function openShellWithPipelineFixture(page: Page, rulesStatus = 200) {
     }),
   }))
   await page.route(/\/api\/providers(?:\/|\?|$)/, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(providers) }))
   await page.route(/\/api\/m3u\/server-groups(?:\/|\?|$)/, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
   await page.route(/\/api\/epg\/sources(?:\/|\?|$)/, (route) =>
@@ -228,7 +232,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
 
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
       await seedChannelWorkspace(page, true)
-      await openShellWithPipelineFixture(page)
+      await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
       await dismissFirstRunPromptIfPresent(page)
 
       await expect(page.locator('#main-content h1')).toHaveText('OPERATIONS / CHANNEL MANAGER')
@@ -238,8 +242,67 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(page.getByRole('heading', { name: 'Channels', level: 2 })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Streams', level: 2 })).toBeVisible()
       await expect(page.getByLabel('1 channels')).toBeVisible()
-      await expect(page.getByLabel('1 streams')).toBeVisible()
-      await expect(page.getByRole('separator', { name: 'Resize Channels and Streams panes' })).toBeVisible()
+      await expect(page.getByLabel('1 total stream')).toBeVisible()
+      const separator = page.getByRole('separator', { name: 'Resize Channels and Streams panes' })
+      await expect(separator).toBeVisible()
+
+      const separatorBox = await separator.boundingBox()
+      if (!separatorBox) throw new Error('splitter has no geometry')
+      const initialSplit = Number(await separator.getAttribute('aria-valuenow'))
+      await page.mouse.move(separatorBox.x + separatorBox.width / 2, separatorBox.y + separatorBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(separatorBox.x - 80, separatorBox.y + separatorBox.height / 2, { steps: 5 })
+      await page.mouse.up()
+      const draggedSplit = Number(await separator.getAttribute('aria-valuenow'))
+      expect(draggedSplit).toBeGreaterThanOrEqual(35)
+      expect(draggedSplit).toBeLessThanOrEqual(70)
+      expect(draggedSplit).toBeLessThan(initialSplit)
+
+      const channelSearch = page.getByRole('textbox', { name: 'Search channels' })
+      await channelSearch.fill('deliberately long')
+      await expect(channelSearch).toHaveValue('deliberately long')
+      await page.locator('.channels-pane').getByRole('button', { name: 'Clear search' }).click()
+
+      const streamSearch = page.getByRole('textbox', { name: 'Search streams' })
+      await streamSearch.fill('source stream')
+      await expect(streamSearch).toHaveValue('source stream')
+      await expect(page.getByLabel('1 matching stream')).toBeVisible()
+      await page.locator('.streams-pane').getByRole('button', { name: 'Clear search' }).click()
+
+      const moreActions = page.locator('.channels-pane').getByRole('button', { name: 'More actions' })
+      await moreActions.focus()
+      await moreActions.press('Enter')
+      await expect(page.getByRole('button', { name: /Channel Profiles/i })).toBeVisible()
+      await moreActions.click()
+
+      const category = page.getByRole('button', { name: /^Other/ })
+      await category.click()
+      const providerGroup = page.getByRole('button', { name: /Provider Sports/ })
+      await providerGroup.press('Enter')
+      const inventoryIdentity = page.locator('.streams-pane .stream-name').filter({
+        hasText: 'A deliberately long source stream identity that must ellipsize before inventory actions',
+      })
+      await expect(inventoryIdentity).toBeVisible()
+
+      await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
+      const channelIdentity = page.getByText('A deliberately long channel identity that must remain inside the Channels pane')
+      await channelIdentity.click()
+      await expect(page.locator('.inline-stream-name').filter({ hasText: 'A deliberately long source stream identity' })).toBeVisible()
+
+      expect(await inventoryIdentity.evaluate((identity) => {
+        const info = identity.closest<HTMLElement>('.stream-info')!
+        const row = identity.closest<HTMLElement>('.stream-item')!
+        const actions = [...row.querySelectorAll<HTMLElement>('button')]
+        const infoRect = info.getBoundingClientRect()
+        const identityStyle = getComputedStyle(identity)
+        return {
+          ellipsisContract: identityStyle.overflow === 'hidden'
+            && identityStyle.textOverflow === 'ellipsis'
+            && identityStyle.whiteSpace === 'nowrap',
+          actionsVisible: actions.every((action) => action.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1),
+          noOverlap: actions.every((action) => action.getBoundingClientRect().left >= infoRect.right - 1),
+        }
+      })).toEqual({ ellipsisContract: true, actionsVisible: true, noOverlap: true })
 
       for (const collapsed of [false, true]) {
         if (collapsed) await page.getByRole('button', { name: 'Collapse navigation' }).click()
@@ -296,6 +359,61 @@ test.describe('operator shell at 200% equivalent', () => {
 
 test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
+
+  test('Channel Manager distinguishes loading and true-empty inventory', async ({ page }) => {
+    await seedChannelWorkspace(page, false)
+    await page.route(/\/api\/channels(?:\?|$)/, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+      })
+    })
+    await openShellWithPipelineFixture(page)
+    await expect(page.getByText('Loading channels...')).toBeVisible()
+    await expect(page.getByLabel('0 channels')).toBeVisible()
+    await expect(page.getByLabel('0 total streams')).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Channels' })).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Streams' })).toBeVisible()
+  })
+
+  test('Channel Manager gives a named scoped error and recovers through Retry', async ({ page }) => {
+    await seedChannelWorkspace(page, false)
+    let attempts = 0
+    await page.route(/\/api\/channels(?:\?|$)/, (route) => {
+      attempts += 1
+      return route.fulfill({
+        status: attempts === 1 ? 503 : 200,
+        contentType: 'application/json',
+        body: attempts === 1
+          ? JSON.stringify({ detail: 'Channels source unavailable' })
+          : JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+      })
+    })
+    await openShellWithPipelineFixture(page)
+    await expect(page.getByText('Channels unavailable')).toBeVisible()
+    await page.getByRole('button', { name: 'Retry loading channels' }).click()
+    await expect(page.getByText('Loading channels...')).toBeVisible()
+    await expect(page.getByLabel('0 channels')).toBeVisible()
+    expect(attempts).toBeGreaterThanOrEqual(2)
+  })
+
+  test('Channel Manager permission state exposes no protected panes or actions', async ({ page }) => {
+    await seedChannelWorkspace(page, false)
+    await page.route(/\/api\/channels(?:\?|$)/, (route) => route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Forbidden' }),
+    }))
+    await openShellWithPipelineFixture(page)
+    await expect(page.getByText('Channels require administrator access')).toBeVisible()
+    await expect(page.getByText('Streams require administrator access')).toBeVisible()
+    await expect(page.locator('.channels-pane')).toHaveCount(0)
+    await expect(page.locator('.streams-pane')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Edit Mode' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Retry loading/i })).toHaveCount(0)
+  })
 
   test('Channel Pipeline exposes deterministic named recovery when rule loading fails', async ({ page }) => {
     await openShellWithPipelineFixture(page, 503)
