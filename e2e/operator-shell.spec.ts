@@ -305,22 +305,23 @@ type RequestSnapshot = {
 }
 
 type PeriodicRequestPolicy = {
-  owner: 'global' | 'Stats' | 'Settings'
+  owner: 'global' | 'Channel Manager' | 'Stats' | 'Settings'
   maximumPerWindow: number
   reason: string
 }
 
 const intendedPeriodicRequests: Readonly<Record<string, PeriodicRequestPolicy>> = {
-  // Global notification freshness and the Channel Manager pending-merge badge
-  // are deliberate 30-second background polls. The value is the maximum
-  // normalized requests permitted in each 31-second observation window.
+  // Notification freshness is global; the Channel Manager pending-merge
+  // badge is route-owned. Both are deliberate 30-second background polls.
+  // The value is the maximum normalized requests permitted in each
+  // 31-second observation window while the owner is active.
   'GET /api/notifications?page_size': {
     owner: 'global', maximumPerWindow: 2,
     reason: 'Global notification-center freshness, including accelerated active-operation cadence.',
   },
   'GET /api/channel-merges?page&page_size&status': {
-    owner: 'global', maximumPerWindow: 2,
-    reason: 'Global app-shell pending-merge badge freshness.',
+    owner: 'Channel Manager', maximumPerWindow: 2,
+    reason: 'Channel Manager pending-merge badge freshness.',
   },
   // The visible Stats overview intentionally refreshes its four primary
   // metrics once per configured interval. The deterministic settings fixture
@@ -795,6 +796,28 @@ test('route-scoped poll policy rejects a leaked Stats refresh on Dashboard', () 
     deltas: [0, 1],
     allowance: 0,
   }])
+})
+
+test('route-scoped poll policy rejects a leaked Channel Manager pending-merge poll on Dashboard', () => {
+  const pendingMerges = 'GET /api/channel-merges?page&page_size&status'
+  expect(periodicAllowancesForRoute('Channel Manager')).toMatchObject({
+    [pendingMerges]: 2,
+  })
+  expect(periodicAllowancesForRoute('Dashboard')).not.toHaveProperty(pendingMerges)
+  expect(requestWindowGrowth([
+    { elapsedMs: 0, exact: {}, normalized: {} },
+    { elapsedMs: 31_000, exact: {}, normalized: {} },
+    {
+      elapsedMs: 62_000,
+      exact: { '/api/channel-merges?status=pending&page=1&page_size=1': 1 },
+      normalized: { [pendingMerges]: 1 },
+    },
+  ], periodicAllowancesForRoute('Dashboard'))).toEqual([{
+    key: pendingMerges,
+    deltas: [0, 1],
+    allowance: 0,
+  }])
+  expect(requestOwner(pendingMerges)).toBe('Channel Manager')
 })
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {

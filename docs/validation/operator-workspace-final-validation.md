@@ -184,16 +184,17 @@ query-changing `cursor` loop only in the second window, and proves that delayed
 value churn cannot evade the detector.
 
 The only continuing requests allowed are bounded, documented product polls:
-global notifications and app-shell pending-merge freshness (30 seconds), the
-four visible Stats overview metrics (configured refresh interval, allowed only
-while Stats is current), and Settings detection of externally scheduled stream
-probes (5 seconds, allowed only while Settings is current). Each request
-artifact records the policy owner, reason, active route, whether the request is
-allowed there, and leaked-owner results. A prior-route-owned poll after the
-next route's grace boundary fails even when its cadence would have been valid
-on its owning route; a synthetic Stats-on-Dashboard case locks this behavior.
-Finite dependent loads are included in the initial exact-URL route budgets and
-may not continue after the lifecycle grace boundary.
+global notifications; Channel Manager pending-merge freshness (30 seconds,
+allowed only while Channel Manager is current); the four visible Stats
+overview metrics (configured refresh interval, allowed only while Stats is
+current); and Settings detection of externally scheduled stream probes (5
+seconds, allowed only while Settings is current). Each request artifact records
+the policy owner, reason, active route, whether the request is allowed there,
+and leaked-owner results. A prior-route-owned poll after the next route's grace
+boundary fails even when its cadence would have been valid on its owning route;
+synthetic Stats-on-Dashboard and pending-merges-on-Dashboard cases lock this
+behavior. Finite dependent loads are included in the initial exact-URL route
+budgets and may not continue after the lifecycle grace boundary.
 
 ## Artifacts
 
