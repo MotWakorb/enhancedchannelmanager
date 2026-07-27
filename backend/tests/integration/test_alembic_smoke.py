@@ -1706,6 +1706,14 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN match_scope_group_id INTEGER"
                 ))
+                # 0025 (enhancedchannelmanager-orzck / W1): manual-channel
+                # isolation flag on auto_creation_rules — create_all() can't add
+                # a column to an already-existing table, so add it by hand so the
+                # live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN allow_manual_channel_merge BOOLEAN NOT NULL DEFAULT 0"
+                ))
                 conn.execute(text(
                     "ALTER TABLE normalization_rules "
                     "ADD COLUMN require_delimiter BOOLEAN NOT NULL DEFAULT 0"
@@ -1713,6 +1721,102 @@ class TestSmartBootstrapFastPath:
                 conn.execute(text(
                     "ALTER TABLE auto_creation_executions "
                     "ADD COLUMN channels_touched INTEGER NOT NULL DEFAULT 0"
+                ))
+                # 0028 (enhancedchannelmanager-e8p1h): advisory run warnings
+                # (e.g. disabled normalization groups) on the pre-0005
+                # auto_creation_executions table — create_all() can't add a
+                # column to an already-existing table, so add it by hand so the
+                # live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN warnings TEXT"
+                ))
+                # 0023 (bd-0i2vt.4): credential-freshness + insecure flag on the
+                # pre-0005 cloud_storage_targets table — create_all() can't add
+                # columns to an existing table, so add them by hand here too.
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 1"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN token_revoked_at DATETIME"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE cloud_storage_targets "
+                    "ADD COLUMN insecure BOOLEAN NOT NULL DEFAULT 0"
+                ))
+                # 0027 (enhancedchannelmanager-vp1rx / W3): AI-mutation audit
+                # actor on the pre-0005 journal_entries table — create_all()
+                # can't add a column to an already-existing table, so add it by
+                # hand so the live schema genuinely matches head for the
+                # fast-path. (_schema_matches_head is column-only, so the
+                # accompanying idx_journal_mutation_source index is not required
+                # for the match.)
+                conn.execute(text(
+                    "ALTER TABLE journal_entries "
+                    "ADD COLUMN mutation_source VARCHAR(20)"
+                ))
+                # 0037 (enhancedchannelmanager-uliyr): journal automation
+                # marker on the pre-0005 journal_entries table — same
+                # create_all() limitation, add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE journal_entries "
+                    "ADD COLUMN automated_client BOOLEAN"
+                ))
+                # 0030 (bd-x67qe): refresh-token rotation grace window on the
+                # pre-0005 user_sessions table — same create_all() limitation,
+                # add both nullable columns by hand.
+                conn.execute(text(
+                    "ALTER TABLE user_sessions "
+                    "ADD COLUMN prior_refresh_token_hash VARCHAR(255)"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE user_sessions "
+                    "ADD COLUMN rotated_at DATETIME"
+                ))
+                # 0031 (enhancedchannelmanager-ti939.1.3): event_sync rule
+                # config on the pre-0005 auto_creation_rules table — same
+                # create_all() limitation, add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN event_sync_config TEXT"
+                ))
+                # 0034 (GH #645 / bead 0vao3): opt-in fold-match-key flag on
+                # the pre-0005 auto_creation_rules table — same create_all()
+                # limitation, add the NOT NULL boolean by hand.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN fold_match_key BOOLEAN NOT NULL DEFAULT 0"
+                ))
+                # 0038 (GH #646 / enhancedchannelmanager-6lhmb): optional
+                # inclusive UTC date bounds on rules.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules ADD COLUMN active_from DATE"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules ADD COLUMN active_until DATE"
+                ))
+                # 0033 (enhancedchannelmanager-7wuhd): persisted event_sync run
+                # summary + pure-event_sync kind flag on the pre-0005
+                # auto_creation_executions table — create_all() can't add
+                # columns to an already-existing table, so add both by hand so
+                # the live schema genuinely matches head for the fast-path.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN event_sync_summary TEXT"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_executions "
+                    "ADD COLUMN is_event_sync BOOLEAN NOT NULL DEFAULT 0"
+                ))
+                # 0035 (GH #496 / bead enhancedchannelmanager-wwovg): digest
+                # notification account scoping on the pre-0005 (baseline 0001)
+                # m3u_digest_settings table — same create_all() limitation,
+                # add the nullable column by hand.
+                conn.execute(text(
+                    "ALTER TABLE m3u_digest_settings "
+                    "ADD COLUMN account_ids TEXT"
                 ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not

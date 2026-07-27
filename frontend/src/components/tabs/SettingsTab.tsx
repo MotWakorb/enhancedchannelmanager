@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
-import * as autoCreationApi from '../../services/autoCreationApi';
+import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
@@ -12,6 +12,8 @@ import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
 import { LookupTableSection } from '../settings/LookupTableSection';
+import { AlertMethodsSection } from '../settings/AlertMethodsSection';
+import { EventSyncTeamAliasesSection } from '../settings/EventSyncTeamAliasesSection';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -24,6 +26,8 @@ import { ScheduledTasksSection } from '../ScheduledTasksSection';
 import { SettingsModal } from '../SettingsModal';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
+import { useScrollTopReset } from '../../hooks/useScrollTopReset';
 import {
   DndContext,
   closestCenter,
@@ -52,6 +56,7 @@ const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string
   m3u_priority: { icon: 'low_priority', label: 'M3U Priority', description: 'Higher priority M3U first' },
   audio_channels: { icon: 'surround_sound', label: 'Audio Channels', description: '5.1 > Stereo > Mono' },
   custom_streams: { icon: 'edit_note', label: 'Custom Streams', description: 'Operator-added custom streams first' },
+  catchup: { icon: 'history', label: 'Catch-up', description: 'Catch-up enabled' },
 };
 
 // Failed stream category configuration for drag-and-drop ordering
@@ -69,7 +74,7 @@ const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_sc
 const EMBY_LOGO_TYPES: readonly api.EmbyLogoType[] = ['Primary', 'LogoLight', 'LogoLightColor'];
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
+const ALL_SORT_CRITERIA: SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams', 'catchup'];
 
 // Default enabled state for each criterion
 const DEFAULT_SORT_ENABLED: SortEnabledMap = {
@@ -80,6 +85,7 @@ const DEFAULT_SORT_ENABLED: SortEnabledMap = {
   m3u_priority: false,
   audio_channels: false,
   custom_streams: false,
+  catchup: false,
 };
 
 // Merge saved sort criteria with any new criteria that may have been added
@@ -293,6 +299,11 @@ import type { SettingsPage } from '../../hooks';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
+  const settingsContentRef = useRef<HTMLDivElement>(null);
+  // Reset scroll position when navigating between Settings sub-pages — the
+  // content pane otherwise preserves scrollTop from the previously viewed
+  // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
+  useScrollTopReset(settingsContentRef, activePage);
 
   // Wrap setActivePage to also notify parent for hash routing
   const setActivePage = (page: SettingsPage) => {
@@ -408,8 +419,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // attribution candidates, never to gate.
   const [trustedMediaNetworks, setTrustedMediaNetworks] = useState<string[]>([]);
 
-  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams']);
-  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false });
+  const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams', 'catchup']);
+  const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false });
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
@@ -427,6 +438,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // Appearance settings
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [hideAutoSyncGroups, setHideAutoSyncGroups] = useState(false);
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard. Admin-only install-wide toggle (duplicate-channel risk), default false.
+  const [allowMultiProviderAutoSync, setAllowMultiProviderAutoSync] = useState(false);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
   const [hideEpgUrls, setHideEpgUrls] = useState(false);
   const [hideM3uUrls, setHideM3uUrls] = useState(false);
@@ -448,7 +462,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const handleDownloadDebugBundle = async () => {
     setDebugBundleLoading(true);
     try {
-      const { blob, filename } = await autoCreationApi.generateAndFetchDebugBundle();
+      const { blob, filename } = await channelPipelineApi.generateAndFetchDebugBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -466,17 +480,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   // Auto-creation exclusion settings
-  const [autoCreationExcludedTerms, setAutoCreationExcludedTerms] = useState<string[]>([]);
+  const [channelPipelineExcludedTerms, setChannelPipelineExcludedTerms] = useState<string[]>([]);
   const [newExcludedTermInput, setNewExcludedTermInput] = useState('');
-  const [autoCreationExcludedGroups, setAutoCreationExcludedGroups] = useState<string[]>([]);
+  const [channelPipelineExcludedGroups, setChannelPipelineExcludedGroups] = useState<string[]>([]);
   const [availableStreamGroups, setAvailableStreamGroups] = useState<string[]>([]);
   const [selectedExcludeGroup, setSelectedExcludeGroup] = useState('');
-  const [autoCreationExcludeAutoSyncGroups, setAutoCreationExcludeAutoSyncGroups] = useState(false);
+  const [channelPipelineExcludeAutoSyncGroups, setChannelPipelineExcludeAutoSyncGroups] = useState(false);
+  // GH #473 channel pipeline OOM safety-valve caps (skg35). Admin-only on save;
+  // 0 disables. Default 500 matches the backend.
+  const [maxAutoCreatedChannelsPerRun, setMaxAutoCreatedChannelsPerRun] = useState(500);
+  const [maxChannelPipelineLogEntries, setMaxChannelPipelineLogEntries] = useState(500);
 
   // M3U Digest settings
   const [digestSettings, setDigestSettings] = useState<M3UDigestSettings | null>(null);
   const [digestLoading, setDigestLoading] = useState(false);
+  // Latches after a failed load so the activation effect below stops
+  // re-issuing request batches; cleared only by an explicit Retry
+  // (bead enhancedchannelmanager-fi3dq).
+  const [digestError, setDigestError] = useState<string | null>(null);
   const [digestSaving, setDigestSaving] = useState(false);
+  // M3U accounts for the digest notification account-filter picker (GH #496)
+  const [digestM3uAccounts, setDigestM3uAccounts] = useState<{ id: number; name: string }[]>([]);
 
   // Shared SMTP (Email) settings
   const [smtpHost, setSmtpHost] = useState('');
@@ -587,6 +611,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const [resettingStats, setResettingStats] = useState(false);
 
+  // Channel-groups diagnostic + with-streams views (enhancedchannelmanager-hq3de.b)
+  // — read-only, alongside the orphaned/auto-created scans above.
+  const [groupsDiagnostic, setGroupsDiagnostic] = useState<api.ChannelGroupsDiagnostic | null>(null);
+  const [loadingGroupsDiagnostic, setLoadingGroupsDiagnostic] = useState(false);
+  const [groupsWithStreams, setGroupsWithStreams] = useState<{ id: number; name: string }[] | null>(null);
+  const [totalGroupsForStreams, setTotalGroupsForStreams] = useState(0);
+  const [loadingGroupsWithStreams, setLoadingGroupsWithStreams] = useState(false);
+
   // Auto-created channels maintenance state
   const [autoCreatedGroups, setAutoCreatedGroups] = useState<api.AutoCreatedGroup[]>([]);
   const [totalAutoCreatedChannels, setTotalAutoCreatedChannels] = useState(0);
@@ -600,6 +632,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [removingStruckOut, setRemovingStruckOut] = useState(false);
   const [selectedStruckOut, setSelectedStruckOut] = useState<Set<number>>(new Set());
   const [struckOutScanned, setStruckOutScanned] = useState(false);
+
+  // Stale streams state
+  const [staleStreamDays, setStaleStreamDays] = useState(7);
+  const [staleStreams, setStaleStreams] = useState<api.StaleStream[]>([]);
+  const [loadingStaleStreams, setLoadingStaleStreams] = useState(false);
+  const [probingStaleStreams, setProbingStaleStreams] = useState(false);
+  const [selectedStaleStreams, setSelectedStaleStreams] = useState<Set<number>>(new Set());
+  const [staleStreamsScanned, setStaleStreamsScanned] = useState(false);
 
   // Track original URL/username to detect if auth settings changed
   const [originalUrl, setOriginalUrl] = useState('');
@@ -651,19 +691,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadM3UAccountsMaxStreams();
   }, []);
 
-  // Load M3U digest settings when that page is activated
+  // Load M3U digest settings when that page is activated. The !digestError
+  // guard is load-bearing: without it, a failed load (digestSettings still
+  // null, digestLoading back to false) re-armed this effect into a tight
+  // retry loop that spammed one error toast per attempt (bead fi3dq).
   useEffect(() => {
-    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading) {
+    if (activePage === 'm3u-digest' && !digestSettings && !digestLoading && !digestError) {
       loadDigestSettings();
     }
-    // loadDigestSettings is a local function reference that never changes
-    // identity in a harmful way (no closed-over state that would stale).
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- safe local function reference
-  }, [activePage, digestSettings, digestLoading]);
+  }, [activePage, digestSettings, digestLoading, digestError]);
 
-  // Load available stream groups when auto-creation page is activated
+  // Load available stream groups when channel pipeline page is activated
   useEffect(() => {
-    if (activePage === 'auto-creation' && availableStreamGroups.length === 0) {
+    if (activePage === 'channel-pipeline' && availableStreamGroups.length === 0) {
       api.getStreamGroups().then(groups => {
         setAvailableStreamGroups(groups.map(g => g.name).sort((a, b) => a.localeCompare(b)));
       }).catch(() => {});
@@ -823,6 +863,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTimezonePreference(settings.timezone_preference);
       setShowStreamUrls(settings.show_stream_urls);
       setHideAutoSyncGroups(settings.hide_auto_sync_groups);
+      setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setHideEpgUrls(settings.hide_epg_urls ?? false);
       setHideM3uUrls(settings.hide_m3u_urls ?? false);
@@ -832,9 +873,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
       setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
-      setAutoCreationExcludedTerms(settings.auto_creation_excluded_terms ?? []);
-      setAutoCreationExcludedGroups(settings.auto_creation_excluded_groups ?? []);
-      setAutoCreationExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
+      setChannelPipelineExcludedTerms(settings.auto_creation_excluded_terms ?? []);
+      setChannelPipelineExcludedGroups(settings.auto_creation_excluded_groups ?? []);
+      setChannelPipelineExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
+      setMaxAutoCreatedChannelsPerRun(settings.max_auto_created_channels_per_run ?? 500);
+      setMaxChannelPipelineLogEntries(settings.max_auto_creation_log_entries ?? 500);
       setDefaultChannelProfileIds(settings.default_channel_profile_ids);
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setCustomNetworkPrefixes(settings.custom_network_prefixes ?? []);
@@ -1251,6 +1294,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         timezone_preference: timezonePreference,
         show_stream_urls: showStreamUrls,
         hide_auto_sync_groups: hideAutoSyncGroups,
+        allow_multi_provider_auto_sync: allowMultiProviderAutoSync,
         hide_ungrouped_streams: hideUngroupedStreams,
         hide_epg_urls: hideEpgUrls,
         hide_m3u_urls: hideM3uUrls,
@@ -1287,9 +1331,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         stream_preview_mode: streamPreviewMode,
-        auto_creation_excluded_terms: autoCreationExcludedTerms,
-        auto_creation_excluded_groups: autoCreationExcludedGroups,
-        auto_creation_exclude_auto_sync_groups: autoCreationExcludeAutoSyncGroups,
+        auto_creation_excluded_terms: channelPipelineExcludedTerms,
+        auto_creation_excluded_groups: channelPipelineExcludedGroups,
+        auto_creation_exclude_auto_sync_groups: channelPipelineExcludeAutoSyncGroups,
+        // skg35: GH #473 safety-valve caps. Always echoed (loaded from the
+        // stored value) so a non-admin save sends the unchanged value and the
+        // backend field-level admin gate does NOT trip; only an admin who edits
+        // the disabled-for-non-admins input sends a real change.
+        max_auto_created_channels_per_run: maxAutoCreatedChannelsPerRun,
+        max_auto_creation_log_entries: maxChannelPipelineLogEntries,
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_timeout: streamProbeTimeout,
@@ -1416,11 +1466,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U Digest Settings Management
   const loadDigestSettings = async () => {
     setDigestLoading(true);
+    setDigestError(null);
     try {
-      const settings = await api.getM3UDigestSettings();
+      const [settings, accounts] = await Promise.all([
+        api.getM3UDigestSettings(),
+        api.getM3UAccounts(),
+      ]);
       setDigestSettings(settings);
+      setDigestM3uAccounts(accounts.map(a => ({ id: a.id, name: a.name })));
     } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to load digest settings', 'Digest Settings');
+      // Inline recoverable error state instead of a toast: the activation
+      // effect stops retrying while digestError is set, so one failed
+      // activation costs exactly one request batch and zero toast noise
+      // (bead enhancedchannelmanager-fi3dq).
+      setDigestError(err instanceof Error ? err.message : 'Failed to load digest settings');
     } finally {
       setDigestLoading(false);
     }
@@ -1449,6 +1508,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         send_to_discord: digestSettings.send_to_discord,
         exclude_group_patterns: digestSettings.exclude_group_patterns,
         exclude_stream_patterns: digestSettings.exclude_stream_patterns,
+        account_ids: digestSettings.account_ids,
       });
       setDigestSettings(updated);
       notifications.success('Settings saved successfully');
@@ -1475,6 +1535,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         send_to_discord: digestSettings.send_to_discord,
         exclude_group_patterns: digestSettings.exclude_group_patterns,
         exclude_stream_patterns: digestSettings.exclude_stream_patterns,
+        account_ids: digestSettings.account_ids,
       });
       // Now send the test
       const result = await api.sendTestM3UDigest();
@@ -1746,6 +1807,64 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const handleScanStaleStreams = async () => {
+    setLoadingStaleStreams(true);
+    setStaleStreamsScanned(true);
+    try {
+      const result = await api.getStaleStreams(staleStreamDays);
+      setStaleStreams(result.streams);
+      setSelectedStaleStreams(new Set());
+      if (result.streams.length === 0) {
+        notifications.success('No stale streams found.');
+      }
+    } catch (err) {
+      notifications.error(`Failed to scan for stale streams: ${err}`);
+    } finally {
+      setLoadingStaleStreams(false);
+    }
+  };
+
+  const handleProbeSelectedStale = async () => {
+    if (selectedStaleStreams.size === 0) return;
+    setProbingStaleStreams(true);
+    try {
+      const streamIds = Array.from(selectedStaleStreams);
+      // NOTE: probeBulkStreams() is typed as returning { probed, results } (BulkProbeResult),
+      // but POST /probe/bulk was made async in enhancedchannelmanager-znc76.5 (synchronous
+      // probing 504'd at batches >=3) — it now actually responds immediately with
+      // { status: 'started' | 'already_running', message, total } and probes in the
+      // background. The declared type is stale; see enhancedchannelmanager-n4g7g follow-up
+      // bead for fixing it (and its two other ChannelsPane.tsx callers) at the source.
+      const startResult = await api.probeBulkStreams(streamIds) as unknown as {
+        status: 'started' | 'already_running';
+        message?: string;
+        total?: number;
+      };
+
+      if (startResult.status === 'already_running') {
+        notifications.warning('A probe is already in progress; try again once it finishes.');
+        return;
+      }
+
+      notifications.info(`Probing ${streamIds.length} stream(s)...`);
+
+      // Poll until the background probe finishes before rescanning — an immediate
+      // rescan would race the background job and show the list unchanged.
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const progress = await api.getProbeProgress();
+        if (!progress.in_progress) break;
+      }
+
+      notifications.success(`Finished probing ${streamIds.length} stream(s).`);
+      await handleScanStaleStreams();
+    } catch (err) {
+      notifications.error(`Failed to probe stale streams: ${err}`);
+    } finally {
+      setProbingStaleStreams(false);
+    }
+  };
+
   const handleLoadOrphanedGroups = async () => {
     setLoadingOrphaned(true);
     try {
@@ -1758,6 +1877,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error(`Failed to load orphaned groups: ${err}`);
     } finally {
       setLoadingOrphaned(false);
+    }
+  };
+
+  // Channel-groups diagnostic + with-streams views (bead hq3de.b)
+  const handleLoadGroupsDiagnostic = async () => {
+    setLoadingGroupsDiagnostic(true);
+    try {
+      const result = await api.getChannelGroupsDiagnostic();
+      setGroupsDiagnostic(result);
+    } catch (err) {
+      notifications.error(`Failed to load channel groups diagnostic: ${err}`);
+    } finally {
+      setLoadingGroupsDiagnostic(false);
+    }
+  };
+
+  const handleLoadGroupsWithStreams = async () => {
+    setLoadingGroupsWithStreams(true);
+    try {
+      const result = await api.getChannelGroupsWithStreams();
+      setGroupsWithStreams(result.groups);
+      setTotalGroupsForStreams(result.total_groups);
+    } catch (err) {
+      notifications.error(`Failed to load groups with streams: ${err}`);
+    } finally {
+      setLoadingGroupsWithStreams(false);
     }
   };
 
@@ -2042,11 +2187,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
 
         <div className="form-group-vertical">
-          <label>Debug Bundle</label>
+          <label>App Debug Bundle</label>
           <span className="form-description">
-            Download a tar.gz containing channels, rules, settings, recent logs, and a
+            Download a tar.gz covering the whole app: channels, rules, settings, recent logs, and a
             channel groups diagnostic. Sensitive fields (URLs, passwords, tokens) are redacted.
-            Share this when reporting issues.
+            Share this when reporting issues. For a Channel Pipeline-only bundle, use the
+            Pipeline Debug Bundle button on the Channel Pipeline tab instead.
           </span>
           <button
             className="btn-secondary"
@@ -2055,7 +2201,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             style={{ alignSelf: 'flex-start' }}
           >
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
-            {debugBundleLoading ? 'Generating...' : 'Generate Debug Bundle'}
+            {debugBundleLoading ? 'Generating...' : 'Generate App Debug Bundle'}
           </button>
         </div>
       </div>
@@ -2199,6 +2345,29 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <p>
               Automatically hide channel groups that are managed by Dispatcharr's M3U auto-sync feature.
               You can still show them using the filter in the Channel Manager tab.
+            </p>
+          </div>
+        </div>
+
+        <div className="checkbox-group">
+          <input
+            id="allowMultiProviderAutoSync"
+            type="checkbox"
+            checked={allowMultiProviderAutoSync}
+            onChange={(e) => setAllowMultiProviderAutoSync(e.target.checked)}
+            disabled={!user?.is_admin}
+          />
+          <div className="checkbox-content">
+            <label htmlFor="allowMultiProviderAutoSync">Allow multi-provider auto-sync on shared groups</label>
+            <p>
+              Dispatcharr channel groups are global — a group with the same name on two M3U
+              providers shares one underlying group ID. By default, ECM locks a group's Auto-Sync
+              controls to whichever account enabled it first, to prevent two providers from
+              silently double-creating channels for the same group. Enabling this lets you
+              auto-sync the same group from multiple providers, as Dispatcharr itself allows,
+              but it <strong>can create duplicate channels</strong> if both providers stream the
+              same content. An informational icon still marks groups shared across providers.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
             </p>
           </div>
         </div>
@@ -2962,11 +3131,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const renderAutoCreationPage = () => (
+  const renderChannelPipelinePage = () => (
     <div className="settings-page">
       <div className="settings-page-header">
-        <h2>Auto Creation</h2>
-        <p>Configure global exclusion filters for the auto-creation pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
+        <h2>Channel Pipeline</h2>
+        <p>Configure global exclusion filters for the channel pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
       </div>
 
       {/* Stream Name Exclusion List */}
@@ -2982,18 +3151,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               Streams whose name contains any of these terms (case-insensitive) will be excluded from the pipeline.
             </span>
             <div className="email-recipients-list">
-              {autoCreationExcludedTerms.length === 0 ? (
+              {channelPipelineExcludedTerms.length === 0 ? (
                 <span className="no-recipients">No excluded terms configured</span>
               ) : (
-                autoCreationExcludedTerms.map((term) => (
+                channelPipelineExcludedTerms.map((term) => (
                   <span key={term} className="email-recipient-tag">
                     {term}
                     <button
                       className="remove-btn"
-                      onClick={() => setAutoCreationExcludedTerms(prev => prev.filter(t => t !== term))}
+                      onClick={() => setChannelPipelineExcludedTerms(prev => prev.filter(t => t !== term))}
                       title="Remove term"
+                      aria-label="Remove term"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </span>
                 ))
@@ -3008,8 +3178,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newExcludedTermInput.trim()) {
                     const term = newExcludedTermInput.trim();
-                    if (!autoCreationExcludedTerms.includes(term)) {
-                      setAutoCreationExcludedTerms(prev => [...prev, term]);
+                    if (!channelPipelineExcludedTerms.includes(term)) {
+                      setChannelPipelineExcludedTerms(prev => [...prev, term]);
                     }
                     setNewExcludedTermInput('');
                   }
@@ -3019,8 +3189,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 className="btn-secondary"
                 onClick={() => {
                   const term = newExcludedTermInput.trim();
-                  if (term && !autoCreationExcludedTerms.includes(term)) {
-                    setAutoCreationExcludedTerms(prev => [...prev, term]);
+                  if (term && !channelPipelineExcludedTerms.includes(term)) {
+                    setChannelPipelineExcludedTerms(prev => [...prev, term]);
                   }
                   setNewExcludedTermInput('');
                 }}
@@ -3047,18 +3217,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               Streams belonging to any of these M3U groups (case-insensitive exact match) will be excluded.
             </span>
             <div className="email-recipients-list">
-              {autoCreationExcludedGroups.length === 0 ? (
+              {channelPipelineExcludedGroups.length === 0 ? (
                 <span className="no-recipients">No excluded groups configured</span>
               ) : (
-                autoCreationExcludedGroups.map((group) => (
+                channelPipelineExcludedGroups.map((group) => (
                   <span key={group} className="email-recipient-tag">
                     {group}
                     <button
                       className="remove-btn"
-                      onClick={() => setAutoCreationExcludedGroups(prev => prev.filter(g => g !== group))}
+                      onClick={() => setChannelPipelineExcludedGroups(prev => prev.filter(g => g !== group))}
                       title="Remove group"
+                      aria-label="Remove group"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </span>
                 ))
@@ -3072,14 +3243,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 searchPlaceholder="Search groups..."
                 placeholder="Select a group to exclude..."
                 options={availableStreamGroups
-                  .filter(g => !autoCreationExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
+                  .filter(g => !channelPipelineExcludedGroups.some(eg => eg.toLowerCase() === g.toLowerCase()))
                   .map(g => ({ value: g, label: g }))}
               />
               <button
                 className="btn-secondary"
                 onClick={() => {
-                  if (selectedExcludeGroup && !autoCreationExcludedGroups.includes(selectedExcludeGroup)) {
-                    setAutoCreationExcludedGroups(prev => [...prev, selectedExcludeGroup]);
+                  if (selectedExcludeGroup && !channelPipelineExcludedGroups.includes(selectedExcludeGroup)) {
+                    setChannelPipelineExcludedGroups(prev => [...prev, selectedExcludeGroup]);
                   }
                   setSelectedExcludeGroup('');
                 }}
@@ -3104,18 +3275,70 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <label className="checkbox-label">
               <input
                 type="checkbox"
-                checked={autoCreationExcludeAutoSyncGroups}
-                onChange={(e) => setAutoCreationExcludeAutoSyncGroups(e.target.checked)}
+                checked={channelPipelineExcludeAutoSyncGroups}
+                onChange={(e) => setChannelPipelineExcludeAutoSyncGroups(e.target.checked)}
               />
               Exclude streams in Auto Channel Sync groups
             </label>
             <span className="form-description">
               When enabled, streams belonging to Dispatcharr channel groups that have Auto Channel Sync
-              enabled will be excluded from the auto-creation pipeline.
+              enabled will be excluded from the channel pipeline.
             </span>
           </div>
         </div>
       </div>
+
+      {/* Runaway Safety Cap (GH #473 OOM safety valve) */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">shield</span>
+          <h3>Runaway Safety Cap</h3>
+        </div>
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="maxAutoCreatedChannelsPerRun">Max channels created per run</label>
+            <input
+              type="number"
+              id="maxAutoCreatedChannelsPerRun"
+              value={maxAutoCreatedChannelsPerRun}
+              onChange={(e) => setMaxAutoCreatedChannelsPerRun(parseInt(e.target.value, 10) || 0)}
+              min={0}
+              disabled={!user?.is_admin}
+            />
+            <p className="field-hint">
+              The per-run runaway safety cap. If a single channel pipeline run would create
+              more than this many channels it stops early (status &quot;capped&quot;), leaving the
+              channels it already created in place. Default 500. Set to 0 to disable the cap.
+              The channel pipeline is idempotent — running it again continues from where a capped run
+              stopped, so you can leave the cap in place and re-run rather than raising it.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
+            </p>
+          </div>
+          <div className="form-group-vertical">
+            <label htmlFor="maxChannelPipelineLogEntries">Max execution-log entries per run</label>
+            <input
+              type="number"
+              id="maxChannelPipelineLogEntries"
+              value={maxChannelPipelineLogEntries}
+              onChange={(e) => setMaxChannelPipelineLogEntries(parseInt(e.target.value, 10) || 0)}
+              min={0}
+              disabled={!user?.is_admin}
+            />
+            <p className="field-hint">
+              Caps how many per-stream trace entries each non-dry-run keeps in memory (the
+              dominant memory consumer on a runaway run). Dry-runs always keep the full trace.
+              Default 500. Set to 0 to disable the cap.
+              {!user?.is_admin && ' Only an administrator can change this safety setting.'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Event Sync team-alias dictionary (bead ti939.4.2). Self-contained:
+          loads and saves through its own /api/event-sync/team-aliases
+          endpoints — deliberately NOT part of this page's Save Settings
+          button below. */}
+      <EventSyncTeamAliasesSection />
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
@@ -3478,6 +3701,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
 
       </div>
+
+      <AlertMethodsSection />
 
       <div className="settings-actions">
         <button
@@ -3940,6 +4165,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       )}
 
+      {digestError && !digestLoading && (
+        <div className="loading-state" role="alert" data-testid="digest-load-error">
+          <span className="material-icons">error</span>
+          <p>Failed to load digest settings: {digestError}</p>
+          <p>Check that the ECM backend is reachable, then retry.</p>
+          <button
+            className="btn-primary"
+            onClick={loadDigestSettings}
+            aria-label="Retry loading digest settings"
+          >
+            <span className="material-icons">refresh</span>
+            Retry
+          </button>
+        </div>
+      )}
+
       {digestSettings && !digestLoading && (
         <>
           {/* Enable/Disable Section */}
@@ -4058,6 +4299,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </div>
           </div>
 
+          {/* Account Filter Section */}
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <span className="material-icons">checklist</span>
+              <h3>Account Filter</h3>
+            </div>
+
+            <div className="settings-group">
+              <div className="form-group-vertical">
+                <label>M3U Accounts</label>
+                <span className="form-description">
+                  Limit digest notifications to changes from these M3U accounts. Change history is always logged for every account regardless of this setting — this only scopes what gets emailed or posted to Discord. Leave empty to include all accounts.
+                </span>
+                <GroupMultiSelectDropdown
+                  options={digestM3uAccounts.map(a => ({ id: a.id, name: a.name }))}
+                  selectedIds={digestSettings.account_ids}
+                  onChange={(ids) => handleDigestSettingChange('account_ids', ids)}
+                  label="M3U Accounts"
+                  placeholder="All accounts"
+                  emptyMessage="No M3U accounts configured."
+                  itemLabelSingular="account"
+                  itemLabelPlural="accounts"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Exclude Patterns Section */}
           <div className="settings-section">
             <div className="settings-section-header">
@@ -4082,8 +4350,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveGroupExcludePattern(pattern)}
                           title="Remove pattern"
+                          aria-label="Remove pattern"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -4134,8 +4403,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveStreamExcludePattern(pattern)}
                           title="Remove pattern"
+                          aria-label="Remove pattern"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -4212,8 +4482,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           className="remove-btn"
                           onClick={() => handleRemoveDigestRecipient(email)}
                           title="Remove recipient"
+                          aria-label="Remove recipient"
                         >
-                          <span className="material-icons">close</span>
+                          <span className="material-icons" aria-hidden="true">close</span>
                         </button>
                       </span>
                     ))
@@ -5106,6 +5377,137 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         )}
       </div>
 
+      {/* Stale Streams Section */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">schedule</span>
+          <h3>Stale Streams</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Flag streams that haven't been re-checked recently, or that the provider's own M3U
+          refresh no longer lists. Unlike struck-out streams, a stale stream may still be
+          playable — it just hasn't been confirmed lately.
+        </p>
+
+        <div className="settings-group">
+          <div className="form-group-vertical">
+            <label htmlFor="staleStreamDays">Not probed in (days)</label>
+            <span className="form-description">
+              Streams last probed longer ago than this, or never probed, are flagged.
+              Provider-reported stale streams are always flagged regardless of this value.
+            </span>
+            <input
+              id="staleStreamDays"
+              type="number"
+              min="1"
+              value={staleStreamDays}
+              onChange={(e) => setStaleStreamDays(e.target.value === '' ? 7 : parseInt(e.target.value))}
+              onBlur={() => setStaleStreamDays(Math.max(1, staleStreamDays || 1))}
+              style={{ width: '80px' }}
+            />
+          </div>
+        </div>
+
+        <div className="settings-group" style={{ marginTop: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleScanStaleStreams}
+              disabled={loadingStaleStreams || probingStaleStreams}
+            >
+              <span className="material-icons">search</span>
+              {loadingStaleStreams ? 'Scanning...' : 'Scan for Stale Streams'}
+            </button>
+          </div>
+
+          {staleStreamsScanned && staleStreams.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <p style={{ margin: 0 }}>
+                  Found <strong>{staleStreams.length}</strong> stale stream(s)
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                    onClick={() => setSelectedStaleStreams(new Set(staleStreams.map(s => s.stream_id)))}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                    onClick={() => setSelectedStaleStreams(new Set())}
+                  >
+                    Select None
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                {staleStreams.map((stream) => (
+                  <label
+                    key={stream.stream_id}
+                    className="checkbox-label"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedStaleStreams.has(stream.stream_id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedStaleStreams);
+                        if (e.target.checked) next.add(stream.stream_id);
+                        else next.delete(stream.stream_id);
+                        setSelectedStaleStreams(next);
+                      }}
+                      style={{ marginTop: '2px' }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500 }}>{stream.stream_name || `Stream #${stream.stream_id}`}</div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '2px' }}>
+                        {stream.reasons.includes('not_probed_recently') && (
+                          <span className="badge badge-warning badge-sm badge-pill">
+                            {stream.last_probed ? `Last probed: ${formatTimestamp(stream.last_probed)}` : 'Never probed'}
+                          </span>
+                        )}
+                        {stream.reasons.includes('provider_stale') && (
+                          <span className="badge badge-error badge-sm badge-pill">
+                            {stream.provider_last_seen ? `Provider last saw: ${formatTimestamp(stream.provider_last_seen)}` : 'Provider reports missing'}
+                          </span>
+                        )}
+                      </div>
+                      {stream.channels.length > 0 && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                          In channels: {stream.channels.map(c => c.name).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                <button
+                  className="btn-secondary"
+                  onClick={handleProbeSelectedStale}
+                  disabled={selectedStaleStreams.size === 0 || probingStaleStreams}
+                >
+                  <span className="material-icons">refresh</span>
+                  {probingStaleStreams ? 'Probing...' : `Probe ${selectedStaleStreams.size} Stream(s)`}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Auto-Created Channels Section */}
       <div className="settings-section">
         <div className="settings-section-header">
@@ -5224,6 +5626,122 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      {/* Channel Groups Diagnostic + With-Streams Views (bead hq3de.b) */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">troubleshoot</span>
+          <h3>Channel Groups Diagnostic</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Read-only report: duplicate group names, stale hidden-group records, and channels whose
+          group reference doesn't resolve. Same data the debug bundle generator writes.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadGroupsDiagnostic}
+              disabled={loadingGroupsDiagnostic}
+            >
+              <span className="material-icons">search</span>
+              {loadingGroupsDiagnostic ? 'Running...' : 'Run Diagnostic'}
+            </button>
+          </div>
+
+          {groupsDiagnostic && (
+            <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <div className="header-stats" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                <span>Dispatcharr groups: <strong>{groupsDiagnostic.dispatcharr_group_count}</strong></span>
+                <span>Channels scanned: <strong>{groupsDiagnostic.channel_count}</strong></span>
+                <span>Duplicate names: <strong>{Object.keys(groupsDiagnostic.duplicate_group_names).length}</strong></span>
+                <span>Orphaned group refs: <strong>{groupsDiagnostic.orphaned_channel_group_id_count}</strong></span>
+                <span>Null-id-with-name: <strong>{groupsDiagnostic.null_id_with_name_count}</strong></span>
+              </div>
+
+              {Object.keys(groupsDiagnostic.duplicate_group_names).length > 0 && (
+                <div>
+                  <strong>Duplicate group names:</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {Object.entries(groupsDiagnostic.duplicate_group_names).map(([name, count]) => (
+                      <li key={name}>{name} &times;{count}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {groupsDiagnostic.orphaned_sample.length > 0 && (
+                <div>
+                  <strong>Channels with an unresolved group (sample):</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {groupsDiagnostic.orphaned_sample.slice(0, 10).map((c) => (
+                      <li key={c.id}>#{c.channel_number} {c.name} &rarr; group_id {c.channel_group_id}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {groupsDiagnostic.hidden_records.some((h) => h.status !== 'VALID') && (
+                <div>
+                  <strong>Stale hidden-group records:</strong>
+                  <ul style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {groupsDiagnostic.hidden_records.filter((h) => h.status !== 'VALID').map((h) => (
+                      <li key={h.id}>id {h.id} ({h.stored_name}) — {h.status}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {Object.keys(groupsDiagnostic.duplicate_group_names).length === 0 &&
+                groupsDiagnostic.orphaned_channel_group_id_count === 0 &&
+                groupsDiagnostic.null_id_with_name_count === 0 &&
+                groupsDiagnostic.hidden_records.every((h) => h.status === 'VALID') && (
+                <p style={{ color: 'var(--text-secondary)' }}>No issues found.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">stream</span>
+          <h3>Channel Groups With Streams</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          Channel groups that have at least one channel with a stream — the groups that can be
+          probed.
+        </p>
+
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn-secondary"
+              onClick={handleLoadGroupsWithStreams}
+              disabled={loadingGroupsWithStreams}
+            >
+              <span className="material-icons">search</span>
+              {loadingGroupsWithStreams ? 'Scanning...' : 'Scan for Groups With Streams'}
+            </button>
+          </div>
+
+          {groupsWithStreams && (
+            <div style={{ marginTop: '1rem' }}>
+              <p>
+                <strong>{groupsWithStreams.length} of {totalGroupsForStreams} group(s) have streams:</strong>
+              </p>
+              {groupsWithStreams.length > 0 && (
+                <ul style={{ marginLeft: '1.5rem', marginTop: '0.5rem', maxHeight: '240px', overflowY: 'auto' }}>
+                  {groupsWithStreams.map((g) => (
+                    <li key={g.id}>{g.name} (ID: {g.id})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="settings-actions">
         <div className="settings-actions-left" />
         <button className="btn-primary" onClick={handleSave} disabled={loading}>
@@ -5303,11 +5821,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             Scheduled Tasks
           </li>
           <li
-            className={`settings-nav-item ${activePage === 'auto-creation' ? 'active' : ''}`}
-            onClick={() => setActivePage('auto-creation')}
+            className={`settings-nav-item ${activePage === 'channel-pipeline' ? 'active' : ''}`}
+            onClick={() => setActivePage('channel-pipeline')}
           >
             <span className="material-icons">auto_awesome</span>
-            Auto Creation
+            Channel Pipeline
           </li>
           <li
             className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
@@ -5373,7 +5891,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </ul>
       </nav>
 
-      <div className="settings-content">
+      <div className="settings-content" ref={settingsContentRef}>
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
@@ -5383,7 +5901,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'integrations' && renderIntegrationsPage()}
         {activePage === 'scheduled-tasks' && <ScheduledTasksSection userTimezone={userTimezone} />}
-        {activePage === 'auto-creation' && renderAutoCreationPage()}
+        {activePage === 'channel-pipeline' && renderChannelPipelinePage()}
         {activePage === 'm3u-digest' && renderM3UDigestPage()}
         {activePage === 'maintenance' && renderMaintenancePage()}
         {activePage === 'linked-accounts' && <LinkedAccountsSection />}
@@ -5414,8 +5932,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <button
                 onClick={() => setShowProbeResultsModal(false)}
                 className="modal-close-btn"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -5557,8 +6077,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <button
                 onClick={() => setShowReorderModal(false)}
                 className="modal-close-btn"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 

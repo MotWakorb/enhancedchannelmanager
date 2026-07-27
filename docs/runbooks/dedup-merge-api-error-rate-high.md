@@ -80,7 +80,7 @@ The most expected failure mode — Dispatcharr returns 5xx or times out partway 
 
 ### Branch B: SQLite lock contention
 
-A long-running bulk operation (auto-creation, M3U import) holds a write lock; the merge endpoint's ECM-side update times out.
+A long-running bulk operation (the Channel Pipeline, M3U import) holds a write lock; the merge endpoint's ECM-side update times out.
 
 - Cross-reference: [stats-v2-write-failures.md](./stats-v2-write-failures.md) Branch B (same root cause class).
 

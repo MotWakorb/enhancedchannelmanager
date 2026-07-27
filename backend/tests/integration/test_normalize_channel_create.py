@@ -79,10 +79,15 @@ class TestNormalizeOnChannelCreateSetting:
         # including a password — because the settings endpoint correctly
         # rejects a URL/username change in password mode without one
         # ("password required when changing auth mode, URL or username").
+        # Use a non-loopback host: kgz3k now SSRF-validates a changed
+        # Dispatcharr URL on save, and ``localhost`` is a blocked loopback
+        # host. ``dispatcharr.example`` does not resolve, so the save is
+        # allowed (the runtime client re-validates before connecting) — which
+        # keeps this test focused on the normalize flag, not URL policy.
         response = await async_client.post(
             "/api/settings",
             json={
-                "url": "http://localhost:8090",
+                "url": "http://dispatcharr.example:8090",
                 "auth_method": "password",
                 "username": "admin",
                 "password": "test-password",
@@ -122,9 +127,15 @@ class TestCreateChannelWithNormalize:
                     "normalize": True,
                 },
             )
-            # Should not fail due to unknown field
-            # (may fail for other reasons like missing dispatcharr connection)
-            assert response.status_code in (200, 201, 500)
+            # get_client is mocked to a working create_channel, so the happy path
+            # runs end to end and returns the created channel with 200. The old
+            # (200, 201, 500) set treated a 500 (a broken normalize path or a
+            # router exception) as a PASS; assert the intended 200 and that the
+            # response echoes the created channel.
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == 1
+            assert data["name"] == "Test Channel"
 
     @pytest.mark.asyncio
     async def test_create_channel_accepts_normalize_false(self, async_client):
@@ -146,7 +157,12 @@ class TestCreateChannelWithNormalize:
                     "normalize": False,
                 },
             )
-            assert response.status_code in (200, 201, 500)
+            # Mocked get_client → deterministic 200 with the created channel.
+            # The old (200, 201, 500) set admitted a 500 as a pass.
+            assert response.status_code == 200
+            data = response.json()
+            assert data["id"] == 2
+            assert data["name"] == "Test Channel 2"
 
 
 class TestBulkCommitWithNormalize:
@@ -180,8 +196,14 @@ class TestBulkCommitWithNormalize:
             )
             # Non-validateOnly path returns 202 + job_id (bd-ggxks); the schema
             # would have raised 422 BEFORE the dispatch if the normalize field
-            # were rejected, so the 202 here proves acceptance.
-            assert response.status_code in (202, 500)
+            # were rejected, so the 202 here proves acceptance. The old (202, 500)
+            # set treated a 500 (an exception anywhere in the dispatch) as a pass;
+            # the enqueue path is synchronous and deterministic, so assert exactly
+            # 202 and the documented running-job envelope.
+            assert response.status_code == 202
+            data = response.json()
+            assert data["status"] == "running"
+            assert "job_id" in data
 
     @pytest.mark.asyncio
     async def test_bulk_commit_createchannel_schema_includes_normalize(self, async_client):
@@ -202,5 +224,11 @@ class TestBulkCommitWithNormalize:
                 "validateOnly": True,  # Just validate, don't execute
             },
         )
-        # Should not return 422 (validation error) for the normalize field
-        assert response.status_code != 422 or "normalize" not in str(response.json())
+        # The schema must accept the normalize field — a 422 here means schema rejection.
+        # The or-form of the prior assertion was always-True: this form fails if the
+        # endpoint returns 422 for any reason, which is the correct guard for schema acceptance.
+        # Mutation check: removing the normalize field from BulkCreateChannelOp would cause
+        # Pydantic to reject it with 422, failing this assertion.
+        assert response.status_code != 422, (
+            f"Schema rejected the normalize field — response: {response.json()}"
+        )

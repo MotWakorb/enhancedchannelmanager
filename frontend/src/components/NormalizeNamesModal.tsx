@@ -109,8 +109,8 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
       <div className="modal-container modal-md normalize-names-modal">
         <div className="modal-header">
           <h2>Normalize Channel Names</h2>
-          <button className="modal-close-btn" onClick={onCancel}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -182,8 +182,9 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
                             className="normalize-revert-btn"
                             onClick={() => updateName(n.id, n.current)}
                             title="Revert to original name for manual editing"
+                            aria-label="Revert to original name for manual editing"
                           >
-                            <span className="material-icons">undo</span>
+                            <span className="material-icons" aria-hidden="true">undo</span>
                           </button>
                         )}
                       </div>
@@ -196,6 +197,9 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onCancel}>
+            Cancel
+          </button>
           {normalizations.length > 0 && !loading && (
             <button
               className="modal-btn modal-btn-primary"

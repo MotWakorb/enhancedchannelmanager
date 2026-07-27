@@ -1,13 +1,13 @@
 # Normalization
 
-> How ECM collapses noisy stream names into the channel names you want — across Test Rules (the preview you try before saving) and Auto Create (the engine that actually makes channels). This guide is dual-audience: the first half is for operators authoring rules; the [Developer reference](#developer-reference) at the bottom is for engineers integrating with the engine.
+> How ECM collapses noisy stream names into the channel names you want — across Test Rules (the preview you try before saving) and the Channel Pipeline (the engine that actually makes channels). This guide is dual-audience: the first half is for operators authoring rules; the [Developer reference](#developer-reference) at the bottom is for engineers integrating with the engine.
 
 ## Overview
 
 Normalization is the step between "raw name from an M3U line" and "channel name on disk." It runs in three places:
 
 - **Test Rules** — Settings → Normalization → the preview panel where you paste a sample name and see what the current rule set produces. Safe to use freely; no side effects.
-- **Auto Create** — the auto-creation pipeline reads the stream's raw name, passes it through the same rule set, and uses the output as the channel name (or as the lookup key for matching an existing channel).
+- **Channel Pipeline** — the Channel Pipeline reads the stream's raw name, passes it through the same rule set, and uses the output as the channel name (or as the lookup key for matching an existing channel).
 - **Re-normalize Existing Channels** — a one-time bulk rewrite that reapplies the current rule set to channels already on disk. Manual, gated, undoable.
 
 These three paths **must produce the same output for the same input**. That is the *parity contract*, added in bd-eio04.1 and enforced by a nightly canary ([SLO-5 in `docs/sre/slos.md`](sre/slos.md#slo-5-normalization-correctness)). If a user reports "Test Rules says one thing and my auto-created channel got a different name," that is a canary-level bug — follow [the divergence runbook](runbooks/normalization-canary-divergence.md), don't work around it with a rule change.
@@ -15,7 +15,7 @@ These three paths **must produce the same output for the same input**. That is t
 ### When does normalization run?
 
 - **Test Rules**: on demand, when you click "Test" in the rules UI or call `POST /api/normalization/test` / `test-batch`.
-- **Auto Create**: on every stream name processed by an auto-creation rule that has a normalization group configured. If no group is configured on the rule, normalization is **skipped** — `ecm_auto_creation_channels_created_total{normalized="skipped"}` increments.
+- **Channel Pipeline**: on every stream name processed by a Channel Pipeline rule that has a normalization group configured. If no group is configured on the rule, normalization is **skipped** — `ecm_auto_creation_channels_created_total{normalized="skipped"}` increments.
 - **Re-normalize Existing Channels**: only when an operator explicitly runs it via the Settings UI or `POST /api/normalization/apply-to-channels`. Never automatic.
 
 ### What normalization is not
@@ -23,6 +23,7 @@ These three paths **must produce the same output for the same input**. That is t
 - It is not search. `GET /api/channels?search=foo` does its own matching without invoking the normalization rule set.
 - It is not EPG matching. EPG match uses channel name + TVG-ID against EPG data; normalization affects the channel name that feeds into EPG match but is not itself EPG logic.
 - It is not a regex sandbox. Regex rules run under `safe_regex` (100 ms timeout, bounded pattern size); pathological patterns fail fast with `[SAFE_REGEX]` WARN in logs and are rejected at save time by the linter.
+- It is not the **fold match key** (GH #645). The opt-in per-rule flag `fold_match_key` (Channel Pipeline rule editor: *"Ignore spacing & case differences when matching"*) and the Find Duplicates *"Ignore spacing differences"* toggle compare names by a canonical key — casefold + strip ALL whitespace, one shared helper (`backend/match_fold.py`) for both surfaces — **without ever rewriting the visible channel name**. Normalization rules transform stored names; the fold only changes how names are *compared* during the `create_channel` `if_exists: merge` lookup and duplicate grouping. Because the fold never touches stored names, the parity contract below is unaffected by it. Caveat: with the fold on, genuinely distinct channels whose names differ only by spacing/case merge too — including spacing inside digit runs ("Canal 5 2" vs "Canal 52" fold to the same key) and word boundaries ("Sky Cinema" vs "SkyCinema") — that is why it is opt-in and off by default.
 
 ## Quick start
 
@@ -38,7 +39,7 @@ These three paths **must produce the same output for the same input**. That is t
 
 ### Testing a rule before you commit
 
-Test Rules is the single source of truth for "what will Auto Create do with this input." If Test Rules shows the output you want, Auto Create will produce that same output. If it does not, **do not** work around the rule — file a bug, because divergence between the two paths is the exact failure class the parity contract and SLO-5 canary exist to catch.
+Test Rules is the single source of truth for "what will the Channel Pipeline do with this input." If Test Rules shows the output you want, the Channel Pipeline will produce that same output. If it does not, **do not** work around the rule — file a bug, because divergence between the two paths is the exact failure class the parity contract and SLO-5 canary exist to catch.
 
 - `POST /api/normalization/test` — single rule, single input. Useful when authoring one rule at a time.
 - `POST /api/normalization/test-batch` — all enabled rules, multiple inputs. Use this to preview a batch (e.g., pasting 50 raw names from a new M3U).
@@ -52,7 +53,7 @@ Rules live in groups. Groups run in **group priority** order (lowest number firs
 Consequences:
 
 - A rule later in the pipeline sees the *output* of earlier rules, not the raw input. If rule 1 strips `HD` and rule 2 matches `HD`, rule 2 will not fire against the original input.
-- Groups are a coarse bucket for sharing across auto-creation rules. You can assign one group to many auto-creation rules; the same group applied twice will produce the same output (idempotent).
+- Groups are a coarse bucket for sharing across Channel Pipeline rules. You can assign one group to many Channel Pipeline rules; the same group applied twice will produce the same output (idempotent).
 
 ### NormalizationPolicy — the Unicode preprocessor
 
@@ -63,15 +64,15 @@ Before any user-authored rule runs, a **policy** preprocesses the input. The pol
 3. **Full superscript conversion.** Letter-superscripts (`ᴴᴰ` → `HD`, `ᴿᴬᵂ` → `RAW`) and numeric-superscripts (`²` → `2`, `⁶⁰` → `60`) both convert to ASCII. Both, always.
 4. **(Opt-in)** **Confusables fold** — see [Confusables fold](#confusables-fold-opt-in-bd-sc5s4) below. Off by default; enable when homoglyph attacks are part of your threat model.
 
-The policy is a [frozen dataclass](#developer-reference) applied at the same call site by Test Rules, Auto Create, and Re-normalize Existing Channels. It is not extensible from rule configuration — if you need a different Unicode preprocessing step, file a bead.
+The policy is a [frozen dataclass](#developer-reference) applied at the same call site by Test Rules, the Channel Pipeline, and Re-normalize Existing Channels. It is not extensible from rule configuration — if you need a different Unicode preprocessing step, file a bead.
 
 ### Confusables fold (opt-in, bd-sc5s4)
 
-Unicode contains many characters that render identically across scripts but occupy distinct code points — for example, Cyrillic `а` (U+0430) and Latin `a` (U+0061) look the same on screen but are byte-distinct. An attacker can register a stream named `chаnnel` (with a Cyrillic `а`) that visually matches a legitimate `channel`, defeating dedup, rule matching, and auto-creation collision detection.
+Unicode contains many characters that render identically across scripts but occupy distinct code points — for example, Cyrillic `а` (U+0430) and Latin `a` (U+0061) look the same on screen but are byte-distinct. An attacker can register a stream named `chаnnel` (with a Cyrillic `а`) that visually matches a legitimate `channel`, defeating dedup, rule matching, and Channel Pipeline collision detection.
 
 ECM ships with an opt-in **confusables fold** that maps a curated subset of Unicode TR39 confusables to Latin/ASCII *after* NFC + Cf-strip + superscript conversion. The fold is **off by default** because it is aggressive — it collapses characters that some operators want kept distinct (e.g. Greek alphabet channels, math-italic letters used as branding).
 
-**Enable it** by setting `ECM_NORMALIZATION_CONFUSABLES_FOLD=true` and restarting the container. Once on, the fold applies uniformly to Test Rules, Auto Create, and Re-normalize Existing Channels — the parity contract is preserved.
+**Enable it** by setting `ECM_NORMALIZATION_CONFUSABLES_FOLD=true` and restarting the container. Once on, the fold applies uniformly to Test Rules, the Channel Pipeline, and Re-normalize Existing Channels — the parity contract is preserved.
 
 **What gets folded** (curated subset, not the full ~6000-entry TR39 table):
 
@@ -217,16 +218,16 @@ Work this checklist in order:
 4. **Rule ordering.** Does an earlier rule in the pipeline already transform the input away from what your pattern expects? The Test Rules trace drawer shows the intermediate values; read it top-down.
 5. **Regex timeout.** Check logs for `[SAFE_REGEX]` WARN mentioning your rule_id. If present, the pattern is timing out on this input — rewrite per style guide.
 
-### "Auto Create stopped stripping country prefixes / quality suffixes after upgrade" (bd-0tryb)
+### "Channel Pipeline stopped stripping country prefixes / quality suffixes after upgrade" (bd-0tryb)
 
 Symptom: channels land with the full raw stream name (e.g., `DE: RTL 3840P` instead of `RTL`, or `RX: RELAX TROPICAL BEACH ᵁᴴᴰ 3840P` instead of `RELAX TROPICAL BEACH`). Test Rules shows the expected normalized output, so the engine is healthy.
 
-Cause: per-rule normalization. The legacy `normalize_names: true` boolean was replaced in v0.16.0 by `normalization_group_ids` (a list of `NormalizationRuleGroup` IDs to apply on this rule). The migration sets `normalization_group_ids` to all enabled groups for any rule that had `normalize_names=true`; rules that had `normalize_names=false` (the default for new rules created before the migration) end up with `normalization_group_ids = NULL`, which means **normalization is skipped on that rule** — and so does the `merge_streams` core-name fallback that strips country/quality tags before channel lookup (see `auto_creation_executor.py` _merge_streams core-name branch).
+Cause: per-rule normalization. The legacy `normalize_names: true` boolean was replaced in v0.16.0 by `normalization_group_ids` (a list of `NormalizationRuleGroup` IDs to apply on this rule). The migration sets `normalization_group_ids` to all enabled groups for any rule that had `normalize_names=true`; rules that had `normalize_names=false` (the default for new rules created before the migration) end up with `normalization_group_ids = NULL`, which means **normalization is skipped on that rule** — and so does the `merge_streams` core-name fallback that strips country/quality tags before channel lookup (see `channel_pipeline_executor.py` _merge_streams core-name branch).
 
 Fix:
 
-1. **UI**: Auto-Creation Rules → edit the rule → **Normalization Groups** picker → select the groups you want this rule to apply (typically all enabled groups). Save. Re-run the rule.
-2. **API**: `PUT /api/auto-creation/rules/{id}` with body `{"normalization_group_ids": [<ids>]}`. To list available group IDs: `GET /api/normalization/groups`.
+1. **UI**: Channel Pipeline tab → edit the rule → **Normalization Groups** picker → select the groups you want this rule to apply (typically all enabled groups). Save. Re-run the rule.
+2. **API**: `PUT /api/channel-pipeline/rules/{id}` with body `{"normalization_group_ids": [<ids>]}`. To list available group IDs: `GET /api/normalization/groups`.
 
 Pre-existing channels created before you set the groups are not retroactively renamed by this change — they were stored with their original raw names. Use [Re-normalize existing channels](#re-normalize-existing-channels) (Settings UI or `POST /api/normalization/apply-to-channels`) for a one-shot cleanup.
 
@@ -234,6 +235,19 @@ Verification:
 
 - Test Rules with the raw stream name should already show the desired normalized output (proof the engine and tag groups are correct).
 - After enabling `normalization_group_ids`, run the rule in **dry-run mode** first and inspect the execution log for `Normalization applied` entries — these confirm the new behavior on the actual streams.
+
+### "Auto-creation created duplicate channels that differ only by spacing" (GH #645)
+
+Symptom: a rule with `if_exists: merge` produced several channels for the same logical channel — e.g. `eurosport 2`, `Eurosport 2`, `Eurosport2`, `eurosport2`.
+
+Cause: the merge lookup compares names case-insensitively but does **not** collapse whitespace, so `Eurosport 2` and `Eurosport2` are different names. Enabling normalization groups on the rule does not change this — user normalization rules collapse *runs* of whitespace to one space but never remove single interior spaces.
+
+Fix (two halves, both opt-in):
+
+1. **Stop new duplicates**: edit the rule → enable **"Ignore spacing & case differences when matching"** (`fold_match_key`). Future runs compare names by a folded key (casefold + strip all whitespace) so all four spellings merge into whichever channel exists first. Stored names are never rewritten.
+2. **Clean up existing duplicates**: Channels tab → Find Duplicates → enable **"Ignore spacing differences"**. The same folded key groups the existing spelling variants so you can bulk-merge them.
+
+Leave both off if your provider uses spacing/case to distinguish genuinely different channels — note that digit runs collide too ("Canal 5 2" and "Canal 52" fold to the same key).
 
 ### `[SAFE_REGEX]` log entries
 
@@ -290,7 +304,7 @@ The instance is process-global. Read it via `get_default_policy()`; mutate it vi
 
 ### Engine entrypoints
 
-- `NormalizationEngine.normalize(text)` — the auto-creation and apply-to-channels path.
+- `NormalizationEngine.normalize(text)` — the Channel Pipeline and apply-to-channels path.
 - `NormalizationEngine.test_rule(text, rule)` — single-rule preview.
 - `NormalizationEngine.test_rules_batch(texts)` — all-rules multi-input preview.
 
@@ -306,7 +320,7 @@ Defined in `backend/observability.py`:
 | `ecm_normalization_no_change_total` | Counter | — | Count of `normalize()` calls that returned the input unchanged. |
 | `ecm_normalization_duration_seconds` | Histogram | — | Per-call duration. Buckets cover sub-millisecond regime. |
 | `ecm_normalization_canary_divergence_total` | Counter | — | SLI numerator for SLO-5. Non-zero = breach. |
-| `ecm_auto_creation_channels_created_total` | Counter | `normalized ∈ {true, false, skipped}` | Per-auto-creation outcome. `skipped` = no normalization group on the rule. |
+| `ecm_auto_creation_channels_created_total` | Counter | `normalized ∈ {true, false, skipped}` | Per-Channel-Pipeline outcome. `skipped` = no normalization group on the rule. |
 
 SLO-5 ties the canary counter to zero-tolerance. See [`docs/sre/slos.md` §SLO-5](sre/slos.md#slo-5-normalization-correctness).
 

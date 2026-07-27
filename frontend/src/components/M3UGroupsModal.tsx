@@ -22,6 +22,12 @@ interface M3UGroupsModalProps {
   channelProfiles?: ChannelProfile[];
   streamProfiles?: StreamProfile[];
   onChannelGroupsChange?: () => void; // Called when channel groups are created/changed
+  // bd-dgs64 (GH #591): admin-only global setting (settings.allow_multi_provider_auto_sync).
+  // When true, a channel group already auto-synced by another M3U account is
+  // NOT locked here — the toggle/Start#/Settings stay usable, with a
+  // shared-ownership indicator instead of the "owned by" lock. Default false
+  // preserves the original single-owner guard from commit 030c1ef8.
+  allowMultiProviderAutoSync?: boolean;
 }
 
 // Extended type with name from channel groups lookup
@@ -41,6 +47,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   channelProfiles = [],
   streamProfiles = [],
   onChannelGroupsChange,
+  allowMultiProviderAutoSync = false,
 }: M3UGroupsModalProps) {
   const notifications = useNotifications();
   const [groups, setGroups] = useState<GroupWithName[]>([]);
@@ -212,19 +219,37 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
     setSaving(true);
 
     try {
-      // Build settings for this account
-      // Include id field - Dispatcharr needs this to identify the relationship record
+      // Build settings for this account.
+      // Include id field - Dispatcharr needs this to identify the relationship record.
+      // Dispatcharr's group-settings upsert is FULL-ROW (omitted fields are
+      // reset to defaults), so every row must carry the complete field set —
+      // including auto_sync_channel_end and custom_properties verbatim
+      // (bead enhancedchannelmanager-igqcy).
       const groupSettings = groups.map(g => ({
         id: g.id,
         channel_group: g.channel_group,
         enabled: g.enabled,
         auto_channel_sync: g.auto_channel_sync,
         auto_sync_channel_start: g.auto_sync_channel_start,
+        auto_sync_channel_end: g.auto_sync_channel_end,
         custom_properties: g.custom_properties,
       }));
 
-      // Save this account first
-      await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      // Save this account first. Capture the response so we can warn if the
+      // downstream channel-profile apply was incomplete (#9).
+      const primaryResp = await api.updateM3UGroupSettings(account.id, { group_settings: groupSettings });
+      // Accumulate the apply summary across EVERY save path (primary + linked)
+      // so a partial/conflict/degraded apply from any of them is surfaced with
+      // status-specific recovery guidance (#9 / Should-Fix 4).
+      const applySummary = [...(primaryResp?.ecm_profile_apply ?? [])];
+      // Linked-account SAVE failures tracked separately from profile-apply
+      // outcomes so they are labeled correctly (finding), not as apply errors.
+      const linkedSaveFailures: number[] = [];
+
+      // Accounts to refresh after a successful save (Dispatcharr parity:
+      // its modal's only save action is Save & Refresh — settings take
+      // effect only when the M3U refreshes).
+      const refreshAccountIds: number[] = [account.id];
 
       // Cascade to linked accounts if any
       if (linkedAccountInfo.isLinked && linkedAccountInfo.linkedAccountIds.length > 0) {
@@ -239,7 +264,9 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
             // Fetch the linked account's current groups
             const linkedAccount = await api.getM3UAccount(linkedAccountId);
 
-            // Build settings for linked account - match by channel_group ID
+            // Build settings for linked account - match by channel_group ID.
+            // Full rows: only `enabled` is overlaid; every other field is the
+            // linked account's own current value, passed through verbatim.
             const linkedSettings = linkedAccount.channel_groups.map(lg => {
               // Look up by channel_group ID (the group ID is shared across M3U accounts)
               const matchEnabled = groupEnabledById.get(lg.channel_group);
@@ -248,15 +275,52 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                 enabled: matchEnabled !== undefined ? matchEnabled : lg.enabled,  // Use this account's setting if matched
                 auto_channel_sync: lg.auto_channel_sync,  // Keep linked account's own value
                 auto_sync_channel_start: lg.auto_sync_channel_start,  // Keep linked account's own value
+                auto_sync_channel_end: lg.auto_sync_channel_end,  // Keep linked account's own value
+                custom_properties: lg.custom_properties,  // Keep linked account's own value
               };
             });
 
-            await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            const linkedResp = await api.updateM3UGroupSettings(linkedAccountId, { group_settings: linkedSettings });
+            applySummary.push(...(linkedResp?.ecm_profile_apply ?? []));
+            refreshAccountIds.push(linkedAccountId);
           } catch (linkedErr) {
-            // Log error but continue with other linked accounts
+            // Finding: a linked-account SAVE failure is a save failure, NOT a
+            // profile-application failure — track it distinctly (do not fold it
+            // into the profile-apply summary, which would mislabel it).
             logger.error(`Failed to update linked account ${linkedAccountId}:`, linkedErr);
+            linkedSaveFailures.push(linkedAccountId);
           }
         }
+      }
+
+      // Chain the M3U refresh (Save & Refresh, mirroring Dispatcharr's
+      // native modal). Only fires after a successful save; a refresh
+      // failure does not undo the save.
+      const applyWarning = api.profileApplyWarningMessage(applySummary);
+      const linkedWarning = linkedSaveFailures.length
+        ? `Saved, but ${linkedSaveFailures.length} linked account(s) could not be saved — retry from those accounts.`
+        : null;
+      // Finding: surface EVERY present warning rather than letting one hide
+      // another (a refresh failure must not mask an incomplete-apply warning,
+      // and vice versa). Returns true if any warning was emitted.
+      const emitWarnings = (refreshWarning?: string | null): boolean => {
+        const msgs = [refreshWarning, applyWarning, linkedWarning].filter(Boolean) as string[];
+        msgs.forEach(m => notifications.warning(m, 'M3U Groups'));
+        return msgs.length > 0;
+      };
+      try {
+        await Promise.all(refreshAccountIds.map(id => api.refreshM3UAccount(id)));
+        if (!emitWarnings()) {
+          notifications.success(
+            `Group settings saved — M3U refresh started for ${account.name}`,
+            'M3U Groups'
+          );
+        }
+      } catch (refreshErr) {
+        logger.error('Failed to start M3U refresh after group settings save:', refreshErr);
+        emitWarnings(
+          'Group settings saved, but the M3U refresh failed to start — changes take effect on the next refresh'
+        );
       }
 
       onSaved();
@@ -270,10 +334,24 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
 
   const enabledCount = groups.filter(g => g.enabled).length;
 
+  // bd 09x38.7: X and Escape both route through this shared close-request
+  // handler. Dirty state (hasChanges) guards against silently discarding
+  // unsaved toggles — the modal has no Cancel button, so X/Escape were the
+  // only ways to lose a batch of pending changes with zero confirmation.
+  // Outside-click close does not exist for this modal (ModalOverlay disables
+  // backdrop-click-to-close unless an `onClick` handler is passed in, and none
+  // is here), so there's no third path to guard.
+  const handleRequestClose = () => {
+    if (hasChanges && !window.confirm('Discard unsaved changes?')) {
+      return;
+    }
+    onClose();
+  };
+
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={handleRequestClose}>
       <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }}>
         <div className="modal-header">
           <div className="header-info">
@@ -286,8 +364,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               </span>
             )}
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={handleRequestClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -301,8 +379,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               onChange={(e) => setSearch(e.target.value)}
             />
             {search && (
-              <button className="clear-search" onClick={() => setSearch('')}>
-                <span className="material-icons">close</span>
+              <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search" title="Clear search">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -358,21 +436,31 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                     </label>
                   </div>
                   <div className="group-autosync">
-                    {autoSyncedByOtherAccounts.has(group.channel_group) ? (
+                    {autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync ? (
                       <div className="autosync-owned" title={`Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`}>
                         <span className="material-icons">link</span>
                         <span className="owned-text">{autoSyncedByOtherAccounts.get(group.channel_group)}</span>
                       </div>
                     ) : (
-                      <label className="toggle">
-                        <input
-                          type="checkbox"
-                          checked={group.auto_channel_sync}
-                          onChange={() => handleToggleAutoSync(group.channel_group)}
-                          disabled={!group.enabled}
-                        />
-                        <span className="toggle-slider"></span>
-                      </label>
+                      <div className="autosync-toggle-wrapper">
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={group.auto_channel_sync}
+                            onChange={() => handleToggleAutoSync(group.channel_group)}
+                            disabled={!group.enabled}
+                          />
+                          <span className="toggle-slider"></span>
+                        </label>
+                        {autoSyncedByOtherAccounts.has(group.channel_group) && (
+                          <span
+                            className="material-icons autosync-shared-indicator"
+                            title={`Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`}
+                          >
+                            link
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div className="group-start">
@@ -382,23 +470,38 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
                       placeholder="--"
                       value={group.auto_sync_channel_start ?? ''}
                       onChange={(e) => handleStartChannelChange(group.channel_group, e.target.value)}
-                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      disabled={!group.auto_channel_sync || (autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync)}
                     />
                   </div>
                   <div className="group-settings">
                     <button
                       className={`settings-btn ${hasCustomProperties(group) ? 'has-settings' : ''}`}
                       onClick={() => setSettingsModalGroup(group)}
-                      disabled={!group.auto_channel_sync || autoSyncedByOtherAccounts.has(group.channel_group)}
+                      disabled={!group.auto_channel_sync || (autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync)}
                       title={
-                        autoSyncedByOtherAccounts.has(group.channel_group)
+                        autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync
                           ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
-                          : group.auto_channel_sync
-                            ? 'Configure auto-sync settings'
-                            : 'Enable auto-sync to configure settings'
+                          : autoSyncedByOtherAccounts.has(group.channel_group)
+                            ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
+                            : group.auto_channel_sync
+                              ? 'Configure auto-sync settings'
+                              : group.enabled
+                                ? 'Turn on Auto-Sync to configure settings'
+                                : 'Enable this group and turn on Auto-Sync to configure settings'
+                      }
+                      aria-label={
+                        autoSyncedByOtherAccounts.has(group.channel_group) && !allowMultiProviderAutoSync
+                          ? `Auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)}`
+                          : autoSyncedByOtherAccounts.has(group.channel_group)
+                            ? `Also auto-synced by: ${autoSyncedByOtherAccounts.get(group.channel_group)} — may create duplicate channels`
+                            : group.auto_channel_sync
+                              ? 'Configure auto-sync settings'
+                              : group.enabled
+                                ? 'Turn on Auto-Sync to configure settings'
+                                : 'Enable this group and turn on Auto-Sync to configure settings'
                       }
                     >
-                      <span className="material-icons">settings</span>
+                      <span className="material-icons" aria-hidden="true">settings</span>
                     </button>
                   </div>
                 </div>
@@ -427,8 +530,13 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
               <span>Auto-sync only</span>
             </label>
           </div>
-          <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={saving || !hasChanges}>
-            {saving ? 'Saving...' : 'Save Changes'}
+          <button
+            className="modal-btn modal-btn-primary"
+            onClick={handleSave}
+            disabled={saving || !hasChanges}
+            title="Save group settings and refresh this M3U account so they take effect"
+          >
+            {saving ? 'Saving...' : 'Save & Refresh'}
           </button>
         </div>
       </div>

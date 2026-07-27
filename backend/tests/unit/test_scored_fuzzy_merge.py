@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from auto_creation_executor import ActionExecutor, ExecutionContext
-from auto_creation_evaluator import StreamContext
+from channel_pipeline_executor import ActionExecutor, ExecutionContext
+from channel_pipeline_evaluator import StreamContext
 
 
 CHANNEL_TVG_ID = "WBAY-DT(ABC)(WBAYDT).us"
@@ -37,6 +37,10 @@ def _wbay_channel(group_id=42, streams=None):
         "id": 1, "name": "ABC: WBAY Green Bay", "tvg_id": CHANNEL_TVG_ID,
         "channel_number": 2, "channel_group_id": group_id,
         "streams": streams if streams is not None else [],
+        # Auto-created merge target: the scored-fuzzy path must be allowed to
+        # adopt it (enhancedchannelmanager-orzck — manual channels are protected,
+        # auto channels are valid merge targets).
+        "auto_created": True,
     }
 
 
@@ -97,7 +101,8 @@ class TestScoredFuzzyResolution:
 class TestNoCallsignPolicy:
     def _no_callsign_channel(self):
         return {"id": 5, "name": "Travel Channel", "tvg_id": None,
-                "channel_number": 7, "channel_group_id": 42, "streams": []}
+                "channel_number": 7, "channel_group_id": 42, "streams": [],
+                "auto_created": True}
 
     def test_no_callsign_rejected_by_default(self):
         client, ex = _make_executor([self._no_callsign_channel()])
@@ -133,7 +138,7 @@ class TestNoCallsignPolicy:
 class TestJournalProvenance:
     def test_journal_records_score_and_provenance(self):
         client, ex = _make_executor([_wbay_channel()])
-        with patch("auto_creation_executor.journal.log_entries") as log_entries:
+        with patch("channel_pipeline_executor.journal.log_entries") as log_entries:
             result = _run(ex.execute(
                 _scored_action(), _stream("WI | Green Bay | ABC 2 WBAY"),
                 ExecutionContext(), normalization_group_ids=[1],
@@ -164,7 +169,7 @@ class TestJournalProvenance:
         # FIX 4: the firing rule's id (threaded from the engine via execute)
         # lands in provenance["rule_id"] for M7 completeness.
         client, ex = _make_executor([_wbay_channel()])
-        with patch("auto_creation_executor.journal.log_entries") as log_entries:
+        with patch("channel_pipeline_executor.journal.log_entries") as log_entries:
             result = _run(ex.execute(
                 _scored_action(), _stream("WI | Green Bay | ABC 2 WBAY"),
                 ExecutionContext(), normalization_group_ids=[1],
@@ -182,7 +187,7 @@ class TestJournalProvenance:
              "channel_number": 100, "channel_group_id": 42, "streams": []},
         ])
         action = {"type": "merge_streams", "target": "auto"}
-        with patch("auto_creation_executor.journal.log_entries") as log_entries:
+        with patch("channel_pipeline_executor.journal.log_entries") as log_entries:
             _run(ex.execute(action, _stream("ESPN", sid=900),
                             ExecutionContext(), normalization_group_ids=[1]))
             ex._flush_journal_buffer()

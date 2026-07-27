@@ -1,0 +1,76 @@
+/**
+ * TaskStatusPill styles (bead vkktd.4).
+ *
+ * Status pill = outline/ghost chip (bd-9n08a: status, not action — solid fill
+ * is reserved for actions). The amber wontRun variant reuses the semantic
+ * --warning theme tokens so dark/light/high-contrast modes stay legible;
+ * meaning is carried by the icon + the words "won't run", not colour alone
+ * (WCAG 1.4.1). "Fix it" is an action, so it gets a solid warning fill.
+ */
+
+.task-status-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.task-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.task-status-pill .material-icons {
+  font-size: 14px;
+}
+
+.task-status-pill.running {
+  color: #3498db;
+  border-color: #3498db;
+}
+
+.task-status-pill.enabled {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.task-status-pill.wontRun {
+  color: var(--warning-text);
+  border-color: var(--warning);
+  background-color: var(--warning-bg);
+}
+
+.task-status-pill.disabled {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+}
+
+.task-status-pill-fix-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  background-color: var(--warning);
+  color: #1a1a1a;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.task-status-pill-fix-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.task-status-pill-fix-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

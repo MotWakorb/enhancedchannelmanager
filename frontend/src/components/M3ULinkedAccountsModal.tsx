@@ -143,8 +143,8 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
       <div className="modal-container modal-md m3u-linked-accounts-modal">
         <div className="modal-header">
           <h2>Manage Linked Accounts</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -209,15 +209,17 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
                             className="btn-icon"
                             onClick={() => handleStartEdit(index)}
                             title="Edit group"
+                            aria-label="Edit group"
                           >
-                            <span className="material-icons">edit</span>
+                            <span className="material-icons" aria-hidden="true">edit</span>
                           </button>
                           <button
                             className="btn-icon delete"
                             onClick={() => handleDeleteGroup(index)}
                             title="Delete group"
+                            aria-label="Delete group"
                           >
-                            <span className="material-icons">delete</span>
+                            <span className="material-icons" aria-hidden="true">delete</span>
                           </button>
                         </div>
                       </div>
@@ -251,6 +253,9 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
 
         {hasChanges && !isEditing && (
           <div className="modal-footer">
+            <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
             <button className="modal-btn modal-btn-primary" onClick={handleSaveAll}>
               Save Changes
             </button>

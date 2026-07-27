@@ -12,7 +12,7 @@
 This runbook is **manually triggered**. There is no Prometheus alert on duplicate channels directly — dedupe is a correctness property, not a latency/error budget. Expect to reach this runbook via one of:
 
 - **User report** — "two copies of ESPN appeared after a refresh," "the channel list shows `RTL` and `RTL ᴿᴬᵂ` as separate entries," "we merged these last week, they came back."
-- **Auto-creation audit** — `ecm_auto_creation_channels_created_total{normalized="false"}` incremented unexpectedly for a rule that has a normalization group configured. Sampled INFO log under the same rule_id shows the raw names.
+- **Channel Pipeline audit** — `ecm_auto_creation_channels_created_total{normalized="false"}` incremented unexpectedly for a rule that has a normalization group configured. Sampled INFO log under the same rule_id shows the raw names.
 - **Post-incident sweep** — after a normalization rule change lands, operator wants to know if any now-collapsible duplicates exist.
 - **Canary fired first** — if `ecm_normalization_canary_divergence_total` went non-zero, stop here and follow [`normalization-canary-divergence.md`](./normalization-canary-divergence.md) instead. The canary is the leading indicator; duplicates on disk are the lagging symptom.
 
@@ -57,6 +57,10 @@ Ordered, if/then. Do not skip steps — the wrong resolution for the wrong cause
    A WARN line that names a rule_id appearing in your Test Rules preview means the pattern is pathological (timeout, oversize, compile error). Go to **Resolution C** even if step 2 suggested A or B — fix the rule first, then re-diagnose.
 
 4. **Correlate with the canary.** If `ecm_normalization_canary_divergence_total` is non-zero for the same period, the divergence is between Test Rules and the auto-create executor — not between "correct rule" and "stale channel name." Stop this runbook and follow [`normalization-canary-divergence.md`](./normalization-canary-divergence.md).
+
+5. **Not a Unicode-suffix divergence at all? Check multi-provider auto-sync overlap.** If Test Rules shows both raw names normalizing to the SAME output (step 2 routed you to Resolution B) but the duplicate pair are otherwise byte-identical or clearly the same channel duplicated with no suffix/accent/superscript difference, this runbook's root cause may not apply. Check `GET /api/settings` for `allow_multi_provider_auto_sync` (Settings → Appearance → Display Options, admin-only) — when enabled (bd-dgs64, GH #591), two different M3U provider accounts can both auto-sync the same (globally-shared) Dispatcharr channel group, each independently creating a channel for it. Confirm via Settings → M3U → *[account]* → Manage Groups: if the same group name shows a live (non-locked) Auto-Sync toggle on more than one account, that overlap — not normalization — is producing the duplicates.
+
+   **Rollback caveat:** disabling `allow_multi_provider_auto_sync` re-engages the single-owner lock going forward (it prevents *new* cross-provider overlap), but it does **not** retroactively clean up channels the overlap already created. Resolve existing duplicates the same way as Resolution B — Merge Channels or a dedup pass — the setting change alone will not remove them.
 
 **Escalate** if:
 

@@ -85,6 +85,13 @@ class TaskResult:
     skipped_count: int = 0
     error: Optional[str] = None
     details: dict = field(default_factory=dict)
+    # y3m6o.1 review (Finding 2): when True, the task engine SKIPS its generic
+    # completion notification (the "Task Completed"/"...with Warnings" toast +
+    # alert) because the task body already emitted ONE coherent notification for
+    # this run. Journal + success-gauge stamping still happen. Used by the
+    # channel-pipeline post-refresh path when a run is BOTH capped AND has
+    # failed actions, to avoid emitting two separate warnings.
+    suppress_completion_notification: bool = False
 
     @property
     def duration_seconds(self) -> Optional[float]:
@@ -249,6 +256,16 @@ class TaskScheduler(ABC):
             "next_run": self._next_run.isoformat() + "Z" if self._next_run else None,
             "config": self.get_config(),
         }
+
+    # Whether the task-specific config surface (get_config/update_config) is
+    # DURABLE operator settings: persisted to ScheduledTask.config by the
+    # registry on save and re-applied (merge-over-defaults, via
+    # update_config) on startup reconstruction (gjb01 review blocker).
+    # Set False on tasks whose config is per-invocation/ephemeral state
+    # (e.g. dbas_restore/dbas_sync destructive arming flags, which must
+    # re-disarm on restart) or lives in its own store (m3u_digest settings
+    # table) — those are neither persisted nor hydrated.
+    persist_config: bool = True
 
     def get_config(self) -> dict:
         """

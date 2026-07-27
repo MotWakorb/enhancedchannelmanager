@@ -1,0 +1,1303 @@
+/**
+ * TDD Tests for ActionEditor component.
+ *
+ * These tests define the expected behavior of the component BEFORE implementation.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {
+  server,
+  resetMockDataStore,
+  mockDataStore,
+  createMockChannelGroup,
+} from '../../test/mocks/server';
+import { ActionEditor } from './ActionEditor';
+
+// Setup MSW server
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() => {
+  server.resetHandlers();
+  resetMockDataStore();
+});
+afterAll(() => server.close());
+
+describe('ActionEditor', () => {
+  describe('rendering', () => {
+    it('renders action type selector', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Action type selector should be the first combobox
+      expect(screen.getAllByRole('combobox').length).toBeGreaterThan(0);
+    });
+
+    it('renders remove button', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByRole('button', { name: /remove/i })).toBeInTheDocument();
+    });
+
+    it('displays action type label', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/create channel/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('create_channel action', () => {
+    it('renders name template input', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{stream_name}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/name template/i)).toHaveValue('{stream_name}');
+    });
+
+    it('renders group selector', () => {
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ name: 'Sports' }),
+        createMockChannelGroup({ name: 'News' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/target group/i)).toBeInTheDocument();
+    });
+
+    it('renders if_exists selector', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', if_exists: 'skip' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/if already exists/i)).toBeInTheDocument();
+    });
+
+    it('shows all if_exists options', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // The if_exists field uses CustomSelect - find its trigger button by the displayed value
+      // Default is 'skip', so find the button showing "Skip" near the "If already exists" label
+      const ifExistsLabel = screen.getByText(/if already exists/i);
+      const ifExistsField = ifExistsLabel.closest('.action-field')!;
+      const ifExistsTrigger = ifExistsField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(ifExistsTrigger);
+
+      expect(screen.getByRole('option', { name: /^skip$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /merge \(create if new\)/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /merge only/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /^update$/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /use existing/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('create_group action', () => {
+    it('renders name template input', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_group', name_template: '{stream_group}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/name template/i)).toHaveValue('{stream_group}');
+    });
+
+    it('renders if_exists selector', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_group' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/if already exists/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('merge_streams action', () => {
+    it('renders target channel finder options', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('Target')).toBeInTheDocument();
+    });
+
+    it('shows find_channel_by options when target is existing_channel', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'existing_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/find channel by/i)).toBeInTheDocument();
+
+      // Click the CustomSelect trigger for "Find channel by"
+      const findByLabel = screen.getByText(/find channel by/i);
+      const findByField = findByLabel.closest('.action-field')!;
+      const findByTrigger = findByField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(findByTrigger);
+
+      expect(screen.getByRole('option', { name: /exact name/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /regex/i })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /tvg.*id/i })).toBeInTheDocument();
+    });
+
+    it('shows find_channel_value input when find_by is set', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'merge_streams',
+            target: 'existing_channel',
+            find_channel_by: 'name_exact',
+            find_channel_value: 'ESPN',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/find.*value/i)).toHaveValue('ESPN');
+    });
+
+    it('renders the loose name matching checkbox, unchecked by default', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const checkbox = screen.getByLabelText(/loose name matching/i);
+      expect(checkbox).toBeInTheDocument();
+      expect(checkbox).not.toBeChecked();
+    });
+
+    it('reflects loose_name_match=true as a checked checkbox', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', loose_name_match: true }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/loose name matching/i)).toBeChecked();
+    });
+
+    it('includes loose_name_match in the payload when toggled on', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByLabelText(/loose name matching/i));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'merge_streams', loose_name_match: true })
+      );
+    });
+
+    // bd-0emgo.3 / GH #677: target-channel group filter, now a shared
+    // GroupMultiSelectDropdown (bead enhancedchannelmanager-zi85o) --
+    // collapsed by default, so tests open it before asserting on options.
+    it('renders the exclude-target-groups control collapsed, with a checkbox per group once opened', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 1, name: 'Sports' }),
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/exclude target groups/i)).toBeInTheDocument();
+      const trigger = await screen.findByRole('button', { name: /exclude target groups/i });
+      // Collapsed: option names are not yet in the document.
+      expect(screen.queryByText('Excluded')).not.toBeInTheDocument();
+
+      await user.click(trigger);
+
+      await waitFor(() => {
+        expect(screen.getByText('Excluded')).toBeInTheDocument();
+      });
+    });
+
+    it('reflects an existing target_channel_not_in_group selection as checked', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 1, name: 'Sports' }),
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', target_channel_not_in_group: [567] }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      await waitFor(() => {
+        const checkboxes = excludeGroupBox.querySelectorAll('input[type="checkbox"]');
+        expect(checkboxes.length).toBe(2);
+      });
+      const checkboxes = excludeGroupBox.querySelectorAll('input[type="checkbox"]');
+      // Order matches channelGroups: [Sports(1), Excluded(567)]
+      expect(checkboxes[0]).not.toBeChecked(); // Sports (1) not excluded
+      expect(checkboxes[1]).toBeChecked();     // Excluded (567) is excluded
+    });
+
+    it('adds a group to target_channel_not_in_group when its checkbox is toggled on', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      const checkbox = await waitFor(() => {
+        const cb = excludeGroupBox.querySelector('input[type="checkbox"]') as HTMLElement;
+        expect(cb).toBeTruthy();
+        return cb;
+      });
+      await user.click(checkbox);
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'merge_streams',
+          target_channel_not_in_group: [567],
+        })
+      );
+    });
+
+    it('clears target_channel_not_in_group to undefined when last group is unchecked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      mockDataStore.channelGroups.push(
+        createMockChannelGroup({ id: 567, name: 'Excluded' })
+      );
+
+      render(
+        <ActionEditor
+          action={{ type: 'merge_streams', target: 'auto', target_channel_not_in_group: [567] }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(await screen.findByRole('button', { name: /exclude target groups/i }));
+
+      const excludeGroupBox = await screen.findByRole('group', { name: /exclude target groups/i });
+      const checkbox = await waitFor(() => {
+        const cb = excludeGroupBox.querySelector('input[type="checkbox"]') as HTMLElement;
+        expect(cb).toBeTruthy();
+        return cb;
+      });
+      await user.click(checkbox); // uncheck the only excluded group
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'merge_streams',
+          target_channel_not_in_group: undefined,
+        })
+      );
+    });
+  });
+
+  describe('assign_logo action', () => {
+    it('renders logo source radio buttons', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/from stream/i)).toBeChecked();
+      expect(screen.getByLabelText(/from epg/i)).not.toBeChecked();
+      expect(screen.getByLabelText(/custom url/i)).not.toBeChecked();
+    });
+
+    it('renders custom URL input with value', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: 'https://example.com/logo.png' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/custom url/i)).toBeChecked();
+      // Exact literal match (CodeQL #1769 js/regex/missing-regexp-anchor: an
+      // unanchored /example\.com/ regex is a flagged pattern even in a test).
+      expect(
+        screen.getByPlaceholderText('https://example.com/logo.png or {template}')
+      ).toHaveValue('https://example.com/logo.png');
+    });
+
+    it('shows template variables hint for custom URL', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/template variables/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('assign_tvg_id action', () => {
+    it('renders TVG ID template input', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_tvg_id', value: '{tvg_id}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/tvg.*id/i)).toHaveValue('{tvg_id}');
+    });
+  });
+
+  describe('assign_channel_profile action', () => {
+    // y3m6o.2: the copy must state the EXCLUSIVE (subtractive) semantics —
+    // selected profiles are enabled AND the channel is removed from every
+    // other profile — not the additive "assign to selected" it read as before.
+    it('shows the exclusive-membership hint (enabled in selected, removed from all others)', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_channel_profile', channel_profile_ids: [] }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const hint = screen.getByTestId('channel-profile-exclusive-hint');
+      expect(hint).toBeInTheDocument();
+      expect(hint).toHaveTextContent(/exclusive membership/i);
+      expect(hint).toHaveTextContent(/enabled/i);
+      expect(hint).toHaveTextContent(/removed from all other/i);
+    });
+  });
+
+  describe('set_channel_number action', () => {
+    it('renders channel number input', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'set_channel_number', value: '101' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/channel number/i)).toHaveValue('101');
+    });
+
+    it('accepts numeric and template values', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'set_channel_number' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      const input = screen.getByLabelText(/channel number/i);
+      // Type a numeric value (curly braces have special meaning in userEvent)
+      await user.type(input, '100');
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('sort_group action', () => {
+    it('renders order, starting number, and normalization fields', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('Order')).toBeInTheDocument();
+      expect(screen.getByLabelText(/starting channel number/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ignore channel numbers in names when sorting/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/ignore country prefix when sorting/i)).toBeInTheDocument();
+    });
+
+    it('defaults order to ascending, strip_numbers to true, ignore_country to false on type select', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'skip' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /sort group/i }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sort_group',
+          order: 'asc',
+          strip_numbers: true,
+          ignore_country: false,
+        })
+      );
+    });
+
+    it('shows ascending option selected by default', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/A → Z \(ascending\)/)).toBeInTheDocument();
+    });
+
+    it('switches to descending order', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', order: 'asc' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // CustomSelect renders its trigger as a plain button (not role=combobox)
+      // — open it via its current value text, then pick the option.
+      await user.click(screen.getByRole('button', { name: /A → Z \(ascending\)/ }));
+      await user.click(screen.getByRole('option', { name: /Z → A \(descending\)/ }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sort_group', order: 'desc' })
+      );
+    });
+
+    it('updates starting_number as a number', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.type(screen.getByLabelText(/starting channel number/i), '5');
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ starting_number: expect.any(Number) })
+        );
+      });
+    });
+
+    it('toggles strip_numbers and ignore_country checkboxes', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group', strip_numbers: true, ignore_country: false }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByLabelText(/ignore channel numbers in names when sorting/i));
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ strip_numbers: false })
+      );
+
+      await user.click(screen.getByLabelText(/ignore country prefix when sorting/i));
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ ignore_country: true })
+      );
+    });
+
+    it('shows the once-per-group help text', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'sort_group' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/runs once per group after all streams are processed/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('skip action', () => {
+    it('renders with minimal UI', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'skip' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Skip action should only show the type selector
+      expect(screen.getByText(/skip/i)).toBeInTheDocument();
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+
+    it('shows description of what skip does', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'skip' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/stream will not be processed/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('stop_processing action', () => {
+    it('renders with description', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'stop_processing' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/stop processing/i)).toBeInTheDocument();
+      expect(screen.getByText(/no further rules/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('log_match action', () => {
+    it('renders message input', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'log_match', message: 'Matched: {stream_name}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/message/i)).toHaveValue('Matched: {stream_name}');
+    });
+  });
+
+  describe('onChange handling', () => {
+    it('calls onChange when action type is changed', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Click the action type selector (first combobox)
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      // Click the Skip option in the dropdown
+      const skipOptions = screen.getAllByRole('option', { name: /skip/i });
+      await user.click(skipOptions[0]);
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'skip' })
+      );
+    });
+
+    it('calls onChange when name_template is updated', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Wait for component to settle (groups fetch etc)
+      await waitFor(() => {
+        expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+      });
+
+      await user.type(screen.getByLabelText(/name template/i), 'test');
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalled();
+      });
+    });
+
+    it('calls onChange when if_exists is changed', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', if_exists: 'skip' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Find the if_exists CustomSelect trigger and click to open
+      const ifExistsLabel = screen.getByText(/if already exists/i);
+      const ifExistsField = ifExistsLabel.closest('.action-field')!;
+      const ifExistsTrigger = ifExistsField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(ifExistsTrigger);
+
+      // Click the "Merge (create if new)" option
+      await user.click(screen.getByRole('option', { name: /merge \(create if new\)/i }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ if_exists: 'merge' })
+      );
+    });
+
+    it('calls onChange when group_id is changed', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      const group = createMockChannelGroup({ name: 'Sports' });
+      mockDataStore.channelGroups.push(group);
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Wait for groups to load - look for the Target Group label
+      await waitFor(() => {
+        expect(screen.getByText(/target group/i)).toBeInTheDocument();
+      });
+
+      // Find the Target Group CustomSelect trigger and click to open
+      const groupLabel = screen.getByText(/target group/i);
+      const groupField = groupLabel.closest('.action-field')!;
+      const groupTrigger = groupField.querySelector('.custom-select-trigger') as HTMLElement;
+      await user.click(groupTrigger);
+
+      // Wait for the dropdown to appear and click the Sports option
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /sports/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('option', { name: /sports/i }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ group_id: group.id })
+      );
+    });
+  });
+
+  describe('onRemove handling', () => {
+    it('calls onRemove when remove button is clicked', async () => {
+      const user = userEvent.setup();
+      const onRemove = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={onRemove}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /remove/i }));
+
+      expect(onRemove).toHaveBeenCalled();
+    });
+
+    it('can be disabled from removing', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          canRemove={false}
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('validation', () => {
+    it('shows error for empty required name_template', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByText(/name template is required/i)).toBeInTheDocument();
+    });
+
+    it('shows error for invalid template syntax', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{invalid_var}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByText(/unknown variable/i)).toBeInTheDocument();
+    });
+
+    it('validates merge_streams target configuration', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'merge_streams',
+            target: 'existing_channel',
+            find_channel_by: 'name_exact',
+            find_channel_value: '', // Missing required value
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByText(/find.*value is required/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('template variables helper', () => {
+    it('shows available template variables', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Click helper button to show variables
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+
+      expect(screen.getByText(/{stream_name}/)).toBeInTheDocument();
+      expect(screen.getByText(/{stream_group}/)).toBeInTheDocument();
+      expect(screen.getByText(/{quality}/)).toBeInTheDocument();
+    });
+
+    it('inserts variable when clicked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Focus the template input first
+      const input = screen.getByLabelText(/name template/i);
+      await user.click(input);
+
+      // Open variables helper
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+
+      // Click a variable
+      await user.click(screen.getByText(/{stream_name}/));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ name_template: '{stream_name}' })
+      );
+    });
+
+    it('shows template variables dropdown for value actions', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+
+      expect(screen.getByText(/{stream_name}/)).toBeInTheDocument();
+      expect(screen.getByText(/{tvg_id}/)).toBeInTheDocument();
+    });
+
+    it('inserts variable into value field when clicked', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: '' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /show variables/i }));
+      await user.click(screen.getByText(/{stream_name}/));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ value: '{stream_name}' })
+      );
+    });
+  });
+
+  describe('template preview', () => {
+    it('shows preview of template with example values', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{stream_name} HD' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(screen.getByText(/preview/i)).toBeInTheDocument();
+      // Should show example like "ESPN HD"
+      expect(screen.getByText(/ESPN HD/i)).toBeInTheDocument();
+    });
+
+    it('updates preview when template changes', async () => {
+      const { rerender } = render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{stream_name}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      rerender(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{stream_name} ({quality})' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(screen.getByText(/ESPN.*1080p/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('name transform group reference validation', () => {
+    // Backend parity (enhancedchannelmanager-yom3k): the pipeline converts
+    // $N to Python \N and errors at execution when N exceeds the pattern's
+    // capture-group count. JS treats out-of-range $N as literal text, which
+    // used to make the preview look correct while every matching stream
+    // silently failed. The preview must flag it as an error instead.
+
+    it('flags a replacement referencing an out-of-range group as an error', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+) (\\w+) (\\w+)',
+            name_transform_replacement: '$2 $1 $3 $4',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'references group 4 but pattern defines 3 capture groups'
+      );
+    });
+
+    it('accepts in-range group references', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+) (\\w+) (\\w+)',
+            name_transform_replacement: '$3 $2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('flags $0 as an invalid group reference', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            group_id: 1,
+            name_transform_pattern: '(\\w+)',
+            name_transform_replacement: '$0',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      expect(screen.getByRole('alert')).toHaveTextContent(/\$0/);
+      expect(screen.getByRole('alert')).toHaveTextContent(/numbered from \$1/);
+    });
+
+    it('shows the error in the preview instead of rendering literal $N text', () => {
+      // {stream_name} example is 'ESPN HD' — the pattern matches, so the
+      // backend would error on every matching stream. The preview must NOT
+      // render '$3' as literal text.
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$3',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(
+        screen.getByText(/references group 3 but pattern defines 2 capture groups/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText('$3')).not.toBeInTheDocument();
+    });
+
+    it('previews a valid transform with backreferences applied', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showPreview={true}
+        />
+      );
+
+      expect(screen.getByText('HD ESPN')).toBeInTheDocument();
+    });
+
+    it('notes that pattern matching is case-sensitive', () => {
+      render(
+        <ActionEditor
+          action={{
+            type: 'create_channel',
+            name_template: '{stream_name}',
+            name_transform_pattern: '(ESPN) (HD)',
+            name_transform_replacement: '$2 $1',
+          }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText(/case-sensitive/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('readonly mode', () => {
+    it('disables all inputs when readonly', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '{stream_name}' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          readonly={true}
+        />
+      );
+
+      expect(screen.getByLabelText(/name template/i)).toBeDisabled();
+      // All comboboxes should be disabled
+      const comboboxes = screen.getAllByRole('combobox');
+      comboboxes.forEach(cb => expect(cb).toBeDisabled());
+    });
+
+    it('hides remove button when readonly', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          readonly={true}
+        />
+      );
+
+      expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('action type categories', () => {
+    it('groups action types by category in selector', async () => {
+      const user = userEvent.setup();
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      // Click the action type selector
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+
+      expect(screen.getByText(/creation/i)).toBeInTheDocument();
+      expect(screen.getByText(/assignment/i)).toBeInTheDocument();
+      expect(screen.getByText(/control/i)).toBeInTheDocument();
+    });
+  });
+
+  describe('accessibility', () => {
+    it('has accessible labels for inputs', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/action type/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/name template/i)).toBeInTheDocument();
+    });
+
+    it('shows validation errors with aria-describedby', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel', name_template: '' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          showValidation={true}
+        />
+      );
+
+      const input = screen.getByLabelText(/name template/i);
+      const describedBy = input.getAttribute('aria-describedby');
+      expect(describedBy).toBeTruthy();
+    });
+  });
+
+  describe('reorder controls', () => {
+    it('shows reorder controls when orderNumber and totalItems are provided', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          orderNumber={1}
+          totalItems={3}
+        />
+      );
+
+      expect(screen.getByTestId('reorder-controls')).toBeInTheDocument();
+    });
+
+    it('hides reorder controls when orderNumber/totalItems are not provided', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.queryByTestId('reorder-controls')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('compact mode', () => {
+    it('renders in compact layout when specified', () => {
+      const { container } = render(
+        <ActionEditor
+          action={{ type: 'create_channel' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          compact={true}
+        />
+      );
+
+      expect(container.firstChild).toHaveClass('compact');
+    });
+  });
+
+  describe('action dependencies', () => {
+    it('shows warning when action depends on previous action', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'skip' }]}
+        />
+      );
+
+      expect(screen.getByText(/requires.*channel/i)).toBeInTheDocument();
+    });
+
+    it('hides warning when dependency is satisfied', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'assign_logo', value: 'logo.png' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+          previousActions={[{ type: 'create_channel', name_template: '{stream_name}' }]}
+        />
+      );
+
+      expect(screen.queryByText(/requires.*channel/i)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('remove button hit area (GH #726)', () => {
+    // jsdom has no real layout, so the stretched-hit-area regression cannot be
+    // asserted via getBoundingClientRect. Instead, pin the CSS fix itself:
+    // .action-editor is a flex row whose children default to stretch, so the
+    // remove button MUST carry align-self: flex-start or its clickable area
+    // silently spans the card's full height and a blank-space click below the
+    // visible X deletes the action.
+    it('pins align-self: flex-start on .action-remove-btn so the hit area stays glyph-sized', () => {
+      // import.meta.url is not a file: URL under the jsdom test environment,
+      // so resolve from the Vitest root (frontend/) like the a11y/uxAudits
+      // source-scanning tests do.
+      const cssPath = path.resolve(
+        process.cwd(),
+        'src/components/channelPipeline/ActionEditor.css'
+      );
+      const css = fs.readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      const rule = css.match(/\.action-remove-btn\s*\{[^}]*\}/);
+
+      expect(rule).not.toBeNull();
+      expect(rule![0]).toMatch(/align-self:\s*flex-start/);
+      // The original bug hid behind top padding that pushed the glyph down
+      // while the button spanned the card -- keep the hit area unpadded.
+      expect(rule![0]).not.toMatch(/padding-top/);
+    });
+  });
+});

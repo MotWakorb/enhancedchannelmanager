@@ -10,6 +10,10 @@ import type { BackupValidation, BackupRestoreResult } from '../services/api';
 vi.mock('../services/api', () => ({
   validateBackup: vi.fn(),
   restoreBackupYaml: vi.fn(),
+  // getSettings supplies the Dispatcharr base url that drives the logo-miss
+  // banner's "Fix in Dispatcharr" link (bead 0i2vt.19). Default to a resolved
+  // settings object so the modal's mount effect doesn't reject.
+  getSettings: vi.fn(),
 }));
 
 import * as api from '../services/api';
@@ -20,7 +24,7 @@ const mockValidation: BackupValidation = {
   exported_at: '2026-01-01T00:00:00+00:00',
   sections: [
     { key: 'settings', label: 'Settings', item_count: 10, available: true },
-    { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+    { key: 'scheduled_tasks', label: 'Task Settings & Alerts', item_count: 3, available: true },
     { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
     { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
   ],
@@ -39,24 +43,46 @@ describe('BackupRestoreModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: a resolved settings object with a Dispatcharr base url so the
+    // modal's mount effect (logo-miss banner link source) settles cleanly.
+    vi.mocked(api.getSettings).mockResolvedValue({
+      url: 'https://dispatcharr.example.test',
+    } as Awaited<ReturnType<typeof api.getSettings>>);
   });
 
   describe('upload step', () => {
-    it('renders dropzone', () => {
+    it('renders dropzone', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       expect(screen.getByText(/drag & drop/i)).toBeInTheDocument();
       expect(screen.getByText('.yaml or .yml files')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle so the resulting state
+      // update (setDispatcharrUrl) happens inside act() — otherwise React logs
+      // an act() warning for the un-awaited promise resolution.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
-    it('renders cancel button', () => {
+    it('renders cancel button', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       expect(screen.getByText('Cancel')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
-    it('calls onClose when cancel clicked', () => {
+    it('calls onClose when cancel clicked', async () => {
       render(<BackupRestoreModal onClose={mockClose} />);
       fireEvent.click(screen.getByText('Cancel'));
       expect(mockClose).toHaveBeenCalled();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
 
     it('shows error for non-yaml file', async () => {
@@ -102,7 +128,7 @@ describe('BackupRestoreModal', () => {
     it('shows section checkboxes', async () => {
       await renderWithFile();
       expect(screen.getByText('Settings')).toBeInTheDocument();
-      expect(screen.getByText('Scheduled Tasks')).toBeInTheDocument();
+      expect(screen.getByText('Task Settings & Alerts')).toBeInTheDocument();
       expect(screen.getByText('Tag Groups')).toBeInTheDocument();
       expect(screen.getByText('FFmpeg Profiles')).toBeInTheDocument();
     });

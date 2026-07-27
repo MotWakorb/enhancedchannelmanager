@@ -7,6 +7,36 @@ stream-preview and channel-preview endpoints.
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
+import config
+
+
+@pytest.fixture
+def isolated_settings_file():
+    """Isolate the persisted settings file for a single test.
+
+    ``test_update_settings_accepts_valid_stream_preview_modes`` exercises the
+    real settings round-trip (POST /api/settings → GET /api/settings) without
+    mocking ``get_settings``/``save_settings``, so it reads and mutates the
+    shared on-disk settings file (``config.CONFIG_FILE``). This fixture stashes
+    the existing file, removes it so the test starts from a known-clean default,
+    clears the settings cache, and restores the original file + cache afterwards
+    so the test neither depends on nor pollutes shared state. (Mirrors the
+    fixture in test_normalize_channel_create.py — bead o076m.)
+    """
+    config_file = config.CONFIG_FILE
+    backup = config_file.read_bytes() if config_file.exists() else None
+    if config_file.exists():
+        config_file.unlink()
+    config.clear_settings_cache()
+    try:
+        yield
+    finally:
+        if backup is not None:
+            config_file.write_bytes(backup)
+        elif config_file.exists():
+            config_file.unlink()
+        config.clear_settings_cache()
+
 
 class TestStreamPreview:
     """Tests for GET /api/stream-preview/{stream_id} endpoint."""
@@ -248,19 +278,42 @@ class TestStreamPreviewModeSettings:
         assert "stream_preview_mode" in data
 
     @pytest.mark.asyncio
-    async def test_update_settings_accepts_valid_stream_preview_modes(self, async_client):
-        """POST /api/settings accepts valid stream_preview_mode values."""
+    async def test_update_settings_accepts_valid_stream_preview_modes(
+        self, async_client, isolated_settings_file
+    ):
+        """POST /api/settings accepts valid stream_preview_mode values and persists them.
+
+        The old assertion accepted (200, 400, 422): a set that admits BOTH
+        success and validation-failure, so it never actually proved acceptance.
+        Worse, the old payload used ``http://localhost:5656`` — a loopback host
+        the kgz3k SSRF-on-save guard rejects with 400 BEFORE the request ever
+        reaches mode handling, so the test was vacuous for its stated purpose.
+
+        This version uses a non-loopback host that does not resolve
+        (``dispatcharr.example``) so the save is allowed (the runtime client
+        re-validates before connecting), sends a complete password-mode auth
+        payload (required when the URL/username changes), and asserts the exact
+        200 plus that the mode round-trips on a follow-up GET. A regression that
+        stopped persisting stream_preview_mode — or one that started rejecting a
+        valid mode — now fails.
+        """
         valid_modes = ["passthrough", "transcode", "video_only"]
 
         for mode in valid_modes:
             response = await async_client.post(
                 "/api/settings",
                 json={
-                    "url": "http://localhost:5656",
+                    "url": "http://dispatcharr.example:5656",
+                    "auth_method": "password",
                     "username": "admin",
-                    "password": "password",
+                    "password": "test-password",
                     "stream_preview_mode": mode,
                 },
             )
-            # Should accept valid modes
-            assert response.status_code in (200, 400, 422), f"Mode {mode} should be accepted"
+            assert response.status_code == 200, (
+                f"Mode {mode} should be accepted, got {response.status_code}: {response.text}"
+            )
+
+            verify = await async_client.get("/api/settings")
+            assert verify.status_code == 200
+            assert verify.json()["stream_preview_mode"] == mode

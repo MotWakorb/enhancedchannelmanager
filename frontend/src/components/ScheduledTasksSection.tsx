@@ -5,6 +5,8 @@ import type { ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
+import { TaskStatusPill } from './TaskStatusPill';
+import { getTaskPillState } from '../utils/taskPillState';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
 import '../components/ModalBase.css';
@@ -54,12 +56,14 @@ function formatSchedule(task: TaskStatus): { summary: string; details: string[] 
   return { summary: 'Not scheduled', details: [] };
 }
 
-function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for future use */ onEdit, isRunning }: {
+function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for future use */ onEdit, onFixWontRun, isFixing, isRunning }: {
   task: TaskStatus;
   onRunNow: (taskId: string) => void;
   onCancel: (taskId: string) => void;
   onToggleEnabled: (taskId: string, enabled: boolean) => void;
   onEdit: (task: TaskStatus) => void;
+  onFixWontRun: (task: TaskStatus) => void;
+  isFixing: boolean;
   isRunning: boolean;
 }) {
   const [showHistory, setShowHistory] = useState(false);
@@ -70,6 +74,11 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
     }
     if (!task.enabled) {
       return <span className="material-icons" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
+    }
+    // vkktd.4: keep the card icon coherent with the status pill — an
+    // enabled-but-won't-run task must not show a reassuring green check.
+    if (getTaskPillState(task) === 'wontRun') {
+      return <span className="material-icons" style={{ color: 'var(--warning)' }}>warning</span>;
     }
     return <span className="material-icons" style={{ color: '#2ecc71' }}>check_circle</span>;
   };
@@ -98,22 +107,16 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          {/* Enabled indicator */}
-          <span style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.35rem',
-            fontSize: '0.85rem',
-            color: task.enabled ? 'var(--success)' : 'var(--text-muted)',
-            padding: '0.25rem 0.5rem',
-            backgroundColor: task.enabled ? 'rgba(46, 204, 113, 0.1)' : 'rgba(128, 128, 128, 0.1)',
-            borderRadius: '4px',
-          }}>
-            <span className="material-icons" style={{ fontSize: '14px' }}>
-              {task.enabled ? 'check_circle' : 'pause_circle'}
-            </span>
-            {task.enabled ? 'Enabled' : 'Disabled'}
-          </span>
+          {/* Task status pill (vkktd.4) — bound to effective_enabled so a task
+              whose child schedules are all disabled reads "Enabled, won't run"
+              (amber, with a one-click Fix it) instead of a misleading bare
+              "Enabled". See TaskStatusPill for the state derivation. */}
+          <TaskStatusPill
+            task={task}
+            running={isRunning}
+            onFixIt={onFixWontRun}
+            fixing={isFixing}
+          />
           {/* Run Now / Cancel button - hidden for stream_probe */}
           {task.task_id !== 'stream_probe' && (
             (isRunning || task.status === 'running') ? (
@@ -289,8 +292,8 @@ function RunNowDialog({ task, onRun, onCancel }: {
       <div className="modal-container modal-sm" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h2 className="modal-title">Run {task.task_name}</h2>
-          <button className="modal-close-btn" onClick={onCancel}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
         <div className="modal-body">
@@ -373,7 +376,11 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
   const [tasks, setTasks] = useState<TaskStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningTasks, setRunningTasks] = useState<Set<string>>(new Set());
+  const [fixingTasks, setFixingTasks] = useState<Set<string>>(new Set());
   const [editingTask, setEditingTask] = useState<TaskStatus | null>(null);
+  // vkktd.4: when Fix-it finds no child schedule to enable, open the editor
+  // straight at the Add Schedule sub-editor.
+  const [editorOpensAddSchedule, setEditorOpensAddSchedule] = useState(false);
   const [runNowTask, setRunNowTask] = useState<TaskStatus | null>(null);
   const notifications = useNotifications();
 
@@ -441,15 +448,24 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       if (result.error === 'CANCELLED') {
         logger.info(`${taskName} was cancelled (notification handled by cancel handler)`);
       } else if (task?.show_notifications !== false) {
-        if (result.success) {
-          notifications.success(
-            `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-            'Task Completed'
-          );
-        } else {
+        if (!result.success) {
           notifications.error(
             result.message || `${taskName} failed`,
             'Task Failed'
+          );
+        } else if (result.failed_count > 0) {
+          // Completed WITH WARNINGS (e.g. a coalesced/deferred profile reconcile
+          // returns success=true, failed_count>0): never render deferred/partial
+          // work as a plain green success — surface the message amber, matching
+          // the Task History panel.
+          notifications.warning(
+            result.message || `${taskName} completed with warnings: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Completed with warnings'
+          );
+        } else {
+          notifications.success(
+            `${taskName} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
           );
         }
       }
@@ -557,6 +573,50 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     }
   };
 
+  // vkktd.4: one-click fix for the "Enabled, won't run" state — enable the
+  // disabled child schedule (newest first, mirroring the backend reconcile's
+  // determinism). With no schedule to enable, open the editor at Add Schedule.
+  const handleFixWontRun = async (task: TaskStatus) => {
+    const disabledSchedules = (task.schedules || []).filter(s => !s.enabled);
+    if (disabledSchedules.length === 0) {
+      // Nothing to flip (zero schedules, or enabled ones that can't compute a
+      // next run) — send the operator to the editor to sort it out.
+      setEditorOpensAddSchedule((task.schedules || []).length === 0);
+      setEditingTask(task);
+      return;
+    }
+
+    const target = disabledSchedules.reduce((newest, s) => {
+      const a = newest.created_at || '';
+      const b = s.created_at || '';
+      if (b > a) return s;
+      if (b === a && s.id > newest.id) return s;
+      return newest;
+    });
+
+    setFixingTasks(prev => new Set(prev).add(task.task_id));
+    try {
+      await api.updateTaskSchedule(task.task_id, target.id, { enabled: true });
+      notifications.success(
+        `Enabled the "${target.name || target.description}" schedule — ${task.task_name} will now run automatically`,
+        'Schedule Enabled'
+      );
+      await loadTasks();
+    } catch (err) {
+      logger.error(`Failed to enable schedule for task ${task.task_id}`, err);
+      notifications.error(
+        `Failed to enable schedule for ${task.task_name}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        'Fix Failed'
+      );
+    } finally {
+      setFixingTasks(prev => {
+        const next = new Set(prev);
+        next.delete(task.task_id);
+        return next;
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
@@ -621,6 +681,8 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
             onCancel={handleCancel}
             onToggleEnabled={handleToggleEnabled}
             onEdit={setEditingTask}
+            onFixWontRun={handleFixWontRun}
+            isFixing={fixingTasks.has(task.task_id)}
             isRunning={runningTasks.has(task.task_id)}
           />
         ))
@@ -630,7 +692,8 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
       {editingTask && (
         <TaskEditorModal
           task={editingTask}
-          onClose={() => setEditingTask(null)}
+          openAddSchedule={editorOpensAddSchedule}
+          onClose={() => { setEditingTask(null); setEditorOpensAddSchedule(false); }}
           onSaved={loadTasks}
         />
       )}

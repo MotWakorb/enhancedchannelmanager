@@ -11,44 +11,32 @@
   box-sizing: border-box;
 }
 
-.logo-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
-
-.header-title h2 {
-  margin: 0 0 0.25rem 0;
-  font-size: 1.5rem;
-  color: var(--text-primary);
-}
-
-.header-description {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-}
-
-.header-actions {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-}
+/* .logo-header layout + .header-title/.header-description/.header-actions
+   are supplied by PageHeader.css / shared/common.css (bd-7l7wi). This tab
+   renders its header via <PageHeader className="logo-header" .../>. */
 
 /* .btn-primary, .btn-secondary are defined in shared/common.css */
 
 /* .search-box is defined in shared/common.css */
 
-/* View Toggle */
-.view-toggle {
+/* View Toggle (icon-only list/grid switch)
+   bd-p5f70: scoped to `.logo-header` — this used to be a bare `.view-toggle`
+   / `.view-toggle button` selector, which (CSS has no per-file scoping)
+   matched ANY `.view-toggle` container anywhere in the app, including the
+   text-label view toggles in PopularityPanel and EnhancedStatsPanel. Those
+   panels' own `.toggle-btn` buttons don't set width/height, so this file's
+   `width: 36px; height: 36px; padding: 0` (sized for a bare icon) applied
+   to them uninvited and squeezed "Rankings"/"Trending" into an overlapping
+   mess. Prefixing with `.logo-header` keeps this icon-toggle sizing local
+   to Logo Manager, where it belongs. */
+.logo-header .view-toggle {
   display: flex;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
-.view-toggle button {
+.logo-header .view-toggle button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -62,21 +50,76 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
-.view-toggle button:first-child {
+.logo-header .view-toggle button:first-child {
   border-right: 1px solid var(--border-secondary);
 }
 
-.view-toggle button:hover:not(.active) {
+.logo-header .view-toggle button:hover:not(.active) {
   background-color: var(--border-primary);
 }
 
-.view-toggle button.active {
+.logo-header .view-toggle button.active {
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 
-.view-toggle button .material-icons {
+.logo-header .view-toggle button .material-icons {
   font-size: 18px;
+}
+
+/* Unused-only filter toggle (bead enhancedchannelmanager-09x38.13) — same
+   pill affordance as .btn-secondary, with an .active state that mirrors
+   .view-toggle button.active so both binary toggles in this header read
+   consistently. */
+.logo-header .unused-only-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 36px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  background-color: var(--input-bg);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.logo-header .unused-only-toggle:hover:not(.active) {
+  background-color: var(--border-primary);
+}
+
+.logo-header .unused-only-toggle.active {
+  background-color: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+}
+
+.logo-header .unused-only-toggle .material-icons {
+  font-size: 18px;
+}
+
+/* Sortable list-header columns (Name, Used By) — mirrors M3UChangesTab's
+   .sortable / .sort-icon pattern (docs/style_guide.md: follow the in-app
+   precedent rather than inventing a new sort-header idiom). */
+.logos-list .list-header .sortable {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.logos-list .list-header .sortable:hover {
+  color: var(--text-primary);
+}
+
+.logos-list .list-header .sort-icon {
+  font-size: 14px !important;
+  opacity: 0.8;
 }
 
 /* .loading-state is defined in shared/common.css */

@@ -20,9 +20,10 @@ All values are environment variables, overridable at container runtime.
 
 | Variable | Default | Meaning |
 |-|-|-|
-| `ECM_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request budget. Requests exceeding this return 504 Gateway Timeout. Applies to `/api/*` except streaming/ffmpeg/tasks/backup. |
+| `ECM_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request budget. Requests exceeding this return 504 Gateway Timeout. Applies to `/api/*` except streaming/tasks/backup. |
 | `ECM_LIMIT_CONCURRENCY` | `100` | Max simultaneous in-flight requests per uvicorn worker. When exceeded, uvicorn returns 503. |
 | `ECM_TIMEOUT_KEEP_ALIVE` | `30` | Seconds to hold an idle keep-alive connection open. |
+| `ECM_UVICORN_LOOP` | `asyncio` | Event loop implementation passed to uvicorn's `--loop` (whitelist: `auto`, `asyncio`, `uvloop`; anything else falls back to `asyncio` with a warning). Default is stdlib `asyncio` because uvloop 0.22.1 has open upstream issues — MagicStack/uvloop#645 (responses leaking to the wrong request under load) and #706 (segfault in FastAPI-in-container) — with no fixed release (bead wadu3). Set to `uvloop` to opt back in without a rebuild. |
 | `ECM_CPU_POOL_WORKERS` | `min(32, 2 * cpu_count)` | Size of the thread pool used by `run_cpu_bound`. |
 
 Change values by setting env vars in `docker-compose.yml` or your container
@@ -36,7 +37,7 @@ runtime. No image rebuild required.
 - Several user-reachable endpoints call sync CPU code: `/api/normalization/*`,
   `/api/channels` (with `normalize=true`), `/api/dummy-epg/preview*`,
   `/api/dummy-epg/xmltv*`, `/api/dummy-epg/generate`, and
-  `/api/auto-creation/validate`.
+  `/api/channel-pipeline/validate`.
 - These endpoints are now wrapped in `backend/concurrency.py::run_cpu_bound`,
   which dispatches the sync call to a bounded thread-pool executor so the
   loop stays free.

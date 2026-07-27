@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { ToastContainer, ToastData } from '../components/ToastContainer';
 import { ToastType, ToastAction } from '../components/Toast';
 
@@ -47,27 +47,49 @@ export function NotificationProvider({
   maxVisible = 5,
 }: NotificationProviderProps) {
   const [toasts, setToasts] = useState<ToastData[]>([]);
+  // Synchronous mirror of `toasts` so notify() can deduplicate against
+  // notifications added earlier in the same tick (bead fi3dq) -- state
+  // reads inside rapid successive calls would be stale.
+  const toastsRef = useRef<ToastData[]>([]);
 
   const dismiss = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    toastsRef.current = toastsRef.current.filter((toast) => toast.id !== id);
+    setToasts(toastsRef.current);
   }, []);
 
   const dismissAll = useCallback(() => {
+    toastsRef.current = [];
     setToasts([]);
   }, []);
 
   const notify = useCallback((options: NotificationOptions): string => {
+    const type = options.type || 'info';
+    // Deduplicate equivalent notifications (same type + title + message):
+    // repeat callers get the existing toast's id back instead of stacking
+    // a duplicate. Guards against error storms flooding the viewport with
+    // identical toasts (bead enhancedchannelmanager-fi3dq).
+    const existing = toastsRef.current.find(
+      (toast) =>
+        toast.type === type &&
+        toast.title === options.title &&
+        toast.message === options.message
+    );
+    if (existing) {
+      return existing.id;
+    }
+
     const id = generateId();
     const toast: ToastData = {
       id,
-      type: options.type || 'info',
+      type,
       title: options.title,
       message: options.message,
       duration: options.duration ?? 5000,
       action: options.action,
     };
 
-    setToasts((prev) => [toast, ...prev]);
+    toastsRef.current = [toast, ...toastsRef.current];
+    setToasts(toastsRef.current);
     return id;
   }, []);
 

@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 
 MIN_PREFIX_LENGTH = 4
 
+# EPG source priority is a banded tiebreaker, NOT a confidence override.
+# Candidates whose confidence scores fall in the same band (width
+# PRIORITY_TIEBREAK_BAND) are reordered so the higher-priority source wins;
+# a candidate more than one band better on confidence is never demoted.
+# N=5 is the smallest meaningful confidence signal (HD variant = 5 pts), so
+# priority only arbitrates genuine near-ties. See bead s5vyz.1 for the decision.
+PRIORITY_TIEBREAK_BAND = 5
+
+# Sentinel rank for an EPG source absent from the priority map: sorts after
+# every ranked source within a confidence band (but never reorders across bands).
+_UNRANKED_SOURCE = 1_000_000
+
 LEAGUE_SUFFIXES = [
     "nfl", "nba", "mlb", "nhl", "mls", "wnba", "ncaa", "cfb", "cbb",
     "epl", "premierleague", "laliga", "bundesliga", "seriea", "ligue1",
@@ -42,6 +54,35 @@ LEAGUE_SUFFIXES = [
 ]
 
 REGIONAL_VARIANTS = ["east", "west", "pacific", "central", "mountain"]
+
+# Timezone/region words treated as identity-free for EPG matching (vznut.2,
+# spike vznut.3). A regional guide feed ("USA Network (Pacific)") is the SAME
+# network as its base entry — the region word is a schedule-offset tag, not part
+# of the network's identity — so it must not create a distinct match key, a
+# spurious extra identity token, or a bogus parenthetical "acronym".
+_REGION_WORDS = frozenset(REGIONAL_VARIANTS)
+
+# Region code for the region-consistency tie-break. Only an EXACT whole-word
+# region token maps to a code, so adjective forms ("Eastern"/"Western") and
+# network names that merely contain a region substring never register.
+# West == Pacific: US West-coast feeds run on Pacific time and the JESmann guide
+# publishes the West feed as its "(Pacific)" row. Central and Mountain are their
+# OWN regions — no in-data evidence to alias MT/CT -> PT (spike vznut.3).
+_REGION_CODE = {
+    "east": "E",
+    "west": "W",
+    "pacific": "W",
+    "central": "C",
+    "mountain": "M",
+}
+
+# Quality/format tokens ("HD", "FHD", "4K", "1080P", ...) that commonly TRAIL a
+# region word in a channel name ("AMC West HD"). detect_region skips them so the
+# real region tag ("West") is still the effective trailing word — channels being
+# matched usually carry no tvg_id, so the name is the only region signal and
+# "...West HD"/"...West 4K" is a common IPTV naming pattern. Reuses the shared
+# QUALITY_SUFFIXES list rather than hand-rolling a second copy.
+_QUALITY_TOKENS = frozenset(s.lower() for s in QUALITY_SUFFIXES)
 
 # ---------------------------------------------------------------------------
 # Pre-compiled regex patterns (module level for performance)
@@ -89,6 +130,164 @@ _REGIONAL_RE = re.compile(
 # HD pattern
 _HD_RE = re.compile(r"\bhd\b", re.IGNORECASE)
 
+# --- Token-overlap signal (a6445) ---------------------------------------
+# Among same-call-sign candidates, the entry sharing MORE of the channel
+# name's meaningful tokens (call sign AND network/affiliate/city) should win.
+# Tokens are derived from the SPACED cleaned core (engine.extract_core_name)
+# before it is flattened into the match key, because flattening destroys word
+# boundaries ("FOX WTVT Tampa" -> "foxwtvttampa").
+_TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+# Subchannel / feed markers ("DT", "DT2", "DT3", ...): identity-free noise that
+# never distinguishes the correct network, so drop them from token sets.
+_SUBCHANNEL_TOKEN_RE = re.compile(r"^d?t?\d+$|^dt$")
+
+# Generic tokens that carry no network/affiliate identity and would only create
+# spurious overlap if counted (format/quality markers, bare articles).
+_TOKEN_STOPWORDS = frozenset(
+    {"dt", "tv", "hd", "sd", "uhd", "fhd", "4k", "the"}
+)
+
+# Token-set match QUALITY (m4hp1): precision-aware, not just recall.
+# A candidate is rewarded for SHARING the channel's meaningful tokens AND
+# penalised for carrying EXTRA tokens the channel does not have (e.g. the noise
+# in "TW BAK KABC B/O (ABC)" or the diginet brand in "KCOP-DT4 (HEROICN)").
+# The clean primary-feed network entry (whose tokens are a subset of the
+# channel's) therefore strictly outranks a noisier same-call-sign sibling.
+#
+# quality = min(shared, CAP) * SHARED_WEIGHT - min(extra, EXTRA_CAP) * EXTRA_WEIGHT
+#
+# Magnitudes are tuned to stay BELOW the country/league (40) and exact (25)
+# tiers so a fuzzy call-sign match can never beat an exact/country-preferred
+# match: the positive range is capped at 36 (3 * 12) and the penalty at 16
+# (4 * 4). One extra SHARED token (12) outweighs four extra noise tokens, and
+# every shared token outweighs the per-token noise penalty, so recall still
+# dominates precision — extra tokens only break what would otherwise be ties.
+_TOKEN_SHARED_WEIGHT = 12
+_TOKEN_SHARED_CAP = 3
+_TOKEN_EXTRA_WEIGHT = 4
+_TOKEN_EXTRA_CAP = 4
+
+# --- Parenthetical-acronym match weight (bd-6rz70) ----------------------
+# An "acronym" candidate comes from an EXACT dict-key lookup against a
+# parenthetical abbreviation Dispatcharr embeds in the tvg_id (and sometimes
+# the display name) — e.g. "OWN" resolves via OprahWinfreyNetwork(OWN).us,
+# "HGTV" via Home&GardenTelevision(HGTV).us. This is NOT a fuzzy/partial
+# signal like "prefix" (15pts): the acronym is the deliberate, canonical
+# short identifier for the network, and the lookup matches it exactly, not
+# via a substring guess. It is therefore weighted EQUAL to "exact" (25pts)
+# rather than below it — matching the acronym carries the same certainty as
+# matching the full flattened name/tvg_id, just through a different (and,
+# for channels literally named after the acronym, e.g. "890 | Fetv", the
+# ONLY working) field.
+#
+# It is deliberately NOT weighted ABOVE "exact": a full name/tvg_id match
+# remains the most complete identity signal when it is available; acronym
+# matching only kicks in as an alternate discovery path when the flattened
+# name/tvg_id blob buries the acronym mid-string where no boundary check can
+# find it (see parse_tvg_id / epg_match_key). build_epg_lookup folds the
+# extracted acronym into the entry's match_tokens set, so when multiple
+# candidates share the same acronym (e.g. HGTV entries from several
+# countries), the token-overlap term below still discriminates between them
+# via the surrounding network-name tokens (and, when stream data is
+# available, country/league +40 discriminates further).
+_ACRONYM_MATCH_WEIGHT = 25
+
+# Parse a broadcast subchannel ("digital subchannel") number from a RAW EPG or
+# channel display name. The ATSC convention is CALLSIGN-DT for the primary feed
+# and CALLSIGN-DT2/-DT3/... for diginets. Primary feed (no marker, "-DT", or
+# "-DT1") is treated as subchannel 1; "-DT2" and up are the higher diginets.
+# Used ONLY as a tie-break so the clean primary feed wins when two candidates
+# are otherwise indistinguishable (identical tokens, e.g. KOCE-DT vs KOCE-DT2).
+_SUBCHANNEL_RE = re.compile(r"[-\s]DT(\d*)\b", re.IGNORECASE)
+
+
+def _parse_subchannel(name: str) -> int:
+    """Return the broadcast subchannel number (1 = primary feed, >=2 diginet).
+
+    Names without an ATSC ``-DT`` marker, or with a bare ``-DT``/``-DT1``, are
+    treated as the primary feed (1). ``-DT2``/``-DT3``/``-DT4`` -> 2/3/4. This is
+    a pure tie-break signal; it never changes how strongly a name matches.
+    """
+    if not name:
+        return 1
+    m = _SUBCHANNEL_RE.search(name)
+    if not m:
+        return 1
+    digits = m.group(1)
+    if not digits:
+        return 1
+    try:
+        n = int(digits)
+    except ValueError:
+        return 1
+    return n if n >= 1 else 1
+
+
+def _extract_match_tokens(name: str, engine=None) -> frozenset:
+    """Derive a set of meaningful tokens from a channel/EPG display name.
+
+    Tokens come from the SPACED core name (``extract_core_name(..., for_match
+    ing=True)`` when an engine is supplied; the raw name on the deprecated
+    engine-less path). Subchannel markers and generic format words are dropped
+    so the overlap reflects real network/affiliate/city identity, not noise.
+
+    A standalone digit-run token is fused onto the immediately preceding
+    token (e.g. ["espn", "2"] -> ["espn2"]) before the drop filters run
+    (bd-gl3sd). Without this, a spaced channel name like "ESPN 2" and its
+    fused EPG counterpart "ESPN2" — which already collapse to the IDENTICAL
+    match key via epg_match_key's flatten-and-strip — produce disjoint token
+    sets ({"espn"} vs {"espn2"}), because the lone digit "2" is dropped by
+    the length filter while "espn2" survives whole. That let a coincidental
+    "ESPN HD" prefix match outscore the correct "ESPN2" exact match on the
+    token-overlap term alone. The fuse is intentionally conservative:
+    - Only merges into the RAW previous token (not an already-fused one), so
+      two independent digit runs ("Channel 4 +1" -> "4", "1") never get
+      glued into one bogus number ("channel41").
+    - Skips fusing onto a stopword or subchannel-marker predecessor ("dt",
+      "hd", ...), so "WUNC-DT 20 (PBS)" keeps dropping "dt" and "20"
+      independently exactly as before, and "Eurosport 360 HD 8" doesn't let
+      "8" smuggle through fused to "hd" as "hd8" (which would evade both the
+      stopword and subchannel filters as one new token).
+    """
+    if not name:
+        return frozenset()
+
+    core = engine.extract_core_name(name, for_matching=True) if engine else name
+
+    raw_tokens = _TOKEN_SPLIT_RE.split(core.lower())
+    fused_tokens: list[str] = []
+    for i, tok in enumerate(raw_tokens):
+        prev = raw_tokens[i - 1] if i > 0 else ""
+        if (
+            tok.isdigit()
+            and fused_tokens
+            and prev
+            and not prev.isdigit()
+            and prev not in _TOKEN_STOPWORDS
+            and not _SUBCHANNEL_TOKEN_RE.match(prev)
+        ):
+            fused_tokens[-1] += tok
+        else:
+            fused_tokens.append(tok)
+
+    tokens = set()
+    for tok in fused_tokens:
+        if len(tok) < 2:
+            continue
+        if tok in _TOKEN_STOPWORDS or _SUBCHANNEL_TOKEN_RE.match(tok):
+            continue
+        # vznut.2 change 2/3: a region word ("Pacific") is a schedule-offset
+        # tag, not network identity. Excluding it stops the regional entry
+        # ("USA Network (Pacific)") from carrying an EXTRA token its base
+        # sibling lacks (m4hp1 -4 penalty), which otherwise pushes the East
+        # default a full confidence band ahead of the correct Pacific feed and
+        # so prevents the band-preserving region tie-break from ever firing.
+        if tok in _REGION_WORDS:
+            continue
+        tokens.add(tok)
+    return frozenset(tokens)
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -102,7 +301,21 @@ class EPGMatchWithScore:
     tvg_id: str
     epg_source: dict  # {id, name}
     confidence: int
-    match_type: str  # "exact", "prefix", "league", "callsign"
+    match_type: str  # "exact", "prefix", "league", "callsign", "acronym"
+    # The EPG name's match key, carried from the lookup entry so _sort_matches
+    # reuses it instead of re-normalizing (bd-xxzxe). Empty for objects built
+    # outside the lookup path (e.g. direct unit-test construction); _sort_matches
+    # falls back to recomputing in that case.
+    epg_normalized: str = ""
+    # Broadcast subchannel number (1 = primary feed, >=2 diginet), carried from
+    # the lookup entry (m4hp1). Used by _sort_matches ONLY as a tie-break so the
+    # primary feed wins when two candidates are otherwise indistinguishable.
+    # Defaults to 1 (neutral) for objects built outside the lookup path.
+    subchannel: int = 1
+    # Timezone region ("E"/"W"/"C"/"M") of the EPG entry (vznut.2), carried from
+    # the lookup entry and used by _sort_matches for the region-consistency
+    # tie-break. None (neutral) for objects built outside the lookup path.
+    epg_region: Optional[str] = None
 
 
 @dataclass
@@ -218,15 +431,79 @@ def detect_country_from_streams(streams: list[dict]) -> Optional[str]:
     return best_country
 
 
-def normalize_for_epg_match(name: str) -> str:
-    """Normalize a name for EPG matching.
+# Residual leading-digit sweep — EPG-MATCH-KEY ONLY (bd-xxzxe). After the engine
+# has stripped channel-number noise and we have flattened to alnum, sweep any
+# residual leading digits ("5033cw" -> "cw") so a separator the engine missed
+# still can't block a match. This MUST NOT live in the engine: it would eat
+# brand digits like "3ABN"/"9Gem". Here it is safe because the key is a
+# match-only artifact, never a stored/displayed core name.
+_RESIDUAL_LEADING_DIGITS_RE = re.compile(r"^\d+")
 
-    Strips country prefix, quality/timezone suffixes, and non-alphanumeric
-    characters. Returns lowercase alphanumeric string.
+
+def epg_match_key(engine, name: str) -> str:
+    """Build the EPG match key for a display name via the shared engine.
+
+    This is the ONE consolidated EPG normalization (bd-xxzxe). It runs the
+    shared ``NormalizationEngine.extract_core_name(name, for_matching=True)``
+    (which strips channel-number noise, country/quality, AND timezone), then
+    folds ``+``/``&`` to words and flattens to lowercase alphanumeric. A final
+    EPG-only residual leading-digit sweep catches any separator the engine
+    missed.
+
+    Args:
+        engine: a ``NormalizationEngine`` bound to a DB session.
+        name: the channel or EPG display name.
     """
     if not name:
         return ""
 
+    core = engine.extract_core_name(name, for_matching=True)
+
+    # Region collapse (vznut.2 change 1/3): drop timezone/region words so a
+    # regional guide feed shares its base network's key and becomes an EXACT
+    # candidate — "AMC (Pacific)" -> "amc", matching "AMC West" -> "amc" (WEST
+    # was already stripped by the "Timezone Tags" group in extract_core_name).
+    # REQUIRED for short-name nets (AMC/FX/TBS/E!/FXX): their Pacific row is
+    # otherwise never a candidate (the prefix scan is gated at len>=4) and no
+    # tie-break can reorder a candidate that isn't in the set. Done here as a
+    # match-only artifact (like the residual-digit sweep below), NOT in the tag
+    # group, which ALSO renames displayed channel names. Whole-word only, so
+    # adjective forms ("Eastern"/"Westerns") and network names that merely
+    # contain a region substring are untouched. Collapsing "Comedy Central" ->
+    # "comedy" is safe: the region-consistency tie-break re-disambiguates.
+    core = _REGIONAL_RE.sub(" ", core)
+
+    # Fold semantic punctuation BEFORE flattening so "AMC+" -> "amcplus",
+    # "A&E" -> "aande" (channel and EPG fold identically, so they still match).
+    core = core.replace("+", "plus").replace("&", "and")
+
+    key = _NON_ALNUM_RE.sub("", core.lower())
+
+    # EPG-only residual leading-digit sweep (NOT in the engine — see above).
+    key = _RESIDUAL_LEADING_DIGITS_RE.sub("", key)
+
+    return key
+
+
+def normalize_for_epg_match(name: str, engine=None) -> str:
+    """Normalize a name for EPG matching.
+
+    When ``engine`` is supplied, delegates to the shared ``NormalizationEngine``
+    via :func:`epg_match_key` — the canonical path (bd-xxzxe).
+
+    When ``engine`` is omitted this falls back to the legacy stateless
+    stream_normalization rules. **DEPRECATED**: the legacy path exists only for
+    backward compatibility with call sites that have no DB session; production
+    EPG matching always passes an engine. New code should call
+    :func:`epg_match_key` directly.
+    """
+    if engine is not None:
+        return epg_match_key(engine, name)
+
+    if not name:
+        return ""
+
+    # --- legacy stateless path (deprecated) ---
     # Strip channel number prefix (e.g., "535 | ESPN" -> "ESPN")
     result = _CHANNEL_NUMBER_PREFIX_RE.sub("", name)
 
@@ -250,8 +527,13 @@ def normalize_for_epg_match(name: str) -> str:
     return result
 
 
-def normalize_for_epg_match_with_league(name: str) -> dict:
+def normalize_for_epg_match_with_league(name: str, engine=None) -> dict:
     """Extended normalization that also extracts league info.
+
+    League extraction is shared; only the key computation differs by path. When
+    ``engine`` is supplied the remainder is keyed via :func:`epg_match_key`
+    (the canonical shared-engine path, bd-xxzxe); otherwise the deprecated
+    legacy stateless path is used.
 
     Returns dict with keys: 'normalized', 'league', 'original_name'.
     """
@@ -263,7 +545,7 @@ def normalize_for_epg_match_with_league(name: str) -> dict:
         league = league_info["league"]
         name_to_normalize = league_info["name"]
 
-    normalized = normalize_for_epg_match(name_to_normalize)
+    normalized = normalize_for_epg_match(name_to_normalize, engine=engine)
 
     return {
         "normalized": normalized,
@@ -309,15 +591,132 @@ def parse_tvg_id(tvg_id: str) -> tuple[str, Optional[str], Optional[str]]:
     return (normalized, country, league)
 
 
+# Parenthetical acronym embedded in a tvg_id or display name, e.g.
+# "FamilyEntertainmentTelevision(FETV).us" or "Family Entertainment
+# Television (FETV)". Captures the FIRST parenthetical group — matches the
+# precedent in channel_pipeline_executor._match_epg_data's call-sign extraction
+# (bd-6rz70), which is a different, non-bulk matching path but established
+# the pattern.
+_PAREN_ACRONYM_RE = re.compile(r"\(([^)]+)\)")
+
+# An extracted acronym shorter than this is too generic to trust as an exact
+# lookup key (collision risk, e.g. stray single-letter annotations) — same
+# 2-character floor _extract_match_tokens already applies to any token.
+_MIN_ACRONYM_LENGTH = 2
+
+
+def extract_paren_acronym(text: str) -> Optional[str]:
+    """Extract a parenthetical acronym from a TVG-ID or display name.
+
+    Dispatcharr's guide database often encodes a network's canonical short
+    acronym as a parenthetical INSIDE the tvg_id (and sometimes the display
+    name), e.g. ``FamilyEntertainmentTelevision(FETV).us`` or
+    ``Family Entertainment Television (FETV)``. ``epg_match_key`` flattens
+    the whole string (parens included) into one blob, which buries the
+    acronym mid-string where no ``.startswith()``/``.endswith()`` check can
+    find it — this extracts it directly instead (bd-6rz70).
+
+    The acronym is a bare token, not a display name needing tag-stripping,
+    so it is normalized with the plain ``_NON_ALNUM_RE`` + lowercase fold —
+    NOT routed through ``epg_match_key``'s full engine pipeline.
+
+    Returns the normalized acronym, or ``None`` if: no parenthetical is
+    present; the FIRST parenthetical normalizes to fewer than
+    ``_MIN_ACRONYM_LENGTH`` characters; or ANY parenthetical is a region word
+    (vznut.2 — a regional-variant entry yields no acronym; see below).
+    """
+    if not text:
+        return None
+    groups = _PAREN_ACRONYM_RE.findall(text)
+    if not groups:
+        return None
+    # vznut.2 change 2/3: a PARENTHETICAL region marker ("(Pacific)") means this
+    # is a regional-variant entry. Its trailing station-id acronym is just the
+    # base acronym plus a region suffix (USANetwork(Pacific)(USAP) -> "USAP",
+    # AMC(Pacific)(AMCP) -> "AMCP") — the SAME network as the base feed, not an
+    # independent identity. Folding it into match_tokens would make it an EXTRA
+    # token the base entry lacks (m4hp1 -4 penalty), pushing the East default
+    # ahead of the correct Pacific feed and defeating the band-preserving region
+    # tie-break. So a region parenthetical yields NO acronym at all: the entry
+    # is already an exact candidate via its region-collapsed key and stays
+    # token-symmetric with its base sibling, letting the region tie-break fire.
+    for group in groups:
+        if _NON_ALNUM_RE.sub("", group.lower()) in _REGION_WORDS:
+            return None
+    # Otherwise keep the ORIGINAL bd-6rz70 semantics exactly: the FIRST
+    # parenthetical only, dropped if it is under the length floor (the
+    # region scan above is the sole intended behavior change).
+    acronym = _NON_ALNUM_RE.sub("", groups[0].lower())
+    if len(acronym) < _MIN_ACRONYM_LENGTH:
+        return None
+    return acronym
+
+
+def detect_region(
+    tvg_id: Optional[str], name: Optional[str] = None
+) -> Optional[str]:
+    """Detect the timezone region of a channel or EPG entry (vznut.2).
+
+    Returns a region code ("E"/"W"/"C"/"M"), or ``None`` when no region is
+    present. West and Pacific both map to "W" (US West-coast feeds run on
+    Pacific time); Central and Mountain are their own regions.
+
+    Detection order (spike vznut.3):
+    1. Any parenthetical in the tvg_id — authoritative for JESmann, e.g.
+       Dispatcharr's ``USANetwork(Pacific)(USAP).us`` -> "W". Parens are scanned
+       in order so the region wins even when it precedes the station-id paren.
+    2. Else the LAST word of the display name, e.g. "USA Network West" -> "W".
+       Only the trailing word is considered so a leading descriptor
+       ("West Coast News") is never mistaken for a timezone tag.
+
+    Only an EXACT whole-word region token registers, so adjective forms
+    ("PBS Eastern", "Western Channel", "Starz Encore Westerns") resolve to
+    ``None`` — the edge guard called out in the bead.
+    """
+    if tvg_id:
+        for group in _PAREN_ACRONYM_RE.findall(tvg_id):
+            code = _REGION_CODE.get(_NON_ALNUM_RE.sub("", group.lower()))
+            if code:
+                return code
+    if name:
+        words = re.findall(r"[A-Za-z0-9]+", name)
+        # Skip trailing quality/format tokens ("AMC West HD" -> region from
+        # "West", not "HD") AND bare trailing digits ("AMC West 2" -> "West"):
+        # the region tag is the last MEANINGFUL word, and a quality suffix or a
+        # stray number after it is noise. Only the effective trailing word is
+        # considered, so a leading descriptor is never mistaken for a timezone.
+        # The digit skip only looks PAST the number for a real region word; it
+        # never invents one ("ESPN 2" -> skip "2" -> "ESPN" -> None).
+        idx = len(words) - 1
+        while idx >= 0 and (
+            words[idx].lower() in _QUALITY_TOKENS or words[idx].isdigit()
+        ):
+            idx -= 1
+        if idx >= 0:
+            code = _REGION_CODE.get(words[idx].lower())
+            if code:
+                return code
+    return None
+
+
 def build_epg_lookup(
     epg_data: list[dict],
+    engine=None,
 ) -> dict:
     """Build lookup maps from EPG data for O(1) matching.
+
+    Args:
+        epg_data: list of EPG entry dicts.
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). When supplied, EPG
+            names are keyed through the shared engine via :func:`epg_match_key`;
+            otherwise the deprecated legacy normalizer is used.
 
     Returns a dict with keys:
     - 'by_normalized_name': dict mapping normalized name -> list of EPG entries
     - 'by_tvg_id': dict mapping normalized TVG-ID name -> list of EPG entries
     - 'by_call_sign': dict mapping call sign -> list of EPG entries
+    - 'by_acronym': dict mapping normalized parenthetical acronym (extracted
+      from tvg_id or name, e.g. "OWN") -> list of EPG entries (bd-6rz70)
     - 'all_entries': list of all processed EPG entries with normalized data
     """
     start = time.time()
@@ -328,6 +727,7 @@ def build_epg_lookup(
     by_normalized_name: dict[str, list[dict]] = {}
     by_tvg_id: dict[str, list[dict]] = {}
     by_call_sign: dict[str, list[dict]] = {}
+    by_acronym: dict[str, list[dict]] = {}
     all_entries: list[dict] = []
 
     for epg in epg_data:
@@ -336,12 +736,25 @@ def build_epg_lookup(
         epg_source = epg.get("epg_source", {})
 
         # Normalize the EPG name
-        norm_info = normalize_for_epg_match_with_league(epg_name)
+        norm_info = normalize_for_epg_match_with_league(epg_name, engine=engine)
         normalized_name = norm_info["normalized"]
         league = norm_info["league"]
 
         # Parse TVG-ID
         tvg_normalized, tvg_country, tvg_league = parse_tvg_id(tvg_id)
+
+        # Parenthetical acronym extraction (bd-6rz70): Dispatcharr often
+        # buries a network's canonical acronym as "(ACRONYM)" inside the
+        # tvg_id, and sometimes inside the display name too. Extract both
+        # explicitly — the tvg_id form is invisible to normalized_name (it's
+        # flattened into a long blob) and the name form CAN be buried by
+        # flattening too (e.g. "Family Entertainment Television (FETV)" ->
+        # "familyentertainmenttelevisionfetv" is not a prefix of "fetv").
+        tvg_acronym = extract_paren_acronym(tvg_id)
+        name_acronym = extract_paren_acronym(epg_name)
+        acronym_tokens = frozenset(
+            a for a in (tvg_acronym, name_acronym) if a
+        )
 
         entry = {
             "id": epg.get("id"),
@@ -353,6 +766,26 @@ def build_epg_lookup(
             "country": tvg_country,
             "tvg_normalized": tvg_normalized,
             "call_sign": extract_broadcast_call_sign(epg_name),
+            # Meaningful tokens for the overlap signal (a6445), extended
+            # with any parenthetical acronym (bd-6rz70) — the acronym IS a
+            # network identity token, on par with a call sign, so folding it
+            # in lets the token-quality term discriminate between multiple
+            # candidates that share the same acronym (e.g. HGTV entries from
+            # several countries). A no-op when the acronym already appears
+            # in the display name (already tokenized by the split below).
+            "match_tokens": (
+                _extract_match_tokens(epg_name, engine=engine)
+                | acronym_tokens
+            ),
+            # Broadcast subchannel number parsed from the RAW name (m4hp1).
+            # Primary feed (no marker / -DT / -DT1) = 1; diginets -DT2.. >= 2.
+            # Pure tie-break: prefer the primary feed when tokens tie.
+            "subchannel": _parse_subchannel(epg_name),
+            # Timezone region (vznut.2): "E"/"W"/"C"/"M" or None, from the tvg_id
+            # parenthetical first, then the trailing name word. Used ONLY by
+            # _sort_matches as a band-preserving tie-break so a "...West" channel
+            # prefers the "(Pacific)" feed over the East default.
+            "region": detect_region(tvg_id, epg_name),
         }
 
         all_entries.append(entry)
@@ -371,17 +804,25 @@ def build_epg_lookup(
                 entry["call_sign"], []
             ).append(entry)
 
+        # Index by parenthetical acronym (bd-6rz70). acronym_tokens is a set
+        # derived from THIS entry alone, so each key gets the entry once.
+        for acronym in acronym_tokens:
+            by_acronym.setdefault(acronym, []).append(entry)
+
     elapsed = (time.time() - start) * 1000
     logger.info(
         "[EPG-MATCH] Built EPG lookup in %.1fms: "
-        "%s name entries, %s tvg-id entries, %s call sign entries",
+        "%s name entries, %s tvg-id entries, %s call sign entries, "
+        "%s acronym entries",
         elapsed, len(by_normalized_name), len(by_tvg_id), len(by_call_sign),
+        len(by_acronym),
     )
 
     return {
         "by_normalized_name": by_normalized_name,
         "by_tvg_id": by_tvg_id,
         "by_call_sign": by_call_sign,
+        "by_acronym": by_acronym,
         "all_entries": all_entries,
     }
 
@@ -393,19 +834,37 @@ def _compute_confidence(
     channel_call_sign: Optional[str],
     epg_entry: dict,
     match_type: str,
+    channel_tokens: Optional[frozenset] = None,
 ) -> int:
     """Compute confidence score for a channel-EPG match.
 
-    Scoring (100 points total):
+    Scoring:
     - Country OR League match: 40 points
-    - Exact vs prefix match: 25 points
-    - Name length similarity: 20 points
+    - Exact vs acronym vs prefix match: 25 / 25 / 15 points (bd-6rz70: an
+      "acronym" candidate is an exact dict-key lookup on a parenthetical
+      abbreviation, weighted equal to "exact" — see _ACRONYM_MATCH_WEIGHT)
+    - Token-set match quality: +36 .. -16 points (m4hp1 — PRIMARY same-bucket
+      discriminator: rewards shared tokens, penalises extra/noise EPG tokens)
     - Call sign match: 10 points
     - HD variant: 5 points
+
+    The token-quality term (m4hp1, evolving a6445) rewards candidates that share
+    more of the channel name's meaningful tokens (call sign AND
+    network/affiliate/city) AND penalises candidates carrying EXTRA tokens the
+    channel lacks (the "TW BAK"/"Stream"/"HEROICN"/"THENEST" noise). It is
+    weighted above call sign so that, among entries in the same call-sign
+    bucket, the clean primary-feed network entry wins.
+
+    The former name-length-similarity term was REMOVED (m4hp1): it rewarded
+    coincidental character counts and actively mis-ranked — a noisier subchannel
+    whose flattened name happened to be closer in length to the channel key
+    would beat the clean network entry (it ranked 'KABC-DT Stream (ABC)' and
+    'WTVT-DT2 (MVIES)' over the correct feed). Token-set quality, not length, is
+    the same-bucket discriminator now; genuine ties are broken in _sort_matches
+    (subchannel number, then deterministic keys).
     """
     score = 0
 
-    epg_normalized = epg_entry["normalized_name"]
     epg_league = epg_entry.get("league")
     epg_country = epg_entry.get("country")
     epg_call_sign = epg_entry.get("call_sign")
@@ -418,19 +877,28 @@ def _compute_confidence(
         if channel_country.upper() == epg_country.upper():
             score += 40
 
-    # Exact vs prefix match: 25 points
+    # Exact vs acronym vs prefix match: 25 / 25 / 15 points
     if match_type == "exact":
         score += 25
+    elif match_type == "acronym":
+        # bd-6rz70: exact dict-key lookup on a parenthetical acronym — see
+        # _ACRONYM_MATCH_WEIGHT for the full weighting rationale.
+        score += _ACRONYM_MATCH_WEIGHT
     elif match_type == "prefix" and len(channel_normalized) > MIN_PREFIX_LENGTH:
         # Partial credit for prefix matches
         score += 15
 
-    # Name length similarity: 20 points
-    if channel_normalized and epg_normalized:
-        len_ratio = min(len(channel_normalized), len(epg_normalized)) / max(
-            len(channel_normalized), len(epg_normalized), 1
+    # Token-set match quality (m4hp1): reward shared tokens, penalise extra
+    # EPG tokens absent from the channel. Skipped entirely when either side
+    # lacks tokens (e.g. legacy direct callers) so those scores are unchanged.
+    epg_tokens = epg_entry.get("match_tokens")
+    if channel_tokens and epg_tokens:
+        shared = len(channel_tokens & epg_tokens)
+        extra = len(epg_tokens - channel_tokens)
+        score += (
+            min(shared, _TOKEN_SHARED_CAP) * _TOKEN_SHARED_WEIGHT
+            - min(extra, _TOKEN_EXTRA_CAP) * _TOKEN_EXTRA_WEIGHT
         )
-        score += int(len_ratio * 20)
 
     # Call sign match: 10 points
     if channel_call_sign and epg_call_sign:
@@ -444,62 +912,268 @@ def _compute_confidence(
     return score
 
 
+def _epg_source_id(epg_source) -> Optional[int]:
+    """Resolve an EPG source id from either a ``{id, name}`` dict or a bare int.
+
+    Dispatcharr's epgdata may serialize ``epg_source`` as a nested object or as
+    a plain foreign-key id depending on version; handle both.
+    """
+    if isinstance(epg_source, dict):
+        return epg_source.get("id")
+    if isinstance(epg_source, int):
+        return epg_source
+    return None
+
+
+def build_source_priority_order(epg_sources: list[dict]) -> dict[int, int]:
+    """Map EPG ``source_id -> rank`` where rank 0 is the most-preferred source.
+
+    Sources are ranked by their ``priority`` field DESCENDING — higher priority
+    number = more preferred, matching the EPG Manager UI convention
+    (EPGManagerTab sorts ``b.priority - a.priority``). Ties broken by source id
+    so the ranking is deterministic regardless of fetch order.
+    """
+    ranked = sorted(
+        (s for s in epg_sources if s.get("id") is not None),
+        key=lambda s: (-(s.get("priority") or 0), s["id"]),
+    )
+    return {s["id"]: rank for rank, s in enumerate(ranked)}
+
+
+def find_shared_epg_links(
+    channels: list[dict],
+    epg_data: Optional[list[dict]] = None,
+) -> dict:
+    """Read-only audit: find every set of channels that share one ``epg_data_id``.
+
+    This is the fingerprint of the West-shares-East linkage bug (bead vznut):
+    two or more channels silently linked to the *same* Dispatcharr EPG row, so a
+    West feed shows its East counterpart's schedule. There is no local ECM table
+    for this — ``epg_data_id`` lives on the live Dispatcharr channel record — so
+    the audit is a pure aggregation over the channel list the caller already
+    fetched.
+
+    Grouping key is the channel's ``epg_data_id`` alone. A Dispatcharr
+    ``epg_data_id`` is the primary key of a single ``/api/epg/epgdata/{id}/``
+    row, so it is **globally unique** and already implies exactly one source —
+    grouping by ``(epg_source_id, epg_data_id)`` would be redundant. (``tvg_id``
+    is NOT unique across sources; ``epg_data_id`` is, which is why we group on
+    it.) The shared row's ``epg_source`` is surfaced per group for diagnostics.
+
+    Channels with a NULL / missing ``epg_data_id`` are **excluded** — they are
+    unlinked, not mis-linked. Only groups of size >= 2 are reported (no
+    threshold beyond "shared").
+
+    Args:
+        channels: Dispatcharr channel dicts (each may carry ``id``, ``name``,
+            ``epg_data_id``).
+        epg_data: Optional Dispatcharr EPG-data rows used to enrich each group
+            with the shared row's ``name`` / ``tvg_id`` / source. When omitted or
+            when a row is absent, those enrichment fields are ``None``.
+
+    Returns:
+        A deterministic dict::
+
+            {
+              "shared_links": [
+                {
+                  "epg_data_id": int,
+                  "epg_name": str | None,
+                  "tvg_id": str | None,
+                  "epg_source_id": int | None,
+                  "count": int,
+                  "channels": [{"channel_id": int, "channel_name": str}, ...],
+                },
+                ...
+              ],
+              "summary": {
+                "shared_link_groups": int,
+                "affected_channels": int,
+                "total_channels": int,
+              },
+            }
+
+        ``shared_links`` is sorted by each group's smallest channel id (then by
+        ``epg_data_id``); channels within a group are sorted by channel id. The
+        output is fully deterministic so it can serve as a repeatable test
+        oracle.
+    """
+    # Index EPG rows by their id for O(1) enrichment lookups.
+    epg_by_id: dict = {}
+    for entry in epg_data or []:
+        entry_id = entry.get("id")
+        if entry_id is not None:
+            epg_by_id[entry_id] = entry
+
+    # Group channels by epg_data_id, excluding NULL / unlinked.
+    groups: dict = {}
+    for ch in channels:
+        epg_data_id = ch.get("epg_data_id")
+        if epg_data_id is None:
+            continue
+        groups.setdefault(epg_data_id, []).append(
+            {
+                "channel_id": ch.get("id"),
+                "channel_name": ch.get("name") or "",
+            }
+        )
+
+    shared_links = []
+    affected_channels = 0
+    for epg_data_id, members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: (m["channel_id"] is None, m["channel_id"]))
+        affected_channels += len(members)
+
+        entry = epg_by_id.get(epg_data_id)
+        if entry is not None:
+            epg_name = entry.get("name")
+            tvg_id = entry.get("tvg_id")
+            epg_source_id = _epg_source_id(entry.get("epg_source"))
+        else:
+            epg_name = tvg_id = epg_source_id = None
+
+        shared_links.append(
+            {
+                "epg_data_id": epg_data_id,
+                "epg_name": epg_name,
+                "tvg_id": tvg_id,
+                "epg_source_id": epg_source_id,
+                "count": len(members),
+                "channels": members,
+            }
+        )
+
+    # Deterministic order: by the group's smallest channel id, then epg_data_id.
+    def _group_key(group: dict) -> tuple:
+        ch_ids = [c["channel_id"] for c in group["channels"] if c["channel_id"] is not None]
+        min_id = min(ch_ids) if ch_ids else float("inf")
+        return (min_id, group["epg_data_id"])
+
+    shared_links.sort(key=_group_key)
+
+    return {
+        "shared_links": shared_links,
+        "summary": {
+            "shared_link_groups": len(shared_links),
+            "affected_channels": affected_channels,
+            "total_channels": len(channels),
+        },
+    }
+
+
 def _sort_matches(
     matches: list[EPGMatchWithScore],
     channel_league: Optional[str],
     channel_normalized: str,
+    source_order: Optional[dict[int, int]] = None,
+    channel_region: Optional[str] = None,
 ) -> list[EPGMatchWithScore]:
     """Sort matches by priority rules.
 
     Sort priority:
     1. League match (if channel has league prefix)
-    2. Country match
-    3. Exact over prefix (for names > 2 chars)
-    4. Special punctuation match
-    5. Channel-is-prefix-of-EPG preferred
-    6. Length similarity (closer = better)
-    7. Regional variant matching
-    8. HD + call sign combined scoring
-    9. Alphabetical
+    2. Confidence band (higher confidence first, bucketed by
+       PRIORITY_TIEBREAK_BAND)
+    3. EPG source priority — within a confidence band only (rank 0 = best)
+    4. Raw confidence (higher first, within band + source)
+    5. Subchannel number (m4hp1: primary feed before diginet) — a pure
+       tie-break, applied only AFTER token-quality/confidence already tied, so
+       it never beats a genuinely higher-overlap candidate (e.g. won't let
+       KCOP-DT beat a real KCOP-DT4 (MY) MyNet diginet match).
+    6. Exact over prefix (for names > 2 chars)
+    7. Special punctuation match
+    8. Channel-is-prefix-of-EPG preferred
+    9. Region consistency (vznut.2): channel region == EPG region preferred;
+       band-preserving, replaces the latently-backwards ``has_regional``
+       tie-break. Inert when the channel has no detected region.
+    10. Alphabetical, then EPG id (fully deterministic)
+
+    The former name-length-similarity tie-break (``len_diff``) was REMOVED
+    (m4hp1): like the length term in _compute_confidence, it rewarded
+    coincidental character counts and mis-ranked noisier subchannels over the
+    clean primary feed. Token-set quality (confidence) plus the subchannel
+    tie-break replace it.
+
+    ``source_order`` maps EPG ``source_id -> rank`` (0 = most preferred). It is a
+    *banded tiebreaker*: it only reorders candidates that share a confidence
+    band, so it never promotes a candidate more than one band worse on
+    confidence. When ``source_order`` is None/empty every match gets an equal
+    rank, and because the band is a monotonic function of confidence the result
+    is identical to ordering by raw confidence alone (no behavior change).
     """
 
     def sort_key(m: EPGMatchWithScore) -> tuple:
-        # Higher confidence first (negate for descending)
-        # Then apply tiebreaker rules
-        epg_norm = normalize_for_epg_match(m.epg_name)
+        # Reuse the key carried from the lookup entry (bd-xxzxe); only recompute
+        # for objects built outside the lookup path (epg_normalized == "").
+        epg_norm = m.epg_normalized or normalize_for_epg_match(m.epg_name)
 
         # 1. League match bonus
         league_bonus = 0
         if channel_league and m.match_type == "league":
             league_bonus = -1  # Sort first
 
-        # 2. Country (encoded in confidence already)
-        # 3. Exact over prefix
+        # 2. Confidence band (negate for descending). Coarser than raw
+        #    confidence so near-ties share a band and can be broken by source.
+        confidence_band = -(m.confidence // PRIORITY_TIEBREAK_BAND)
+
+        # 3. Source priority rank — only differentiates within a band.
+        if source_order:
+            source_rank = source_order.get(
+                _epg_source_id(m.epg_source), _UNRANKED_SOURCE
+            )
+        else:
+            source_rank = 0
+
+        # 4. Raw confidence (still prefer the better match within band + source)
+        # 5. Subchannel: lower number first (primary feed before diginet).
+        #    Placed AFTER -m.confidence so it only arbitrates genuine ties —
+        #    a candidate with higher token-quality/confidence still wins.
+        subchannel = m.subchannel
+
+        # 6. Exact over prefix
         exact_bonus = 0 if m.match_type == "exact" else 1
 
-        # 4. Special punctuation
+        # 7. Special punctuation
         has_special = 1 if _SPECIAL_PUNCT_RE.search(m.epg_name) else 0
 
-        # 5. Channel is prefix of EPG
+        # 8. Channel is prefix of EPG
         is_prefix = 0 if epg_norm.startswith(channel_normalized) else 1
 
-        # 6. Length similarity
-        len_diff = abs(len(channel_normalized) - len(epg_norm))
+        # 9. Region consistency (vznut.2): among candidates otherwise tied
+        #    (same band, source, confidence, subchannel, ...), prefer the EPG
+        #    entry whose timezone region matches the channel's. This REPLACES
+        #    the latently-backwards ``has_regional`` tie-break, which preferred
+        #    the NON-regional entry and so ranked the East default above the
+        #    correct "(Pacific)" feed for a "...West" channel. Band-preserving:
+        #    it only reorders genuine ties, never outranking country(+40) or
+        #    exact(+25). Inert (rank 0 for every candidate) when the channel has
+        #    no detected region, so non-regional channels (ESPN/CNN) are
+        #    unaffected. 0 = region match, 1 = EPG has no region (neutral),
+        #    2 = conflict (channel and EPG in different regions).
+        if channel_region is None:
+            region_consistency = 0
+        elif m.epg_region == channel_region:
+            region_consistency = 0
+        elif m.epg_region is None:
+            region_consistency = 1
+        else:
+            region_consistency = 2
 
-        # 7. Regional variant
-        has_regional = 1 if _REGIONAL_RE.search(m.epg_name) else 0
-
-        # 8. HD + call sign (encoded in confidence)
-        # 9. Alphabetical
+        # 10. Alphabetical, then EPG id as a final deterministic tiebreaker
         return (
             league_bonus,
+            confidence_band,
+            source_rank,
             -m.confidence,
+            subchannel,
             exact_bonus,
             has_special,
             is_prefix,
-            len_diff,
-            has_regional,
+            region_consistency,
             m.epg_name.lower(),
+            m.epg_id,
         )
 
     return sorted(matches, key=sort_key)
@@ -510,6 +1184,7 @@ def find_epg_matches_with_lookup(
     streams: list[dict],
     lookup: dict,
     source_order: Optional[dict[int, int]] = None,
+    engine=None,
 ) -> EPGMatchResult:
     """Core matching: find EPG matches for a channel using pre-built lookup.
 
@@ -518,6 +1193,9 @@ def find_epg_matches_with_lookup(
         streams: list of stream dicts for this channel
         lookup: pre-built lookup from build_epg_lookup()
         source_order: optional dict mapping source_id -> priority order
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). Must be the SAME
+            engine passed to ``build_epg_lookup`` so the channel name and the
+            EPG names are keyed identically.
 
     Returns:
         EPGMatchResult with sorted matches and best match
@@ -532,10 +1210,16 @@ def find_epg_matches_with_lookup(
     )
 
     # Normalize channel name
-    norm_info = normalize_for_epg_match_with_league(channel_name)
+    norm_info = normalize_for_epg_match_with_league(channel_name, engine=engine)
     channel_normalized = norm_info["normalized"]
     channel_league = norm_info["league"]
     channel_call_sign = extract_broadcast_call_sign(channel_name)
+    # Meaningful tokens for the overlap signal (a6445).
+    channel_tokens = _extract_match_tokens(channel_name, engine=engine)
+    # Timezone region of the channel (vznut.2): from the channel's tvg_id
+    # parenthetical first, then the trailing name word ("USA Network West" ->
+    # "W"). Drives the region-consistency tie-break in _sort_matches.
+    channel_region = detect_region(channel.get("tvg_id", ""), channel_name)
 
     # Detect country from streams
     channel_country = detect_country_from_streams(streams)
@@ -556,6 +1240,7 @@ def find_epg_matches_with_lookup(
     by_name = lookup["by_normalized_name"]
     by_tvg = lookup["by_tvg_id"]
     by_sign = lookup["by_call_sign"]
+    by_acronym = lookup["by_acronym"]
 
     # 1. Exact name matches
     if channel_normalized in by_name:
@@ -567,12 +1252,16 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "exact",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -587,12 +1276,16 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "exact",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="exact",
             ))
@@ -614,12 +1307,16 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "prefix",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -640,12 +1337,16 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "prefix",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="prefix",
                     ))
@@ -660,17 +1361,50 @@ def find_epg_matches_with_lookup(
             confidence = _compute_confidence(
                 channel_normalized, channel_league, channel_country,
                 channel_call_sign, entry, "callsign",
+                channel_tokens=channel_tokens,
             )
             matches.append(EPGMatchWithScore(
                 epg_id=epg_id,
                 epg_name=entry["name"],
                 tvg_id=entry["tvg_id"],
                 epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
+                epg_region=entry["region"],
                 confidence=confidence,
                 match_type="callsign",
             ))
 
-    # 5. League-specific matches
+    # 5. Acronym matches (bd-6rz70): exact lookup on a parenthetical
+    # acronym extracted from the EPG entry's tvg_id or display name (e.g.
+    # "OWN" -> OprahWinfreyNetwork(OWN).us). Deliberately NOT gated on
+    # MIN_PREFIX_LENGTH — short cable acronyms like "OWN" (3 chars) are
+    # exactly the case this exists for; gating them out would defeat the
+    # purpose (they'd never reach the prefix-scan path either).
+    if channel_normalized in by_acronym:
+        for entry in by_acronym[channel_normalized]:
+            epg_id = entry["id"]
+            if epg_id in seen_epg_ids:
+                continue
+            seen_epg_ids.add(epg_id)
+            confidence = _compute_confidence(
+                channel_normalized, channel_league, channel_country,
+                channel_call_sign, entry, "acronym",
+                channel_tokens=channel_tokens,
+            )
+            matches.append(EPGMatchWithScore(
+                epg_id=epg_id,
+                epg_name=entry["name"],
+                tvg_id=entry["tvg_id"],
+                epg_source=entry["epg_source"],
+                epg_normalized=entry["normalized_name"],
+                subchannel=entry["subchannel"],
+                epg_region=entry["region"],
+                confidence=confidence,
+                match_type="acronym",
+            ))
+
+    # 6. League-specific matches
     if channel_league:
         league_lower = channel_league.lower()
         for entry in lookup["all_entries"]:
@@ -689,32 +1423,27 @@ def find_epg_matches_with_lookup(
                     confidence = _compute_confidence(
                         channel_normalized, channel_league, channel_country,
                         channel_call_sign, entry, "league",
+                        channel_tokens=channel_tokens,
                     )
                     matches.append(EPGMatchWithScore(
                         epg_id=epg_id,
                         epg_name=entry["name"],
                         tvg_id=entry["tvg_id"],
                         epg_source=entry["epg_source"],
+                        epg_normalized=entry["normalized_name"],
+                        subchannel=entry["subchannel"],
+                        epg_region=entry["region"],
                         confidence=confidence,
                         match_type="league",
                     ))
 
-    # Apply source order preference if provided
-    if source_order and matches:
-        for match in matches:
-            source_id = None
-            if isinstance(match.epg_source, dict):
-                source_id = match.epg_source.get("id")
-            if source_id is not None and source_id in source_order:
-                # Boost confidence slightly for preferred sources
-                order = source_order[source_id]
-                if order == 0:
-                    match.confidence = min(100, match.confidence + 3)
-                elif order == 1:
-                    match.confidence = min(100, match.confidence + 1)
-
-    # Sort matches
-    matches = _sort_matches(matches, channel_league, channel_normalized)
+    # Sort matches. Source priority is applied inside the sort as a banded
+    # tiebreaker (see _sort_matches) — confidence is never mutated, so the
+    # reported score stays an honest measure of match quality.
+    matches = _sort_matches(
+        matches, channel_league, channel_normalized, source_order,
+        channel_region=channel_region,
+    )
 
     result.matches = matches
     result.best_match = matches[0] if matches else None
@@ -763,6 +1492,7 @@ def batch_find_epg_matches(
     all_streams: list[dict],
     epg_data: list[dict],
     source_order: Optional[dict[int, int]] = None,
+    engine=None,
 ) -> list[EPGMatchResult]:
     """Batch process EPG matching for multiple channels.
 
@@ -773,6 +1503,9 @@ def batch_find_epg_matches(
         epg_data: list of EPG entry dicts with 'id', 'name', 'tvg_id',
                   'epg_source' keys
         source_order: optional dict mapping EPG source_id -> priority (0=best)
+        engine: optional ``NormalizationEngine`` (bd-xxzxe). When supplied, all
+            EPG matching is keyed through ECM's one shared engine. When omitted
+            the deprecated legacy normalizer is used (back-compat only).
 
     Returns:
         List of EPGMatchResult, one per channel
@@ -792,7 +1525,7 @@ def batch_find_epg_matches(
             stream_by_id[sid] = stream
 
     # Build EPG lookup
-    lookup = build_epg_lookup(epg_data)
+    lookup = build_epg_lookup(epg_data, engine=engine)
 
     progress = BatchMatchProgress(total=len(channels))
     results: list[EPGMatchResult] = []
@@ -808,7 +1541,7 @@ def batch_find_epg_matches(
 
         # Find matches
         match_result = find_epg_matches_with_lookup(
-            channel, channel_streams, lookup, source_order,
+            channel, channel_streams, lookup, source_order, engine=engine,
         )
         results.append(match_result)
 

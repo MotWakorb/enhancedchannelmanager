@@ -225,8 +225,8 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
       <div className="modal-container logo-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -313,8 +313,9 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
                         handleClearFile();
                       }}
                       title="Remove file"
+                      aria-label="Remove file"
                     >
-                      <span className="material-icons">close</span>
+                      <span className="material-icons" aria-hidden="true">close</span>
                     </button>
                   </div>
                 ) : (
@@ -367,6 +368,9 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
         </div>
 
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={loading}>
+            Cancel
+          </button>
           <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={loading}>
             {loading ? 'Saving...' : isEdit ? 'Save Changes' : 'Add Logo'}
           </button>

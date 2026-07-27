@@ -44,8 +44,15 @@ const PROVIDER_CONFIG: Record<IdentityProvider, { icon: string; label: string; d
   },
 };
 
-// Get all supported providers
-const ALL_PROVIDERS: IdentityProvider[] = ['local', 'dispatcharr', 'oidc', 'saml', 'ldap'];
+// Get all linkable providers. 'oidc' is intentionally excluded: it has no
+// working link flow — get_enabled_providers() (backend/auth/settings.py)
+// never returns it, and even if it did, the redirect target
+// /api/auth/identities/link/oidc/authorize doesn't exist in backend/auth/
+// (bd-f9rlc). PROVIDER_CONFIG.oidc stays defined so an already-linked OIDC
+// identity (auth_provider column, models.py) still renders correctly in
+// the identity list above — this only hides the "Link Another Account"
+// entry point for the unimplemented flow.
+const ALL_PROVIDERS: IdentityProvider[] = ['local', 'dispatcharr', 'saml', 'ldap'];
 
 interface LinkModalProps {
   provider: IdentityProvider;
@@ -74,8 +81,8 @@ function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
             <span className="material-icons">{config.icon}</span>
             Link {config.label} Account
           </h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -310,22 +317,6 @@ export function LinkedAccountsSection() {
           <div className="available-providers">
             {availableProviders.map((provider) => {
               const config = PROVIDER_CONFIG[provider];
-              // OIDC uses redirect flow, not modal
-              if (provider === 'oidc') {
-                return (
-                  <button
-                    key={provider}
-                    className="link-provider-button"
-                    onClick={() => {
-                      // Redirect to OIDC linking endpoint
-                      window.location.href = '/api/auth/identities/link/oidc/authorize';
-                    }}
-                  >
-                    <span className="material-icons">{config.icon}</span>
-                    Link {config.label}
-                  </button>
-                );
-              }
               return (
                 <button
                   key={provider}

@@ -438,6 +438,359 @@ class TestM3UChangeDetector:
         assert change_set.streams_removed[0].group_name == "Sports"
         assert change_set.streams_removed[0].count == 10
 
+    def test_detect_changes_pure_rename_count_stable(self, test_session):
+        """enhancedchannelmanager-wawwh: a pure rename (one name out, one
+        name in, group stream COUNT unchanged) must still be recorded --
+        exactly how a PPV slot provider behaves (a dateless event name is
+        replaced in place without changing how many streams are in the
+        group)."""
+        detector = M3UChangeDetector(test_session)
+
+        # Initial state: PPV group has one slot, "Event A".
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 1, "enabled": True}],
+            1,
+            stream_names_by_group={"PPV": ["Event A"]},
+        )
+
+        # Provider swaps the slot's name; count stays at 1.
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 1, "enabled": True}],
+            1,
+            stream_names_by_group={"PPV": ["Event B"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].group_name == "PPV"
+        assert change_set.streams_added[0].stream_names == ["Event B"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].group_name == "PPV"
+        assert change_set.streams_removed[0].stream_names == ["Event A"]
+        assert change_set.streams_removed[0].count == 1
+
+        # No group-level or count-delta changes -- membership changed, not
+        # size.
+        assert len(change_set.groups_added) == 0
+        assert len(change_set.groups_removed) == 0
+        assert change_set.stream_count_delta == 0
+        assert change_set.has_changes is True
+
+    def test_detect_changes_no_change_count_stable_same_names(self, test_session):
+        """Count stable AND names identical -- must record nothing. Guards
+        against the rename-detection branch firing on every stable group
+        just because it now runs a set comparison."""
+        detector = M3UChangeDetector(test_session)
+        stream_names_by_group = {"Sports": ["ESPN", "Fox Sports"]}
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group=stream_names_by_group,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group=dict(stream_names_by_group),
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_pure_rename_multiple_swaps(self, test_session):
+        """Multiple simultaneous swaps within a count-stable group are all
+        captured in a single added/removed pair."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"PPV": ["Event A", "Event B", "Event C"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"PPV": ["Event A", "Event D", "Event E"]},
+        )
+
+        assert set(change_set.streams_added[0].stream_names) == {"Event D", "Event E"}
+        assert change_set.streams_added[0].count == 2
+        assert set(change_set.streams_removed[0].stream_names) == {"Event B", "Event C"}
+        assert change_set.streams_removed[0].count == 2
+
+    def test_detect_changes_pure_rename_duplicate_name_replacement(self, test_session):
+        """enhancedchannelmanager-wawwh review round 2 (PR #740): the
+        captured per-group name lists preserve duplicates, so the diff must
+        use multiset (Counter) semantics, not set semantics. A plain set()
+        collapses ["Event A", "Event A"] to one entry, so
+        ["Event A", "Event A"] -> ["Event A", "Event B"] would previously
+        diff as "added Event B" with NO removal recorded -- the replaced
+        duplicate occurrence was invisible. With Counter-based diffing this
+        must record exactly one addition ("Event B") and one removal
+        ("Event A"), reflecting that one of the two "Event A" occurrences
+        was actually swapped out."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event A"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event B"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].stream_names == ["Event B"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].stream_names == ["Event A"]
+        assert change_set.streams_removed[0].count == 1
+
+    def test_detect_changes_pure_rename_duplicate_count_increase_within_stable_total(
+        self, test_session
+    ):
+        """A distinct name is replaced by a second occurrence of an
+        already-present name -- the total stream count stays the same, but
+        one name's duplicate count increases from 1 to 2 while a different
+        name drops out entirely. Multiset diffing must record the extra
+        duplicate as an addition and the dropped name as a removal, not
+        cancel them out via set equality (both names are present in both
+        snapshots' sets, so a naive set diff would see no change at all)."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event B"]},
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"PPV": ["Event A", "Event A"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].stream_names == ["Event A"]
+        assert change_set.streams_added[0].count == 1
+
+        assert len(change_set.streams_removed) == 1
+        assert change_set.streams_removed[0].stream_names == ["Event B"]
+        assert change_set.streams_removed[0].count == 1
+
+    def test_detect_changes_no_change_multiset_identical_with_duplicates(self, test_session):
+        """Count stable AND the multiset of names identical (including
+        matching duplicate counts) -- must record nothing. Guards against
+        Counter-based diffing firing spuriously on a group that legitimately
+        carries duplicate names but hasn't actually changed."""
+        detector = M3UChangeDetector(test_session)
+        stream_names_by_group = {"PPV": ["Event A", "Event A", "Event B"]}
+
+        detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group=stream_names_by_group,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "PPV", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group=dict(stream_names_by_group),
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_count_stable_no_names_captured_fails_open(self, test_session):
+        """Count stable and NO stream names available on either side (e.g.
+        the group is disabled, or names simply weren't captured) must not
+        fabricate a rename -- the guard fails open, same philosophy as the
+        jqwfq stale-dateless guard's snapshot check."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 5, "enabled": False}],
+            5,
+        )
+
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 5, "enabled": False}],
+            5,
+        )
+
+        assert change_set.has_changes is False
+        assert len(change_set.streams_added) == 0
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_count_changed_behavior_unchanged(self, test_session):
+        """The existing count-changed detection path (added/removed streams
+        computed from prev/curr name sets) must be unaffected by the new
+        count-stable rename branch."""
+        detector = M3UChangeDetector(test_session)
+
+        detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 2, "enabled": True}],
+            2,
+            stream_names_by_group={"Sports": ["ESPN", "Fox Sports"]},
+        )
+
+        # Count grows by one AND the surviving names are also renamed --
+        # exercises the branch computing added/removed from the diff, not
+        # just literal net-new entries.
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "Sports", "stream_count": 3, "enabled": True}],
+            3,
+            stream_names_by_group={"Sports": ["ESPN HD", "Fox Sports 1", "NBC Sports"]},
+        )
+
+        assert len(change_set.streams_added) == 1
+        assert change_set.streams_added[0].count == 1
+        assert set(change_set.streams_added[0].stream_names) == {
+            "ESPN HD", "Fox Sports 1", "NBC Sports",
+        }
+        assert len(change_set.streams_removed) == 0
+
+    def test_detect_changes_pure_rename_detected_just_below_cap(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740): one stream
+        under the per-group name-capture cap, the captured list is the
+        group's COMPLETE membership (no truncation possible), so a genuine
+        rename must still be detected. Guards against an over-broad fix
+        that silences everything near the cap instead of just at/above it."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES - 1  # fits under the cap, untruncated
+        names = [f"Stream {i}" for i in range(total)]
+
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": names},
+        )
+
+        # Swap exactly one name; count is unchanged.
+        renamed = list(names)
+        renamed[0] = "Stream Renamed"
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": renamed},
+        )
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert len(added) == 1
+        assert added[0].stream_names == ["Stream Renamed"]
+        assert len(removed) == 1
+        assert removed[0].stream_names == [names[0]]
+
+    def test_detect_changes_pure_rename_guard_silent_at_exact_cap(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740): a group
+        whose TRUE count sits exactly AT the cap is ambiguous -- it could be
+        exactly cap-many real streams with nothing truncated, or a larger
+        group truncated down to the cap. The guard cannot tell the
+        difference from stream_count alone, so it must treat "at the cap"
+        the same as "above the cap" and stay silent rather than guess, even
+        though the two captured lists here differ by one swapped name."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES  # exactly at the cap
+        names = [f"Stream {i}" for i in range(total)]
+
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": names},
+        )
+
+        renamed = list(names)
+        renamed[0] = "Stream Renamed"
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": renamed},
+        )
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert added == []
+        assert removed == []
+
+    def test_detect_changes_pure_rename_guard_silent_above_cap_order_jitter(self, test_session):
+        """enhancedchannelmanager-wawwh review round (PR #740) -- the
+        reviewer's empirical repro: a group one OVER the cap, with
+        byte-identical real membership between two refreshes, must not
+        fabricate a rename just because Dispatcharr's unordered stream
+        listing (no explicit ``ordering`` param) hands back a different
+        truncated PAGE of names each time. Ascending order on refresh 1,
+        reversed order on refresh 2 -- same 501 real streams, two different
+        500-name windows. The old guard (``prev_stream_names and
+        curr_stream_names``) could not tell "genuinely renamed" from "same
+        streams, different truncated window" and would record a phantom
+        1-added/1-removed pair; the count-below-cap guard must recognize
+        both captured lists as unreliable and stay silent."""
+        from tasks.m3u_refresh import MAX_STREAM_NAMES
+
+        detector = M3UChangeDetector(test_session)
+        total = MAX_STREAM_NAMES + 1  # exceeds the cap by exactly one
+        all_names = [f"Stream {i}" for i in range(total)]
+
+        prev_names = all_names[:MAX_STREAM_NAMES]
+        detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": prev_names},
+        )
+
+        curr_names = list(reversed(all_names))[:MAX_STREAM_NAMES]
+        change_set = detector.detect_changes(
+            1,
+            [{"name": "BigGroup", "stream_count": total, "enabled": True}],
+            total,
+            stream_names_by_group={"BigGroup": curr_names},
+        )
+
+        # Sanity: the two captured windows really do differ (otherwise this
+        # test would pass for the wrong reason -- no jitter to guard against).
+        assert set(prev_names) != set(curr_names)
+
+        added = [s for s in change_set.streams_added if s.group_name == "BigGroup"]
+        removed = [s for s in change_set.streams_removed if s.group_name == "BigGroup"]
+        assert added == []
+        assert removed == []
+
     def test_detect_changes_with_stream_names(self, test_session):
         """Test detection with stream names provided."""
         detector = M3UChangeDetector(test_session)

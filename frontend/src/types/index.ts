@@ -13,6 +13,13 @@ export interface Channel {
   auto_created: boolean;
   auto_created_by: number | null;
   auto_created_by_name: string | null;
+  // Dispatcharr catch-up (timeshift) fields (bead enhancedchannelmanager-sy1sz).
+  // Passed through verbatim by /api/channels. `is_catchup` is the authoritative
+  // "catch-up supported" flag; `catchup_days` is the archive depth (channel-level
+  // = max across the channel's streams). Never infer support from catchup_days —
+  // the flag wins (a channel can have days:0 but is_catchup:true).
+  is_catchup?: boolean;
+  catchup_days?: number;
   // Client-side only: temporary logo URL for staged channels before commit
   _stagedLogoUrl?: string;
 }
@@ -28,7 +35,7 @@ export interface MergeChannelsRequest {
   target_stream_profile_id?: number | null;
 }
 
-export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams';
+export type SortMode = 'smart' | 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup';
 
 export type EPGSourceType = 'xmltv' | 'schedules_direct' | 'dummy';
 export type EPGSourceStatus = 'idle' | 'fetching' | 'parsing' | 'error' | 'success' | 'disabled';
@@ -175,6 +182,29 @@ export interface Stream {
   channel_group_name: string | null;
   is_custom: boolean;
   custom_properties?: Record<string, unknown> | null;  // Extra M3U attributes like tvc-guide-stationid
+  // Dispatcharr stale-stream flags (bead enhancedchannelmanager-po78p / GH
+  // #696) — passed through verbatim by /api/channels/{id}/streams and
+  // /api/streams/by-ids. `is_stale` is truthy when Dispatcharr's own M3U
+  // refresh no longer re-matched this stream in the source playlist.
+  is_stale?: boolean;
+  last_seen?: string | null;
+  // Dispatcharr catch-up (timeshift) fields (bead enhancedchannelmanager-sy1sz).
+  // Passed through verbatim by /api/channels/{id}/streams and /api/streams/by-ids.
+  // `is_catchup` is the authoritative "catch-up supported" flag; `catchup_days`
+  // is the archive depth in days. Never infer support from catchup_days — the
+  // flag wins (a stream can have days:0 but is_catchup:true).
+  is_catchup?: boolean;
+  catchup_days?: number;
+}
+
+// Response shape for GET /api/streams/stale-ids — the cached, paged-scan
+// set of Dispatcharr-stale stream ids used as the single source of truth
+// for stale-stream decoration across the Channels/Streams panes (bead
+// enhancedchannelmanager-po78p / GH #696).
+export interface StaleStreamIdsResponse {
+  stale_stream_ids: number[];
+  last_seen: Record<string, string | null>;
+  count: number;
 }
 
 // Stream group with count (returned by /api/stream-groups)
@@ -242,11 +272,18 @@ export interface AutoSyncCustomProperties {
   name_regex_pattern?: string;              // Find pattern (regex)
   name_replace_pattern?: string;            // Replace pattern
   name_match_regex?: string;                // Channel name filter regex (Dispatcharr field name)
-  channel_profile_ids?: string[];           // Channel Profile IDs (strings for API compatibility)
+  channel_profile_ids?: number[];           // Channel Profile IDs (canonical INTEGER type — Dispatcharr profile ids)
   channel_sort_order?: 'provider' | 'name' | 'tvg_id' | 'updated_at' | null; // Sort field
   channel_sort_reverse?: boolean;           // Reverse sort order
   stream_profile_id?: number | null;        // Stream Profile ID
   custom_logo_id?: number | null;           // Custom Logo ID
+  // Dispatcharr keeps adding keys its sync consumes (v0.27.2:
+  // channel_numbering_mode, channel_numbering_fallback,
+  // name_match_exclude_regex, force_dummy_epg, ...). Its group-settings
+  // upsert replaces custom_properties wholesale, so unknown keys MUST be
+  // carried through verbatim on every save — never rebuild this object
+  // from the known keys above (bead enhancedchannelmanager-igqcy).
+  [key: string]: unknown;
 }
 
 export interface ChannelGroupM3UAccount {
@@ -258,6 +295,9 @@ export interface ChannelGroupM3UAccount {
   enabled_series: boolean;
   auto_channel_sync: boolean;
   auto_sync_channel_start: number | null;
+  // Added in Dispatcharr v0.25.0; optional so payloads from older
+  // Dispatcharr versions (key absent) still typecheck.
+  auto_sync_channel_end?: number | null;
   custom_properties: AutoSyncCustomProperties | null;
 }
 
@@ -556,6 +596,10 @@ export interface SystemEvent {
   channel_name?: string;
   client_id?: string;
   ip_address?: string;
+  // ECM-resolved streaming username for this event's client IP, joined from
+  // UniqueClientConnection server-side (enhancedchannelmanager-2sfpt #2). Null
+  // when no connection attributes the IP — the UI falls back to ip_address.
+  username?: string | null;
   message?: string;
   details?: Record<string, unknown>;
   timestamp: string;
@@ -1039,6 +1083,10 @@ export interface M3UDigestSettings {
   send_to_discord: boolean;  // Send digest to Discord (uses shared webhook from General Settings)
   exclude_group_patterns: string[];  // Regex patterns to exclude groups from digest
   exclude_stream_patterns: string[];  // Regex patterns to exclude streams from digest
+  // M3U account IDs to include in digest NOTIFICATIONS (GH #496). DB change
+  // logging is never filtered by this -- only what gets emailed/Discorded.
+  // Empty array = all accounts (default, unchanged behavior).
+  account_ids: number[];
   last_digest_at: string | null;  // ISO timestamp
   created_at: string;  // ISO timestamp
   updated_at: string;  // ISO timestamp
@@ -1056,6 +1104,7 @@ export interface M3UDigestSettingsUpdate {
   send_to_discord?: boolean;
   exclude_group_patterns?: string[];
   exclude_stream_patterns?: string[];
+  account_ids?: number[];
 }
 
 // =============================================================================
@@ -1122,7 +1171,13 @@ export interface PreviewStreamModalProps {
 
 // Top viewer entry in unique viewers summary
 export interface TopViewer {
+  // In by-IP mode this is the client IP. In by-user mode it carries the group
+  // identity = COALESCE(username, ip_address): the username when resolved, else
+  // the IP fallback (enhancedchannelmanager-2sfpt #3).
   ip_address: string;
+  // Resolved username, or null when grouping by IP / when the viewer fell back
+  // to their IP. UI renders ``username ?? ip_address``.
+  username?: string | null;
   connection_count: number;
   total_watch_seconds: number;
 }
@@ -1408,6 +1463,44 @@ export type ProviderHeatmapResponse = ProviderStatsEnvelope<ProviderHeatmapRow>;
 export type ProviderBitrateResponse = ProviderStatsEnvelope<ProviderBitrateRow>;
 
 // =============================================================================
+// Provider Stream Usage (GH-482, bd-n5cwp)
+// =============================================================================
+//
+// GET /api/stats/providers/stream-usage — NOT admin-gated (Dispatcharr-derived
+// catalog/assignment data, same trust tier as GET /api/stats/channels — not
+// per-user watch history like the ProviderStats family above).
+//
+// Two counting metrics, both surfaced intentionally:
+//   * assigned_streams (PRIMARY) — distinct streams from this provider
+//     assigned to >=1 channel. A stream in 3 channels still counts once.
+//   * total_assignments (secondary) — SUM of channel-memberships across
+//     those streams (a stream in 2 channels counts twice) — surfaces
+//     providers whose streams get heavily reused across channels.
+// total_streams (provider's full catalog size) + utilization_pct
+// (assigned_streams / total_streams) give scale/context.
+//
+// provider_id is null for the synthetic "Unknown" bucket (an assigned
+// stream whose m3u_account didn't resolve to a known/current provider).
+export interface ProviderStreamUsageRow {
+  provider_id: number | null;
+  provider_name: string;
+  total_streams: number;
+  assigned_streams: number;
+  total_assignments: number;
+  utilization_pct: number;
+}
+
+export interface ProviderStreamUsageMeta {
+  total_rows: number;
+}
+
+export interface ProviderStreamUsageResponse {
+  data: ProviderStreamUsageRow[];
+  meta: ProviderStreamUsageMeta;
+  pagination: null;
+}
+
+// =============================================================================
 // Authentication Types
 // =============================================================================
 
@@ -1448,11 +1541,15 @@ export interface AuthProvidersResponse {
 export interface LoginResponse {
   user: User;
   message: string;
+  /** Seconds until the access token issued with this response expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Current user response
 export interface MeResponse {
   user: User;
+  /** Remaining seconds until the current access token expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Logout response
@@ -1463,6 +1560,8 @@ export interface LogoutResponse {
 // Refresh response
 export interface RefreshResponse {
   message: string;
+  /** Seconds until the freshly minted access token expires (bd-3ymo4). */
+  access_token_expires_in?: number | null;
 }
 
 // Setup required check response
@@ -1932,6 +2031,14 @@ export interface DummyEPGPreviewResult {
   matched: boolean;
   matched_variant: string | null;
   groups: Record<string, string> | null;
+  /**
+   * Batch endpoint only (bead hirm6): true when the Event Sync matcher
+   * would actually build a start time from the captured groups — valid
+   * month name, hour <= 23, a real calendar date ("45 Jul" is captured
+   * but invalid). Computed server-side from the matcher's own semantics;
+   * drives the Test Patterns panel's honest "Parsed" verdict.
+   */
+  event_sync_start_valid?: boolean;
   time_variables: Record<string, string> | null;
   rendered: {
     title: string;
@@ -1957,65 +2064,4 @@ export interface DummyEPGChannelAssignment {
   profile_id: number;
   channel_id: number;
   channel_name: string;
-}
-
-// ── Status / Monitoring Types ──────────────────────────────────────
-
-export type ServiceStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unconfigured' | 'unknown';
-
-export interface ServiceWithStatus {
-  id: string;
-  name: string;
-  type?: string;
-  description?: string;
-  status: ServiceStatus;
-  enabled: boolean;
-  critical?: boolean;
-  check_interval: number;
-  last_check?: {
-    checked_at: string;
-    response_time_ms: number | null;
-    message?: string;
-  };
-}
-
-export interface ServiceAlertRule {
-  id: number;
-  name: string;
-  service_id: string | null;
-  condition: string;
-  threshold: string;
-  notify_method_ids: string;
-  enabled: boolean;
-}
-
-export type IncidentStatus = 'investigating' | 'identified' | 'monitoring' | 'resolved';
-export type IncidentSeverity = 'critical' | 'major' | 'minor';
-
-export interface IncidentUpdate {
-  id: number;
-  status: IncidentStatus;
-  message: string;
-  created_by: string;
-  created_at: string;
-}
-
-export interface Incident {
-  id: number;
-  title: string;
-  status: IncidentStatus;
-  severity: IncidentSeverity;
-  service_id: string;
-  created_at: string;
-  resolved_at?: string;
-  auto_created?: boolean;
-  updates?: IncidentUpdate[];
-}
-
-export interface MaintenanceWindow {
-  id: number;
-  title: string;
-  start_time: string;
-  end_time: string;
-  suppress_alerts?: boolean;
 }

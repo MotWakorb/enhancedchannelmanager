@@ -24,6 +24,7 @@
 
 .enhanced-stats-panel .view-toggle {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   background: var(--bg-tertiary);
   padding: 3px;
@@ -34,6 +35,7 @@
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -190,11 +192,17 @@
 }
 
 /* Bandwidth Section */
-.enhanced-stats-panel .bandwidth-section .sort-controls {
+.enhanced-stats-panel .bandwidth-section .sort-controls,
+.enhanced-stats-panel .viewer-group-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+/* By-user / by-IP toggle sits between the chart and the viewer/channel lists. */
+.enhanced-stats-panel .viewer-group-toggle {
+  margin-top: 4px;
 }
 
 .enhanced-stats-panel .sort-label {

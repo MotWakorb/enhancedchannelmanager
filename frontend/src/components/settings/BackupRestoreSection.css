@@ -58,6 +58,23 @@
   line-height: 1.5;
 }
 
+/* "Which one do I need?" chooser guidance (bead 09x38.15 item 7) */
+.backup-chooser-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #888);
+  line-height: 1.6;
+}
+
+.backup-chooser-list li + li {
+  margin-top: 0.5rem;
+}
+
+.backup-chooser-list strong {
+  color: var(--text-primary, #fff);
+}
+
 /* Info/warning banners within backup cards */
 .backup-sensitive-warning {
   display: flex;
@@ -141,6 +158,15 @@
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+/* Visible label for the full-backup ZIP chooser (bead db8ae) — takes the
+   full row above the input inside the wrapping flex container. */
+.restore-file-label {
+  flex-basis: 100%;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
 }
 
 .restore-file-input input[type="file"] {

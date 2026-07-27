@@ -11,10 +11,17 @@
 /* .tab-loading → App.css */
 
 /* Controls */
+/* flex-wrap follows the shared header/toolbar overflow policy (bead 09x38.2):
+   the .guide-tab ancestor is overflow:hidden, so without wrapping the
+   "Print Guide" button was clipped (invisible, unreachable) below ~1400px.
+   Wrapping drops overflowing controls to a second row instead. See
+   docs/css_guidelines.md § "Header / toolbar overflow policy". */
 .guide-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
   padding: 1rem 1.5rem;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
@@ -386,6 +393,18 @@
 .channel-count {
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* Wider channel-name column on desktop viewports (bead 09x38.15 item 8):
+   the 200px column truncates most channel names, recoverable only via the
+   native title tooltip. At 1280px+ there's room to give the name more
+   space before it needs to truncate at all — the spacer and sticky info
+   column must stay in lockstep since the spacer aligns with it. */
+@media (min-width: 1280px) {
+  .timeline-header-spacer,
+  .guide-row .channel-info {
+    width: 260px;
+  }
 }
 
 /* Responsive adjustments */

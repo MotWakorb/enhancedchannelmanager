@@ -5,6 +5,12 @@ import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
 import { getDateLocale } from '../utils/formatting';
 import { decoratePendingMergesToast } from './pendingMergesToast';
+import {
+  collapseTaskNotificationPairs,
+  collapsedUnreadAdjustment,
+  isEntryRead,
+  type NotificationDisplayEntry,
+} from './notificationGrouping';
 import { PENDING_MERGES_EVENT } from './tabs/ChannelManagerTab';
 import './NotificationCenter.css';
 
@@ -78,7 +84,7 @@ export function NotificationCenter({
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [restartingFromNotification, setRestartingFromNotification] = useState<number | null>(null);
-  // Ticking "now" timestamp used by hasActiveAutoCreation freshness check.
+  // Ticking "now" timestamp used by hasActiveChannelPipeline freshness check.
   // Kept in state (not Date.now() in render) so the memo remains pure --
   // satisfies react-hooks/purity. Updated on a 10s interval below.
   const [now, setNow] = useState(() => Date.now());
@@ -101,16 +107,6 @@ export function NotificationCenter({
     try {
       if (showLoading) setLoading(true);
       const response = await api.getNotifications({ page_size: 20 });
-      // Pin active task/probe notifications to the top
-      const sorted = [...response.notifications].sort((a, b) => {
-        const aActive = isProgressNotification(a) && getProbeProgress(a) &&
-          (isProbeActive(getProbeProgress(a)!.status) || getProbeProgress(a)!.status === 'paused');
-        const bActive = isProgressNotification(b) && getProbeProgress(b) &&
-          (isProbeActive(getProbeProgress(b)!.status) || getProbeProgress(b)!.status === 'paused');
-        if (aActive && !bActive) return -1;
-        if (!aActive && bActive) return 1;
-        return 0; // preserve API order within each group
-      });
 
       // Show toasts for new notifications from opted-in sources.
       // For dedup-relevant auto_creation notifications (post-M3U-refresh
@@ -170,7 +166,9 @@ export function NotificationCenter({
       seenNotificationIds.current = new Set(response.notifications.map(n => n.id));
       initialLoadDone.current = true;
 
-      setNotifications(sorted);
+      // Store in API order (newest first); pinning of active entries and
+      // pair collapsing happen in the displayEntries memo below (bd-ib2w3).
+      setNotifications(response.notifications);
       setUnreadCount(response.unread_count);
     } catch (err) {
       logger.error('Failed to load notifications:', err);
@@ -178,6 +176,29 @@ export function NotificationCenter({
       if (showLoading) setLoading(false);
     }
   }, []);
+
+  // Collapse task started/completed pairs into single display entries
+  // (bd-ib2w3), then pin active task/probe entries to the top.
+  const displayEntries = useMemo(() => {
+    const entries = collapseTaskNotificationPairs(notifications);
+    const isActiveEntry = (e: NotificationDisplayEntry) => {
+      const progress = getProbeProgress(e.primary);
+      return !!(progress && (isProbeActive(progress.status) || progress.status === 'paused'));
+    };
+    return [...entries].sort((a, b) => {
+      const aActive = isActiveEntry(a);
+      const bActive = isActiveEntry(b);
+      if (aActive && !bActive) return -1;
+      if (!aActive && bActive) return 1;
+      return 0; // preserve API order within each group
+    });
+  }, [notifications]);
+
+  // Badge count: a collapsed pair where both halves are unread counts once.
+  const displayUnreadCount = useMemo(
+    () => Math.max(0, unreadCount - collapsedUnreadAdjustment(displayEntries)),
+    [unreadCount, displayEntries],
+  );
 
   // Check if any notification has an active probe running (including paused)
   const hasActiveProbe = useMemo(() => {
@@ -187,11 +208,11 @@ export function NotificationCenter({
     });
   }, [notifications]);
 
-  // Check if auto-creation is in progress (has "Starting" but no completion yet within 2 minutes)
-  const hasActiveAutoCreation = useMemo(() => {
-    const autoCreationNotifs = notifications.filter(n => n.source === 'auto_creation');
-    if (autoCreationNotifs.length === 0) return false;
-    const latest = autoCreationNotifs[0]; // sorted by newest first from API
+  // Check if the channel pipeline is in progress (has "Starting" but no completion yet within 2 minutes)
+  const hasActiveChannelPipeline = useMemo(() => {
+    const channelPipelineNotifs = notifications.filter(n => n.source === 'auto_creation');
+    if (channelPipelineNotifs.length === 0) return false;
+    const latest = channelPipelineNotifs[0]; // sorted by newest first from API
     const isStarting = latest.title?.includes('Starting');
     if (!isStarting) return false;
     // Only consider active if within last 2 minutes. `now` is state that
@@ -202,7 +223,7 @@ export function NotificationCenter({
   }, [notifications, now]);
 
   // Tick `now` every 10s so the 2-minute freshness window in
-  // hasActiveAutoCreation re-evaluates without violating render purity.
+  // hasActiveChannelPipeline re-evaluates without violating render purity.
   // 10s is well below the 2-minute window and the slowest poll interval,
   // so no perceptible lag.
   useEffect(() => {
@@ -210,14 +231,14 @@ export function NotificationCenter({
     return () => clearInterval(tick);
   }, []);
 
-  // Load on mount and periodically - faster when probe or auto-creation is running
+  // Load on mount and periodically - faster when probe or the channel pipeline is running
   useEffect(() => {
     loadNotifications(true); // Show loading spinner on initial load only
-    // Poll every 2 seconds when probe is running, 5s for auto-creation, otherwise every 30 seconds
-    const pollInterval = hasActiveProbe ? 2000 : hasActiveAutoCreation ? 5000 : 30000;
+    // Poll every 2 seconds when probe is running, 5s for the channel pipeline, otherwise every 30 seconds
+    const pollInterval = hasActiveProbe ? 2000 : hasActiveChannelPipeline ? 5000 : 30000;
     const interval = setInterval(() => loadNotifications(false), pollInterval);
     return () => clearInterval(interval);
-  }, [loadNotifications, hasActiveProbe, hasActiveAutoCreation]);
+  }, [loadNotifications, hasActiveProbe, hasActiveChannelPipeline]);
 
   // Close panel when clicking outside
   useEffect(() => {
@@ -254,21 +275,40 @@ export function NotificationCenter({
     }
   };
 
+  // Mark a display entry (possibly a collapsed pair) read/unread as one unit
+  // so unread semantics stay sensible — a pair counts once (bd-ib2w3).
+  const handleMarkEntryRead = async (entry: NotificationDisplayEntry) => {
+    const target = !isEntryRead(entry);
+    try {
+      await api.markNotificationRead(entry.primary.id, target);
+      if (entry.collapsed) {
+        await api.markNotificationRead(entry.collapsed.id, target);
+      }
+      loadNotifications();
+    } catch (err) {
+      logger.error('Failed to mark notification:', err);
+    }
+  };
+
+  // Delete a display entry — both halves of a collapsed pair.
+  const handleDeleteEntry = async (entry: NotificationDisplayEntry) => {
+    try {
+      await api.deleteNotification(entry.primary.id);
+      if (entry.collapsed) {
+        await api.deleteNotification(entry.collapsed.id);
+      }
+      loadNotifications();
+    } catch (err) {
+      logger.error('Failed to delete notification:', err);
+    }
+  };
+
   const handleMarkAllRead = async () => {
     try {
       await api.markAllNotificationsRead();
       loadNotifications();
     } catch (err) {
       logger.error('Failed to mark all read:', err);
-    }
-  };
-
-  const handleDelete = async (notification: Notification) => {
-    try {
-      await api.deleteNotification(notification.id);
-      loadNotifications();
-    } catch (err) {
-      logger.error('Failed to delete notification:', err);
     }
   };
 
@@ -457,8 +497,9 @@ export function NotificationCenter({
                   className="probe-control-btn probe-pause-btn"
                   onClick={handlePauseProbe}
                   title="Pause probe"
+                  aria-label="Pause probe"
                 >
-                  <span className="material-icons">pause</span>
+                  <span className="material-icons" aria-hidden="true">pause</span>
                 </button>
               )}
               {progress.status === 'paused' && (
@@ -466,16 +507,18 @@ export function NotificationCenter({
                   className="probe-control-btn probe-resume-btn"
                   onClick={handleResumeProbe}
                   title="Resume probe"
+                  aria-label="Resume probe"
                 >
-                  <span className="material-icons">play_arrow</span>
+                  <span className="material-icons" aria-hidden="true">play_arrow</span>
                 </button>
               )}
               <button
                 className="probe-control-btn probe-cancel-btn"
                 onClick={handleCancelProbe}
                 title="Cancel probe"
+                aria-label="Cancel probe"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
           )}
@@ -495,14 +538,15 @@ export function NotificationCenter({
     <div className="notification-center">
       <button
         ref={buttonRef}
-        className={`notification-bell ${unreadCount > 0 ? 'has-unread' : ''}`}
+        className={`notification-bell ${displayUnreadCount > 0 ? 'has-unread' : ''}`}
         onClick={handleToggle}
-        title={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        title={`Notifications${displayUnreadCount > 0 ? ` (${displayUnreadCount} unread)` : ''}`}
+        aria-label={`Notifications${displayUnreadCount > 0 ? ` (${displayUnreadCount} unread)` : ''}`}
       >
-        <span className="material-icons">notifications</span>
-        {unreadCount > 0 && (
+        <span className="material-icons" aria-hidden="true">notifications</span>
+        {displayUnreadCount > 0 && (
           <span className="notification-badge">
-            {unreadCount > 99 ? '99+' : unreadCount}
+            {displayUnreadCount > 99 ? '99+' : displayUnreadCount}
           </span>
         )}
       </button>
@@ -512,13 +556,14 @@ export function NotificationCenter({
           <div className="notification-panel-header">
             <h3>Notifications</h3>
             <div className="notification-panel-actions">
-              {unreadCount > 0 && (
+              {displayUnreadCount > 0 && (
                 <button
                   className="notification-action-btn"
                   onClick={handleMarkAllRead}
                   title="Mark all as read"
+                  aria-label="Mark all as read"
                 >
-                  <span className="material-icons">done_all</span>
+                  <span className="material-icons" aria-hidden="true">done_all</span>
                 </button>
               )}
               {notifications.some(n => n.read) && (
@@ -526,8 +571,9 @@ export function NotificationCenter({
                   className="notification-action-btn"
                   onClick={handleClearAll}
                   title="Clear read notifications"
+                  aria-label="Clear read notifications"
                 >
-                  <span className="material-icons">delete_sweep</span>
+                  <span className="material-icons" aria-hidden="true">delete_sweep</span>
                 </button>
               )}
               {notifications.length > 0 && (
@@ -535,8 +581,9 @@ export function NotificationCenter({
                   className="notification-action-btn delete-all"
                   onClick={handleDeleteAll}
                   title="Delete all notifications"
+                  aria-label="Delete all notifications"
                 >
-                  <span className="material-icons">delete_forever</span>
+                  <span className="material-icons" aria-hidden="true">delete_forever</span>
                 </button>
               )}
             </div>
@@ -554,10 +601,13 @@ export function NotificationCenter({
                 <span>No notifications</span>
               </div>
             ) : (
-              notifications.map((notification) => (
+              displayEntries.map((entry) => {
+                const notification = entry.primary;
+                const entryRead = isEntryRead(entry);
+                return (
                 <div
                   key={notification.id}
-                  className={`notification-item notification-${notification.type} ${notification.read ? 'read' : 'unread'} ${isProbeNotification(notification) ? 'notification-probe' : ''}`}
+                  className={`notification-item notification-${notification.type} ${entryRead ? 'read' : 'unread'} ${isProbeNotification(notification) ? 'notification-probe' : ''}`}
                   onClick={() => handleNotificationClick(notification)}
                 >
                   <div className="notification-icon">
@@ -596,7 +646,14 @@ export function NotificationCenter({
                       </button>
                     )}
                     {renderProbeProgress(notification)}
-                    <div className="notification-time">{formatTime(notification.created_at)}</div>
+                    <div className="notification-time">
+                      {formatTime(notification.created_at)}
+                      {entry.collapsed && (
+                        <span className="notification-time-started">
+                          {` · started ${formatTime(entry.collapsed.created_at)}`}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {/* Hide actions for active probe notifications */}
                   {!(isProbeNotification(notification) &&
@@ -608,28 +665,31 @@ export function NotificationCenter({
                         className="notification-item-action"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleMarkRead(notification);
+                          handleMarkEntryRead(entry);
                         }}
-                        title={notification.read ? 'Mark as unread' : 'Mark as read'}
+                        title={entryRead ? 'Mark as unread' : 'Mark as read'}
+                        aria-label={entryRead ? 'Mark as unread' : 'Mark as read'}
                       >
-                        <span className="material-icons">
-                          {notification.read ? 'mark_email_unread' : 'mark_email_read'}
+                        <span className="material-icons" aria-hidden="true">
+                          {entryRead ? 'mark_email_unread' : 'mark_email_read'}
                         </span>
                       </button>
                       <button
                         className="notification-item-action delete"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDelete(notification);
+                          handleDeleteEntry(entry);
                         }}
                         title="Delete"
+                        aria-label="Delete notification"
                       >
-                        <span className="material-icons">close</span>
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     </div>
                   )}
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

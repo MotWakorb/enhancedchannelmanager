@@ -48,7 +48,7 @@ data:
   `list_channels(search="MCPTEST")` → "No channels found" and
   `list_channel_groups` (no `MCPTEST_*`).
 - **Do not run the system-wide destructive forms** (`clear_auto_created(all_groups=True)`,
-  `run_auto_creation(dry_run=False)` against real rules on a production lineup,
+  `run_channel_pipeline(dry_run=False)` against real rules on a production lineup,
   `refresh_all_*` no-arg, `probe_streams` over the whole catalog) as part of these
   chains unless you're on a disposable instance.
 
@@ -70,7 +70,7 @@ disposably.
   `B1G Advanced EPG` (dummy).
 - **Profiles (real):** channel profiles `LiveTV`, `HDHomerun`, `TestingProfile`;
   stream profiles `ffmpeg`, `VLC`.
-- **Auto-creation rules (real):** `Testing Rule` (matches stream name contains
+- **Channel Pipeline rules (real):** `Testing Rule` (matches stream name contains
   "ESPN"), `Create B1G Channels`, `USA Entertainment`.
 - **Users (real):** `home`, `kmfelmer` (Dispatcharr).
 - **Tasks (real ids):** `stream_probe`, `epg_refresh`, `m3u_refresh`,
@@ -152,19 +152,19 @@ auto-accept behavior.
 
 ---
 
-## Scenario 4 — Provider onboarding → auto-creation → rollback
+## Scenario 4 — Provider onboarding → Channel Pipeline → rollback
 
 **Goal:** The biggest chain: stand up a provider, refresh it, scope its groups,
-auto-create channels, then roll it back cleanly.
+run the Channel Pipeline to create channels, then roll it back cleanly.
 **Tools chained:** `create_m3u_account` → `get_m3u_account` → `refresh_m3u` →
 `list_streams`(provider) → `bulk_update_m3u_group_settings` →
-`create_auto_creation_rule` → `analyze_auto_creation_rules` →
-`run_auto_creation`(dry) → `run_auto_creation`(live) →
-`list_auto_creation_executions` → `rollback_auto_creation` → verify →
-`delete_auto_creation_rule` → `delete_m3u_account`.
+`create_channel_pipeline_rule` → `analyze_channel_pipeline_rules` →
+`run_channel_pipeline`(dry) → `run_channel_pipeline`(live) →
+`list_channel_pipeline_executions` → `rollback_channel_pipeline` → verify →
+`delete_channel_pipeline_rule` → `delete_m3u_account`.
 
 > ⚠️ Run this only on a disposable instance, or point the M3U URL at a tiny test
-> playlist — the live auto-creation step creates real channels (then rolls back).
+> playlist — the live Channel Pipeline step creates real channels (then rolls back).
 
 **Steps**
 1. *"Add an M3U account 'MCPTEST_Provider' with url <a small test m3u8>."* — `create_m3u_account`.
@@ -172,16 +172,16 @@ auto-create channels, then roll it back cleanly.
 3. *"Refresh 'MCPTEST_Provider'."* — `refresh_m3u`; then re-check `get_m3u_account` until stream count > 0.
 4. *"List the streams from 'MCPTEST_Provider'."* — `list_streams(provider_id=…)`. **Seam:** provider id from #1 filters correctly; count matches step 2's reported total.
 5. *"On 'MCPTEST_Provider', disable every group except the one I want to import."* — `bulk_update_m3u_group_settings`. **Seam:** unknown group names are reported as "not found" (not silently swallowed).
-6. *"Create an auto-creation rule 'MCPTEST_Rule' that matches streams from 'MCPTEST_Provider' whose name contains '<token>' and creates channels named after the stream, priority 50, enabled."* — `create_auto_creation_rule`.
-7. *"Analyze my auto-creation rules for problems."* — `analyze_auto_creation_rules`. **Seam:** the new rule appears in the report.
-8. *"Preview what auto-creation would create — dry run."* — `run_auto_creation(dry_run=True)`. Note the "would be created" count + the execution id.
-9. *"Run it for real."* — `run_auto_creation(dry_run=False)`. **Seam:** the live "created" count should match the dry-run "would be created" count.
-10. *"Show me the last few auto-creation runs."* — `list_auto_creation_executions`. **Seam:** the live run from #9 is the most recent, status completed, with a real id.
-11. *"Roll back that last live execution."* — `rollback_auto_creation(execution_id)`. **Seam:** the execution id from #10 feeds the rollback; the deleted-channel count equals the created count from #9.
-12. *"Confirm those channels are gone, then delete 'MCPTEST_Rule' and the 'MCPTEST_Provider' account."* — `list_channels` + `delete_auto_creation_rule` + `delete_m3u_account`.
+6. *"Create a Channel Pipeline rule 'MCPTEST_Rule' that matches streams from 'MCPTEST_Provider' whose name contains '<token>' and creates channels named after the stream, priority 50, enabled."* — `create_channel_pipeline_rule`.
+7. *"Analyze my Channel Pipeline rules for problems."* — `analyze_channel_pipeline_rules`. **Seam:** the new rule appears in the report.
+8. *"Preview what the Channel Pipeline would create — dry run."* — `run_channel_pipeline(dry_run=True)`. Note the "would be created" count + the execution id.
+9. *"Run it for real."* — `run_channel_pipeline(dry_run=False)`. **Seam:** the live "created" count should match the dry-run "would be created" count.
+10. *"Show me the last few Channel Pipeline runs."* — `list_channel_pipeline_executions`. **Seam:** the live run from #9 is the most recent, status completed, with a real id.
+11. *"Roll back that last live execution."* — `rollback_channel_pipeline(execution_id)`. **Seam:** the execution id from #10 feeds the rollback; the deleted-channel count equals the created count from #9.
+12. *"Confirm those channels are gone, then delete 'MCPTEST_Rule' and the 'MCPTEST_Provider' account."* — `list_channels` + `delete_channel_pipeline_rule` + `delete_m3u_account`.
 
 **Expected end-state:** post-rollback the created channels are gone; rule + provider deleted; stream catalog back to baseline.
-**Seam checks:** dry-count == live-count == rollback-count (the three numbers must agree); execution id is stable across run→list→rollback; deleting the provider cascades its streams/groups without orphaning the auto-created channels (already rolled back).
+**Seam checks:** dry-count == live-count == rollback-count (the three numbers must agree); execution id is stable across run→list→rollback; deleting the provider cascades its streams/groups without orphaning the Channel Pipeline-created channels (already rolled back).
 **Cleanup:** as in step 12 (and `delete_orphaned_groups` for any groups the provider left behind — scope to the named ones, never blanket-delete).
 **Result:** ☐
 
@@ -279,25 +279,19 @@ user/channel — a pure read chain where the seam is *data consistency*.
 
 ---
 
-## Scenario 9 — Export profile → generate → publish discovery
+## Scenario 9 — Cloud targets + backup export-sections discovery
 
-**Goal:** Test the export chain and the publish-config discovery seam.
-**Tools chained:** `create_export_profile` → `list_export_profiles` →
-`generate_export` → `get_export_sections` → `list_publish_configs` →
-`list_cloud_targets` → (`publish_export`) → `delete_export_profile`.
+**Goal:** Verify the cloud-targets surface (relocated to `/api/cloud-targets` in v0.18.0, now managed via Settings → Backup & Restore) is discoverable via MCP, and that the backup export-sections tool accurately describes what YAML sections are available for selective restore.
+**Tools chained:** `list_cloud_targets` → `get_export_sections`.
 
 **Steps**
-1. *"Create an export profile 'MCPTEST_Export'."* — `create_export_profile`.
-2. *"List my export profiles."* — `list_export_profiles`. **Seam:** the new profile appears; resolve its id for the next step.
-3. *"Generate the export for 'MCPTEST_Export'."* — `generate_export`. **Seam:** the profile id from #2 is the one generated.
-4. *"What export sections are available?"* — `get_export_sections`.
-5. *"What publish configs and cloud targets do I have?"* — `list_publish_configs` + `list_cloud_targets`. (Expect "none configured" on a fresh instance — this is the discovery seam for `publish_export`.)
-6. *(Only if a publish config exists)* *"Publish using <that config>."* — `publish_export`. **Seam:** the config id comes from `list_publish_configs` (no other tool exposes it).
-7. *"Delete the 'MCPTEST_Export' profile."* — `delete_export_profile`.
+1. *"List my cloud storage targets."* — `list_cloud_targets`. **Seam:** returns a list (may be empty on a fresh instance — both empty list and real entries are valid; the key check is that the tool responds with a structured result, not an error).
+2. *"What YAML export sections are available?"* — `get_export_sections`. **Seam:** returns a non-empty list of section names (e.g. `normalization_rules`, `auto_creation_rules`, `dummy_epg_profiles`, `channel_profiles`) that represents what a YAML backup/export covers.
+3. *(Only if a cloud target exists)* *"Show me the details of the first cloud target."* Note the provider type and whether credentials are masked in the response — they should be (credentials are never returned in clear by `list_cloud_targets`).
 
-**Expected end-state:** profile created→generated→deleted cleanly; publish-config discovery returns an honest empty/real list.
-**Seam checks:** profile id flows create→list→generate→delete; `publish_export` can only be driven from a `list_publish_configs` id (verify there's a discovery path, not a guess).
-**Cleanup:** delete the profile (step 7).
+**Expected end-state:** `list_cloud_targets` responds with a structured result (empty list is valid); `get_export_sections` returns a non-empty section list; any returned cloud-target credentials are masked.
+**Seam checks:** (a) `list_cloud_targets` does not raise an error or return an unstructured blob; (b) `get_export_sections` sections are real names, not an empty list or a stub `["..."]` placeholder; (c) if a cloud target exists, its `provider` field is present and credential fields (access keys, tokens) are absent or masked.
+**Cleanup:** none (read-only).
 **Result:** ☐
 
 ---
@@ -375,12 +369,12 @@ dedup/duplicate tools rely on — a cross-feature consistency seam.
 | 1 | Build channel from streams under new group + EPG + logo | ✅ PASS |
 | 2 | Fuzzy-match provider streams onto a fresh lineup | ✅ PASS |
 | 3 | Add-stream dedup decision loop | ✅ PASS |
-| 4 | Provider onboarding → auto-creation → rollback | ✅ PASS |
+| 4 | Provider onboarding → Channel Pipeline → rollback | ✅ PASS |
 | 5 | Duplicate cleanup: find → merge → renumber → reorder | ✅ PASS |
 | 6 | EPG source lifecycle → grid → match → logos | ✅ PASS (seam fix: znc76.2) |
 | 7 | Stream-health triage loop | ⚠️ PARTIAL (znc76.5) |
 | 8 | Stats cross-reference (consistency) | ✅ PASS (seam fix: znc76.1) |
-| 9 | Export profile → generate → publish discovery | ✅ PASS |
+| 9 | Cloud targets + backup export-sections discovery | ☐ |
 | 10 | Backup-guarded destructive operation | ✅ PASS |
 | 11 | Task + schedule lifecycle | ✅ PASS |
 | 12 | Normalization-driven dedup preview | ❌ FAIL (znc76.3 — config) |

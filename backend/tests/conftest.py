@@ -27,9 +27,8 @@ Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 import database
 import models  # noqa: F401 — registers all tables with SQLAlchemy Base
 import export_models  # noqa: F401 — registers export tables with SQLAlchemy Base
-from ffmpeg_builder import persistence  # noqa: F401 — registers table
 # Reference side-effect imports so static analysis sees them as used
-assert models and persistence and export_models
+assert models and export_models
 
 
 def closing_create_task_mock() -> MagicMock:
@@ -67,6 +66,45 @@ def closing_create_task_mock() -> MagicMock:
 
     mock.side_effect = _close_coro
     return mock
+
+
+def auto_advancing_clock(step: float):
+    """Return a monotonic clock that advances ``step`` seconds per call.
+
+    ADR-013 §D2 / bead 312nk.3 wired a ``telemetry_write_interval`` throttle and
+    a wall-clock-based watch-time accrual into ``BandwidthTracker``, both read
+    through the injectable ``now_fn`` clock. The tracker reads the clock exactly
+    once per observation (``_process_channel_snapshot``). BandwidthTracker unit
+    tests drive that method back-to-back without sleeping, so a real monotonic
+    clock would report ~0s between observations — throttling every poll after
+    the first and zeroing watch-time accrual.
+
+    This factory makes each successive observation land exactly ``step`` seconds
+    (the poll interval) after the previous one, so the throttle is always due
+    (matching today's per-poll write cadence) and watch-time accrues exactly the
+    poll interval per continuing poll — i.e. the pre-throttle behavior the
+    existing assertions encode, with no test-by-test clock bookkeeping.
+    """
+    state = {"t": 0.0}
+
+    def _clock() -> float:
+        state["t"] += step
+        return state["t"]
+
+    return _clock
+
+
+@pytest.fixture
+def telemetry_clock():
+    """An auto-advancing 10s monotonic clock for BandwidthTracker unit tests.
+
+    Inject as ``BandwidthTracker(..., now_fn=telemetry_clock)`` so back-to-back
+    ``_collect_stats`` / ``_process_channel_snapshot`` calls each land one poll
+    interval apart — keeping the ADR-013 §D2 throttle due every poll and the
+    watch-time accrual at one poll interval per poll, matching the pre-throttle
+    behavior the existing assertions encode. See ``auto_advancing_clock``.
+    """
+    return auto_advancing_clock(10.0)
 
 
 @pytest.fixture(scope="function")
@@ -144,6 +182,84 @@ async def async_client(test_session, test_engine):
         app.dependency_overrides.clear()
         # Restore original session local
         database._SessionLocal = original_session_local
+
+
+@pytest.fixture
+def non_admin_client(async_client, test_session):
+    """An authenticated NON-admin client (auth enabled, require_auth + setup).
+
+    Closes the kgz3k test gap: there was no non-admin fixture, so the
+    field-level admin gate on POST /api/settings could only be exercised
+    against an admin/auth-disabled caller — a vacuous test. This fixture
+    forces auth-ENABLED at the settings router's admin-resolver and binds the
+    resolver's ``get_current_user`` to a real, non-admin ``User`` so the
+    gate's 403 path actually bites.
+
+    ``routers.settings._resolve_settings_admin`` reads ``get_auth_settings``
+    and ``get_current_user`` as module-level names in ``routers.settings``, so
+    we patch them there (a direct call, not a FastAPI sub-dependency, so
+    ``dependency_overrides`` would NOT apply). Yields the ``AsyncClient``.
+    """
+    from unittest.mock import AsyncMock, patch
+    from models import User
+
+    non_admin = User(
+        id=4242,
+        username="regular-user",
+        is_admin=False,
+        is_active=True,
+        auth_provider="local",
+    )
+
+    auth_patch = patch("routers.settings.get_auth_settings")
+    user_patch = patch(
+        "routers.settings.get_current_user",
+        new=AsyncMock(return_value=non_admin),
+    )
+    auth_mock = auth_patch.start()
+    user_patch.start()
+    auth_mock.return_value.require_auth = True
+    auth_mock.return_value.setup_complete = True
+    try:
+        yield async_client
+    finally:
+        auth_patch.stop()
+        user_patch.stop()
+
+
+@pytest.fixture
+def admin_client(async_client, test_session):
+    """An authenticated ADMIN client (auth enabled), companion to
+    :func:`non_admin_client`.
+
+    Proves the field-level admin gate ALLOWS an admin to change admin-only
+    fields when auth is enabled — the positive control for the 403 tests.
+    """
+    from unittest.mock import AsyncMock, patch
+    from models import User
+
+    admin = User(
+        id=4243,
+        username="admin-user",
+        is_admin=True,
+        is_active=True,
+        auth_provider="local",
+    )
+
+    auth_patch = patch("routers.settings.get_auth_settings")
+    user_patch = patch(
+        "routers.settings.get_current_user",
+        new=AsyncMock(return_value=admin),
+    )
+    auth_mock = auth_patch.start()
+    user_patch.start()
+    auth_mock.return_value.require_auth = True
+    auth_mock.return_value.setup_complete = True
+    try:
+        yield async_client
+    finally:
+        auth_patch.stop()
+        user_patch.stop()
 
 
 @pytest.fixture

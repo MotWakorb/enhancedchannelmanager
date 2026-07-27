@@ -136,57 +136,6 @@
   font-size: 14px;
 }
 
-/* Selection info styles are in shared/common.css */
-
-.selection-actions {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-/* Icon-only bulk action buttons - matches toolbar button style */
-.bulk-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.375rem 0.5rem;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-secondary);
-  color: var(--button-text);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.bulk-action-btn:hover {
-  background-color: var(--button-hover-bg);
-  border-color: var(--accent-primary);
-  color: var(--text-primary);
-}
-
-.bulk-action-btn .material-icons {
-  font-size: 18px;
-}
-
-.bulk-action-btn--danger {
-  color: var(--error);
-}
-
-.bulk-action-btn--danger:hover {
-  background-color: rgba(248, 113, 113, 0.15);
-  border-color: var(--error);
-  color: var(--error);
-}
-
-.bulk-action-btn--clear {
-  color: var(--text-secondary);
-}
-
-.bulk-action-btn--clear:hover {
-  background-color: var(--button-hover-bg);
-  color: var(--text-primary);
-}
-
 .edit-mode-info {
   display: flex;
   align-items: center;
@@ -691,6 +640,28 @@
   padding: 2px 8px 4px;
 }
 
+/* "Clean up empty groups" affordance (bead 09x38.15 item 3) — links out to
+   Settings → Maintenance → Orphaned Channel Groups instead of embedding the
+   scan/delete tool in this dropdown. */
+.filter-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--accent-primary);
+  background: none;
+  border: none;
+  text-align: left;
+  transition: background-color 0.1s;
+}
+
+.filter-settings-link:hover {
+  background-color: var(--bg-hover);
+}
+
 .filter-settings-button.filter-active {
   border-color: var(--button-primary-bg);
   color: var(--button-primary-bg);
@@ -784,14 +755,59 @@
   background-color: var(--input-bg);
 }
 
+/* Expand/collapse control, split out as a sibling <button> from the group
+   select-all button (round-2 review of bead enhancedchannelmanager-s8xpd)
+   to remove a focusable-inside-focusable nesting conflict -- the header row
+   itself is a plain div now (no role="button"/tabIndex), so this button is
+   the only keyboard-focusable path to expand/collapse. `flex: 1` plus an
+   internal flex row reproduces exactly what `.group-name`'s own `flex: 1`
+   did when it was a direct child of `.group-header` -- badges/counts after
+   it in the row are pushed right the same way. The reset properties strip
+   default <button> chrome (border, background, inherited font) so it's
+   visually identical to the old non-interactive wrapper. */
+.group-toggle-btn {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.group-toggle-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .group-checkbox {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  padding: 0.5rem;
+  margin: -0.5rem;
   margin-right: 0.25rem;
+  cursor: pointer;
   color: var(--text-muted);
   transition: color 0.15s ease;
+  position: relative;
+  z-index: var(--z-base);
+  /* Reset button styles -- the selector is a real <button role="checkbox">
+     (bead enhancedchannelmanager-s8xpd, tri-state fix in the round-2
+     review), mirroring StreamsPane's button.group-selection-checkbox. */
+  background: none;
+  border: none;
+  font: inherit;
+}
+
+.group-checkbox:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .group-checkbox:hover {
@@ -978,6 +994,20 @@
   transition: background-color 0.15s;
 }
 
+/* Explicit small row-gap for the Channel Manager rows. Scoped to
+   .channel-wrapper (every CM row's parent) on purpose: a global
+   `.channel-item { gap: 0.75rem }` leaks in from ChannelProfilesListModal.css
+   (that modal reuses the .channel-item class — a global class collision), and
+   that 12px gap was stacking on top of the left cluster's per-element margins,
+   wasting ~16-20px between the expand arrow, logo, and channel number. This
+   scoped rule (specificity 0-2-0) overrides the leak for CM rows only — the
+   modal keeps its own gap — and, with the per-element margin-right removed from
+   the expand icon / logo / drag handle, is the single source of the left
+   cluster's horizontal spacing. */
+.channel-wrapper .channel-item {
+  gap: 0.375rem;
+}
+
 .channel-item:hover {
   background-color: var(--input-bg);
 }
@@ -1015,6 +1045,17 @@
   margin-right: 0.25rem;
   color: var(--text-muted);
   cursor: pointer;
+  /* Reset button styles -- the selector is a real <button role="checkbox">
+     (bead enhancedchannelmanager-s8xpd), mirroring StreamsPane's
+     .selection-checkbox. */
+  background: none;
+  border: none;
+  font: inherit;
+}
+
+.channel-select-indicator:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .channel-select-indicator .material-icons {
@@ -1037,7 +1078,6 @@
   color: var(--drag-handle-color);
   cursor: grab;
   padding: 0 0.25rem;
-  margin-right: 0.25rem;
   user-select: none;
   font-size: 1.2rem;
   transition: color 0.15s;
@@ -1056,8 +1096,23 @@
   display: none;
 }
 
+/* Fixed-width channel-number column — a direct child of .channel-item, to the
+   left of .channel-content, vertically centered across both lines (the row's
+   align-items:center). Mirrors the streams-count column on the right. Sized to
+   hug the widest channel number that actually exists here — 5 digits ("10441";
+   the whole Radio group is 10004–10440). The binding constraint is the 5-digit
+   EDIT input (≈48.5px = 38.5px text + padding + border), so 3.25rem/52px is the
+   floor that keeps "10441" from clipping in edit mode; display digits are
+   centered. Bump this if channel numbers ever exceed 5 digits. */
+.channel-number-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.25rem;
+  flex-shrink: 0;
+}
+
 .channel-number {
-  width: 3rem;
   font-size: 0.85rem;
   color: var(--text-secondary);
   font-family: monospace;
@@ -1076,7 +1131,8 @@
 }
 
 .channel-number-input {
-  width: 3rem;
+  width: 100%;
+  box-sizing: border-box;
   padding: 0.125rem 0.25rem;
   background-color: var(--input-bg);
   border: 1px solid var(--accent-primary);
@@ -1091,12 +1147,83 @@
   outline: none;
 }
 
+/* Two-line content column: line 1 (number · name · url · streams-count)
+   stacked over line 2 (TVG subtitle + resolution capability pills). Takes
+   over the flex: 1 that the name block used to hold in the single-line row. */
+.channel-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.channel-line1,
+.channel-line2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
 .channel-name {
   flex: 1;
+  min-width: 0;
   font-size: 0.875rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Applied EPG source / TVG ID / TVG name subtitle — full width of line 2,
+   truncating with ellipsis so the capability pills stay right-aligned. */
+.channel-tvg-info {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Resolution capability pills, right-aligned on line 2. */
+.channel-capabilities {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.capability-pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.capability-pill.cap-4k {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+}
+
+.capability-pill.cap-fhd {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+}
+
+.capability-pill.cap-hd {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+.capability-pill.cap-sd {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
 }
 
 .channel-name.editable {
@@ -1166,19 +1293,41 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
+  /* Give the URL the larger share of line 1 so more of it is visible; the
+     name (flex: 1) sizes closer to its content. Both still truncate. */
+  flex: 2;
   min-width: 0;
-  margin-left: 0.5rem;
+  /* Click-to-copy affordance (mirrors the "Copy URL" menu item). */
+  cursor: pointer;
 }
 
+/* Fixed-width count column — a direct child of .channel-item, sitting to the
+   right of the two-line .channel-content and vertically centered across both
+   lines (the row's align-items:center). Content ([icon] + bare number, the
+   "stream(s)" word lives only in the title tooltip) is horizontally centered.
+   Sized to hug a 1-digit count ("lan" + "2" ≈ 24px measured live at the
+   0.125rem icon↔number gap) with ~2px side breathing — every channel in the
+   deployment has ≤2 streams (1 digit), so this is snug for all real rows. A
+   hypothetical 2-digit count clips gracefully: white-space:nowrap keeps it a
+   single line and flex-shrink:0 stops it from shoving the menu. The per-icon
+   margin-right is omitted — the 2px flex gap is the only icon↔number spacing. */
 .channel-streams-count {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  justify-content: center;
+  gap: 0.125rem;
+  width: 1.75rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-align: center;
   font-size: 0.75rem;
   color: var(--text-muted);
-  margin-left: 0.5rem;
-  flex-shrink: 0;
+}
+
+/* Neutral "sources" icon for healthy channels (has streams, no probe problem).
+   Inherits the muted count colour. */
+.channel-streams-count .streams-count-icon {
+  font-size: 0.9rem;
 }
 
 .channel-streams-count.no-streams {
@@ -1196,7 +1345,15 @@
 .channel-streams-count .failed-stream-icon {
   font-size: 0.9rem;
   color: var(--error, #e74c3c);
-  margin-right: 0.25rem;
+}
+
+.channel-streams-count.has-stale {
+  color: var(--warning);
+}
+
+.channel-streams-count .stale-stream-icon {
+  font-size: 0.9rem;
+  color: var(--warning);
 }
 
 .channel-streams-count.has-black-screen {
@@ -1206,7 +1363,6 @@
 .channel-streams-count .black-screen-icon {
   font-size: 0.9rem;
   color: #a855f7;
-  margin-right: 0.25rem;
 }
 
 .channel-streams-count.has-low-fps {
@@ -1216,12 +1372,20 @@
 .channel-streams-count .low-fps-icon {
   font-size: 0.9rem;
   color: #f59e0b;
-  margin-right: 0.25rem;
 }
 
 /* Highlight channels without streams */
 .channel-item.no-streams {
   border-left: 3px solid var(--warning);
+}
+
+/* Highlight channels whose assigned streams include a Dispatcharr-stale
+   stream (bead enhancedchannelmanager-po78p / GH #696). Option B: amber
+   left border (mirrors .no-streams above) plus a faint background tint so
+   the row reads as "needs attention" at a glance in a dense list. */
+.channel-item.has-stale-streams {
+  border-left: 3px solid var(--warning);
+  background-color: var(--warning-bg);
 }
 
 /* Channel three-dot menu */
@@ -1445,7 +1609,6 @@
   font-size: 0.6rem;
   color: var(--text-muted);
   width: 1rem;
-  margin-right: 0.25rem;
   cursor: pointer;
   transition: color 0.15s;
 }
@@ -1458,7 +1621,7 @@
   display: flex;
   flex-direction: column;
   content-visibility: auto;
-  contain-intrinsic-size: auto 3rem;
+  contain-intrinsic-size: auto 3.5rem;
 }
 
 /* Inline streams display */
@@ -1729,6 +1892,20 @@
 
 .meta-tag.probe-failed .material-icons,
 .meta-tag.probe-timeout .material-icons {
+  font-size: 12px;
+}
+
+.meta-tag.stream-stale {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 5px;
+}
+
+.meta-tag.stream-stale .material-icons {
   font-size: 12px;
 }
 
@@ -2589,7 +2766,6 @@
   width: 32px;
   height: 32px;
   min-width: 32px;
-  margin-right: 0.5rem;
   border-radius: 4px;
   overflow: hidden;
   background-color: var(--input-bg);
@@ -4292,6 +4468,19 @@
   font-size: 0.85rem;
 }
 
+.sort-renumber-order-field {
+  margin-top: 0.75rem;
+}
+
+.sort-renumber-order {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.sort-renumber-order .sort-renumber-checkbox {
+  margin-top: 0;
+}
+
 .sort-renumber-checkbox {
   display: flex;
   align-items: center;
@@ -4302,7 +4491,8 @@
   font-size: 0.9rem;
 }
 
-.sort-renumber-checkbox input[type="checkbox"] {
+.sort-renumber-checkbox input[type="checkbox"],
+.sort-renumber-checkbox input[type="radio"] {
   width: 16px;
   height: 16px;
   margin: 0;
@@ -4394,104 +4584,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* Context Menu */
-.context-menu {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  min-width: 200px;
-  padding: 4px 0;
-  font-size: 0.9rem;
-}
-
-.context-menu-item {
-  padding: 8px 16px;
-  cursor: pointer;
-  color: var(--button-text);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  transition: background-color 0.15s ease;
-}
-
-.context-menu-item:hover {
-  background-color: var(--bg-hover);
-}
-
-.context-menu-arrow {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  margin-left: 12px;
-}
-
-.context-menu-submenu {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  min-width: 180px;
-  padding: 4px 0;
-  z-index: 10001;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-/* Scrollbar styling for context submenu */
-.context-menu-submenu::-webkit-scrollbar {
-  width: 6px;
-}
-
-.context-menu-submenu::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.context-menu-submenu::-webkit-scrollbar-thumb {
-  background-color: var(--text-muted);
-  border-radius: 3px;
-}
-
-.context-menu-submenu::-webkit-scrollbar-thumb:hover {
-  background-color: var(--text-secondary);
-}
-
-/* Scroll indicator shadows */
-.context-menu-submenu.scrollable {
-  position: relative;
-}
-
-.context-menu-submenu.scroll-top::before {
-  content: '';
-  position: sticky;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 20px;
-  margin-bottom: -20px;
-  background: linear-gradient(to bottom, var(--bg-secondary) 0%, transparent 100%);
-  pointer-events: none;
-  z-index: 1;
-  display: block;
-}
-
-.context-menu-submenu.scroll-bottom::after {
-  content: '';
-  position: sticky;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 20px;
-  margin-top: -20px;
-  background: linear-gradient(to top, var(--bg-secondary) 0%, transparent 100%);
-  pointer-events: none;
-  z-index: 1;
-  display: block;
-}
-
-.context-menu-submenu .context-menu-item {
-  padding: 8px 16px;
 }
 
 /* Mass Renumber Modal */

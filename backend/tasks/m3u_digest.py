@@ -77,6 +77,79 @@ class _FilteredChange:
         return getattr(self._original, name)
 
 
+def apply_exclude_filters(changes, group_patterns_raw, stream_patterns_raw):
+    """Apply user-supplied exclude patterns to a list of change rows.
+
+    This is the production exclude-filter used by ``M3UDigestTask.execute()``.
+    It is a module-level function (rather than an inline block) so the unit
+    tests can drive the exact code path the task runs, instead of a
+    hand-copied reimplementation.
+
+    Group patterns drop an entire change when its ``group_name`` matches.
+    Stream patterns filter individual stream names within ``streams_added`` /
+    ``streams_removed`` changes; a change whose stream names are all excluded
+    is dropped, and a partially-excluded change is wrapped in
+    ``_FilteredChange`` so its count/names reflect the survivors.
+
+    Patterns are compiled via ``safe_regex`` so oversized patterns are
+    rejected up-front (PatternTooLongError) and syntactically invalid ones
+    are logged and skipped (SafeRegexError). Matching goes through
+    ``safe_regex.search`` so every call has a per-invocation ReDoS timeout —
+    on timeout or other failure, search returns None and the row is treated
+    as NOT matched (i.e. not excluded), which is the safe default for an
+    exclude filter.
+
+    Returns the filtered list; the input list is not mutated. When no
+    patterns are supplied, ``changes`` is returned unchanged.
+    """
+    if not group_patterns_raw and not stream_patterns_raw:
+        return changes
+
+    group_regexes = []
+    for p in group_patterns_raw:
+        try:
+            group_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
+        except safe_regex.SafeRegexError as e:
+            logger.debug("[M3U-DIGEST] Suppressed invalid group regex pattern: %s", e)
+
+    stream_regexes = []
+    for p in stream_patterns_raw:
+        try:
+            stream_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
+        except safe_regex.SafeRegexError as e:
+            logger.debug("[M3U-DIGEST] Suppressed invalid stream regex pattern: %s", e)
+
+    filtered_changes = []
+    for change in changes:
+        # Check group exclude: if group_name matches any pattern, drop it
+        if group_regexes and change.group_name:
+            if any(
+                safe_regex.search(rx, change.group_name) is not None
+                for rx in group_regexes
+            ):
+                continue
+
+        # Check stream exclude: filter individual stream names
+        if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
+            original_names = change.get_stream_names()
+            if original_names:
+                kept = [
+                    n for n in original_names
+                    if not any(
+                        safe_regex.search(rx, n) is not None
+                        for rx in stream_regexes
+                    )
+                ]
+                if not kept:
+                    continue  # All streams excluded, drop entire entry
+                if len(kept) < len(original_names):
+                    # Partial exclusion — wrap in a proxy to override count/names
+                    change = _FilteredChange(change, kept)
+
+        filtered_changes.append(change)
+    return filtered_changes
+
+
 def get_or_create_digest_settings(db: Session) -> M3UDigestSettings:
     """Get or create the M3U digest settings singleton."""
     settings = db.query(M3UDigestSettings).first()
@@ -121,6 +194,14 @@ class M3UDigestTask(TaskScheduler):
     task_id = "m3u_digest"
     task_name = "M3U Change Digest"
     task_description = "Send email digest of M3U playlist changes"
+    # This task's config lives in its OWN store (the m3u digest settings
+    # table — get_config reads it, update_config writes it, and the
+    # /api/m3u digest-settings endpoints edit it directly without going
+    # through the registry). A ScheduledTask.config snapshot would go stale
+    # the moment those endpoints run, and hydrating it at startup would
+    # clobber the newer settings — so the registry must neither persist nor
+    # rehydrate this surface (gjb01).
+    persist_config = False
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         # Default to daily at 8 AM
@@ -158,6 +239,8 @@ class M3UDigestTask(TaskScheduler):
                 settings.include_stream_changes = config["include_stream_changes"]
             if "min_changes_threshold" in config:
                 settings.min_changes_threshold = config["min_changes_threshold"]
+            if "account_ids" in config:
+                settings.set_account_ids(config["account_ids"])
 
             db.commit()
         finally:
@@ -350,7 +433,17 @@ class M3UDigestTask(TaskScheduler):
             # pure memory risk with no effect on the rendered digest (GH #473).
             query = db.query(M3UChangeLog).filter(M3UChangeLog.change_time >= since)
             if m3u_account_id:
+                # Single-account request (test send, immediate digest for one
+                # account) — takes precedence over the account_ids scope below.
                 query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
+            else:
+                # GH #496: scope the scheduled digest to the operator-selected
+                # accounts. Empty/unset account_ids means "all accounts" (the
+                # pre-existing behavior) — DB logging in M3UChangeLog is never
+                # filtered, only what gets built into the notification here.
+                account_ids = settings.get_account_ids()
+                if account_ids:
+                    query = query.filter(M3UChangeLog.m3u_account_id.in_(account_ids))
 
             total_changes = query.count()
             if total_changes > MAX_DIGEST_CHANGES:
@@ -373,62 +466,13 @@ class M3UDigestTask(TaskScheduler):
             if not settings.include_stream_changes:
                 changes = [c for c in changes if c.change_type not in ("streams_added", "streams_removed")]
 
-            # Apply exclude patterns
-            group_patterns_raw = settings.get_exclude_group_patterns()
-            stream_patterns_raw = settings.get_exclude_stream_patterns()
-
-            if group_patterns_raw or stream_patterns_raw:
-                # Compile user-supplied patterns via safe_regex so oversized
-                # patterns are rejected up-front (raises PatternTooLongError)
-                # and syntactically invalid ones are logged and skipped
-                # (SafeRegexError). Matching goes through safe_regex.search
-                # below so every call has a per-invocation ReDoS timeout —
-                # on timeout or other failure, search returns None and the
-                # row is treated as NOT matched (i.e. not excluded), which
-                # is the safe default for an exclude filter.
-                group_regexes = []
-                for p in group_patterns_raw:
-                    try:
-                        group_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
-                    except safe_regex.SafeRegexError as e:
-                        logger.debug("[M3U-DIGEST] Suppressed invalid group regex pattern: %s", e)
-
-                stream_regexes = []
-                for p in stream_patterns_raw:
-                    try:
-                        stream_regexes.append(safe_regex.compile(p, flags=re.IGNORECASE))
-                    except safe_regex.SafeRegexError as e:
-                        logger.debug("[M3U-DIGEST] Suppressed invalid stream regex pattern: %s", e)
-
-                filtered_changes = []
-                for change in changes:
-                    # Check group exclude: if group_name matches any pattern, drop it
-                    if group_regexes and change.group_name:
-                        if any(
-                            safe_regex.search(rx, change.group_name) is not None
-                            for rx in group_regexes
-                        ):
-                            continue
-
-                    # Check stream exclude: filter individual stream names
-                    if stream_regexes and change.change_type in ("streams_added", "streams_removed"):
-                        original_names = change.get_stream_names()
-                        if original_names:
-                            kept = [
-                                n for n in original_names
-                                if not any(
-                                    safe_regex.search(rx, n) is not None
-                                    for rx in stream_regexes
-                                )
-                            ]
-                            if not kept:
-                                continue  # All streams excluded, drop entire entry
-                            if len(kept) < len(original_names):
-                                # Partial exclusion — wrap in a proxy to override count/names
-                                change = _FilteredChange(change, kept)
-
-                    filtered_changes.append(change)
-                changes = filtered_changes
+            # Apply exclude patterns (see apply_exclude_filters for the
+            # safe_regex / graceful-fallback contract).
+            changes = apply_exclude_filters(
+                changes,
+                settings.get_exclude_group_patterns(),
+                settings.get_exclude_stream_patterns(),
+            )
 
             # Check threshold
             if len(changes) < settings.min_changes_threshold and not force:
@@ -821,6 +865,26 @@ async def send_immediate_digest(m3u_account_id: int) -> TaskResult:
             return TaskResult(
                 success=True,
                 message="Immediate digest not enabled",
+                started_at=datetime.utcnow(),
+                completed_at=datetime.utcnow(),
+            )
+
+        # GH #496: an immediate digest fires for exactly one M3U account (the
+        # one that was just refreshed). If the operator has scoped digest
+        # notifications to a subset of accounts and this account isn't in it,
+        # skip sending — the operator deliberately excluded this account's
+        # notifications (its changes are still logged to M3UChangeLog by the
+        # refresh path regardless of this decision).
+        account_ids = settings.get_account_ids()
+        if account_ids and m3u_account_id not in account_ids:
+            logger.info(
+                "[M3U-DIGEST] Skipping immediate digest for m3u_account_id=%s: "
+                "not in selected digest accounts %s",
+                m3u_account_id, account_ids,
+            )
+            return TaskResult(
+                success=True,
+                message=f"Immediate digest skipped: account {m3u_account_id} not in selected digest accounts",
                 started_at=datetime.utcnow(),
                 completed_at=datetime.utcnow(),
             )

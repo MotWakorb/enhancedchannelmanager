@@ -39,6 +39,7 @@ import itertools
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -209,17 +210,22 @@ def install_json_logging(level: int = logging.INFO) -> None:
     json_handler.setFormatter(JsonFormatter())
     json_handler.addFilter(_TraceIdFilter())
 
-    # Drop any handler we previously installed (idempotency).
     for existing in list(root.handlers):
         if getattr(existing, "_ecm_json_handler", False):
+            # Drop any handler we previously installed (idempotency).
             root.removeHandler(existing)
-        else:
-            # Also replace the formatter on any default stream handler so
-            # ``logging.basicConfig``-installed handlers speak JSON too,
-            # instead of emitting a second plaintext line alongside ours.
-            if isinstance(existing, logging.StreamHandler):
-                existing.setFormatter(JsonFormatter())
-                existing.addFilter(_TraceIdFilter())
+        elif type(existing) is logging.StreamHandler and getattr(
+            existing, "stream", None
+        ) in (sys.stderr, sys.stdout):
+            # Remove the plain console handler ``logging.basicConfig``
+            # installed at import time. Keeping it — even re-formatted to
+            # JSON — leaves TWO console handlers on the root logger, so
+            # every record is emitted twice (bd-cng0d: duplicate JSON
+            # access-log lines). ``type() is`` (not ``isinstance``) so
+            # FileHandler and other StreamHandler subclasses are left
+            # alone, and the stream check spares handlers a test attached
+            # to capture output into a StringIO.
+            root.removeHandler(existing)
 
     json_handler._ecm_json_handler = True  # type: ignore[attr-defined]
     root.addHandler(json_handler)
@@ -703,6 +709,112 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "drifting; failure modes 1-2 ride on (time-since-success) "
             "in the gauge above, this counter ride on (rate-of-errors).",
             ["phase"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # DBAS scheduled/manual backup outcomes (bead 0i2vt.6).
+        #
+        # ``ecm_backup_runs_total`` labels by ``result`` — a bounded set:
+        #   'success'  the DbasBackupTask built a sealed artifact + sidecar.
+        #   'skipped'  the fire-time credential-freshness gate aborted the
+        #              run (target missing / disabled / revoked / rotated).
+        #              This is a SKIP, not a failure — it is the operator's
+        #              own configuration change taking effect, but it is NOT
+        #              silent: a WARN log, journal entry and NotificationCenter
+        #              notification accompany every increment (a backup that
+        #              silently stops = false safety).
+        #   'failed'   the artifact build itself raised (disk, IO, gather).
+        #
+        # SRE: a sustained 'skipped'/'failed' rate with a zero 'success'
+        # rate over the alerting window is the #1 op risk for this feature
+        # (a scheduled backup that has quietly stopped producing artifacts).
+        # Cardinality is fixed at three series.
+        "backup_runs_total": Counter(
+            "ecm_backup_runs_total",
+            "Cumulative count of DBAS backup task runs, labeled by result. "
+            "result ∈ {success, skipped, failed}. 'success' = a sealed "
+            "artifact + sidecar were written. 'skipped' = the fire-time "
+            "credential-freshness gate aborted the run (target missing, "
+            "disabled, revoked, or credential rotated) — a non-silent abort "
+            "that also emits a WARN log, journal entry and notification. "
+            "'failed' = the artifact build itself raised.",
+            ["result"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # DBAS cloud upload outcomes (bead 0i2vt.8).
+        #
+        # ``ecm_backup_upload_total`` labels by ``provider`` and ``result``:
+        #   provider ∈ {s3, gdrive, webdav} — the three shipping adapters in
+        #            v0.18.0 (dropbox/onedrive deferred to v0.18.x). Cardinality
+        #            is bounded by the get_adapter() provider_type allowlist.
+        #   result   ∈ {success, failed} — one increment per outbound upload of
+        #            the sealed artifact (and its .sha256 sidecar) to a
+        #            configured+enabled target. A target that is skipped by the
+        #            fire-time freshness gate does NOT increment this counter
+        #            (it increments ecm_backup_runs_total{result="skipped"} once
+        #            for the run, not per-target here).
+        #
+        # SRE: the ratio failed / (success + failed) is the cloud-upload error
+        # SLI for DBAS offsite backups; a sustained non-zero failed rate means
+        # backups are being produced locally but not landing offsite — the host
+        # is one disk failure away from total backup loss.
+        # ----------------------------------------------------------------
+        "backup_upload_total": Counter(
+            "ecm_backup_upload_total",
+            "Cumulative count of DBAS cloud-upload attempts, labeled by "
+            "provider (s3|gdrive|webdav) and result (success|failed). One "
+            "increment per outbound artifact upload to a configured+enabled "
+            "target. Freshness-gate skips are counted on ecm_backup_runs_total "
+            "(result=skipped), not here.",
+            ["provider", "result"],
+            registry=registry,
+        ),
+        # ----------------------------------------------------------------
+        # DBAS cross-instance sync outcomes (bead enhancedchannelmanager-k78ja,
+        # epic i39wu).
+        #
+        # ``ecm_sync_runs_total`` labels by ``result`` — a bounded tri-state set
+        # mirroring ``ecm_backup_runs_total``:
+        #   'success'  the DbasSyncTask completed a clean run — a dry-run plan
+        #              that produced a preview, or an APPLY whose RestoreReport
+        #              outcome was SUCCESS. This is also the ONLY result that
+        #              stamps ecm_task_schedule_last_success_timestamp (the
+        #              task_engine stamps it on TaskResult.success), so a
+        #              'success' increment is the heartbeat the staleness alert
+        #              keys off.
+        #   'partial'  an APPLY whose outcome was mixed / rolled-back (tri-state
+        #              discipline — NEVER reported as a clean success). The
+        #              per-task success gauge is NOT stamped on a partial, so a
+        #              SUSTAINED partial loop ALSO trips ECMSyncStalledTargetDrift
+        #              (the staleness clock never resets). That is correct:
+        #              target B is drifting either way.
+        #   'failed'   the run raised, the freshness gate aborted (target
+        #              missing / disabled / revoked / rotated), or no
+        #              sync_target_id was configured — every non-clean,
+        #              non-partial terminal state. Freshness aborts are
+        #              non-silent (WARN + journal + notification) independent of
+        #              this counter.
+        #
+        # SRE: the #1 operator risk for cross-instance sync is SILENT DRIFT —
+        # a sync quietly failing (or looping on partial) for N cycles while B
+        # diverges from A, discovered only at failover. A sustained
+        # 'partial'/'failed' rate with a zero 'success' rate is that signal;
+        # the freshness/last-success staleness alert (ECMSyncStalledTargetDrift)
+        # is the time-since-success counterpart. Cardinality is fixed at three
+        # series.
+        # ----------------------------------------------------------------
+        "sync_runs_total": Counter(
+            "ecm_sync_runs_total",
+            "Cumulative count of DBAS cross-instance sync task runs, labeled by "
+            "result. result ∈ {success, partial, failed}. 'success' = a clean "
+            "dry-run plan or an APPLY with a SUCCESS outcome (also the heartbeat "
+            "that stamps ecm_task_schedule_last_success_timestamp). 'partial' = "
+            "an APPLY with a mixed/rolled-back outcome (target B drifting; "
+            "tri-state discipline — never a clean success, and does NOT stamp "
+            "the last-success gauge). 'failed' = the run raised, the credential-"
+            "freshness gate aborted, or no target was configured.",
+            ["result"],
             registry=registry,
         ),
         # ----------------------------------------------------------------
@@ -1259,16 +1371,16 @@ def update_auto_creation_snapshot_metrics(session=None) -> None:
     try:
         from sqlalchemy import func
 
-        from models import AutoCreationSnapshot
+        from models import ChannelPipelineSnapshot
 
         if session is None:
             from database import get_session  # local — avoid import cycle
             session = get_session()
             own_session = True
 
-        count = session.query(func.count(AutoCreationSnapshot.id)).scalar() or 0
+        count = session.query(func.count(ChannelPipelineSnapshot.id)).scalar() or 0
         total_bytes = session.query(
-            func.coalesce(func.sum(func.length(AutoCreationSnapshot.channels_data)), 0)
+            func.coalesce(func.sum(func.length(ChannelPipelineSnapshot.channels_data)), 0)
         ).scalar() or 0
 
         get_metric("auto_creation_snapshot_count").set(float(count))

@@ -169,6 +169,25 @@ def test_create_then_delete_temp_channel_cancels():
     assert len(deletes) == 0
 
 
+def test_delete_then_create_temp_channel_cancels():
+    """Reverse-order create+delete of the same temp channel should also cancel.
+
+    Companion to test_create_then_delete_temp_channel_cancels (forward order).
+    Encodes the order-independent contract: the consolidator computes the
+    created-temp-id set in a first pass (symmetric to channels_to_delete), so
+    the delete is cancelled even when it precedes its matching create.
+    """
+    ops = [
+        BulkDeleteChannelOp(channelId=-1),
+        BulkCreateChannelOp(tempId=-1, name="New Channel"),
+    ]
+    result = _consolidate_operations(ops)
+    creates = [o for o in result if o.type == "createChannel"]
+    deletes = [o for o in result if o.type == "deleteChannel"]
+    assert len(creates) == 0
+    assert len(deletes) == 0
+
+
 def test_delete_real_channel_not_cancelled():
     """Delete of a real (positive) channel ID is always preserved."""
     ops = [

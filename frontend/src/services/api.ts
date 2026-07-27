@@ -91,9 +91,18 @@ import type {
   DummyEPGPreviewResult,
   DummyEPGBatchPreviewRequest,
   DummyEPGChannelAssignment,
+  StaleStreamIdsResponse,
 } from '../types';
+import type {
+  AcceptEventSyncReviewOutcome,
+  EventSyncExclusionCreateRequest,
+  EventSyncExclusionRecord,
+  EventSyncExclusionsListResponse,
+  EventSyncReviewsListResponse,
+  RejectEventSyncReviewOutcome,
+} from '../types/eventSync';
 import { logger } from '../utils/logger';
-import { fetchJson, fetchText, buildQuery } from './httpClient';
+import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
 import {
   type TimezonePreference,
   type NumberSeparator,
@@ -371,9 +380,20 @@ export interface BulkMergeResponse {
   results: { target_channel_id: number; target_name?: string; sources_deleted?: number; total_streams?: number; success: boolean; error?: string }[];
 }
 
-export async function findDuplicateChannels(): Promise<FindDuplicatesResponse> {
+export async function findDuplicateChannels(
+  channelIds?: number[],
+  foldMatchKey?: boolean,
+): Promise<FindDuplicatesResponse> {
+  // fold_match_key (GH #645): opt-in whitespace/case-insensitive grouping —
+  // the same canonicalization the auto-creation fold_match_key rule flag
+  // uses. Only sent when true so the default request stays byte-identical
+  // to the pre-flag behavior.
+  const body: { channel_ids?: number[]; fold_match_key?: boolean } = {};
+  if (channelIds !== undefined) body.channel_ids = channelIds;
+  if (foldMatchKey) body.fold_match_key = true;
   return fetchJson(`${API_BASE}/channels/find-duplicates`, {
     method: 'POST',
+    ...(Object.keys(body).length > 0 ? { body: JSON.stringify(body) } : {}),
   });
 }
 
@@ -638,6 +658,37 @@ export async function clearAutoCreatedFlag(groupIds: number[]): Promise<{
   });
 }
 
+/** Diagnostic report shape from `build_channel_groups_diagnostic` (backend/routers/channel_groups.py). */
+export interface ChannelGroupsDiagnostic {
+  dispatcharr_group_count: number;
+  duplicate_group_names: Record<string, number>;
+  hidden_records: Array<{ id: number; stored_name: string; live_name: string | null; status: string }>;
+  channel_count: number;
+  channels_by_group_id: Record<string, { live_name: string | null; count: number; sample: string[] }>;
+  channels_by_group_name_count: Record<string, number>;
+  orphaned_channel_group_id_count: number;
+  orphaned_sample: Array<{ id: number; name: string; channel_number: number | null; channel_group_name: string | null; channel_group_id: number }>;
+  null_id_with_name_count: number;
+  null_id_with_name_sample: Array<{ id: number; name: string; channel_number: number | null; channel_group_name: string | null }>;
+}
+
+/**
+ * Run the Channel Manager group/channel diagnostic (bd-hq3de.b). Read-only —
+ * same computation the debug-bundle generator uses for
+ * channel_groups_diagnostic.json.
+ */
+export async function getChannelGroupsDiagnostic(): Promise<ChannelGroupsDiagnostic> {
+  return fetchJson(`${API_BASE}/channel-groups/diagnostic`);
+}
+
+/** Channel groups that have at least one channel with a stream (probeable groups). */
+export async function getChannelGroupsWithStreams(): Promise<{
+  groups: { id: number; name: string }[];
+  total_groups: number;
+}> {
+  return fetchJson(`${API_BASE}/channel-groups/with-streams`);
+}
+
 // Streams
 export async function getStreams(params?: {
   page?: number;
@@ -679,6 +730,36 @@ export async function getM3UAccounts(): Promise<M3UAccount[]> {
 
 export async function getProviderGroupSettings(): Promise<Record<number, M3UGroupSetting>> {
   return fetchJson(`${API_BASE}/providers/group-settings`);
+}
+
+/** Per-provider catch-up availability for the M3U manager badge (bead 4dpiz).
+ *  `has_catchup` is authoritative (true when the provider has ≥1 catch-up
+ *  stream); `catchup_days` is the provider's sampled catch-up depth (null when
+ *  no catch-up). Keyed by M3U account id as a string. */
+export interface ProviderCatchupStatus {
+  has_catchup: boolean;
+  catchup_days: number | null;
+}
+
+export async function getProviderCatchupStatus(): Promise<Record<string, ProviderCatchupStatus>> {
+  return fetchJson(`${API_BASE}/providers/catchup-status`);
+}
+
+/** One (provider, channel-group) junction row — NON-collapsed. bead 38dzi:
+ *  powers the provider-scoped Event Sync group picker (the same channel-group
+ *  id can appear under multiple providers). Join on channel_group_id against
+ *  the channel groups the caller already loads for the group name. */
+export interface ProviderGroupScopeRow {
+  m3u_account_id: number;
+  m3u_account_name: string;
+  channel_group_id: number;
+  auto_channel_sync: boolean;
+  enabled: boolean;
+  stream_count: number | null;
+}
+
+export async function getProviderGroupSettingsByProvider(): Promise<ProviderGroupScopeRow[]> {
+  return fetchJson(`${API_BASE}/providers/group-settings/by-provider`);
 }
 
 // M3U Account CRUD
@@ -821,10 +902,27 @@ export async function deleteM3UProfile(accountId: number, profileId: number): Pr
 }
 
 // M3U Group Settings
+/**
+ * Per-group outcome of the downstream channel-profile reconcile the
+ * group-settings PATCH performs (GH #720 Part B / #9). Best-effort — a
+ * reconcile problem never fails the PATCH, but it IS reported here so the UI
+ * can warn on an incomplete apply.
+ */
+export interface ProfileApplyOutcome {
+  // Backend statuses: no_selection | no_channels | stale_selection |
+  // partial_failure | reconciled | error.
+  status: string;
+  group_id?: number | null;
+  failed_profile_ids?: number[];
+  conflict?: boolean;
+  channels_scoped?: number;
+  error?: string | null;
+}
+
 export async function updateM3UGroupSettings(
   accountId: number,
   data: { group_settings: Partial<ChannelGroupM3UAccount>[] }
-): Promise<{ message: string }> {
+): Promise<{ message?: string; ecm_profile_apply?: ProfileApplyOutcome[] }> {
   // Dispatcharr expects 'group_settings' key, not 'channel_groups'
   return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-settings`, {
     method: 'PATCH',
@@ -832,9 +930,124 @@ export async function updateM3UGroupSettings(
   });
 }
 
+/**
+ * True when a group-settings save's profile-apply summary reports an
+ * INCOMPLETE or dead apply — any per-group partial_failure/degraded/error, a
+ * fully stale (all-deleted) selection, a cross-account conflict, or a non-empty
+ * failed_profile_ids. Drives the "saved but apply incomplete" warning (#9).
+ * An empty summary is a clean no-op (nothing to apply) — NOT incomplete; the
+ * backend emits an explicit {status:'error'} entry when setup itself failed so
+ * that case is distinguished from "nothing to do".
+ */
+export function profileApplyIncomplete(
+  summary: ProfileApplyOutcome[] | undefined
+): boolean {
+  return (summary ?? []).some(
+    (o) =>
+      o.status === 'partial_failure' ||
+      o.status === 'degraded' ||
+      o.status === 'error' ||
+      o.status === 'stale_selection' ||
+      o.conflict === true ||
+      (o.failed_profile_ids?.length ?? 0) > 0
+  );
+}
+
+/**
+ * Status-specific recovery guidance for an incomplete profile apply. Returns
+ * null when the apply is clean. The generic "it will retry automatically"
+ * message is WRONG for stale_selection and conflict (auto-retry cannot fix a
+ * deleted profile or contradictory operator choices), so those get an
+ * actionable next step instead of a false promise.
+ */
+export function profileApplyWarningMessage(
+  summary: ProfileApplyOutcome[] | undefined
+): string | null {
+  const items = summary ?? [];
+  if (!profileApplyIncomplete(items)) return null;
+  if (items.some((o) => o.status === 'stale_selection')) {
+    return 'Saved, but the selected channel profile(s) no longer exist — open Auto-Sync settings and choose current profiles.';
+  }
+  if (items.some((o) => o.conflict === true)) {
+    return 'Saved, but this group had conflicting profile selections across accounts — reopen Auto-Sync settings and re-save to normalize them.';
+  }
+  if (items.some((o) => o.status === 'degraded')) {
+    return 'Saved, but channel profiles could not be fully enforced (the profile list was unreachable). It will retry automatically on the next sync.';
+  }
+  // Cheap honesty: the backend already NAMES the affected account(s) + the
+  // recovery action in outcome.error — surface it instead of a generic
+  // "check the logs" when present.
+  const errWithDetail = items.find((o) => o.status === 'error' && o.error);
+  if (errWithDetail) {
+    return `Saved, but ${errWithDetail.error}`;
+  }
+  if (items.some((o) => o.status === 'error')) {
+    return 'Saved, but applying channel profiles hit an error — check the logs.';
+  }
+  return 'Saved, but applying some channel profiles failed — check the logs; it will retry automatically.';
+}
+
+export interface GroupAutoSyncToggleResult {
+  changed: boolean;
+  channel_group_id: number;
+  group_name: string;
+  account_id: number;
+  account_name: string;
+  auto_channel_sync: boolean;
+  was?: boolean;
+}
+
+/**
+ * Guided-setup auto_channel_sync toggle (bead ti939.3.4). Admin-gated and
+ * confirm-gated on the backend: `confirm: true` is REQUIRED and must only
+ * be sent from an explicit confirmation dialog — never as a side effect of
+ * saving a rule or running the pipeline. Every toggle is journaled
+ * (snapshot restore does NOT revert Dispatcharr group settings; the
+ * journal entry is the recovery breadcrumb).
+ */
+export async function toggleGroupAutoSync(
+  accountId: number,
+  data: { channel_group_id: number; auto_channel_sync: boolean; confirm: true }
+): Promise<GroupAutoSyncToggleResult> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/group-auto-sync-toggle`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
 // Server Groups
 export async function getServerGroups(): Promise<ServerGroup[]> {
   return fetchJson(`${API_BASE}/m3u/server-groups`);
+}
+
+export async function createServerGroup(data: { name: string; account_ids?: number[] }): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateServerGroup(
+  groupId: number,
+  data: { name?: string; account_ids?: number[] },
+): Promise<ServerGroup> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${groupId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteServerGroup(groupId: number): Promise<{ status: string }> {
+  return fetchJson(`${API_BASE}/m3u/server-groups/${groupId}`, {
+    method: 'DELETE',
+  });
+}
+
+/** Refresh VOD content for an XtreamCodes M3U account (enhancedchannelmanager-hq3de.d). */
+export async function refreshM3UVod(accountId: number): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/m3u/accounts/${accountId}/refresh-vod`, {
+    method: 'POST',
+  });
 }
 
 // Health check
@@ -967,7 +1180,7 @@ export type Theme = 'dark' | 'light' | 'high-contrast';
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
 // Sort criteria for stream sorting
-export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams';
+export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup';
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 // Deprioritized stream categories for ordering within the "failed" group
@@ -1015,6 +1228,10 @@ export interface SettingsResponse {
   date_format: string;  // Global UI date format: "auto", "mdy", "dmy", or "iso" (bd-8j47e)
   default_channel_profile_ids: number[];
   linked_m3u_accounts: number[][];  // List of link groups, each is a list of account IDs
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard. Admin-only on the backend (install-wide duplicate-channel risk).
+  // Default False preserves today's locked behavior.
+  allow_multi_provider_auto_sync: boolean;
   epg_auto_match_threshold: number;  // 0-100, confidence score threshold for auto-matching
   custom_network_prefixes: string[];  // User-defined network prefixes to strip
   custom_network_suffixes: string[];  // User-defined network suffixes to strip
@@ -1071,6 +1288,9 @@ export interface SettingsResponse {
   auto_creation_excluded_terms: string[];
   auto_creation_excluded_groups: string[];
   auto_creation_exclude_auto_sync_groups: boolean;
+  // GH #473 auto-creation OOM safety-valve caps (skg35). <= 0 disables.
+  max_auto_created_channels_per_run: number;
+  max_auto_creation_log_entries: number;
   // MCP integration
   mcp_api_key_configured: boolean;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
@@ -1099,6 +1319,37 @@ export interface SettingsResponse {
   // bare IPs). Used ONLY to RANK media-server attribution candidates,
   // never to gate. Default empty.
   trusted_media_networks: string[];
+  // nngkg / bead 0i2vt.5: DBAS outbound-destination policy mode. Read by the
+  // first-run wizard + Settings > Backup & Restore (relocated from the
+  // removed Security page by bead 09x38.12). The always-on denylist is
+  // enforced unconditionally in the backend regardless of this value.
+  ssrf_outbound_mode: OutboundPolicyMode;
+}
+
+/**
+ * DBAS outbound-destination policy mode (nngkg).
+ *
+ * `lan_friendly` (DEFAULT) lets ECM reach private/home-network addresses, so
+ * backups can go to a NAS on your own network. `public_only` blocks those and
+ * allows only public internet destinations. (Plain-language copy lives in the
+ * UI; these are the wire values consumed by the backend SSRF chokepoint.)
+ */
+export type OutboundPolicyMode = 'lan_friendly' | 'public_only';
+
+/**
+ * Persist the outbound-policy mode (nngkg). Dedicated endpoint so the
+ * Settings > Backup & Restore card (OutboundPolicyCard, relocated from the
+ * removed Security page by bead 09x38.12) and the first-run wizard can save
+ * the operator's choice without a full settings round-trip. Returns the
+ * saved mode.
+ */
+export async function saveSecurityMode(
+  mode: OutboundPolicyMode,
+): Promise<{ ssrf_outbound_mode: OutboundPolicyMode }> {
+  return fetchJson(`${API_BASE}/settings/security`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ssrf_outbound_mode: mode }),
+  });
 }
 
 // Stream preview mode for browser playback
@@ -1140,6 +1391,8 @@ export async function saveSettings(settings: {
   date_format?: string;  // Optional - "auto" | "mdy" | "dmy" | "iso", defaults to 'auto' (bd-8j47e)
   default_channel_profile_ids?: number[];  // Optional - empty array means no defaults
   linked_m3u_accounts?: number[][];  // Optional - list of link groups
+  // bd-dgs64 (GH #591): optional - admin-only on the backend, defaults to false.
+  allow_multi_provider_auto_sync?: boolean;
   epg_auto_match_threshold?: number;  // Optional - 0-100, defaults to 80
   custom_network_prefixes?: string[];  // Optional - user-defined network prefixes
   custom_network_suffixes?: string[];  // Optional - user-defined network suffixes
@@ -1193,6 +1446,10 @@ export async function saveSettings(settings: {
   auto_creation_excluded_terms?: string[];
   auto_creation_excluded_groups?: string[];
   auto_creation_exclude_auto_sync_groups?: boolean;
+  // GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only on the
+  // backend; <= 0 disables the cap. Optional so a partial save preserves them.
+  max_auto_created_channels_per_run?: number;
+  max_auto_creation_log_entries?: number;
   // Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
   telemetry_client_errors_enabled?: boolean;
   // Dedup settings (BD-B / BD-K, ADR-008 §D2). Float 0.60-1.00; server clamps to floor.
@@ -1427,11 +1684,23 @@ export async function getLogos(params?: {
   page?: number;
   pageSize?: number;
   search?: string;
+  /** Sort column. Passing either this or `unusedOnly` (or a non-empty
+   * `search`) routes the request through the backend's full-dataset
+   * aggregate path (bead enhancedchannelmanager-09x38.13) — see
+   * backend/routers/channels.py get_logos() for why Dispatcharr itself
+   * cannot sort or honor `search`. */
+  sortBy?: 'name' | 'channel_count';
+  sortOrder?: 'asc' | 'desc';
+  /** Only return logos with channel_count === 0. */
+  unusedOnly?: boolean;
 }): Promise<PaginatedResponse<Logo>> {
   const query = buildQuery({
     page: params?.page,
     page_size: params?.pageSize,
     search: params?.search,
+    sort_by: params?.sortBy,
+    sort_order: params?.sortOrder,
+    unused_only: params?.unusedOnly ? true : undefined,
   });
   // Debug instrumentation (bd-nh50y): the channel-edit-modal logo picker
   // had zero observability between the API response and the rendered grid,
@@ -1674,6 +1943,187 @@ export async function getEPGLcnBatch(items: LCNLookupItem[]): Promise<{
   });
 }
 
+export type GuideMigrationStatus =
+  | 'ready'
+  | 'already_target'
+  | 'unassigned'
+  | 'missing_lcn'
+  | 'missing_target'
+  | 'ambiguous_target'
+  | 'unsupported_origin';
+
+export interface GuideMigrationRow {
+  channel_id: number;
+  channel_name: string;
+  current_epg_data_id: number | null;
+  current_source_id: number | null;
+  current_source_name: string | null;
+  lcn: string | null;
+  target_epg_data_id: number | null;
+  target_name: string | null;
+  current_tvg_id: string | null;
+  target_tvg_id: string | null;
+  status: GuideMigrationStatus;
+}
+
+export interface GuideMigrationPreview {
+  target_source_id: number;
+  target_source_name: string;
+  rows: GuideMigrationRow[];
+  counts: Record<GuideMigrationStatus, number>;
+  preview_token: string;
+}
+
+export type GuideMigrationApplyStatus =
+  | 'updated'
+  | 'updated_audit_failed'
+  | 'ambiguous_target'
+  | 'unsupported_origin'
+  | 'semantic_drift'
+  | 'changed_since_preview'
+  | 'failed';
+
+export interface GuideMigrationApplyResult {
+  mutated: number;
+  updated: number;
+  audit_failed: number;
+  skipped: number;
+  failed: number;
+  results: Array<{ channel_id: number; status: GuideMigrationApplyStatus }>;
+  batch_id: string;
+}
+
+export interface GuideMigrationJobStatus {
+  batch_id: string;
+  status: 'running' | 'completed' | 'failed';
+  processed: number;
+  total: number;
+  result: GuideMigrationApplyResult;
+  error?: string;
+}
+
+export async function previewGuideMigration(
+  targetEpgSourceId: number
+): Promise<GuideMigrationPreview> {
+  return fetchJson(`${API_BASE}/epg/migration/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ target_epg_source_id: targetEpgSourceId }),
+  });
+}
+
+const GUIDE_MIGRATION_POLL_INTERVAL_MS = 750;
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Guide migration polling aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export class GuideMigrationPollingError extends Error {
+  constructor(
+    message: string,
+    public readonly batchId: string
+  ) {
+    super(message);
+    this.name = 'GuideMigrationPollingError';
+  }
+}
+
+export async function applyGuideMigration(
+  preview: GuideMigrationPreview,
+  onProgress?: (status: GuideMigrationJobStatus) => void,
+  signal?: AbortSignal
+): Promise<GuideMigrationApplyResult> {
+  const items = preview.rows
+    .filter((row) => row.status === 'ready')
+    .map((row) => ({
+      channel_id: row.channel_id,
+      current_epg_data_id: row.current_epg_data_id,
+      current_source_id: row.current_source_id,
+      current_tvg_id: row.current_tvg_id,
+      lcn: row.lcn,
+      target_epg_data_id: row.target_epg_data_id,
+      target_tvg_id: row.target_tvg_id,
+    }));
+  const accepted = await fetchJson<{
+    batch_id: string;
+    status: 'running';
+  }>(`${API_BASE}/epg/migration/apply`, {
+    method: 'POST',
+    signal,
+    body: JSON.stringify({
+      target_epg_source_id: preview.target_source_id,
+      preview_token: preview.preview_token,
+      items,
+    }),
+  });
+  const emptyResult: GuideMigrationApplyResult = {
+    mutated: 0,
+    updated: 0,
+    audit_failed: 0,
+    skipped: 0,
+    failed: 0,
+    results: [],
+    batch_id: accepted.batch_id,
+  };
+  onProgress?.({
+    batch_id: accepted.batch_id,
+    status: 'running',
+    processed: 0,
+    total: items.length,
+    result: emptyResult,
+  });
+  while (!signal?.aborted) {
+    try {
+      const status = await fetchJson<GuideMigrationJobStatus>(
+        `${API_BASE}/epg/migration/apply/${encodeURIComponent(accepted.batch_id)}`,
+        { signal }
+      );
+      onProgress?.(status);
+      if (status.status === 'completed') return status.result;
+      if (status.status === 'failed') {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} failed. Build a fresh preview and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        throw error;
+      }
+      if (error instanceof GuideMigrationPollingError) throw error;
+      if (error instanceof HttpError && error.status === 404) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} is no longer available, possibly because ECM restarted. Preserve this batch ID, build a fresh preview, and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      if (error instanceof HttpError && error.status < 500) {
+        throw new GuideMigrationPollingError(
+          `Guide migration ${accepted.batch_id} polling stopped: ${error.message}. Preserve this batch ID and verify affected channels in Dispatcharr before retrying.`,
+          accepted.batch_id
+        );
+      }
+      // Network and transient server errors do not discard a known accepted
+      // batch or its last partial result. Keep polling until terminal/unmount.
+    }
+    await abortableDelay(GUIDE_MIGRATION_POLL_INTERVAL_MS, signal);
+  }
+  throw new DOMException('Guide migration polling aborted', 'AbortError');
+}
+
 // EPG Matching (server-side)
 export interface EPGMatchEntry {
   epg_id: number;
@@ -1709,6 +2159,7 @@ export interface EPGMatchResponse {
 export async function matchChannelsToEPG(params: {
   channel_ids?: number[];
   epg_source_ids?: number[];
+  /** @deprecated EPG source priority is resolved server-side; no longer sent. Removed in v0.19.0. */
   source_order?: number[];
 }): Promise<EPGMatchResponse> {
   return fetchJson(`${API_BASE}/epg/match`, {
@@ -1716,7 +2167,6 @@ export async function matchChannelsToEPG(params: {
     body: JSON.stringify({
       channel_ids: params.channel_ids || [],
       epg_source_ids: params.epg_source_ids || [],
-      source_order: params.source_order || [],
     }),
   });
 }
@@ -1726,12 +2176,15 @@ export async function getStreamProfiles(): Promise<StreamProfile[]> {
   return fetchJson(`${API_BASE}/stream-profiles`);
 }
 
-export async function createStreamProfile(data: {
+export interface StreamProfileCreateRequest {
   name: string;
   command: string;
   parameters: string;
   is_active?: boolean;
-}): Promise<StreamProfile> {
+}
+
+/** Create a new stream profile in Dispatcharr (enhancedchannelmanager-hq3de.j). */
+export async function createStreamProfile(data: StreamProfileCreateRequest): Promise<StreamProfile> {
   return fetchJson(`${API_BASE}/stream-profiles`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -1781,6 +2234,29 @@ export async function updateProfileChannel(
   });
 }
 
+/**
+ * Bulk enable/disable a batch of channels for a profile in one call
+ * (enhancedchannelmanager-hq3de.i).
+ *
+ * NOTE: per dispatcharr_client.bulk_update_profile_channels, the underlying
+ * Dispatcharr bulk endpoint only UPDATES existing ChannelProfileMembership
+ * rows — it does not create new ones for a channel the profile has never
+ * tracked before. `updateProfileChannel` (individual PATCH, used by
+ * ChannelProfilesListModal's "Save Changes") is the safe path when new
+ * memberships may need to be created. Prefer this bulk call only for
+ * channels already known to the profile.
+ */
+export async function bulkUpdateProfileChannels(
+  profileId: number,
+  channelIds: number[],
+  enabled: boolean,
+): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+    method: 'PATCH',
+    body: JSON.stringify({ channel_ids: channelIds, enabled }),
+  });
+}
+
 // Helper function to get or create a logo by URL
 // Dispatcharr enforces unique URLs, so we try to create first, then search if it already exists
 export async function getOrCreateLogo(name: string, url: string, logoCache: Map<string, Logo>): Promise<Logo> {
@@ -1827,12 +2303,21 @@ export async function getJournalEntries(params?: JournalQueryParams): Promise<Jo
     date_to: params?.date_to,
     search: params?.search,
     user_initiated: params?.user_initiated,
+    mutation_source: params?.mutation_source,
   });
   return fetchJson(`${API_BASE}/journal${query}`);
 }
 
 export async function getJournalStats(): Promise<JournalStats> {
   return fetchJson(`${API_BASE}/journal/stats`);
+}
+
+/** Delete journal entries older than `days` (enhancedchannelmanager-hq3de.a). */
+export async function purgeJournalEntries(days: number): Promise<{ deleted: number; days: number }> {
+  const query = buildQuery({ days });
+  return fetchJson(`${API_BASE}/journal/purge${query}`, {
+    method: 'DELETE',
+  });
 }
 
 // =============================================================================
@@ -1873,6 +2358,36 @@ export async function stopChannel(channelId: number | string): Promise<{ success
 }
 
 /**
+ * Stop a specific client connection on a channel (enhancedchannelmanager-hq3de.h).
+ *
+ * NOTE: Dispatcharr's underlying `/proxy/ts/stop_client/{channel_id}` is
+ * channel-scoped, not client-id-scoped — there is no per-client identifier in
+ * the request. Calling this stops "a" client connected to the channel (per
+ * Dispatcharr's own selection), not guaranteed to be the specific row the
+ * operator clicked. Callers should word confirmation copy accordingly.
+ */
+export async function stopClient(channelId: number | string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}/stop-client`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Get detailed stats for a specific channel (enhancedchannelmanager-hq3de.g):
+ * per-client info, buffer status, codec details.
+ *
+ * NOTE endpoint id-type mismatch: this router path is typed `channel_id: int`
+ * (backend/routers/stats.py get_channel_stats_detail) while its `/proxy/ts/*`
+ * siblings (stop / stop-client) are typed `str` and take the stream UUID seen
+ * in ChannelStatsResponse.channels[].channel_id. Passing a UUID here 422s.
+ * Callers should pass the resolved integer Channel.id (from GET /channels),
+ * not the Active-Channels-list channel_id, which may be a UUID.
+ */
+export async function getChannelStatsDetail(channelId: number): Promise<Record<string, unknown>> {
+  return fetchJson(`${API_BASE}/stats/channels/${channelId}`);
+}
+
+/**
  * Get bandwidth usage summary for all time periods.
  */
 export async function getBandwidthStats(): Promise<import('../types').BandwidthSummary> {
@@ -1892,9 +2407,16 @@ export async function getTopWatchedChannels(limit: number = 10, sortBy: 'views' 
 
 /**
  * Get unique viewer statistics for the specified period.
+ *
+ * ``groupBy`` controls the Top Viewers bucketing: 'ip' (default) groups by
+ * client IP; 'user' groups by COALESCE(username, ip) so resolved viewers
+ * collapse across IPs and unresolved viewers fall back to their IP.
  */
-export async function getUniqueViewersSummary(days: number = 7): Promise<import('../types').UniqueViewersSummary> {
-  return fetchJson(`${API_BASE}/stats/unique-viewers?days=${days}`);
+export async function getUniqueViewersSummary(
+  days: number = 7,
+  groupBy: 'ip' | 'user' = 'ip'
+): Promise<import('../types').UniqueViewersSummary> {
+  return fetchJson(`${API_BASE}/stats/unique-viewers?days=${days}&group_by=${groupBy}`);
 }
 
 /**
@@ -1913,9 +2435,10 @@ export async function getChannelBandwidthStats(
  */
 export async function getUniqueViewersByChannel(
   days: number = 7,
-  limit: number = 20
+  limit: number = 20,
+  groupBy: 'ip' | 'user' = 'ip'
 ): Promise<import('../types').ChannelUniqueViewers[]> {
-  return fetchJson(`${API_BASE}/stats/unique-viewers-by-channel?days=${days}&limit=${limit}`);
+  return fetchJson(`${API_BASE}/stats/unique-viewers-by-channel?days=${days}&limit=${limit}&group_by=${groupBy}`);
 }
 
 // =============================================================================
@@ -1940,6 +2463,23 @@ export async function getTrendingChannels(
   limit: number = 10
 ): Promise<import('../types').ChannelPopularityScore[]> {
   return fetchJson(`${API_BASE}/stats/popularity/trending?direction=${direction}&limit=${limit}`);
+}
+
+/**
+ * Get the popularity score for a single channel, keyed by the channel UUID
+ * (enhancedchannelmanager-hq3de.g) — same `channel_id` shape as
+ * ChannelStatsResponse.channels[].channel_id, NOT the integer Channel.id.
+ * Returns null when no score has been calculated yet for the channel.
+ */
+export async function getChannelPopularity(
+  channelId: string
+): Promise<import('../types').ChannelPopularityScore | null> {
+  try {
+    return await fetchJson(`${API_BASE}/stats/popularity/channel/${channelId}`);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 /**
@@ -2080,6 +2620,18 @@ export async function getProvidersBitrate(options: {
   if (options.bucket) params.set('bucket', options.bucket);
   const qs = params.toString();
   return fetchJson(`${API_BASE}/stats/providers/bitrate${qs ? `?${qs}` : ''}`);
+}
+
+// =============================================================================
+// Provider Stream Usage (GH-482, bd-n5cwp)
+// =============================================================================
+//
+// NOT admin-gated (Dispatcharr-derived catalog/assignment data — see
+// ProviderStreamUsageResponse doc comment in types/index.ts for the
+// assigned_streams vs total_assignments distinction).
+
+export async function getProviderStreamUsage(): Promise<import('../types').ProviderStreamUsageResponse> {
+  return fetchJson(`${API_BASE}/stats/providers/stream-usage`);
 }
 
 // =============================================================================
@@ -2238,6 +2790,41 @@ export async function removeStruckOutStreams(streamIds: number[]): Promise<{ rem
     method: 'POST',
     body: JSON.stringify({ stream_ids: streamIds }),
   });
+}
+
+// Stale Streams API
+//
+// A stream is stale when either signal fires:
+// - not_probed_recently: ECM hasn't ffprobed it within the `days` threshold (or ever)
+// - provider_stale: Dispatcharr's own M3U refresh no longer re-matched it in the source playlist
+export type StaleReason = 'not_probed_recently' | 'provider_stale';
+
+export interface StaleStream {
+  stream_id: number;
+  stream_name: string | null;
+  last_probed: string | null;
+  provider_last_seen: string | null;
+  reasons: StaleReason[];
+  channels: { id: number; name: string }[];
+}
+
+export interface StaleStreamsResponse {
+  streams: StaleStream[];
+  threshold_days: number;
+}
+
+export async function getStaleStreams(days = 7): Promise<StaleStreamsResponse> {
+  return fetchJson(`${API_BASE}/stream-stats/stale?days=${days}`);
+}
+
+// Provider-stale stream ids (bead enhancedchannelmanager-po78p / GH #696).
+//
+// Distinct from getStaleStreams above: this is the raw Dispatcharr `is_stale`
+// set (cached, cheap paged scan), used as the single source of truth for
+// stale-stream decoration in the Channels/Streams panes — not the richer
+// probe-staleness report that endpoint returns.
+export async function getStaleStreamIds(bypassCache = false): Promise<StaleStreamIdsResponse> {
+  return fetchJson(`${API_BASE}/streams/stale-ids${bypassCache ? '?bypass_cache=true' : ''}`);
 }
 
 export interface SortConfig {
@@ -2412,6 +2999,13 @@ export interface TaskStatus {
   task_description: string;
   status: 'idle' | 'scheduled' | 'running' | 'paused' | 'cancelled' | 'completed' | 'failed';
   enabled: boolean;
+  /**
+   * True firing gate (vkktd.3/vkktd.4): parent `enabled` AND >=1 enabled child
+   * schedule. A task can read `enabled: true` yet never fire when all its
+   * child schedules are disabled — bind UI state to this, never bare `enabled`.
+   * Optional because older backends (< build 0091) don't send it.
+   */
+  effective_enabled?: boolean;
   progress: TaskProgress;
   schedule: TaskScheduleConfig;  // Legacy schedule config
   schedules: TaskSchedule[];  // New multi-schedule support
@@ -2746,6 +3340,32 @@ export async function testNormalizationBatch(texts: string[]): Promise<Normaliza
   });
 }
 
+export interface NormalizationRuleStat {
+  rule_id: number;
+  rule_name: string;
+  group_id: number;
+  group_name: string;
+  enabled: boolean;
+  match_count: number;
+  match_percentage: number;
+}
+
+export interface NormalizationRuleStatsResponse {
+  rule_stats: NormalizationRuleStat[];
+  total_streams_tested: number;
+  total_rules: number;
+}
+
+/**
+ * Get per-rule match counts against a sample of current Dispatcharr stream
+ * names (enhancedchannelmanager-hq3de.e). Expensive (tests every enabled
+ * rule against up to `limit` streams) — call on demand, not on every render.
+ */
+export async function getNormalizationRuleStats(limit = 500): Promise<NormalizationRuleStatsResponse> {
+  const query = buildQuery({ limit });
+  return fetchJson(`${API_BASE}/normalization/rule-stats${query}`);
+}
+
 /**
  * Normalize texts through all enabled rules (simple result)
  */
@@ -2891,6 +3511,25 @@ export async function importTagsYaml(yamlContent: string, overwrite: boolean = f
   return fetchJson(`${API_BASE}/tags/import`, {
     method: 'POST',
     body: JSON.stringify({ yaml_content: yamlContent, overwrite }),
+  });
+}
+
+export interface TestTagsResult {
+  text: string;
+  group_id: number;
+  group_name: string;
+  matches: Array<{ tag_id: number; value: string; case_sensitive: boolean }>;
+  match_count: number;
+}
+
+/**
+ * Test text against a tag group's enabled tags (enhancedchannelmanager-hq3de.f).
+ * Mirrors the normalization engine's test UX (testNormalizationRule).
+ */
+export async function testTags(groupId: number, text: string): Promise<TestTagsResult> {
+  return fetchJson(`${API_BASE}/tags/test`, {
+    method: 'POST',
+    body: JSON.stringify({ group_id: groupId, text }),
   });
 }
 
@@ -3621,6 +4260,139 @@ export interface BackupRestoreResult {
   errors: string[];
 }
 
+// ---------------------------------------------------------------------------
+// DBAS Phase-2 restore report (mirrors backend/dbas/restore_contracts.py)
+//
+// ONE shape carries the dry-run plan (bead 0i2vt.16) AND the realized
+// restore/rollback result (bead 0i2vt.18); the restore-complete summary UX
+// (bead 0i2vt.20) renders both, distinguished by `is_dry_run`. Keep the enum
+// string values byte-for-byte aligned with the backend `str, Enum` values —
+// the wire payload carries the raw string and the UI maps it to a label.
+// ---------------------------------------------------------------------------
+
+/** A restorable Dispatcharr/ECM entity type (one per distinct ID namespace). */
+export type RestoreEntityType =
+  | 'm3u_account'
+  | 'epg_source'
+  | 'channel_group'
+  | 'channel_profile'
+  | 'stream_profile'
+  | 'channel'
+  | 'stream'
+  | 'user_agent'
+  | 'dvr_rule'
+  // Report-only category for core_settings + comskip apply results (updated/
+  // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
+  | 'settings'
+  | 'user'
+  | 'logo';
+
+/** Why an entity was (or would be) skipped. */
+export type RestoreSkipReason =
+  | 'already_exists_identical'
+  | 'excluded_by_operator'
+  | 'current_admin_preserved'
+  | 'unsupported_in_this_version'
+  | 'dependency_unresolved';
+
+/** Why an entity failed to apply. */
+export type RestoreFailureReason =
+  | 'validation_error'
+  | 'dependency_unresolved'
+  | 'upstream_api_error'
+  | 'upstream_timeout'
+  | 'conflict'
+  | 'password_hash_unsupported'
+  | 'internal_error';
+
+/**
+ * Overall tri-state result of a realized restore. `null` on a dry-run (a plan
+ * has no realized outcome). NEVER `success` on mixed state — the two rolled-back
+ * states are explicit failures, surfaced as such by the summary UX.
+ */
+export type RestoreOutcome =
+  | 'success'
+  | 'partial_failed_rolled_back'
+  | 'failed_rollback_incomplete';
+
+/** One skipped entity, with the reason and an operator-facing label (never a secret). */
+export interface RestoreSkipDetail {
+  reason: RestoreSkipReason;
+  label: string;
+  source_export_id?: number | null;
+}
+
+/** One failed entity, with the reason and a sanitized operator-facing message. */
+export interface RestoreFailureDetail {
+  reason: RestoreFailureReason;
+  label: string;
+  message: string;
+  source_export_id?: number | null;
+}
+
+/**
+ * Per-entity-category counts for ONE category. Apply populates
+ * created/updated/skipped/failed; dry-run populates would_create/would_update/
+ * would_skip. The detail lists are the source of truth for reasons.
+ */
+export interface EntityCategoryReport {
+  entity_type: RestoreEntityType;
+  created: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  would_create: number;
+  would_update: number;
+  would_skip: number;
+  skip_details: RestoreSkipDetail[];
+  failure_details: RestoreFailureDetail[];
+}
+
+/**
+ * One channel affected by a logo miss (bead cm9bi). `channel_id` is the
+ * DESTINATION Dispatcharr channel id when known — null when the channel could
+ * not be resolved (its create failed) or on dry-run (whose remap holds
+ * provisional ids that must never render as real Dispatcharr links). `name` is
+ * the operator-facing channel name; never a secret.
+ */
+export interface LogoMissChannel {
+  channel_id?: number | null;
+  name: string;
+}
+
+/**
+ * One logo that could not be matched/applied on restore (bead qhui4) — the
+ * per-logo drill-down behind the aggregate `logo_misses` count. `label` is the
+ * operator-facing logo name; never a path or secret. `channels` (bead cm9bi)
+ * lists the AFFECTED CHANNELS — one miss stays one detail row (the aggregate
+ * counts logos, not channels); a logo shared by several channels lists them
+ * all. May be absent on reports produced before the field existed.
+ */
+export interface LogoMissDetail {
+  source_export_id?: number | null;
+  label: string;
+  channels?: LogoMissChannel[];
+}
+
+/** The one restore response schema — dry-run, apply, and summary. */
+export interface RestoreReport {
+  contract_version: number;
+  is_dry_run: boolean;
+  outcome: RestoreOutcome | null;
+  categories: EntityCategoryReport[];
+  /** Aggregate count of unresolved logo references — bead .19 surfaces a red banner when > 0. */
+  logo_misses: number;
+  /**
+   * Per-logo detail (id + name) for each unresolved logo (bead qhui4). Additive
+   * to the aggregate count: the banner enumerates these as a drill-down list.
+   * May be absent on reports produced before this field existed.
+   */
+  logo_miss_details?: LogoMissDetail[];
+  started_at?: string | null;
+  completed_at?: string | null;
+  notes: string[];
+}
+
 export async function getExportSections(): Promise<{key: string; label: string}[]> {
   return fetchJson(`${API_BASE}/backup/export-sections`);
 }
@@ -3648,6 +4420,8 @@ export interface SavedBackup {
   filename: string;
   size_bytes: number;
   created_at: string;
+  /** "zip" (full on-demand or DBAS backup) or "yaml" (scheduled section export). */
+  type: 'zip' | 'yaml';
 }
 
 export async function listSavedBackups(): Promise<SavedBackup[]> {
@@ -3706,55 +4480,91 @@ export async function restoreBackupYaml(file: File, sections: string[]): Promise
   return response.json();
 }
 
-// ── Status / Monitoring API ────────────────────────────────────────
-
-import type { ServiceWithStatus, ServiceAlertRule } from '../types';
-
-export async function getServices(): Promise<ServiceWithStatus[]> {
-  return fetchJson(`${API_BASE}/services`);
+/** Response of the async DBAS restore-trigger endpoint (bead o8tbv). */
+export interface DbasRestoreStartResult {
+  status: string;
+  /** Poll `/api/tasks/{task_id}` for per-stage progress + the terminal report. */
+  task_id: string;
+  /** True when the run is a counts-only dry-run (default; apply requires confirm). */
+  is_dry_run: boolean;
 }
 
-export async function enableService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/enable`, { method: 'POST' });
-}
+/**
+ * Trigger an async DBAS artifact restore (bead o8tbv).
+ *
+ * Streams the new-format artifact (.zip) to the backend, which kicks the
+ * `dbas_restore` task in the background and returns its `task_id`. The caller
+ * polls `/api/tasks/{task_id}` (see `useRestoreProgress`) for the 13-stage
+ * progress and the terminal `RestoreReport`.
+ *
+ * Dry-run is default-ON: pass `confirmApply=true` for the destructive apply.
+ *
+ * For an encrypted artifact (ADR-012 D12 / u81kh) pass the operator
+ * `passphrase`; it travels as a form field (never the query string, so it does
+ * not land in access logs). Omit it for a plain artifact.
+ */
+export async function startDbasRestore(
+  file: File,
+  confirmApply = false,
+  passphrase?: string
+): Promise<DbasRestoreStartResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (passphrase) formData.append('passphrase', passphrase);
 
-export async function disableService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/disable`, { method: 'POST' });
-}
-
-export async function restartService(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/restart`, { method: 'POST' });
-}
-
-export async function triggerHealthCheck(serviceId: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/services/${serviceId}/health-check`, { method: 'POST' });
-}
-
-export async function getServiceAlertRules(): Promise<ServiceAlertRule[]> {
-  return fetchJson(`${API_BASE}/services/alert-rules`);
-}
-
-export async function createServiceAlertRule(
-  data: Omit<ServiceAlertRule, 'id'>
-): Promise<ServiceAlertRule> {
-  return fetchJson(`${API_BASE}/services/alert-rules`, {
+  const query = buildQuery({ confirm_apply: confirmApply });
+  const response = await fetch(`${API_BASE}/backup/restore-dbas${query}`, {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: formData,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Restore failed' }));
+    throw new Error(error.detail || 'Restore failed');
+  }
+
+  return response.json();
+}
+
+/**
+ * Restore ECM configuration from an on-disk SAVED backup ZIP (legacy full-
+ * archive format written by POST /backup/save or the scheduled YAML backup
+ * task). Synchronous — the same shape as `restoreBackup` (upload path), just
+ * addressed by filename instead of a File. Human-admin only server-side
+ * (enhancedchannelmanager-rzhid).
+ *
+ * NOTE: `GET /backup/saved` cannot distinguish this legacy ZIP format from a
+ * DBAS-format artifact — both share the `ecm-backup-<ts>.zip` naming
+ * convention. Callers should let the operator pick the matching restore
+ * action (this one, or `restoreDbasBackupSaved`) rather than guessing.
+ */
+export async function restoreSavedBackup(filename: string): Promise<RestoreResult> {
+  return fetchJson(`${API_BASE}/backup/restore-saved`, {
+    method: 'POST',
+    body: JSON.stringify({ filename }),
   });
 }
 
-export async function updateServiceAlertRule(
-  ruleId: number,
-  data: Partial<ServiceAlertRule>
-): Promise<ServiceAlertRule> {
-  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
+/**
+ * Trigger an async DBAS restore from an on-disk SAVED artifact (bead
+ * enhancedchannelmanager-rzhid). SAVED-file analogue of `startDbasRestore`
+ * (upload path) — same dry-run-by-default contract (`confirmApply=false`
+ * makes zero mutation), addressed by filename instead of a File.
+ */
+export async function restoreDbasBackupSaved(
+  filename: string,
+  confirmApply = false,
+  passphrase?: string,
+): Promise<DbasRestoreStartResult> {
+  return fetchJson(`${API_BASE}/backup/restore-dbas-saved`, {
+    method: 'POST',
+    body: JSON.stringify({
+      filename,
+      confirm_apply: confirmApply,
+      ...(passphrase ? { passphrase } : {}),
+    }),
   });
-}
-
-export async function deleteServiceAlertRule(ruleId: number): Promise<void> {
-  return fetchJson(`${API_BASE}/services/alert-rules/${ruleId}`, { method: 'DELETE' });
 }
 
 // ── Alert Methods API ───────────────────────────────────────────────
@@ -3809,6 +4619,18 @@ export async function updateAlertMethod(methodId: number, data: AlertMethodUpdat
   return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
+  });
+}
+
+export async function deleteAlertMethod(methodId: number): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testAlertMethod(methodId: number): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/alert-methods/${methodId}/test`, {
+    method: 'POST',
   });
 }
 
@@ -3891,12 +4713,25 @@ export async function deleteLookupTable(id: number): Promise<void> {
  * `backend/routers/channel_merges.py`. `confidence` is a 0.0–1.0 float
  * captured at queue-time; the UI renders it as an integer-percent badge.
  * `created_at` and `resolved_at` are epoch-ms integers per ADR-007/§D8.
+ *
+ * `candidate_channel_name` / `candidate_channel_number` /
+ * `candidate_channel_group_name` are additive fields (bead
+ * enhancedchannelmanager-09x38.14) resolved server-side from Dispatcharr
+ * at list time so the operator can see what they'd be merging into
+ * without leaving the page. All three are `null` when the candidate
+ * channel could not be resolved — most commonly because it was deleted
+ * in Dispatcharr since the row was queued — in which case the UI should
+ * render an explicit "channel no longer exists" fallback using
+ * `candidate_channel_id`.
  */
 export interface PendingMergeRecord {
   id: number;
   stream_name: string;
   group_id: number | null;
   candidate_channel_id: string;
+  candidate_channel_name: string | null;
+  candidate_channel_number: number | null;
+  candidate_channel_group_name: string | null;
   confidence: number;
   status: 'pending' | 'merged' | 'dismissed';
   created_at: number;
@@ -3912,6 +4747,11 @@ export interface PendingMergesListResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+export interface PendingMergesSnapshotResponse {
+  merges: PendingMergeRecord[];
+  total: number;
 }
 
 /**
@@ -3955,6 +4795,14 @@ export async function getPendingMerges(params?: {
   return fetchJson(`${API_BASE}/channel-merges${query}`);
 }
 
+/** Admin-gated coherent snapshot used before queue-wide bulk operations. */
+export async function getPendingMergesSnapshot(params?: {
+  groupId?: number;
+}): Promise<PendingMergesSnapshotResponse> {
+  const query = buildQuery({ group_id: params?.groupId });
+  return fetchJson(`${API_BASE}/channel-merges/snapshot${query}`);
+}
+
 /**
  * Accept a pending merge (operator confirms the candidate match).
  * Idempotent on terminal `merged` (returns the prior outcome envelope);
@@ -3978,4 +4826,199 @@ export async function dismissPendingMerge(mergeId: number): Promise<DismissMerge
   return fetchJson(`${API_BASE}/channel-merges/${mergeId}/dismiss`, {
     method: 'POST',
   });
+}
+
+// -------------------------------------------------------------------------
+// Event Sync review queue (bead ti939.3.2) — /api/event-sync-reviews.
+//
+// Ambiguous-band event_sync matches enqueue here instead of being silently
+// skipped. Rows key on content fingerprints (rule, provider, normalized
+// stream name hash, normalized event identity) — never channel/stream IDs —
+// so operator decisions survive Dispatcharr refreshes and re-apply on every
+// future run. List is RequireAuthIfEnabled; accept/reject are admin-gated.
+// -------------------------------------------------------------------------
+
+/**
+ * List event sync review rows. Defaults to the open queue
+ * (status='pending', page=1, page_size=50). Pass `ruleId` to scope to one
+ * event_sync rule.
+ */
+export async function getEventSyncReviews(params?: {
+  status?: 'pending' | 'accepted' | 'rejected' | 'superseded';
+  ruleId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<EventSyncReviewsListResponse> {
+  const query = buildQuery({
+    status: params?.status ?? 'pending',
+    rule_id: params?.ruleId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/event-sync-reviews${query}`);
+}
+
+/**
+ * Accept a review pairing: the backend records the fingerprint-keyed
+ * decision (durable — future runs auto-attach it) and best-effort attaches
+ * the stream immediately after re-verifying the snapshot ids against live
+ * Dispatcharr. `attach_deferred_reason` explains a deferred attach; the
+ * next pipeline run applies it. Idempotent on `accepted`; 409 on
+ * `rejected`/`superseded`.
+ */
+export async function acceptEventSyncReview(
+  reviewId: number,
+): Promise<AcceptEventSyncReviewOutcome> {
+  return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/accept`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Reject a review pairing: durable fingerprint-keyed suppression — future
+ * runs skip the pairing without re-asking. Idempotent on `rejected`; 409
+ * on `accepted`/`superseded`.
+ */
+export async function rejectEventSyncReview(
+  reviewId: number,
+): Promise<RejectEventSyncReviewOutcome> {
+  return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/reject`, {
+    method: 'POST',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Event Sync operator exclusions (bead ti939.3.5) —
+// /api/event-sync-exclusions.
+//
+// A durable "never attach this provider stream to that event" standing
+// order. Fingerprint-keyed like review decisions (never channel/stream
+// IDs), consulted by the shared resolver BEFORE the attach band — an
+// exclusion outranks a prior accept. List is RequireAuthIfEnabled;
+// create/delete are admin-gated.
+// -------------------------------------------------------------------------
+
+/** List never-attach exclusions, newest first (optionally one rule's). */
+export async function getEventSyncExclusions(params?: {
+  ruleId?: number;
+  page?: number;
+  pageSize?: number;
+}): Promise<EventSyncExclusionsListResponse> {
+  const query = buildQuery({
+    rule_id: params?.ruleId,
+    page: params?.page ?? 1,
+    page_size: params?.pageSize ?? 50,
+  });
+  return fetchJson(`${API_BASE}/event-sync-exclusions${query}`);
+}
+
+/**
+ * Create a never-attach exclusion. Idempotent on the fingerprint: an
+ * already-excluded pairing returns the existing row
+ * (`already_existed: true`), never a duplicate.
+ */
+export async function createEventSyncExclusion(
+  body: EventSyncExclusionCreateRequest,
+): Promise<EventSyncExclusionRecord> {
+  return fetchJson(`${API_BASE}/event-sync-exclusions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Remove a never-attach exclusion — the pairing becomes matchable again on
+ * the next run/preview (nothing is re-attached immediately; the idempotent
+ * run is the applier).
+ */
+export async function deleteEventSyncExclusion(
+  exclusionId: number,
+): Promise<void> {
+  await fetchJson(`${API_BASE}/event-sync-exclusions/${exclusionId}`, {
+    method: 'DELETE',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Sync Targets — cross-instance live-sync destinations (epic i39wu).
+//
+// A SyncTarget is a remote Dispatcharr-B instance ECM pushes config to via the
+// one-way sync engine. The CRUD mirrors backend/routers/sync_targets.py:
+// credentials are WRITE-ONLY (Fernet-encrypted at rest, never echoed back
+// decrypted — responses mask them to last-4). The actual sync is driven by
+// `runTask('dbas_sync', undefined, { sync_target_id, confirm_apply })`.
+// -------------------------------------------------------------------------
+
+/**
+ * Read shape of a sync target. `credentials` is always masked (last-4 only) —
+ * never plaintext. Status fields (`last_full_sync_at`, `last_outcome`) drive
+ * the per-target badge in the UI.
+ */
+export interface SyncTarget {
+  id: number;
+  name: string;
+  base_url: string;
+  credentials: Record<string, unknown>;
+  enabled: boolean;
+  insecure: boolean;
+  fuzzy_stream_matching: boolean;
+  credential_version: number;
+  token_revoked_at?: string | null;
+  last_full_sync_at?: string | null;
+  last_outcome?: string | null;
+  last_source_fingerprint?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** Create payload — `credentials` is write-only (username/password or api_key). */
+export interface SyncTargetCreateRequest {
+  name: string;
+  base_url: string;
+  credentials?: Record<string, string>;
+  enabled?: boolean;
+  insecure?: boolean;
+  fuzzy_stream_matching?: boolean;
+}
+
+/**
+ * Update payload — all fields optional (partial update). Omit `credentials`
+ * to leave the stored secret untouched; supplying it re-encrypts and bumps
+ * `credential_version`. The `enabled` toggle is the KILL SWITCH.
+ */
+export interface SyncTargetUpdateRequest {
+  name?: string;
+  base_url?: string;
+  credentials?: Record<string, string>;
+  enabled?: boolean;
+  insecure?: boolean;
+  fuzzy_stream_matching?: boolean;
+}
+
+export async function listSyncTargets(): Promise<SyncTarget[]> {
+  return fetchJson(`${API_BASE}/sync-targets`);
+}
+
+export async function createSyncTarget(req: SyncTargetCreateRequest): Promise<SyncTarget> {
+  return fetchJson(`${API_BASE}/sync-targets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function updateSyncTarget(
+  id: number,
+  req: SyncTargetUpdateRequest,
+): Promise<SyncTarget> {
+  return fetchJson(`${API_BASE}/sync-targets/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function deleteSyncTarget(id: number): Promise<void> {
+  await fetchJson(`${API_BASE}/sync-targets/${id}`, { method: 'DELETE' });
 }

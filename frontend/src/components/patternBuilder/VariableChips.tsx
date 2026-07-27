@@ -54,8 +54,9 @@ export const VariableChips = memo(function VariableChips({
                 className="pb-chip-delete"
                 onClick={() => onDelete(name)}
                 title={`Remove ${name}`}
+                aria-label={`Remove ${name}`}
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </span>
           );

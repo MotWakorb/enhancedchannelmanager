@@ -290,7 +290,7 @@ async def update_normalization_group(group_id: int, request: UpdateRuleGroupRequ
 
 
 def _strip_normalization_group_ref(session, group_id: int) -> int:
-    """Remove ``group_id`` from every AutoCreationRule.normalization_group_ids.
+    """Remove ``group_id`` from every ChannelPipelineRule.normalization_group_ids.
 
     Called when a NormalizationRuleGroup is deleted (GH #465 / bd-miut3) so no
     auto-creation rule is left holding a dangling reference. Operates on the
@@ -298,14 +298,14 @@ def _strip_normalization_group_ref(session, group_id: int) -> int:
 
     Returns the number of rules that were modified.
     """
-    from models import AutoCreationRule
+    from models import ChannelPipelineRule
 
     # Prefilter on the JSON text column to avoid loading every rule. The id can
     # appear as a list element in any position, so match the digits and verify
     # precisely with the parsed list below (the LIKE is only a cheap narrowing).
-    candidates = session.query(AutoCreationRule).filter(
-        AutoCreationRule.normalization_group_ids.isnot(None),
-        AutoCreationRule.normalization_group_ids.like(f"%{group_id}%"),
+    candidates = session.query(ChannelPipelineRule).filter(
+        ChannelPipelineRule.normalization_group_ids.isnot(None),
+        ChannelPipelineRule.normalization_group_ids.like(f"%{group_id}%"),
     ).all()
 
     cleaned = 0
@@ -1062,7 +1062,7 @@ _NUM_PREFIX_RE = re.compile(r'^(\d+\s*\|\s*)')
 def _split_channel_number_prefix(name: str) -> tuple[str, str]:
     """Split a channel name into (number_prefix, core_name).
 
-    Matches the behavior of auto_creation_executor.py:519-521 so renames here
+    Matches the behavior of channel_pipeline_executor.py:519-521 so renames here
     preserve the "107 | " style prefix when present.
     """
     m = _NUM_PREFIX_RE.match(name or "")

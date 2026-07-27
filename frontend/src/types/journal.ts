@@ -2,7 +2,9 @@
  * Journal types for tracking changes to channels, EPG sources, and M3U accounts.
  */
 
-export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch' | 'task' | 'auto_creation';
+export type JournalCategory = 'channel' | 'epg' | 'm3u' | 'watch' | 'task' | 'auto_creation' | 'event_sync';
+
+export type MutationSource = 'ui' | 'mcp_ai' | 'scheduler' | 'auto_creation';
 
 export type JournalActionType =
   | 'create'
@@ -31,6 +33,7 @@ export interface JournalEntry {
   before_value: Record<string, unknown> | null;
   after_value: Record<string, unknown> | null;
   user_initiated: boolean;
+  mutation_source: MutationSource | null;
   batch_id: string | null;
 }
 
@@ -43,6 +46,7 @@ export interface JournalQueryParams {
   date_to?: string;
   search?: string;
   user_initiated?: boolean;
+  mutation_source?: MutationSource;
 }
 
 export interface JournalResponse {

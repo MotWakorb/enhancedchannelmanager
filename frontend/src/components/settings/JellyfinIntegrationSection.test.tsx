@@ -31,9 +31,9 @@ vi.mock('../../services/api', () => ({
   testJellyfinConnection: vi.fn(),
 }));
 
-vi.mock('../../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn(),
-  getAutoCreationGroups: vi.fn(),
+vi.mock('../../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn(),
+  getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
 }));
 
@@ -136,6 +136,7 @@ const settingsBase = {
   gracenote_conflict_mode: 'ask' as const,
   default_channel_profile_ids: [],
   linked_m3u_accounts: [],
+  allow_multi_provider_auto_sync: false,
   epg_auto_match_threshold: 80,
   custom_network_prefixes: [],
   custom_network_suffixes: [],
@@ -148,6 +149,8 @@ const settingsBase = {
   auto_creation_excluded_terms: [],
   auto_creation_excluded_groups: [],
   auto_creation_exclude_auto_sync_groups: false,
+  max_auto_created_channels_per_run: 500,
+  max_auto_creation_log_entries: 500,
   stream_probe_timeout: 30,
   stream_probe_schedule_time: '03:00',
   bitrate_sample_duration: 10,
@@ -202,6 +205,8 @@ const settingsBase = {
   jellyfin_api_key_configured: false,
   // bd-mlcla: trusted media/proxy networks (ranking hint only).
   trusted_media_networks: [],
+  // nngkg: DBAS outbound-policy mode (default LAN-friendly).
+  ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
 function renderOnIntegrations() {

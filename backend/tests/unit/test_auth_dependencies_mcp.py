@@ -305,6 +305,114 @@ async def test_empty_mcp_key_does_not_accept_literal_empty_match(
 # 6. Constant-time comparison is used and correct for match/non-match
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# 7. kgz3k / bead 6n76m — reject_mcp_service_principal variant
+#    (RequireHumanAdminIfEnabled): denies the MCP principal, admits humans.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reject_mcp_variant_denies_mcp_principal(
+    mcp_key_configured, auth_enabled
+):
+    """require_admin_if_enabled(reject_mcp_service_principal=True) 403s the MCP key.
+
+    The static MCP principal carries is_admin=True but must be denied on the
+    settings-write (backup-restore) path — this is the kgz3k carve-out extended
+    to restore. The 403 detail names the MCP principal, not the generic message.
+    """
+    check_admin = require_admin_if_enabled(reject_mcp_service_principal=True)
+    req = _FakeRequest(bearer=MCP_KEY)
+
+    with pytest.raises(HTTPException) as exc:
+        await check_admin(req, session=_ExplodingSession())
+    assert exc.value.status_code == 403
+    assert "MCP service principal" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_reject_mcp_variant_admits_real_admin(
+    mcp_key_configured, auth_enabled, test_session
+):
+    """The reject-MCP variant still ADMITS a real (DB-backed) admin."""
+    user = User(
+        username="human-admin",
+        email="human-admin@example.com",
+        auth_provider="local",
+        is_admin=True,
+        is_active=True,
+    )
+    test_session.add(user)
+    test_session.commit()
+    test_session.refresh(user)
+
+    token = create_access_token(user_id=user.id, username=user.username)
+    check_admin = require_admin_if_enabled(reject_mcp_service_principal=True)
+    req = _FakeRequest(bearer=token)
+
+    admitted = await check_admin(req, session=test_session)
+    assert admitted is not None
+    assert admitted.username == "human-admin"
+    assert admitted.is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_reject_mcp_variant_denies_non_admin_generic_message(
+    mcp_key_configured, auth_enabled, test_session
+):
+    """A real NON-admin still gets the generic 'Admin access required' message —
+    the MCP-specific reason is only disclosed to an admin-equivalent caller."""
+    user = User(
+        username="human-user",
+        email="human-user@example.com",
+        auth_provider="local",
+        is_admin=False,
+        is_active=True,
+    )
+    test_session.add(user)
+    test_session.commit()
+    test_session.refresh(user)
+
+    token = create_access_token(user_id=user.id, username=user.username)
+    check_admin = require_admin_if_enabled(reject_mcp_service_principal=True)
+    req = _FakeRequest(bearer=token)
+
+    with pytest.raises(HTTPException) as exc:
+        await check_admin(req, session=test_session)
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Admin access required"
+
+
+@pytest.mark.asyncio
+async def test_default_variant_still_admits_mcp_principal(
+    mcp_key_configured, auth_enabled
+):
+    """Regression guard: the DEFAULT factory (no reject flag) STILL admits the
+    MCP principal — every non-restore admin route the MCP key legitimately
+    reaches (channel management, etc.) is unchanged by the 6n76m fix."""
+    check_admin = require_admin_if_enabled()  # reject_mcp_service_principal=False
+    req = _FakeRequest(bearer=MCP_KEY)
+
+    user = await check_admin(req, session=_ExplodingSession())
+    assert user is not None
+    assert user.username == "mcp-service"
+    assert user.is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_reject_mcp_variant_setup_mode_allows(mcp_key_configured, monkeypatch):
+    """In setup mode (auth disabled) the reject-MCP variant returns None, exactly
+    like the base RequireAdminIfEnabled — behaviour is unchanged pre-setup."""
+    monkeypatch.setattr(
+        deps, "get_auth_settings",
+        lambda: AuthSettings(setup_complete=False, require_auth=False),
+    )
+    check_admin = require_admin_if_enabled(reject_mcp_service_principal=True)
+    req = _FakeRequest(bearer=MCP_KEY)
+
+    result = await check_admin(req, session=_ExplodingSession())
+    assert result is None
+
+
 def test_uses_constant_time_compare(monkeypatch):
     """get_current_user must compare via hmac.compare_digest, not ``==``.
 

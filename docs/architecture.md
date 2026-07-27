@@ -24,7 +24,6 @@ graph TB
             M3UManager["M3U Manager"]
             EPGManager["EPG Manager"]
             AutoCreation["Auto Creation"]
-            FFMPEGBuilder["FFMPEG Builder"]
             Settings["Settings"]
             Guide & Journal & Stats
             LogoManager["Logo Manager"]
@@ -71,7 +70,7 @@ graph TB
             AuthProviders["Providers (Dispatcharr)"]
         end
 
-        subgraph Routers["21 Domain Routers (/api/*)"]
+        subgraph Routers["20 Domain Routers (/api/*)"]
             direction LR
             R_channels["/channels"]
             R_groups["/channel-groups"]
@@ -89,8 +88,7 @@ graph TB
             R_norm["/normalization"]
             R_profiles["/profiles"]
             R_journal["/journal"]
-            R_auto["/auto-creation"]
-            R_ffmpeg["/ffmpeg"]
+            R_auto["/channel-pipeline"]
             R_health["/health"]
             R_m3udigest["/m3u-digest"]
             R_dedup["/channel-merges (dedup)"]
@@ -101,7 +99,7 @@ graph TB
             TaskRegistry["TaskRegistry"]
             subgraph Tasks["Scheduled Tasks"]
                 M3URefresh & EPGRefresh & StreamProbe
-                AutoCreate["Auto Creation"]
+                AutoCreate["Channel Pipeline"]
                 M3UChangeMonitor & M3UDigest
                 Cleanup & PopularityCalc["Popularity Calc"]
             end
@@ -126,7 +124,7 @@ graph TB
         end
 
         subgraph Engines["Processing Engines"]
-            AutoEngine["Auto-Creation Engine"]
+            AutoEngine["Channel Pipeline Engine"]
             AutoEval["Evaluator"]
             AutoExec["Executor"]
             NormEngine["Normalization Engine"]
@@ -193,7 +191,7 @@ Browser → Frontend (React SPA on :6100/static/ by default)
 
 ```
 Startup → TaskEngine (checks every 60s, max 3 concurrent)
-        → M3U Refresh, EPG Refresh, Stream Probe, Auto-Creation,
+        → M3U Refresh, EPG Refresh, Stream Probe, Channel Pipeline,
           M3U Change Monitor, M3U Digest, Cleanup, Popularity Calc
         → NotificationService → AlertMethods (Discord, SMTP, Telegram)
         → StreamProber (health checks, bitrate sampling)
@@ -213,12 +211,39 @@ Startup → TaskEngine (checks every 60s, max 3 concurrent)
 
 ---
 
-## Auto-Creation Pipeline Internals
+## Channel Pipeline Internals
 
-`AutoCreationEngine` orchestrates a per-stream pipeline. For each stream in scope it builds a `StreamContext`, evaluates it against a rule via `ConditionEvaluator`, and on match hands the matched actions to `ActionExecutor`.
+`ChannelPipelineEngine` orchestrates a per-stream pipeline. For each stream in scope it builds a `StreamContext`, evaluates it against a rule via `ConditionEvaluator`, and on match hands the matched actions to `ActionExecutor`.
+
+### Trigger model — event-driven, decoupled from M3U refresh (ADR-011)
+
+The Channel Pipeline has **two** entry points, with distinct gating:
+
+- **Manual "Run Now"** — `POST /api/channel-pipeline/run` (and `/rules/{id}/run`;
+  the deprecated `/api/auto-creation/...` alias still works — see `docs/api.md`)
+  go straight to `engine.run_pipeline`. **Never gated** by the run-on-refresh
+  circuit breaker or the refresh watermark.
+- **Unattended auto-fire** — `ChannelPipelineTask` (`tasks/channel_pipeline.py`) runs
+  on an **INTERVAL schedule (~60s)** and decides for itself whether to run. It
+  is the single auto-fire path (one breaker gate, one created-channel cap path,
+  one notification style).
+
+M3U refresh **no longer hard-chains** the Channel Pipeline. Instead, on every
+successful refresh (scheduled `M3URefreshTask` or the manual single-account
+poll in `routers/m3u.py`), the refresh advances a watermark
+`last_m3u_refresh_completed_at` in settings.json (Q1: not change-gated). The
+`ChannelPipelineTask` AUTO-FIRE GUARD then runs the post-refresh pipeline on its
+next tick only when ALL hold: (a) task enabled; (b) `_run_on_refresh_suppressed()`
+is False (exo4j breaker clear AND `ECM_DISABLE_RUN_ON_REFRESH` unset, read
+fresh); (c) ≥1 `enabled AND run_on_refresh=True` rule exists (only that set
+runs); (d) `last_m3u_refresh_completed_at > last_auto_creation_consumed_refresh_at`.
+On run it consumes the watermark (advances `last_auto_creation_consumed_refresh_at`)
+**before** running, so a crash or overlapping tick cannot re-fire against the
+same refresh. Trade-off: ~60s latency after a refresh (Q3); a single failed M3U
+account no longer suppresses the Channel Pipeline for the batch. See ADR-011.
 
 ```
-AutoCreationEngine.run_pipeline() / run_rule()
+ChannelPipelineEngine.run_pipeline() / run_rule()
   ├─ _load_existing_data · _load_rules · _fetch_streams · _load_stream_stats
   ├─ _apply_global_filters
   ├─ _probe_unprobed_streams → _batch_probe_streams          (ffprobe fill-in)
@@ -245,12 +270,33 @@ AutoCreationEngine.run_pipeline() / run_rule()
 
 | DTO | Source | Role |
 |-|-|-|
-| `StreamContext` | `auto_creation_evaluator.py` | Stream + existing data + stats — input to evaluation |
-| `Action` / `ActionType` | `auto_creation_schema.py` | The verb + its parameters |
-| `ExecutionContext` | `auto_creation_executor.py` | Per-run rollback tracker |
-| `ActionResult` | `auto_creation_executor.py` | Outcome reported back up the chain |
+| `StreamContext` | `channel_pipeline_evaluator.py` | Stream + existing data + stats — input to evaluation |
+| `Action` / `ActionType` | `channel_pipeline_schema.py` | The verb + its parameters |
+| `ExecutionContext` | `channel_pipeline_executor.py` | Per-run rollback tracker |
+| `ActionResult` | `channel_pipeline_executor.py` | Outcome reported back up the chain |
 
-`AutoCreationEngine` has exactly three production collaborators: `ConditionEvaluator`, `ActionExecutor`, and `init_auto_creation_engine`. Everything else in its call graph is tests.
+`ChannelPipelineEngine` has exactly three production collaborators: `ConditionEvaluator`, `ActionExecutor`, and `init_channel_pipeline_engine`. Everything else in its call graph is tests.
+
+### Run terminal status & failure aggregation (y3m6o.1 / GH #720 Part 1)
+
+A run finalizes to exactly one terminal `ChannelPipelineExecution.status`:
+
+| Status | Meaning |
+|-|-|
+| `completed` | Every executed action succeeded (green). |
+| `completed_with_errors` | ≥1 executed action/phase FAILED, but the run was not wholly aborted — some channels/actions may have succeeded. Distinct from a blanket `failed`. The top-level `run_pipeline` result reports `success=False` and `failed_action_count`. |
+| `capped` | The created-channel cap was hit. Takes precedence over `completed_with_errors`, but a compound capped+failed run persists BOTH the cap info AND the failed-action summary in `error_message`, and the result still reports `success=False`. |
+| `failed` | The run was wholly aborted by an unrecoverable error. |
+| `rolled_back` | A completed run was later reverted via rollback/undo. |
+| `abandoned` | The run was left at `running` by a hard restart/OOM kill and crash-reconciled to `abandoned` on next boot by `task_engine._abandon_orphaned_auto_creation_executions` (GH #473 / bd-exo4j). Carries an "Abandoned: run was interrupted…" `error_message` and trips the run-on-refresh circuit breaker until an operator clears it. This transition lives in `task_engine`, NOT the engine's finalization branch, so it is easy to miss when enumerating the terminal set — it is nonetheless a genuinely persisted terminal status. |
+
+The full persisted terminal set is therefore: `completed`, `completed_with_errors`, `capped`, `failed`, `rolled_back`, `abandoned` (transient: `pending`, `running`). Any poller/consumer must treat ALL six as terminal.
+
+**One aggregation chokepoint.** Every executed-action/phase failure is recorded into `results["failed_actions"]` — the ONE list finalization keys on. Per-stream Pass 2 action failures funnel through `_record_failed_action`; the non-Pass-2 phases (Event Sync attach, Event Sync dummy-EPG, Pass 5 deferred-EPG retry, default-profile assignment) funnel through `_record_failed_phase`. Default-profile assignment is best-effort for the channel CREATE (a failed profile PATCH never aborts it) but its failure now escalates into aggregation, so such a run is not green.
+
+**Direct-run vs task success semantics.** The engine's `run_pipeline` result is the honest record: `success = not failed_actions`, and `execution.status` persists `completed_with_errors`. The *task envelope* is intentionally softer (PO decision): the unattended `ChannelPipelineTask` returns `TaskResult(success=True, failed_count=N)` on a failed-action run, so the task engine emits ONE "Completed with Warnings" (with external alerts) rather than a hard "failed". Task History renders `failed_count>0` as an amber warning, never solid green.
+
+**Non-rollbackable profile recovery.** `assign_channel_profile` mutates channel-profile membership, which has no reversible previous-state — so it is never recorded as a rollback/snapshot entity. A run that mutated membership persists a `non_reversible_profile_changes` warning; `to_dict` exposes `has_non_reversible_profile_changes`, and the executions UI's Rollback/Undo affordances disclose that membership will NOT be restored. Recovery is manual: re-run the rule (all profile-write paths are idempotent) or fix membership by hand.
 
 ## Stream Deduplication Pipeline (v0.17.1)
 
@@ -293,14 +339,16 @@ Response envelopes follow the ECM flat-outcome pattern (no top-level `data` wrap
 3. On a collision with an existing pending row (§D5 partial unique index): logs at INFO and returns "skip creation" — the existing row stays authoritative.
 4. Increments the `ecm_pending_merges_queue_depth_added_total` counter (BD-M locked metric contract).
 
-The hook fires only on the M3U-refresh path. Scheduled / manual auto-creation runs are not affected.
+The hook fires only on the M3U-refresh path. Scheduled / manual Channel Pipeline runs are not affected.
 
 ### Interactive trigger flow
 
-For drag-drop and Add Stream triggers:
+For drag-drop and Create-in-group triggers (the latter via the Streams pane
+selection strip's "Create in…" menu since build 0161 — previously a
+right-click context menu):
 
 ```
-Operator action (drag-drop / right-click)
+Operator action (drag-drop / Create in… menu)
   └─ Frontend calls GET /api/channel-merges/candidates?stream_name=X&group_id=Y
        └─ Router → dedup_matcher.find_candidate()
             ├─ candidate found → StreamDedupModal displayed
@@ -326,18 +374,18 @@ The existing `add_stream` MCP tool is extended (BD-P) with a `dedup_action` para
 
 ### Boundaries
 
-The interactive dedup pipeline and the auto-creation pipeline's own collision detection (`match_scope_target_group` / separate-not-merge, migration 0002 / bd-r9mtd) are **independent systems** that do not share a matcher. The interactive dedup path is the *attended* (operator-driven) surface; the auto-creation path is the *unattended* surface. A shared matcher service is a deferred backlog candidate.
+The interactive dedup pipeline and the Channel Pipeline feature's own collision detection (`match_scope_target_group` / separate-not-merge, migration 0002 / bd-r9mtd) are **independent systems** that do not share a matcher. The interactive dedup path is the *attended* (operator-driven) surface; the Channel Pipeline feature is the *unattended* surface. A shared matcher service is a deferred backlog candidate.
 
 See also: ADR-008 (`docs/adr/ADR-008-interactive-stream-dedup.md`), API reference (`docs/api.md` → Channel Merges section), operator guide (`docs/user_guide/channels-streams/stream-dedup.md`).
 
 ---
 
-## Normalization ↔ Auto-Creation Coupling
+## Normalization ↔ Channel Pipeline Coupling
 
-The normalization and auto-creation subsystems are architecturally independent and coupled only via a singleton factory:
+The normalization and Channel Pipeline subsystems are architecturally independent and coupled only via a singleton factory:
 
 ```
-AutoCreationEngine._process_streams()
+ChannelPipelineEngine._process_streams()
     └─ calls get_normalization_engine()         [singleton factory]
             └─ returns NormalizationEngine
                     ├─ normalize()              [public API]
@@ -349,7 +397,7 @@ AutoCreationEngine._process_streams()
                                     _apply_rules_single_pass, _apply_legacy_custom_tags]
 ```
 
-Auto-creation treats normalization as an opaque service: it obtains the engine via the factory and calls `normalize()`. No shared types, no shared state. The only other production caller of `NormalizationEngine` is `scripts/normalization_canary.py`.
+The Channel Pipeline treats normalization as an opaque service: it obtains the engine via the factory and calls `normalize()`. No shared types, no shared state. The only other production caller of `NormalizationEngine` is `scripts/normalization_canary.py`.
 
 ## Frontend Edit-Commit UX Pattern
 
@@ -403,7 +451,7 @@ graph LR
     Client -.reads.-> Settings
 ```
 
-**Tool modules (15 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `auto_creation`, `export`, `ffmpeg`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
+**Tool modules (13 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `channel_pipeline`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
 
 **Resources (read-only):** `ecm://stats/overview`, `ecm://channels/summary`, `ecm://tasks/status`.
 
@@ -420,7 +468,7 @@ graph LR
 | `api_key` (deprecated alias) | Same Dispatcharr REST API token, mirrored from `dispatcharr_api_key` on save for one release of back-compat | External scripts that read `settings.json` directly. **Removed in v0.19.0 per `enhancedchannelmanager-ewm4h`** |
 | `mcp_api_key` | MCP server API key | MCP container (inbound auth) + MCP→ECM backend calls |
 
-The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Both `mcp_api_key` and the Dispatcharr key are credential-class — every export path (`routers/backup.py` ZIP export, `routers/auto_creation.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
+The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Both `mcp_api_key` and the Dispatcharr key are credential-class — every export path (`routers/backup.py` ZIP export, `routers/channel_pipeline.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
 
 **Compound tools:** most tools wrap a single ECM endpoint, but some orchestrate multiple calls. Examples:
 

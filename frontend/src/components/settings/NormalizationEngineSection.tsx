@@ -127,6 +127,7 @@ function SortableRuleItem({
   onToggleEnabled,
   onEdit,
   onDelete,
+  matchStat,
 }: {
   rule: NormalizationRule;
   isSelected: boolean;
@@ -135,6 +136,7 @@ function SortableRuleItem({
   onToggleEnabled: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  matchStat?: api.NormalizationRuleStat | null;
 }) {
   const {
     attributes,
@@ -177,6 +179,14 @@ function SortableRuleItem({
             <>{rule.condition_type}: "{rule.condition_value}"</>
           )}
         </span>
+        {matchStat && (
+          <span
+            className="norm-engine-rule-match-badge"
+            title={`Matched ${matchStat.match_count} of ${matchStat.match_count > 0 ? 'the tested' : 'tested'} streams (${matchStat.match_percentage}%)`}
+          >
+            {matchStat.match_count} match{matchStat.match_count === 1 ? '' : 'es'}
+          </span>
+        )}
       </div>
       <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
         <label className="norm-engine-toggle small">
@@ -194,16 +204,18 @@ function SortableRuleItem({
               onClick={onEdit}
               title="Edit rule"
               type="button"
+              aria-label="Edit rule"
             >
-              <span className="material-icons">edit</span>
+              <span className="material-icons" aria-hidden="true">edit</span>
             </button>
             <button
               className="norm-engine-btn-icon small danger"
               onClick={onDelete}
               title="Delete rule"
               type="button"
+              aria-label="Delete rule"
             >
-              <span className="material-icons">delete</span>
+              <span className="material-icons" aria-hidden="true">delete</span>
             </button>
           </>
         )}
@@ -310,6 +322,12 @@ export function NormalizationEngineSection() {
 
   // Live preview state
   const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
+
+  // Rule-match stats (enhancedchannelmanager-hq3de.e) — on-demand only
+  // (GET /rule-stats tests every enabled rule against a sample of live
+  // stream names, so it's not cheap enough to run on every render).
+  const [ruleStats, setRuleStats] = useState<Map<number, api.NormalizationRuleStat> | null>(null);
+  const [loadingRuleStats, setLoadingRuleStats] = useState(false);
 
   // Import/Export state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -822,6 +840,25 @@ export function NormalizationEngineSection() {
     e.target.value = '';
   }, []);
 
+  // Rule-match stats (enhancedchannelmanager-hq3de.e). Toggle: load on first
+  // click, clear (hide badges) on a second click rather than re-fetching —
+  // an operator re-checking numbers clicks it again explicitly.
+  const handleToggleRuleStats = useCallback(async () => {
+    if (ruleStats) {
+      setRuleStats(null);
+      return;
+    }
+    setLoadingRuleStats(true);
+    try {
+      const result = await api.getNormalizationRuleStats();
+      setRuleStats(new Map(result.rule_stats.map((s) => [s.rule_id, s])));
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to load rule stats', 'Normalization');
+    } finally {
+      setLoadingRuleStats(false);
+    }
+  }, [ruleStats, notifications]);
+
   // ------------------------------------------------------------------
   // Apply-to-channels handlers (GH-104)
   // ------------------------------------------------------------------
@@ -1106,6 +1143,19 @@ export function NormalizationEngineSection() {
           </button>
           <button
             className="norm-engine-btn"
+            onClick={handleToggleRuleStats}
+            type="button"
+            disabled={loadingRuleStats}
+            title={ruleStats ? 'Hide rule match counts' : 'Show how many streams each rule matches'}
+            data-testid="rule-stats-btn"
+          >
+            <span className={`material-icons ${loadingRuleStats ? 'spinning' : ''}`}>
+              {loadingRuleStats ? 'sync' : 'insights'}
+            </span>
+            {loadingRuleStats ? 'Loading stats...' : ruleStats ? 'Hide Rule Stats' : 'Rule Stats'}
+          </button>
+          <button
+            className="norm-engine-btn"
             onClick={() => setIsReorderMode((v) => !v)}
             type="button"
             title={isReorderMode ? 'Exit reorder mode' : 'Reorder groups and rules'}
@@ -1241,7 +1291,20 @@ export function NormalizationEngineSection() {
             >
               {groups.map((group) => (
                 <SortableGroupItem key={group.id} group={group}>
-                  <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                  <div
+                  className="norm-engine-group-header"
+                  onClick={() => toggleGroup(group.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedGroups.has(group.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleGroup(group.id);
+                    }
+                  }}
+                >
                 <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
                   chevron_right
                 </span>
@@ -1251,7 +1314,7 @@ export function NormalizationEngineSection() {
                     <span className="norm-engine-badge builtin">Built-in</span>
                   )}
                   <span className="norm-engine-group-count">
-                    {group.rules?.length || 0} rules
+                    {group.rules?.length || 0} rule{(group.rules?.length ?? 0) === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
@@ -1270,16 +1333,18 @@ export function NormalizationEngineSection() {
                         onClick={() => openEditGroupEditor(group)}
                         title="Edit group"
                         type="button"
+                        aria-label="Edit group"
                       >
-                        <span className="material-icons">edit</span>
+                        <span className="material-icons" aria-hidden="true">edit</span>
                       </button>
                       <button
                         className="norm-engine-btn-icon danger"
                         onClick={() => deleteGroup(group)}
                         title="Delete group"
                         type="button"
+                        aria-label="Delete group"
                       >
-                        <span className="material-icons">delete</span>
+                        <span className="material-icons" aria-hidden="true">delete</span>
                       </button>
                     </>
                   )}
@@ -1311,6 +1376,7 @@ export function NormalizationEngineSection() {
                           onToggleEnabled={() => toggleRuleEnabled(rule)}
                           onEdit={() => openEditRuleEditor(rule)}
                           onDelete={() => deleteRule(rule)}
+                          matchStat={ruleStats?.get(rule.id)}
                         />
                       ))}
                     </SortableContext>
@@ -1337,7 +1403,20 @@ export function NormalizationEngineSection() {
               className={`norm-engine-group ${!group.enabled ? 'disabled' : ''}`}
             >
               <div className="norm-engine-group-content">
-                <div className="norm-engine-group-header" onClick={() => toggleGroup(group.id)}>
+                <div
+                  className="norm-engine-group-header"
+                  onClick={() => toggleGroup(group.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedGroups.has(group.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleGroup(group.id);
+                    }
+                  }}
+                >
                   <span className={`material-icons norm-engine-expand ${expandedGroups.has(group.id) ? 'expanded' : ''}`}>
                     chevron_right
                   </span>
@@ -1347,7 +1426,7 @@ export function NormalizationEngineSection() {
                       <span className="norm-engine-badge builtin">Built-in</span>
                     )}
                     <span className="norm-engine-group-count">
-                      {group.rules?.length || 0} rules
+                      {group.rules?.length || 0} rule{(group.rules?.length ?? 0) === 1 ? '' : 's'}
                     </span>
                   </div>
                   <div className="norm-engine-group-actions" onClick={(e) => e.stopPropagation()}>
@@ -1366,16 +1445,18 @@ export function NormalizationEngineSection() {
                           onClick={() => openEditGroupEditor(group)}
                           title="Edit group"
                           type="button"
+                          aria-label="Edit group"
                         >
-                          <span className="material-icons">edit</span>
+                          <span className="material-icons" aria-hidden="true">edit</span>
                         </button>
                         <button
                           className="norm-engine-btn-icon danger"
                           onClick={() => deleteGroup(group)}
                           title="Delete group"
                           type="button"
+                          aria-label="Delete group"
                         >
-                          <span className="material-icons">delete</span>
+                          <span className="material-icons" aria-hidden="true">delete</span>
                         </button>
                       </>
                     )}
@@ -1403,6 +1484,14 @@ export function NormalizationEngineSection() {
                               <>{rule.condition_type}: "{rule.condition_value}"</>
                             )}
                           </span>
+                          {ruleStats?.get(rule.id) && (
+                            <span
+                              className="norm-engine-rule-match-badge"
+                              title={`Matched ${ruleStats.get(rule.id)!.match_count} of tested streams (${ruleStats.get(rule.id)!.match_percentage}%)`}
+                            >
+                              {ruleStats.get(rule.id)!.match_count} match{ruleStats.get(rule.id)!.match_count === 1 ? '' : 'es'}
+                            </span>
+                          )}
                         </div>
                         <div className="norm-engine-rule-actions" onClick={(e) => e.stopPropagation()}>
                           <label className="norm-engine-toggle small">
@@ -1420,16 +1509,18 @@ export function NormalizationEngineSection() {
                                 onClick={() => openEditRuleEditor(rule)}
                                 title="Edit rule"
                                 type="button"
+                                aria-label="Edit rule"
                               >
-                                <span className="material-icons">edit</span>
+                                <span className="material-icons" aria-hidden="true">edit</span>
                               </button>
                               <button
                                 className="norm-engine-btn-icon small danger"
                                 onClick={() => deleteRule(rule)}
                                 title="Delete rule"
                                 type="button"
+                                aria-label="Delete rule"
                               >
-                                <span className="material-icons">delete</span>
+                                <span className="material-icons" aria-hidden="true">delete</span>
                               </button>
                             </>
                           )}
@@ -1477,8 +1568,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={closeRuleEditor}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -1709,8 +1802,9 @@ export function NormalizationEngineSection() {
                             }}
                             disabled={ruleEditor.conditions.length <= 1}
                             title="Remove condition"
+                            aria-label="Remove condition"
                           >
-                            <span className="material-icons">remove_circle</span>
+                            <span className="material-icons" aria-hidden="true">remove_circle</span>
                           </button>
                         </div>
                       </div>
@@ -1923,8 +2017,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={() => setShowImportModal(false)}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">
@@ -1999,8 +2095,10 @@ export function NormalizationEngineSection() {
                 onClick={closeApplyModal}
                 type="button"
                 disabled={applyExecuting}
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -2349,8 +2447,10 @@ export function NormalizationEngineSection() {
                 onClick={() => setShowApplyConfirm(false)}
                 type="button"
                 disabled={applyExecuting}
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">
@@ -2423,8 +2523,10 @@ export function NormalizationEngineSection() {
                 className="modal-close-btn"
                 onClick={closeGroupEditor}
                 type="button"
+                aria-label="Close"
+                title="Close"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 

@@ -134,6 +134,23 @@ _AC_RULE_CREATE_FIELDS = frozenset(
 # field names as create, all Optional.
 _AC_RULE_UPDATE_FIELDS = _AC_RULE_CREATE_FIELDS
 
+# backend/routers/dummy_epg.py :: ProfileCreateRequest / ProfileUpdateRequest —
+# identical field names between create and update (update makes every field
+# Optional; a profile's name IS mutable via PATCH, unlike a channel-pipeline
+# rule's group). enhancedchannelmanager-omxy5.
+_DUMMY_EPG_PROFILE_FIELDS = frozenset({
+    "name", "enabled", "name_source", "stream_index",
+    "title_pattern", "time_pattern", "date_pattern",
+    "substitution_pairs", "title_template", "description_template",
+    "upcoming_title_template", "upcoming_description_template",
+    "ended_title_template", "ended_description_template",
+    "fallback_title_template", "fallback_description_template",
+    "event_timezone", "output_timezone", "program_duration",
+    "categories", "channel_logo_url_template", "program_poster_url_template",
+    "tvg_id_template", "include_date_tag", "include_live_tag", "include_new_tag",
+    "pattern_builder_examples", "pattern_variants", "channel_group_ids",
+})
+
 
 ENDPOINTS: dict[str, Endpoint] = {
     # -- channels domain ----------------------------------------------------
@@ -208,6 +225,9 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="channels_find_duplicates",
         method="POST",
         path="/api/channels/find-duplicates",
+        # enhancedchannelmanager-uahp6: optional scope. Absent/None body =
+        # global scan (backward compatible); present = scoped to those ids.
+        request_fields=frozenset({"channel_ids"}),
     ),
     "channels_bulk_merge": Endpoint(
         name="channels_bulk_merge",
@@ -226,53 +246,96 @@ ENDPOINTS: dict[str, Endpoint] = {
             {"operations", "groupsToCreate", "validateOnly", "continueOnError", "consolidate"}
         ),
     ),
-    # -- auto_creation domain ----------------------------------------------
+    # -- enhancedchannelmanager-l3jf7: channel CSV export/import/preview ---
+    # export-csv (GET, returns text/csv, not JSON) and import-csv (POST,
+    # multipart/form-data upload) are NOT modeled here — call_endpoint only
+    # supports JSON-body endpoints. Those two stay on ecm_client.get_text /
+    # post_multipart directly with a `# contract-exempt:` comment.
+    "channels_preview_csv": Endpoint(
+        name="channels_preview_csv",
+        method="POST",
+        path="/api/channels/preview-csv",
+        request_fields=frozenset({"content"}),
+        response_fields=frozenset({"rows", "errors"}),
+    ),
+    # -- enhancedchannelmanager-twadj: logo management ----------------------
+    "channels_list_logos": Endpoint(
+        name="channels_list_logos",
+        method="GET",
+        path="/api/channels/logos",
+        query_params=frozenset({"page", "page_size", "search"}),
+    ),
+    "channels_get_logo": Endpoint(
+        name="channels_get_logo",
+        method="GET",
+        path="/api/channels/logos/{logo_id}",
+        response_fields=frozenset({"id", "name", "url", "channel_count"}),
+    ),
+    "channels_create_logo": Endpoint(
+        name="channels_create_logo",
+        method="POST",
+        path="/api/channels/logos",
+        request_fields=frozenset({"name", "url"}),  # CreateLogoRequest
+    ),
+    "channels_update_logo": Endpoint(
+        name="channels_update_logo",
+        method="PATCH",
+        path="/api/channels/logos/{logo_id}",
+        # Backend body is ``data: dict`` (free-form) — the tool sends only these.
+        request_fields=frozenset({"name", "url"}),
+    ),
+    "channels_delete_logo": Endpoint(
+        name="channels_delete_logo",
+        method="DELETE",
+        path="/api/channels/logos/{logo_id}",
+    ),
+    # -- channel_pipeline domain (formerly "auto_creation") ----------------
     "ac_list_rules": Endpoint(
         name="ac_list_rules",
         method="GET",
-        path="/api/auto-creation/rules",
+        path="/api/channel-pipeline/rules",
     ),
     "ac_get_rule": Endpoint(
         name="ac_get_rule",
         method="GET",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
     ),
     "ac_create_rule": Endpoint(
         name="ac_create_rule",
         method="POST",
-        path="/api/auto-creation/rules",
+        path="/api/channel-pipeline/rules",
         request_fields=_AC_RULE_CREATE_FIELDS,
     ),
     "ac_update_rule": Endpoint(
         name="ac_update_rule",
         method="PUT",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
         request_fields=_AC_RULE_UPDATE_FIELDS,
     ),
     "ac_delete_rule": Endpoint(
         name="ac_delete_rule",
         method="DELETE",
-        path="/api/auto-creation/rules/{rule_id}",
+        path="/api/channel-pipeline/rules/{rule_id}",
     ),
     "ac_toggle_rule": Endpoint(
         name="ac_toggle_rule",
         method="POST",
-        path="/api/auto-creation/rules/{rule_id}/toggle",
+        path="/api/channel-pipeline/rules/{rule_id}/toggle",
     ),
     "ac_duplicate_rule": Endpoint(
         name="ac_duplicate_rule",
         method="POST",
-        path="/api/auto-creation/rules/{rule_id}/duplicate",
+        path="/api/channel-pipeline/rules/{rule_id}/duplicate",
     ),
     "ac_analyze_rules": Endpoint(
         name="ac_analyze_rules",
         method="POST",
-        path="/api/auto-creation/rules/analyze",
+        path="/api/channel-pipeline/rules/analyze",
     ),
     "ac_run": Endpoint(
         name="ac_run",
         method="POST",
-        path="/api/auto-creation/run",
+        path="/api/channel-pipeline/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
     ),
     # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
@@ -281,25 +344,33 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_fuzzy_preview": Endpoint(
         name="ac_fuzzy_preview",
         method="GET",
-        path="/api/auto-creation/fuzzy-preview",
+        path="/api/channel-pipeline/fuzzy-preview",
         query_params=frozenset(
             {"group_ids", "min_score", "allow_no_callsign", "page", "page_size"}
         ),
     ),
+    # enhancedchannelmanager-ti939.1.4: Event Sync Phase 1A dry-run preview.
+    # ZERO writes — the preview_event_sync tool reads from here only.
+    "ac_event_sync_preview": Endpoint(
+        name="ac_event_sync_preview",
+        method="POST",
+        path="/api/channel-pipeline/event-sync-preview",
+        request_fields=frozenset({"rule_id", "event_sync_config"}),
+    ),
     "ac_list_executions": Endpoint(
         name="ac_list_executions",
         method="GET",
-        path="/api/auto-creation/executions",
+        path="/api/channel-pipeline/executions",
         query_params=frozenset({"limit", "offset", "rule_id", "status"}),
     ),
     "ac_get_execution": Endpoint(
         name="ac_get_execution",
         method="GET",
-        path="/api/auto-creation/executions/{execution_id}",
+        path="/api/channel-pipeline/executions/{execution_id}",
         # query params the poll uses; include_entities and include_log default
         # to False so we omit them from the poll call (saves DB work).
         query_params=frozenset({"include_entities", "include_log"}),
-        # Fields the run_auto_creation tool reads from the execution row.
+        # Fields the run_channel_pipeline tool reads from the execution row.
         response_fields=frozenset({
             "id", "status", "mode", "streams_evaluated", "streams_matched",
             "channels_created", "channels_updated", "groups_created",
@@ -310,7 +381,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_rollback": Endpoint(
         name="ac_rollback",
         method="POST",
-        path="/api/auto-creation/executions/{execution_id}/rollback",
+        path="/api/channel-pipeline/executions/{execution_id}/rollback",
     ),
     # ADR-010 §D8 / uc51o.4 — full whole-run snapshot restore. ``confirm`` is a
     # QUERY param (FastAPI ``Query``), the API-level acknowledgement of the §D5
@@ -319,7 +390,7 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_restore_snapshot": Endpoint(
         name="ac_restore_snapshot",
         method="POST",
-        path="/api/auto-creation/executions/{execution_id}/restore-snapshot",
+        path="/api/channel-pipeline/executions/{execution_id}/restore-snapshot",
         query_params=frozenset({"confirm"}),
     ),
     # ADR-010 §D6 — read-only pre-run snapshot for an execution. The
@@ -329,10 +400,44 @@ ENDPOINTS: dict[str, Endpoint] = {
     "ac_get_execution_snapshot": Endpoint(
         name="ac_get_execution_snapshot",
         method="GET",
-        path="/api/auto-creation/executions/{execution_id}/snapshot",
+        path="/api/channel-pipeline/executions/{execution_id}/snapshot",
         response_fields=frozenset({
             "id", "execution_id", "snapshot_time", "channel_count", "channels",
         }),
+    ),
+    # -- event_sync_exclusions (bead ti939.3.5) ----------------------------
+    # Operator "never attach this provider stream to that event" standing
+    # orders. Rows key on content fingerprints (rule_id, provider_id,
+    # stream_name_hash, event_key) — NEVER stream/channel ids (both churn),
+    # so an exclusion survives provider refreshes by construction. The
+    # shared resolver consults these BEFORE the attach band on every run
+    # and preview; an exclusion outranks a prior review-queue accept.
+    "es_list_exclusions": Endpoint(
+        name="es_list_exclusions",
+        method="GET",
+        path="/api/event-sync-exclusions",
+        query_params=frozenset({"rule_id", "page", "page_size"}),
+        response_fields=frozenset({
+            "exclusions", "total", "page", "page_size", "total_pages",
+        }),
+    ),
+    "es_create_exclusion": Endpoint(
+        name="es_create_exclusion",
+        method="POST",
+        path="/api/event-sync-exclusions",
+        request_fields=frozenset({
+            "rule_id", "provider_id", "stream_name_hash", "event_key",
+            "note", "evidence",
+        }),
+        response_fields=frozenset({
+            "id", "rule_id", "provider_id", "stream_name_hash", "event_key",
+            "created_at", "note", "evidence", "already_existed",
+        }),
+    ),
+    "es_delete_exclusion": Endpoint(
+        name="es_delete_exclusion",
+        method="DELETE",
+        path="/api/event-sync-exclusions/{exclusion_id}",
     ),
     # -- channel_groups domain --------------------------------------------
     "groups_list": Endpoint(
@@ -444,7 +549,19 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="epg_match",
         method="POST",
         path="/api/epg/match",
+        # "source_order" is DEPRECATED (v0.18.x): EPG source priority is now
+        # resolved server-side. The MCP tool no longer sends it, but the field
+        # stays in this contract for the deprecation window because the backend
+        # EPGMatchRequest still declares it (accepted-but-ignored) — and the
+        # contract test requires request_fields to be a subset of the backend
+        # schema's properties. Remove this entry together with the backend
+        # field in v0.19.0.
         request_fields=frozenset({"channel_ids", "epg_source_ids", "source_order"}),  # EPGMatchRequest
+    ),
+    "epg_audit_duplicates": Endpoint(
+        name="epg_audit_duplicates",
+        method="GET",
+        path="/api/epg/audit-duplicates",
     ),
     "epg_link_channel": Endpoint(
         name="epg_link_channel",
@@ -469,65 +586,127 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/dummy-epg/generate",
     ),
-    # -- export domain -----------------------------------------------------
-    "export_list_profiles": Endpoint(
-        name="export_list_profiles",
+    # -- enhancedchannelmanager-omxy5: dummy-EPG profile CRUD --------------
+    "dummy_epg_get_profile": Endpoint(
+        name="dummy_epg_get_profile",
         method="GET",
-        path="/api/export/profiles",
+        path="/api/dummy-epg/profiles/{profile_id}",
+        response_fields=frozenset({"id", "name", "enabled", "channel_group_ids"}),
     ),
-    "export_create_profile": Endpoint(
-        name="export_create_profile",
+    "dummy_epg_create_profile": Endpoint(
+        name="dummy_epg_create_profile",
         method="POST",
-        path="/api/export/profiles",
-        # ProfileCreateRequest — full field set; the tool sends only {"name"}.
-        request_fields=frozenset(
-            {
-                "name",
-                "description",
-                "selection_mode",
-                "selected_groups",
-                "selected_channels",
-                "stream_url_mode",
-                "include_logos",
-                "include_epg_ids",
-                "include_channel_numbers",
-                "sort_order",
-                "filename_prefix",
-            }
-        ),
+        path="/api/dummy-epg/profiles",
+        request_fields=_DUMMY_EPG_PROFILE_FIELDS,
     ),
-    "export_delete_profile": Endpoint(
-        name="export_delete_profile",
+    "dummy_epg_update_profile": Endpoint(
+        name="dummy_epg_update_profile",
+        method="PATCH",
+        path="/api/dummy-epg/profiles/{profile_id}",
+        request_fields=_DUMMY_EPG_PROFILE_FIELDS,
+    ),
+    "dummy_epg_delete_profile": Endpoint(
+        name="dummy_epg_delete_profile",
         method="DELETE",
-        path="/api/export/profiles/{profile_id}",
+        path="/api/dummy-epg/profiles/{profile_id}",
     ),
-    "export_generate_profile": Endpoint(
-        name="export_generate_profile",
+    "dummy_epg_preview": Endpoint(
+        name="dummy_epg_preview",
         method="POST",
-        path="/api/export/profiles/{profile_id}/generate",
+        path="/api/dummy-epg/preview",
+        request_fields=frozenset({
+            "sample_name", "substitution_pairs", "title_pattern", "time_pattern",
+            "date_pattern", "title_template", "description_template",
+            "upcoming_title_template", "upcoming_description_template",
+            "ended_title_template", "ended_description_template",
+            "fallback_title_template", "fallback_description_template",
+            "event_timezone", "output_timezone", "program_duration",
+            "channel_logo_url_template", "program_poster_url_template",
+            "pattern_variants", "inline_lookups", "global_lookup_ids", "include_trace",
+        }),
+        response_fields=frozenset({
+            "original_name", "substituted_name", "matched", "matched_variant",
+            "rendered", "traces",
+        }),
     ),
-    "export_list_cloud_targets": Endpoint(
-        name="export_list_cloud_targets",
+    # -- cloud-targets domain ----------------------------------------------
+    # The Export tab's profile / generate / publish endpoints were removed with
+    # the tab (beads vrrxv / 1w428). The cloud-targets list remains, used by the
+    # list_cloud_targets MCP tool — cloud targets are still load-bearing for
+    # DBAS backup uploads. Relocated from /api/export/cloud-targets to the
+    # dedicated /api/cloud-targets router with the Export tab's removal.
+    "cloud_list_targets": Endpoint(
+        name="cloud_list_targets",
         method="GET",
-        path="/api/export/cloud-targets",
+        path="/api/cloud-targets",
     ),
-    # bd-1wq7z.21 — list publish configurations so callers can discover valid
-    # config_id values for publish_export.  Backend: GET /api/export/publish-configs
-    # (backend/routers/export.py::list_publish_configs).  Returns a JSON array
-    # of PublishConfiguration rows enriched with profile_name / target_name.
-    "export_list_publish_configs": Endpoint(
-        name="export_list_publish_configs",
-        method="GET",
-        path="/api/export/publish-configs",
-        # Backend route is an untyped bare-list response (no response_model), so
-        # OpenAPI declares no array schema — matches the sibling list endpoints
-        # (export_list_profiles / export_list_cloud_targets) which also leave
-        # response_is_list at its default. The tool iterates the runtime list.
-    ),
-    "export_publish_config": Endpoint(
-        name="export_publish_config",
+    # -- enhancedchannelmanager-jcj0f: cloud-target CRUD + test -------------
+    # Credentials are Fernet-encrypted at rest; every response masks them
+    # (last-4 only) — see routers/cloud_targets.py _mask_credentials. The MCP
+    # tools never decrypt or otherwise echo a full credential value.
+    "cloud_create_target": Endpoint(
+        name="cloud_create_target",
         method="POST",
-        path="/api/export/publish-configs/{config_id}/publish",
+        path="/api/cloud-targets",
+        request_fields=frozenset({"name", "provider_type", "credentials", "upload_path", "enabled"}),
+    ),
+    "cloud_update_target": Endpoint(
+        name="cloud_update_target",
+        method="PATCH",
+        path="/api/cloud-targets/{target_id}",
+        request_fields=frozenset({"name", "provider_type", "credentials", "upload_path", "enabled"}),
+    ),
+    "cloud_delete_target": Endpoint(
+        name="cloud_delete_target",
+        method="DELETE",
+        path="/api/cloud-targets/{target_id}",
+    ),
+    "cloud_test_target": Endpoint(
+        name="cloud_test_target",
+        method="POST",
+        path="/api/cloud-targets/{target_id}/test",
+        response_fields=frozenset({"success", "message", "provider_info"}),
+    ),
+    "cloud_test_target_inline": Endpoint(
+        name="cloud_test_target_inline",
+        method="POST",
+        path="/api/cloud-targets/test",
+        request_fields=frozenset({"provider_type", "credentials"}),  # CloudTargetTestRequest
+        response_fields=frozenset({"success", "message", "provider_info"}),
+    ),
+    # -- enhancedchannelmanager-jcj0f: sync-target CRUD (no /test endpoint) -
+    # backend/routers/sync_targets.py — mirrors cloud-targets CRUD exactly;
+    # credentials are Fernet-encrypted at rest, masked in every response.
+    "sync_list_targets": Endpoint(
+        name="sync_list_targets",
+        method="GET",
+        path="/api/sync-targets",
+    ),
+    "sync_get_target": Endpoint(
+        name="sync_get_target",
+        method="GET",
+        path="/api/sync-targets/{target_id}",
+    ),
+    "sync_create_target": Endpoint(
+        name="sync_create_target",
+        method="POST",
+        path="/api/sync-targets",
+        request_fields=frozenset({
+            "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+        }),
+    ),
+    "sync_update_target": Endpoint(
+        name="sync_update_target",
+        method="PUT",
+        path="/api/sync-targets/{target_id}",
+        request_fields=frozenset({
+            "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+        }),
+    ),
+    "sync_delete_target": Endpoint(
+        name="sync_delete_target",
+        method="DELETE",
+        path="/api/sync-targets/{target_id}",
     ),
     # -- m3u domain --------------------------------------------------------
     "m3u_list_providers": Endpoint(
@@ -545,7 +724,19 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/m3u/accounts",
         # Backend body is ``request: Request`` (raw) — forwarded to Dispatcharr.
-        request_fields=frozenset({"name", "url", "server_type", "server_url"}),
+        # enhancedchannelmanager-yd6qh: expanded to the full field set Dispatcharr's
+        # M3UAccount accepts (frontend/src/types/index.ts M3UAccountCreateRequest is
+        # the authoritative source since the backend body has no Pydantic model).
+        # ``server_type``/``url`` are kept for backward compatibility with existing
+        # callers (server_type is a legacy alias the tool maps onto account_type);
+        # ``account_type`` ("STD"/"XC") is the real Dispatcharr field.
+        request_fields=frozenset({
+            "name", "url", "server_type", "server_url", "account_type",
+            "file_path", "server_group", "max_streams", "is_active",
+            "refresh_interval", "username", "password", "stale_stream_days",
+            "enable_vod", "auto_enable_new_groups_live",
+            "auto_enable_new_groups_vod", "auto_enable_new_groups_series",
+        }),
     ),
     "m3u_update_account": Endpoint(
         name="m3u_update_account",
@@ -568,6 +759,26 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="m3u_refresh_account",
         method="POST",
         path="/api/m3u/refresh/{account_id}",
+    ),
+    # bd-wwovg / fltt3 gap 3: M3U digest email settings (change-tracking
+    # notifications) — backend/routers/m3u_digest.py get/update_m3u_digest_settings.
+    # request_fields mirrors M3UDigestSettingsUpdate (m3u_digest.py:27) verbatim;
+    # account_ids (bd-wwovg) scopes which M3U accounts' changes are notified.
+    "m3u_digest_get_settings": Endpoint(
+        name="m3u_digest_get_settings",
+        method="GET",
+        path="/api/m3u/digest/settings",
+    ),
+    "m3u_digest_update_settings": Endpoint(
+        name="m3u_digest_update_settings",
+        method="PUT",
+        path="/api/m3u/digest/settings",
+        request_fields=frozenset({
+            "enabled", "frequency", "email_recipients",
+            "include_group_changes", "include_stream_changes",
+            "show_detailed_list", "min_changes_threshold", "send_to_discord",
+            "exclude_group_patterns", "exclude_stream_patterns", "account_ids",
+        }),
     ),
     # -- normalization domain ---------------------------------------------
     "normalization_test_batch": Endpoint(
@@ -600,6 +811,76 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="PATCH",
         path="/api/normalization/groups/{group_id}",
         request_fields=frozenset({"name", "description", "enabled", "priority"}),
+    ),
+    # -- enhancedchannelmanager-e5n8j: normalization CRUD tools --------------
+    "normalization_create_group": Endpoint(
+        name="normalization_create_group",
+        method="POST",
+        path="/api/normalization/groups",
+        request_fields=frozenset({"name", "description", "enabled", "priority"}),  # CreateRuleGroupRequest
+    ),
+    "normalization_get_group": Endpoint(
+        name="normalization_get_group",
+        method="GET",
+        path="/api/normalization/groups/{group_id}",
+        # Response includes group fields + a nested "rules" list — used by the
+        # delete_normalization_group preview to show the cascade blast radius.
+        response_fields=frozenset({"id", "name", "rules"}),
+    ),
+    "normalization_delete_group": Endpoint(
+        name="normalization_delete_group",
+        method="DELETE",
+        path="/api/normalization/groups/{group_id}",
+        response_fields=frozenset({"status", "id", "rules_cleaned"}),
+    ),
+    "normalization_get_rule": Endpoint(
+        name="normalization_get_rule",
+        method="GET",
+        path="/api/normalization/rules/{rule_id}",
+        response_fields=frozenset({"id", "name"}),
+    ),
+    "normalization_create_rule": Endpoint(
+        name="normalization_create_rule",
+        method="POST",
+        path="/api/normalization/rules",
+        # CreateRuleRequest — full field set.
+        request_fields=frozenset({
+            "group_id", "name", "description", "enabled", "priority",
+            "condition_type", "condition_value", "case_sensitive",
+            "tag_group_id", "tag_match_position", "require_delimiter",
+            "conditions", "condition_logic",
+            "action_type", "action_value",
+            "else_action_type", "else_action_value", "stop_processing",
+        }),
+    ),
+    "normalization_update_rule": Endpoint(
+        name="normalization_update_rule",
+        method="PATCH",
+        path="/api/normalization/rules/{rule_id}",
+        # UpdateRuleRequest — same field names as create, minus group_id
+        # (a rule's group is fixed at creation; PATCH doesn't move it).
+        request_fields=frozenset({
+            "name", "description", "enabled", "priority",
+            "condition_type", "condition_value", "case_sensitive",
+            "tag_group_id", "tag_match_position", "require_delimiter",
+            "conditions", "condition_logic",
+            "action_type", "action_value",
+            "else_action_type", "else_action_value", "stop_processing",
+        }),
+    ),
+    "normalization_delete_rule": Endpoint(
+        name="normalization_delete_rule",
+        method="DELETE",
+        path="/api/normalization/rules/{rule_id}",
+    ),
+    "normalization_apply_to_channels": Endpoint(
+        name="normalization_apply_to_channels",
+        method="POST",
+        path="/api/normalization/apply-to-channels",
+        # ``dry_run`` is a QUERY param (FastAPI ``Query``, default True); the
+        # per-channel execute-mode decisions live in the body's ``actions``.
+        query_params=frozenset({"dry_run"}),
+        request_fields=frozenset({"actions"}),  # ApplyToChannelsRequest
     ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
@@ -726,6 +1007,16 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/stats/providers/bitrate",
         query_params=frozenset({"window", "bucket"}),
     ),
+    # bd-n5cwp / fltt3 gap 2: per-provider stream-assignment usage (config
+    # data, not viewing telemetry — not admin-gated, unlike the four
+    # providers/* endpoints above). See backend/routers/stats.py
+    # get_provider_stream_usage.
+    "stats_providers_stream_usage": Endpoint(
+        name="stats_providers_stream_usage",
+        method="GET",
+        path="/api/stats/providers/stream-usage",
+        query_params=frozenset({"bypass_cache"}),
+    ),
     # -- co5wh.3: per-user watch-time (Stats v2 GH-62, bd-skqln.5) -----------
     # /watch-time: group_by=total|day; response_is_list stays default (untyped).
     # /users/dispatcharr/{user_id} and /users/emby/{emby_user_id}: path-param
@@ -846,6 +1137,55 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/stream-stats/struck-out/remove",
         request_fields=frozenset({"stream_ids"}),  # RemoveStruckOutRequest
     ),
+    "stream_stats_stale": Endpoint(
+        name="stream_stats_stale",
+        method="GET",
+        path="/api/stream-stats/stale",
+        query_params=frozenset({"days"}),
+    ),
+    # enhancedchannelmanager-po78p / fltt3 gap 1: cheap stale-id set (Dispatcharr
+    # is_stale flag only) — distinct from stream_stats_stale above, which is the
+    # heavier ffprobe-age + provider-stale report. See backend/routers/streams.py
+    # get_stale_stream_ids.
+    "streams_stale_ids": Endpoint(
+        name="streams_stale_ids",
+        method="GET",
+        path="/api/streams/stale-ids",
+        query_params=frozenset({"bypass_cache"}),
+        response_fields=frozenset({"stale_stream_ids", "last_seen", "count"}),
+    ),
+    # -- enhancedchannelmanager-rv5w1: probe lifecycle + circuit breaker ----
+    "stream_stats_probe_history": Endpoint(
+        name="stream_stats_probe_history",
+        method="GET",
+        path="/api/stream-stats/probe/history",
+    ),
+    "stream_stats_probe_reset": Endpoint(
+        name="stream_stats_probe_reset",
+        method="POST",
+        path="/api/stream-stats/probe/reset",
+    ),
+    "stream_stats_dismiss": Endpoint(
+        name="stream_stats_dismiss",
+        method="POST",
+        path="/api/stream-stats/dismiss",
+        request_fields=frozenset({"stream_ids"}),  # DismissStatsRequest
+    ),
+    "stream_stats_dismissed": Endpoint(
+        name="stream_stats_dismissed",
+        method="GET",
+        path="/api/stream-stats/dismissed",
+    ),
+    "channel_pipeline_circuit_breaker": Endpoint(
+        name="channel_pipeline_circuit_breaker",
+        method="GET",
+        path="/api/channel-pipeline/circuit-breaker",
+    ),
+    "channel_pipeline_reset_circuit_breaker": Endpoint(
+        name="channel_pipeline_reset_circuit_breaker",
+        method="POST",
+        path="/api/channel-pipeline/reset-circuit-breaker",
+    ),
     "channels_streams": Endpoint(
         name="channels_streams",
         method="GET",
@@ -896,6 +1236,20 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/backup/restore-saved",
         request_fields=frozenset({"filename"}),  # RestoreSavedRequest
+    ),
+    # bd-0wmeg — POST /api/backup/restore-dbas-saved restores a SAVED on-disk
+    # DBAS artifact by filename (RestoreDbasSavedRequest body = {filename,
+    # confirm_apply, passphrase}). The saved-file analogue of the upload-based
+    # POST /restore-dbas; handles the v0.18.0 DBAS format incl. encrypted
+    # artifacts (passphrase). Backend validates the filename via the strict
+    # regex + containment guard and kicks the async dbas_restore task with
+    # cleanup_artifact=False (the operator's saved file survives). Admin-guarded.
+    # SECURITY: ``passphrase`` is forwarded to the task but never logged/echoed.
+    "backup_restore_dbas_saved": Endpoint(
+        name="backup_restore_dbas_saved",
+        method="POST",
+        path="/api/backup/restore-dbas-saved",
+        request_fields=frozenset({"filename", "confirm_apply", "passphrase"}),
     ),
     "journal_list": Endpoint(
         name="journal_list",
@@ -1022,6 +1376,64 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="DELETE",
         path="/api/tasks/{task_id}/schedules/{schedule_id}",
     ),
+    # -- tags domain — enhancedchannelmanager-dswrl -------------------------
+    # backend/routers/tags.py. Used by normalization conditions
+    # (tag_group_id/tag_match_position) and channel-pipeline rule matching.
+    "tags_list_groups": Endpoint(
+        name="tags_list_groups",
+        method="GET",
+        path="/api/tags/groups",
+        response_fields=frozenset({"groups"}),
+    ),
+    "tags_create_group": Endpoint(
+        name="tags_create_group",
+        method="POST",
+        path="/api/tags/groups",
+        request_fields=frozenset({"name", "description"}),  # CreateTagGroupRequest
+    ),
+    "tags_get_group": Endpoint(
+        name="tags_get_group",
+        method="GET",
+        path="/api/tags/groups/{group_id}",
+        # to_dict(include_tags=True) — used by delete_tag_group's cascade preview.
+        response_fields=frozenset({"id", "name", "is_builtin", "tags"}),
+    ),
+    "tags_update_group": Endpoint(
+        name="tags_update_group",
+        method="PATCH",
+        path="/api/tags/groups/{group_id}",
+        request_fields=frozenset({"name", "description"}),  # UpdateTagGroupRequest
+    ),
+    "tags_delete_group": Endpoint(
+        name="tags_delete_group",
+        method="DELETE",
+        path="/api/tags/groups/{group_id}",
+    ),
+    "tags_add_to_group": Endpoint(
+        name="tags_add_to_group",
+        method="POST",
+        path="/api/tags/groups/{group_id}/tags",
+        request_fields=frozenset({"tags", "case_sensitive"}),  # CreateTagsRequest
+        response_fields=frozenset({"created", "skipped", "group_id"}),
+    ),
+    "tags_update_tag": Endpoint(
+        name="tags_update_tag",
+        method="PATCH",
+        path="/api/tags/groups/{group_id}/tags/{tag_id}",
+        request_fields=frozenset({"enabled", "case_sensitive"}),  # UpdateTagRequest
+    ),
+    "tags_delete_tag": Endpoint(
+        name="tags_delete_tag",
+        method="DELETE",
+        path="/api/tags/groups/{group_id}/tags/{tag_id}",
+    ),
+    "tags_test": Endpoint(
+        name="tags_test",
+        method="POST",
+        path="/api/tags/test",
+        request_fields=frozenset({"text", "group_id"}),  # TestTagsRequest
+        response_fields=frozenset({"text", "group_id", "group_name", "matches", "match_count"}),
+    ),
     # -- emby domain --------------------------------------------------------
     # POST returns 202 {job_id, status}; the status-poll GET
     # /api/emby/clear-logos/{job_id} is a raw contract-exempt client.get
@@ -1031,5 +1443,26 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/emby/clear-logos",
         request_fields=frozenset({"logo_types", "channel_ids"}),
+    ),
+    # -- event_sync team-alias dictionary (bead ti939.4.2) ------------------
+    # Deliberately placed at the very END of the registry, away from the
+    # exclusion-domain (~line 405) and digest/stats insertion points of the
+    # in-flight PRs #705/#706, to avoid textual merge overlap.
+    # Operator known-equivalence groups ("Man Utd" == "Manchester United"
+    # == "MUFC") consulted by the event matcher's team-token layer on BOTH
+    # the hard-reject and boost paths. Full-replace PUT; backend validates
+    # against the matcher's own term normalization and journals the change.
+    "es_get_team_aliases": Endpoint(
+        name="es_get_team_aliases",
+        method="GET",
+        path="/api/event-sync/team-aliases",
+        response_fields=frozenset({"groups"}),
+    ),
+    "es_update_team_aliases": Endpoint(
+        name="es_update_team_aliases",
+        method="PUT",
+        path="/api/event-sync/team-aliases",
+        request_fields=frozenset({"groups"}),  # TeamAliasesUpdateRequest
+        response_fields=frozenset({"groups"}),
     ),
 }

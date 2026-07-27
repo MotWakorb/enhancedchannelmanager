@@ -110,15 +110,34 @@ class TestGetJournalEntries:
         assert "ESPN" in data["results"][0]["entity_name"]
 
     @pytest.mark.asyncio
-    async def test_page_size_clamped(self, async_client, test_session):
-        """page_size is clamped between 1 and 200."""
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce a negative SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get("/api/journal", params={"page": page})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 251])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size outside [1, 250] is rejected by validation (422) instead
+        of being silently clamped."""
+        response = await async_client.get(
+            "/api/journal", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_valid_max_page_size_still_works(self, async_client, test_session):
+        """page_size=250 (the Journal tab UI's largest option) passes through
+        unchanged rather than being clamped to 200."""
         _create_journal_entry(test_session)
 
-        # Too large page_size gets clamped to 200
-        response = await async_client.get("/api/journal", params={"page_size": 999})
+        response = await async_client.get("/api/journal", params={"page_size": 250})
         assert response.status_code == 200
         data = response.json()
-        assert data["page_size"] == 200
+        assert data["page_size"] == 250
 
     @pytest.mark.asyncio
     async def test_filter_by_batch_id_returns_only_matching_rows(self, async_client, test_session):
@@ -222,6 +241,53 @@ class TestGetJournalEntries:
         assert data["count"] == 1
         assert data["results"][0]["entity_name"] == "ESPN HD"
         assert data["results"][0]["batch_id"] == "1a2b3c4d"
+
+
+class TestMutationSourceFilter:
+    """GET /api/journal surfaces and filters by mutation_source (W3, vp1rx)."""
+
+    @pytest.mark.asyncio
+    async def test_response_includes_mutation_source(self, async_client, test_session):
+        """Each journal row exposes its mutation_source (NULL for legacy)."""
+        _create_journal_entry(test_session, entity_name="AI Delete", mutation_source="mcp_ai")
+        _create_journal_entry(test_session, entity_name="Legacy", mutation_source=None)
+
+        response = await async_client.get("/api/journal")
+        assert response.status_code == 200
+        rows = {r["entity_name"]: r for r in response.json()["results"]}
+        assert rows["AI Delete"]["mutation_source"] == "mcp_ai"
+        assert rows["Legacy"]["mutation_source"] is None
+
+    @pytest.mark.asyncio
+    async def test_filter_by_mutation_source_returns_only_matching(
+        self, async_client, test_session
+    ):
+        """?mutation_source=mcp_ai returns only AI-originated rows."""
+        _create_journal_entry(test_session, entity_name="AI 1", mutation_source="mcp_ai")
+        _create_journal_entry(test_session, entity_name="AI 2", mutation_source="mcp_ai")
+        _create_journal_entry(test_session, entity_name="UI 1", mutation_source="ui")
+        _create_journal_entry(test_session, entity_name="Legacy", mutation_source=None)
+
+        response = await async_client.get(
+            "/api/journal", params={"mutation_source": "mcp_ai"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert {r["entity_name"] for r in data["results"]} == {"AI 1", "AI 2"}
+        for row in data["results"]:
+            assert row["mutation_source"] == "mcp_ai"
+
+    @pytest.mark.asyncio
+    async def test_unknown_mutation_source_returns_empty(self, async_client, test_session):
+        """A value with no matching rows is a no-match filter, not a 422."""
+        _create_journal_entry(test_session, mutation_source="ui")
+
+        response = await async_client.get(
+            "/api/journal", params={"mutation_source": "no_such_actor"}
+        )
+        assert response.status_code == 200
+        assert response.json()["count"] == 0
 
 
 class TestGetJournalStats:

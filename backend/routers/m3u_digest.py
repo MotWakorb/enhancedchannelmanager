@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from database import get_session
@@ -36,6 +36,7 @@ class M3UDigestSettingsUpdate(BaseModel):
     send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
     exclude_group_patterns: Optional[List[str]] = None  # Regex patterns to exclude groups
     exclude_stream_patterns: Optional[List[str]] = None  # Regex patterns to exclude streams
+    account_ids: Optional[List[int]] = None  # M3U accounts to include in digest notifications; empty = all
 
 
 # -------------------------------------------------------------------------
@@ -44,8 +45,12 @@ class M3UDigestSettingsUpdate(BaseModel):
 
 @router.get("/changes")
 async def get_m3u_changes(
-    page: int = 1,
-    page_size: int = 50,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 previously produced an invalid SQL
+    # OFFSET/LIMIT instead of a clean 422. Upper bound is generous — the
+    # M3UChangesTab UI's largest page-size option is 100 (M3UChangesTab.tsx).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=200, description="Results per page"),
     m3u_account_id: Optional[int] = None,
     change_type: Optional[str] = None,
     enabled: Optional[bool] = None,
@@ -161,8 +166,12 @@ async def get_m3u_changes_summary(
 @router.get("/accounts/{account_id}/changes")
 async def get_m3u_account_changes(
     account_id: int,
-    page: int = 1,
-    page_size: int = 50,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 previously produced an invalid SQL
+    # OFFSET/LIMIT instead of a clean 422. No caller currently found (frontend
+    # or MCP) — ceiling mirrors the sibling GET /api/m3u/changes endpoint.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=200, description="Results per page"),
     change_type: Optional[str] = None,
 ):
     """
@@ -332,6 +341,9 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
                         detail=f"Invalid stream exclude regex '{pattern}': {e}"
                     )
             settings.set_exclude_stream_patterns(request.exclude_stream_patterns)
+
+        if request.account_ids is not None:
+            settings.set_account_ids(request.account_ids)
 
         db.commit()
         db.refresh(settings)

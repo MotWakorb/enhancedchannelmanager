@@ -22,8 +22,8 @@
   - `enhancedchannelmanager-70ylc` — BD-O: MCP dedup tools (`mcp-server/tools/dedup.py`); names in §D7 are the contract
   - `enhancedchannelmanager-7u8ms` — BD-P: Extend `add_stream` MCP tool with `dedup_action`
   - `enhancedchannelmanager-5w6jz` — Alembic 0006-0010 idempotency + smart-bootstrap fast-path pattern (BD-C inherits this)
-  - `enhancedchannelmanager-r9mtd` — Auto-creation separate-not-merge collision detection (migration 0002); the **unattended** path, distinct from this ADR
-  - `enhancedchannelmanager-qpgsx` (P3, backlog) — Bulk "Resolve All" actions (deferred from v0.17.1)
+  - `enhancedchannelmanager-r9mtd` — Channel Pipeline separate-not-merge collision detection (migration 0002); the **unattended** path, distinct from this ADR
+  - `enhancedchannelmanager-ixcf1` (GH #642, delivered in v0.17.6 build 0145) — Pending Merges bulk actions
   - `enhancedchannelmanager-5136e` (P3, backlog) — `pending_merges` retention reaper (deferred; depends on SLO-10 alert firing)
   - `enhancedchannelmanager-bfbk8` (P3, backlog) — Systemic `ModalOverlay` focus trap (BD-G ships bespoke)
   - `enhancedchannelmanager-s7lxd` (P3, backlog) — Per-group threshold override (deferred from v0.17.1)
@@ -43,9 +43,9 @@ The Channel Manager today has no mechanical defense against an operator (or an A
 2. **'Add Stream' button** on a channel-less stream.
 3. **Bulk M3U import / refresh** — the highest-volume path, where an operator can produce dozens to hundreds of latent duplicates in a single refresh.
 
-Each path silently creates a new channel today. The operator only notices later, while reconciling the channel list, and the recovery is manual (find the dupes, decide which to keep, merge with the existing `MergeChannelsModal` editing surface). At low channel counts this is annoyance; at the bulk-M3U scale it is a quality-of-data problem that compounds over time and degrades the EPG-matching and auto-creation hot paths downstream.
+Each path silently creates a new channel today. The operator only notices later, while reconciling the channel list, and the recovery is manual (find the dupes, decide which to keep, merge with the existing `MergeChannelsModal` editing surface). At low channel counts this is annoyance; at the bulk-M3U scale it is a quality-of-data problem that compounds over time and degrades the EPG-matching and Channel Pipeline hot paths downstream.
 
-The companion **auto-creation pipeline** (migration 0002 / bd-r9mtd) already has its own unattended collision detection (`match_scope_target_group` + separate-not-merge option). That path is in scope for the operator's pre-configured rules and is deliberately **not** sharing a matcher with the interactive dedup work this ADR governs — see §D8 boundary note.
+The companion **Channel Pipeline** feature (migration 0002 / bd-r9mtd) already has its own unattended collision detection (`match_scope_target_group` + separate-not-merge option). That path is in scope for the operator's pre-configured rules and is deliberately **not** sharing a matcher with the interactive dedup work this ADR governs — see §D8 boundary note.
 
 ### Why this ADR must land before BD-A through BD-P start
 
@@ -55,7 +55,7 @@ The 2026-05-15 team-plan ratified the design with all ten personas converging; t
 
 ### Threat-model carve-out (D2 confidence floor rationale)
 
-The Security Engineer's position during grooming, adopted here: an operator-configurable confidence threshold without a hard integrity floor is a **bulk-destruction vector**. A misconfigured threshold of, say, 5% — settable today via Settings UI or by hand-editing `settings.json` — would cause the bulk-M3U-import path (BD-F) to mass-enqueue near-meaningless candidate merges, and one operator click on a "Resolve All" button (a deferred backlog item, `qpgsx`) would mass-destroy channels. The floor is a defense-in-depth constraint, not a UX setting. See §D2.
+The Security Engineer's position during grooming, adopted here: an operator-configurable confidence threshold without a hard integrity floor is a **bulk-destruction vector**. A misconfigured threshold of, say, 5% — settable today via Settings UI or by hand-editing `settings.json` — would cause the bulk-M3U-import path (BD-F) to mass-enqueue near-meaningless candidate merges, and one operator click on a bulk merge action could mass-modify channels. The floor is a defense-in-depth constraint, not a UX setting. See §D2.
 
 ## Decision
 
@@ -94,7 +94,7 @@ The matcher service (BD-A) enforces a **hard floor of 60%** below which it refus
 
 **The matcher's clamp is the load-bearing enforcement; the validator is the early-rejection courtesy.** BD-A's test suite MUST include `test_find_candidate_returns_no_match_below_floor`: assert that `find_candidate(stream_name='X', candidates=[(name='Y', confidence=50%)], threshold=5)` returns no candidate — proves the floor holds even when threshold is set below it.
 
-**Rationale.** Without the floor, an accidental or malicious threshold of 5% in the bulk-M3U-import path (BD-F) mass-enqueues low-quality pending rows. A subsequent "Resolve All" action (deferred backlog `qpgsx`, but plausible in v0.17.x) would then mass-destroy channels. The floor is the architectural backstop against this class of misconfiguration; it costs nothing at the happy path (the default 80% is well above it) and bounds the worst-case blast radius. The Security Engineer's veto-class concern, accepted.
+**Rationale.** Without the floor, an accidental or malicious threshold of 5% in the bulk-M3U-import path (BD-F) mass-enqueues low-quality pending rows. A subsequent bulk merge action could then mass-modify channels. The floor is the architectural backstop against this class of misconfiguration; it costs nothing at the happy path (the default 80% is well above it) and bounds the worst-case blast radius. The Security Engineer's veto-class concern, accepted.
 
 **The floor is a single number, not a per-call override or a UX setting.** Changing it is an ADR addendum, not a runtime config change. This is intentional — the value of a defense-in-depth constant comes from it not being trivially loosenable.
 
@@ -242,7 +242,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 - **"Not a match" learning** — the matcher always re-asks on the same `(stream_name, candidate_channel_id)` pair; there is no negative-feedback store. Operators who dismiss the same candidate twice will see it again on the next M3U refresh. Acceptable for v1; revisit if dismissal duplication becomes a complaint.
 - **Auto-aging of stale `pending` rows** — no cron prune in v0.17.1; the `auto_aged_out` action_type slot in §D6 is reserved for the deferred retention reaper (`enhancedchannelmanager-5136e`, P3).
 - **Custom matcher backends** — RapidFuzz is the only matcher. The matcher service interface (BD-A's `find_candidate(...)`) is single-implementation by design; a pluggable adapter layer can be retrofitted later without breaking callers.
-- **Bulk "Resolve All" UI actions** — `enhancedchannelmanager-qpgsx` (P3, backlog). The §D2 floor and the §D5 uniqueness constraint are what make this safe to add later; without them, "Resolve All" would be a bulk-destruction surface.
+- **Bulk queue UI actions** — delivered by `enhancedchannelmanager-ixcf1` / GH #642 in v0.17.6 build 0145. The §D2 floor, §D5 uniqueness constraint, coherent snapshot read, exact-count confirmation, and sequential mutations bound this destructive surface.
 - **Systemic `ModalOverlay` focus trap** — BD-G ships a bespoke focus trap in `StreamDedupModal`; the systemic fix is `enhancedchannelmanager-bfbk8` (P3, backlog). UX-flagged pre-existing gap, not new with this work.
 
 ## Alternatives Considered
@@ -265,13 +265,13 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 ### Positive
 
 - **Contract-lock for 16 sub-beads (BD-A through BD-P, including this ADR as BD-L and the SRE/docs cross-cutters BD-M / BD-N).** BD-A through BD-P consume this ADR as their interface document. The API path, the floor constant, the schema columns, the MCP tool names, and the journal field set are all named once here and referenced from there. Divergent implementation choices have nowhere to hide.
-- **Bulk-destruction is bounded by construction.** The §D2 hard floor means a future "Resolve All" UI action (deferred backlog `qpgsx`) can ship without re-opening the misconfiguration vector — even the worst plausible operator threshold setting still gets matcher behavior at the floor. The Security Engineer signs off without needing per-action review.
+- **Bulk-destruction is bounded by construction.** The §D2 hard floor lets the shipped bulk queue actions operate without re-opening the misconfiguration vector — even the worst plausible operator threshold setting still gets matcher behavior at the floor. The Security Engineer signs off without needing per-action review.
 - **API convention stays consistent with the rest of `/api/*`.** Plural-noun resource paths, flat outcome envelopes, idempotent POST verbs at sub-resources. A new engineer reading `backend/routers/channel_merges.py` should not have to learn a new convention.
 - **No new infrastructure.** SQLite, the existing `asyncio` request loop, the existing JWT middleware, and the existing journal table cover everything. No Celery, no Redis, no APScheduler, no broker. Operators who self-host a single container do not learn a new operational surface.
 - **Audit is real, not nominal.** Every accept / dismiss / queue is attributable to a specific token id, a specific surface, and a specific confidence-at-decision-time. The MCP-vs-operator distinction the epic asks for (was an AI agent driving the merges, or a human?) is answerable from the `pending_merge_journal` table (§D6 / §D8) without inferring from log timing. Every audit field is a queryable column — no JSON blobs.
 - **Retention is deferrable, not ignored.** The terminal-state rows are kept indefinitely in v0.17.1; the reaper bead (`5136e`) is the additive lever if and when SLO-10 (BD-M) shows a real growth problem.
 - **MCP and REST cannot drift.** §D7 names the MCP tools by their final identifiers so BD-O / BD-P land matching the REST surface; future MCP additions go through the same naming convention.
-- **The auto-creation pipeline and the interactive dedup pipeline have a documented boundary.** Migration 0002 / bd-r9mtd is the unattended path; this ADR is the attended path. They do **not** share a matcher in v0.17.1 (epic decision; the architect's case for shared matcher is a backlog candidate but blocked by the auto-creation collision detection's stricter "separate not merge" semantics).
+- **The Channel Pipeline feature and the interactive dedup pipeline have a documented boundary.** Migration 0002 / bd-r9mtd is the unattended path; this ADR is the attended path. They do **not** share a matcher in v0.17.1 (epic decision; the architect's case for shared matcher is a backlog candidate but blocked by the Channel Pipeline collision detection's stricter "separate not merge" semantics).
 
 ### Negative
 
@@ -285,7 +285,7 @@ Explicitly deferred. Each is filed as a backlog candidate so it surfaces in groo
 ### Neutral / Out of Scope
 
 - **The matcher's RapidFuzz dependency** is BD-A's deliverable; the dep-bump cadence and license review are governed by ADR-001's dep-bump path, not this ADR. Pinned version per BD-A.
-- **The auto-creation pipeline's collision detection** (migration 0002, `match_scope_target_group`) is unchanged by this ADR. The interactive dedup work is **attended**; auto-creation is **unattended** and uses its own logic. The "shared matcher service" architect-recommended refactor is a backlog candidate, not v0.17.1 work.
+- **The Channel Pipeline feature's collision detection** (migration 0002, `match_scope_target_group`) is unchanged by this ADR. The interactive dedup work is **attended**; the Channel Pipeline feature is **unattended** and uses its own logic. The "shared matcher service" architect-recommended refactor is a backlog candidate, not v0.17.1 work.
 - **Frontend lint rules, CSS conventions, modal patterns** — BD-G / BD-H / BD-I / BD-J inherit `docs/style_guide.md` and `docs/css_guidelines.md`; this ADR does not re-state them.
 - **CodeQL exposure of the new router** — `backend/routers/channel_merges.py` is subject to ADR-005's delta-zero gating at PR time. No special carve-out.
 - **SLO-10 specifics (warn-at-50 queue depth, p95 latency budgets)** are BD-M's deliverable; the epic body carries the PO-ratified numbers, this ADR encodes only the boundary (operator-paced queue, no page-class alert in v1).
@@ -333,9 +333,9 @@ No vendor relationship to unwind; no external dependency introduced by this ADR 
 - Beads `enhancedchannelmanager-4vxjj` (BD-G), `enhancedchannelmanager-u6ftw` (BD-H), `enhancedchannelmanager-1lznl` (BD-I), `enhancedchannelmanager-gfxrz` (BD-J), `enhancedchannelmanager-ugzn4` (BD-K) — Wave 2 frontend sub-beads
 - Beads `enhancedchannelmanager-ft3hk` (BD-M), `enhancedchannelmanager-0lsas` (BD-N) — Cross-cutting SRE + docs
 - Beads `enhancedchannelmanager-70ylc` (BD-O), `enhancedchannelmanager-7u8ms` (BD-P) — MCP sub-beads
-- Beads `enhancedchannelmanager-qpgsx`, `enhancedchannelmanager-5136e`, `enhancedchannelmanager-bfbk8`, `enhancedchannelmanager-s7lxd` — Deferred backlog candidates (§D10)
+- Bead `enhancedchannelmanager-ixcf1` / GH #642 — shipped bulk queue actions; beads `enhancedchannelmanager-5136e`, `enhancedchannelmanager-bfbk8`, `enhancedchannelmanager-s7lxd` — remaining deferred candidates (§D10)
 - Bead `enhancedchannelmanager-5w6jz` — Alembic 0006-0010 idempotency + smart-bootstrap fast-path (BD-C inherits)
-- Bead `enhancedchannelmanager-r9mtd` — Auto-creation separate-not-merge collision detection (migration 0002); the unattended counterpart to this ADR's attended path
+- Bead `enhancedchannelmanager-r9mtd` — Channel Pipeline separate-not-merge collision detection (migration 0002); the unattended counterpart to this ADR's attended path
 - `backend/routers/channels.py:1961` — `merge_channels` endpoint; the flat-outcome response-envelope precedent §D1 mirrors
 - `backend/alembic/versions/20260515_2000_0013_session_telemetry_channel_event_counters.py` — current Alembic head; BD-C's migration 0014 lands on top
 - `docs/database_migrations.md` — Alembic authoring guide

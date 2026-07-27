@@ -1,0 +1,79 @@
+/**
+ * GroupMultiSelectDropdown styles
+ *
+ * Uses common.css for: .filter-dropdown-button, .filter-dropdown-menu,
+ * .filter-dropdown-search, .filter-dropdown-actions, .filter-dropdown-action,
+ * .filter-dropdown-options, .filter-dropdown-option, .filter-dropdown-empty,
+ * .dropdown-arrow, .search-icon, .filter-option-name
+ *
+ * Only what's genuinely specific to this component lives here: the wrapper
+ * (inline-block so it sits inline in an `.action-field` / `.form-field`
+ * instead of stretching full-width like the toolbar filter row does), the
+ * "inactive" (disabled normalization group) muted style, the empty-options
+ * message, and a `.clear-search` skin -- the shared `.filter-dropdown-search
+ * .clear-search` combo has no styling in common.css today (StreamsPane's
+ * search-clear button relies on the same gap), so this component defines its
+ * own rather than reaching into common.css for an unrelated component (see
+ * docs/css_guidelines.md).
+ *
+ * The menu renders through a portal to `document.body` (see component
+ * comment), so it is NOT a DOM descendant of `.group-multiselect-dropdown` --
+ * anything that needs to target the menu specifically is scoped under the
+ * `.group-multiselect-menu` class applied directly to the portaled element,
+ * not under `.group-multiselect-dropdown`.
+ */
+
+.group-multiselect-dropdown {
+  display: inline-block;
+  position: relative;
+  min-width: 220px;
+  max-width: 100%;
+}
+
+.group-multiselect-dropdown .filter-dropdown-button {
+  min-width: 220px;
+}
+
+/* The menu portals to document.body at `position: fixed` (see component
+   comment) so it can escape a scrollable modal body without being clipped --
+   but that also means it's a body-level sibling of the modal overlay itself
+   (--z-overlay: 1000 / --z-modal: 2000), NOT a descendant. The shared
+   `.filter-dropdown-menu` z-index (--z-dropdown: 100, common.css) assumes
+   the toolbar's non-portal, in-flow usage and would paint BEHIND an open
+   modal here. Use `--z-topmost` (10000) instead -- the same token
+   CustomSelect's portaled menu uses for exactly this reason. */
+.group-multiselect-menu {
+  z-index: var(--z-topmost) !important;
+}
+
+.group-multiselect-menu .clear-search {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0.125rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.group-multiselect-menu .clear-search:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.group-multiselect-menu .clear-search .material-icons {
+  font-size: 1rem;
+}
+
+.group-multiselect-option-inactive {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.group-multiselect-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

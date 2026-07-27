@@ -86,6 +86,9 @@ try:
         RequireAuthIfEnabled,
         require_admin_if_enabled,
         RequireAdminIfEnabled,
+        RequireHumanAdminIfEnabled,
+        resolve_is_admin_if_enabled,
+        ResolveIsAdminIfEnabled,
     )
     __all__.extend([
         "AuthenticationError",
@@ -99,6 +102,9 @@ try:
         "RequireAuthIfEnabled",
         "require_admin_if_enabled",
         "RequireAdminIfEnabled",
+        "RequireHumanAdminIfEnabled",
+        "resolve_is_admin_if_enabled",
+        "ResolveIsAdminIfEnabled",
     ])
 except ImportError as e:
     logger.debug("[AUTH] Suppressed dependencies import error: %s", e)

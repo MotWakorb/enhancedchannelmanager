@@ -13,8 +13,8 @@ The feature fires on three trigger paths:
 | Trigger | When it fires |
 |-|-|
 | Drag-drop | You drag a stream from the Streams pane onto a channel group |
-| Add Stream button | You right-click a channel-less stream and choose "Create channel(s) in group" |
-| Bulk M3U refresh | ECM's auto-creation pipeline processes an M3U import and finds candidate matches |
+| Create in… menu | In Edit Mode, you select a single channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
+| Bulk M3U refresh | ECM's Channel Pipeline processes an M3U import and finds candidate matches |
 
 Each trigger path routes to the same dedup decision surface: the **StreamDedupModal** (for interactive triggers) or the **Pending Merges queue** (for the bulk M3U path).
 
@@ -22,7 +22,7 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 
 ---
 
-## Interactive triggers: drag-drop and Add Stream
+## Interactive triggers: drag-drop and Create in…
 
 ### Drag-drop
 
@@ -30,11 +30,15 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 2. Drag it onto a channel group header or an existing channel row.
 3. If ECM finds a candidate channel — a channel whose name is at or above the configured dedup threshold — the **StreamDedupModal** appears.
 
-### Add Stream button (Create channel(s) in group)
+### Create in… menu (create channel in a chosen group)
 
-1. Right-click a channel-less stream in the Streams pane.
-2. Choose **Create channel(s) in group** from the context menu.
+1. Enter **Edit Mode** and select a single channel-less stream in the Streams pane (its row checkbox).
+2. In the selection strip at the top of the pane, open the **Create in…** menu and choose an enabled channel group (type to filter the list).
 3. If ECM finds a candidate channel in the target group, the **StreamDedupModal** appears.
+
+> Before build 0161 this trigger lived on a right-click context menu
+> ("Create channel(s) in group"). The menu was replaced by the keyboard-
+> accessible **Create in…** menu; the dedup behavior is unchanged.
 
 ### What the StreamDedupModal shows
 
@@ -55,7 +59,7 @@ ECM only shows a candidate when the confidence score is at or above your configu
 
 ### How pending merges are created
 
-When an M3U refresh runs and the auto-creation pipeline encounters a stream whose name matches an existing channel at or above the dedup threshold, ECM **does not** create a new channel immediately. Instead, it places a **pending merge** row in a queue for you to review.
+When an M3U refresh runs and the Channel Pipeline encounters a stream whose name matches an existing channel at or above the dedup threshold, ECM **does not** create a new channel immediately. Instead, it places a **pending merge** row in a queue for you to review.
 
 Each pending merge row records:
 
@@ -80,6 +84,7 @@ The page lists all pending rows with:
 - Candidate channel name and confidence score
 - Created-at timestamp
 - Per-row action buttons: **Merge** and **Create New**
+- A checkbox plus **Select all**, **Deselect all**, **Merge selected**, **Clear selected**, **Merge all**, and **Clear all** controls. **Select all** spans the complete paginated queue, not only the rows currently visible.
 
 ### Resolving a pending merge
 
@@ -91,7 +96,19 @@ If the candidate channel was deleted in Dispatcharr between when the row was que
 
 **Create New**
 
-Clicking **Create New** dismisses the dedup candidate and signals that you want a new channel created for this stream. The row transitions to `dismissed`. You can then run auto-creation again or create the channel manually.
+Clicking **Create New** dismisses the dedup candidate and signals that you want a new channel created for this stream. The row transitions to `dismissed`. You can then run the Channel Pipeline again or create the channel manually.
+
+### Resolving merges in bulk
+
+Use the row checkboxes for a targeted batch, or **Merge all** / **Clear all** for the entire pending queue. ECM loads one coherent, bounded server snapshot before showing the confirmation, so the count and records you confirm are the records it processes. If the queue exceeds the safety limit, ECM shows an error and changes nothing.
+
+For very large queues, ECM keeps the complete snapshot as the action target but renders at most 200 queue rows at once. Later records move into view as earlier records resolve, preventing the browser from mounting up to 20,000 interactive rows at the safety ceiling.
+
+Every bulk action opens a confirmation dialog showing the exact record count and consequence. After confirmation, ECM processes records one at a time and keeps a live progress message visible. Choose **Stop** to finish only the request already in flight and leave every later record selected for a future retry.
+
+**Merge all is irreversible within ECM.** The confirmation dialog is the safety boundary: review its exact count before continuing. Recovery requires correcting the affected channels in Dispatcharr; ECM cannot automatically undo completed merges.
+
+One failure does not stop the rest of a batch. Successful records disappear; failed records stay visible and selected with their exact backend errors and per-row controls. You can correct the cause and retry only those selected failures.
 
 ### Inline error handling
 
@@ -161,9 +178,9 @@ Not in v0.17.1. The threshold is a single global setting. Per-group overrides ar
 
 They are retained indefinitely in ECM's database as an audit trail. You can view them via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`). No automatic pruning occurs in v0.17.1.
 
-**Does the dedup feature affect the auto-creation pipeline's own collision detection?**
+**Does the dedup feature affect the Channel Pipeline feature's own collision detection?**
 
-No. The auto-creation pipeline has its own unattended collision detection (`match_scope_target_group` / separate-not-merge). The dedup feature described in this guide is the *attended* (operator-driven) path. The two systems are independent and do not share a matcher.
+No. The Channel Pipeline feature has its own unattended collision detection (`match_scope_target_group` / separate-not-merge). The dedup feature described in this guide is the *attended* (operator-driven) path. The two systems are independent and do not share a matcher.
 
 **What does the confidence score represent?**
 

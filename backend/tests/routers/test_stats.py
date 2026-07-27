@@ -685,6 +685,64 @@ class TestSystemEvents:
         call_args = mock_client.get_system_events.call_args
         assert call_args[1]["limit"] == 1000
 
+    @pytest.mark.asyncio
+    async def test_enriches_events_with_username(self, async_client, test_session):
+        """Each event's client IP is resolved to a streaming username (#2).
+
+        The IP nested under ``details.client_ip`` is also lifted to a stable
+        top-level ``ip_address``.
+        """
+        from datetime import datetime, date
+        from models import UniqueClientConnection
+
+        test_session.add(UniqueClientConnection(
+            ip_address="10.0.0.5", channel_id="ch-1", channel_name="ESPN",
+            user_id=7, username="alice", date=date(2026, 6, 30),
+            connected_at=datetime(2026, 6, 30, 12, 0, 0), watch_seconds=60,
+        ))
+        test_session.commit()
+
+        mock_client = AsyncMock()
+        mock_client.get_system_events.return_value = {
+            "events": [
+                {"id": 1, "event_type": "client_connect", "channel_name": "ESPN",
+                 "details": {"client_ip": "10.0.0.5"}},
+            ],
+            "count": 1, "total": 1,
+        }
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/activity")
+
+        assert response.status_code == 200
+        event = response.json()["events"][0]
+        assert event["username"] == "alice"
+        assert event["ip_address"] == "10.0.0.5"
+
+    @pytest.mark.asyncio
+    async def test_event_username_falls_back_to_ip_when_unresolved(self, async_client, test_session):
+        """An event whose IP has no connection row gets ``username: None`` (#2).
+
+        The frontend renders the IP as the fallback; the backend keeps username
+        honestly null.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_system_events.return_value = {
+            "events": [
+                {"id": 2, "event_type": "client_disconnect",
+                 "details": {"client_ip": "203.0.113.9"}},
+            ],
+            "count": 1, "total": 1,
+        }
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.get("/api/stats/activity")
+
+        assert response.status_code == 200
+        event = response.json()["events"][0]
+        assert event["username"] is None
+        assert event["ip_address"] == "203.0.113.9"
+
 
 class TestStopChannel:
     """Tests for POST /api/stats/channels/{channel_id}/stop."""
@@ -721,14 +779,14 @@ class TestBandwidthStats:
 
     @pytest.mark.asyncio
     async def test_returns_bandwidth(self, async_client):
-        """Returns bandwidth summary."""
+        """Returns bandwidth summary forwarded verbatim from BandwidthTracker."""
         with patch("routers.stats.BandwidthTracker.get_bandwidth_summary", return_value={
             "today": {"bytes_in": 1000},
         }):
             response = await async_client.get("/api/stats/bandwidth")
 
         assert response.status_code == 200
-        assert "today" in response.json()
+        assert response.json() == {"today": {"bytes_in": 1000}}
 
 
 class TestTopWatched:
@@ -736,13 +794,14 @@ class TestTopWatched:
 
     @pytest.mark.asyncio
     async def test_returns_top_channels(self, async_client):
-        """Returns top watched channels."""
+        """Returns top watched channels forwarded verbatim from BandwidthTracker."""
         with patch("routers.stats.BandwidthTracker.get_top_watched_channels", return_value=[
             {"channel_name": "ESPN", "watch_count": 100},
         ]):
             response = await async_client.get("/api/stats/top-watched")
 
         assert response.status_code == 200
+        assert response.json() == [{"channel_name": "ESPN", "watch_count": 100}]
 
     @pytest.mark.asyncio
     async def test_passes_params(self, async_client):
@@ -761,13 +820,34 @@ class TestUniqueViewers:
 
     @pytest.mark.asyncio
     async def test_returns_summary(self, async_client):
-        """Returns unique viewers summary."""
+        """Returns unique viewers summary forwarded verbatim from BandwidthTracker."""
         with patch("routers.stats.BandwidthTracker.get_unique_viewers_summary", return_value={
             "total_unique": 42,
         }):
             response = await async_client.get("/api/stats/unique-viewers")
 
         assert response.status_code == 200
+        assert response.json() == {"total_unique": 42}
+
+    @pytest.mark.asyncio
+    async def test_defaults_group_by_ip(self, async_client):
+        """Without ?group_by, the tracker is called with group_by='ip' (#3)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_summary", return_value={}) as mock:
+            response = await async_client.get("/api/stats/unique-viewers")
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=7, group_by="ip")
+
+    @pytest.mark.asyncio
+    async def test_forwards_group_by_user(self, async_client):
+        """?group_by=user is forwarded to the tracker (#3)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_summary", return_value={}) as mock:
+            response = await async_client.get(
+                "/api/stats/unique-viewers", params={"days": 30, "group_by": "user"}
+            )
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=30, group_by="user")
 
 
 class TestChannelBandwidth:
@@ -775,11 +855,14 @@ class TestChannelBandwidth:
 
     @pytest.mark.asyncio
     async def test_returns_stats(self, async_client):
-        """Returns per-channel bandwidth stats."""
-        with patch("routers.stats.BandwidthTracker.get_channel_bandwidth_stats", return_value=[]):
+        """Returns per-channel bandwidth stats forwarded verbatim from BandwidthTracker."""
+        with patch("routers.stats.BandwidthTracker.get_channel_bandwidth_stats", return_value=[
+            {"channel_id": "abc", "bytes": 5000},
+        ]):
             response = await async_client.get("/api/stats/channel-bandwidth")
 
         assert response.status_code == 200
+        assert response.json() == [{"channel_id": "abc", "bytes": 5000}]
 
 
 class TestUniqueViewersByChannel:
@@ -787,11 +870,35 @@ class TestUniqueViewersByChannel:
 
     @pytest.mark.asyncio
     async def test_returns_data(self, async_client):
-        """Returns unique viewers per channel."""
-        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[]):
+        """Returns unique viewers per channel forwarded verbatim from BandwidthTracker."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[
+            {"channel_id": "abc", "unique_viewers": 7},
+        ]):
             response = await async_client.get("/api/stats/unique-viewers-by-channel")
 
         assert response.status_code == 200
+        assert response.json() == [{"channel_id": "abc", "unique_viewers": 7}]
+
+    @pytest.mark.asyncio
+    async def test_defaults_group_by_ip(self, async_client):
+        """Without ?group_by, the tracker is called with group_by='ip' (#4)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[]) as mock:
+            response = await async_client.get("/api/stats/unique-viewers-by-channel")
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=7, limit=20, group_by="ip")
+
+    @pytest.mark.asyncio
+    async def test_forwards_group_by_user(self, async_client):
+        """?group_by=user is forwarded to the tracker (#4)."""
+        with patch("routers.stats.BandwidthTracker.get_unique_viewers_by_channel", return_value=[]) as mock:
+            response = await async_client.get(
+                "/api/stats/unique-viewers-by-channel",
+                params={"days": 14, "limit": 5, "group_by": "user"},
+            )
+
+        assert response.status_code == 200
+        mock.assert_called_once_with(days=14, limit=5, group_by="user")
 
 
 class TestWatchHistory:
@@ -807,19 +914,41 @@ class TestWatchHistory:
         assert data["history"] == []
         assert "summary" in data
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce a negative SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get(
+            "/api/stats/watch-history", params={"page": page}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 101])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 100] is rejected by validation (422) instead
+        of being silently clamped."""
+        response = await async_client.get(
+            "/api/stats/watch-history", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
 
 class TestPopularityRankings:
     """Tests for GET /api/stats/popularity/rankings."""
 
     @pytest.mark.asyncio
     async def test_returns_rankings(self, async_client):
-        """Returns popularity rankings."""
+        """Returns popularity rankings forwarded verbatim from PopularityCalculator."""
         with patch("popularity_calculator.PopularityCalculator.get_rankings", return_value={
-            "rankings": [], "total": 0,
+            "rankings": [{"channel_id": "abc", "rank": 1}], "total": 1,
         }):
             response = await async_client.get("/api/stats/popularity/rankings")
 
         assert response.status_code == 200
+        assert response.json() == {"rankings": [{"channel_id": "abc", "rank": 1}], "total": 1}
 
 
 class TestChannelPopularity:
@@ -850,11 +979,14 @@ class TestTrendingChannels:
 
     @pytest.mark.asyncio
     async def test_returns_trending(self, async_client):
-        """Returns trending channels."""
-        with patch("popularity_calculator.PopularityCalculator.get_trending_channels", return_value=[]):
+        """Returns trending channels forwarded verbatim from PopularityCalculator."""
+        with patch("popularity_calculator.PopularityCalculator.get_trending_channels", return_value=[
+            {"channel_id": "abc", "trend": "up"},
+        ]):
             response = await async_client.get("/api/stats/popularity/trending")
 
         assert response.status_code == 200
+        assert response.json() == [{"channel_id": "abc", "trend": "up"}]
 
     @pytest.mark.asyncio
     async def test_rejects_invalid_direction(self, async_client):

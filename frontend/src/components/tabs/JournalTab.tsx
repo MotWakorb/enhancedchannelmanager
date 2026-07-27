@@ -1,11 +1,11 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
-import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams } from '../../types';
+import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams, MutationSource } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { formatTimestamp } from '../../utils/formatting';
+import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -22,6 +22,8 @@ function getCategoryIcon(category: JournalCategory): string {
       return 'schedule';
     case 'auto_creation':
       return 'auto_fix_high';
+    case 'event_sync':
+      return 'sync_alt';
     default:
       return 'article';
   }
@@ -66,9 +68,27 @@ function formatCategory(category: JournalCategory): string {
     case 'task':
       return 'Task';
     case 'auto_creation':
-      return 'Auto-Creation';
+      return 'Channel Pipeline';
+    case 'event_sync':
+      return 'Event Sync';
     default:
       return category;
+  }
+}
+
+// Format mutation_source for display
+function formatMutationSource(source: MutationSource | null | undefined): string {
+  switch (source) {
+    case 'ui':
+      return 'UI';
+    case 'mcp_ai':
+      return 'AI';
+    case 'scheduler':
+      return 'Scheduler';
+    case 'auto_creation':
+      return 'Channel Pipeline';
+    default:
+      return '—';
   }
 }
 
@@ -89,11 +109,17 @@ export function JournalTab() {
   // Filter state
   const [category, setCategory] = useState<JournalCategory | ''>('');
   const [actionType, setActionType] = useState<JournalActionType | ''>('');
+  const [mutationSource, setMutationSource] = useState<MutationSource | ''>('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
 
   // Expanded row state
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // Journal purge control (enhancedchannelmanager-hq3de.a) — matches the
+  // DELETE /api/journal/purge default of 90 days.
+  const [purgeDays, setPurgeDays] = useState(90);
+  const [purging, setPurging] = useState(false);
 
   // Load entries
   const loadEntries = useCallback(async () => {
@@ -105,6 +131,7 @@ export function JournalTab() {
       };
       if (category) params.category = category;
       if (actionType) params.action_type = actionType;
+      if (mutationSource) params.mutation_source = mutationSource;
       if (search) params.search = search;
 
       const result = await api.getJournalEntries(params);
@@ -116,7 +143,7 @@ export function JournalTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, category, actionType, search, notifications]);
+  }, [page, pageSize, category, actionType, mutationSource, search, notifications]);
 
   // Load stats
   const loadStats = useCallback(async () => {
@@ -148,7 +175,7 @@ export function JournalTab() {
   // Reset page when filters or page size change
   useEffect(() => {
     setPage(1);
-  }, [category, actionType, pageSize]);
+  }, [category, actionType, mutationSource, pageSize]);
 
   const handlePageSizeChange = (newSize: number) => {
     setPageSize(newSize);
@@ -161,6 +188,27 @@ export function JournalTab() {
 
   const handleToggleExpand = (id: number) => {
     setExpandedId(expandedId === id ? null : id);
+  };
+
+  const handlePurge = async () => {
+    if (purgeDays < 1) {
+      notifications.error('Enter a day count of 1 or more', 'Journal');
+      return;
+    }
+    if (!confirm(`Delete journal entries older than ${purgeDays} day${purgeDays === 1 ? '' : 's'}? This cannot be undone.`)) {
+      return;
+    }
+    setPurging(true);
+    try {
+      const result = await api.purgeJournalEntries(purgeDays);
+      notifications.success(`Purged ${result.deleted} journal entr${result.deleted === 1 ? 'y' : 'ies'} older than ${purgeDays} days`, 'Journal');
+      loadEntries();
+      loadStats();
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Failed to purge journal entries', 'Journal');
+    } finally {
+      setPurging(false);
+    }
   };
 
   // Render loading state
@@ -203,15 +251,42 @@ export function JournalTab() {
                 <span className="material-icons">stop_circle</span>
                 {stats.by_action_type.stop || 0}
               </span>
-              <span className="header-stat" title="Auto-Creation entries">
+              <span className="header-stat" title="Channel Pipeline entries">
                 <span className="material-icons">auto_fix_high</span>
                 {stats.by_category.auto_creation || 0}
+              </span>
+              <span className="header-stat" title="Event Sync entries">
+                <span className="material-icons">sync_alt</span>
+                {stats.by_category.event_sync || 0}
               </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
           )}
         </div>
         <div className="header-actions">
+          <div className="journal-purge-control">
+            <input
+              type="number"
+              className="journal-purge-days-input"
+              min={1}
+              value={purgeDays}
+              onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
+              aria-label="Days to keep"
+              disabled={purging}
+            />
+            <span className="journal-purge-label">days</span>
+            <button
+              className="btn-secondary journal-purge-btn"
+              onClick={handlePurge}
+              disabled={purging || purgeDays < 1}
+              title="Delete journal entries older than the given number of days"
+            >
+              <span className={`material-icons ${purging ? 'spinning' : ''}`}>
+                {purging ? 'sync' : 'delete_sweep'}
+              </span>
+              {purging ? 'Purging…' : 'Purge Old Entries'}
+            </button>
+          </div>
           <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
             <span className="material-icons">refresh</span>
             Refresh
@@ -235,8 +310,9 @@ export function JournalTab() {
               className="clear-search"
               onClick={() => setSearchInput('')}
               title="Clear search"
+              aria-label="Clear search"
             >
-              <span className="material-icons">close</span>
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
@@ -251,7 +327,8 @@ export function JournalTab() {
             { value: 'm3u', label: 'M3U' },
             { value: 'task', label: 'Task' },
             { value: 'watch', label: 'Watch' },
-            { value: 'auto_creation', label: 'Auto-Creation' },
+            { value: 'auto_creation', label: 'Channel Pipeline' },
+            { value: 'event_sync', label: 'Event Sync' },
           ]}
         />
         <CustomSelect
@@ -272,6 +349,18 @@ export function JournalTab() {
             { value: 'reorder', label: 'Reorder' },
           ]}
         />
+        <CustomSelect
+          value={mutationSource}
+          onChange={(val) => setMutationSource(val as MutationSource | '')}
+          className="filter-select"
+          options={[
+            { value: '', label: 'All Sources' },
+            { value: 'ui', label: 'UI' },
+            { value: 'mcp_ai', label: 'AI' },
+            { value: 'scheduler', label: 'Scheduler' },
+            { value: 'auto_creation', label: 'Channel Pipeline' },
+          ]}
+        />
       </div>
 
       {/* Entries List */}
@@ -290,6 +379,7 @@ export function JournalTab() {
               <span>Action</span>
               <span>Entity</span>
               <span>Description</span>
+              <span>Source</span>
               <span></span>
             </div>
             {entries.map((entry) => (
@@ -297,9 +387,25 @@ export function JournalTab() {
                 <div
                   className={`entry-row ${expandedId === entry.id ? 'expanded' : ''}`}
                   onClick={() => handleToggleExpand(entry.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedId === entry.id}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleToggleExpand(entry.id);
+                    }
+                  }}
                 >
-                  <span className="entry-time" title={entry.timestamp}>
-                    {formatTimestamp(entry.timestamp)}
+                  {/* bd-juy2e: Journal used to always show the absolute
+                      timestamp; M3U Changes used a recency-threshold
+                      relative time for the same kind of data (event
+                      timestamps), which read as inconsistent across tabs.
+                      Both now go through the same shared formatRelativeTime
+                      rule — the absolute time is still one hover away. */}
+                  <span className="entry-time" title={formatTimestamp(entry.timestamp)}>
+                    {formatRelativeTime(entry.timestamp)}
                   </span>
                   <span className="entry-category">
                     <span className={`category-badge category-${entry.category}`}>
@@ -317,6 +423,11 @@ export function JournalTab() {
                   </span>
                   <span className="entry-description" title={entry.description}>
                     {entry.description}
+                  </span>
+                  <span className="entry-source">
+                    <span className={`source-badge source-${entry.mutation_source ?? 'unknown'}`}>
+                      {formatMutationSource(entry.mutation_source)}
+                    </span>
                   </span>
                   <span className="entry-expand">
                     {(entry.before_value || entry.after_value) && (
@@ -374,15 +485,19 @@ export function JournalTab() {
                 className="btn-secondary"
                 onClick={() => setPage(1)}
                 disabled={page === 1 || loading}
+                aria-label="First page"
+                title="First page"
               >
-                <span className="material-icons">first_page</span>
+                <span className="material-icons" aria-hidden="true">first_page</span>
               </button>
               <button
                 className="btn-secondary"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1 || loading}
+                aria-label="Previous page"
+                title="Previous page"
               >
-                <span className="material-icons">chevron_left</span>
+                <span className="material-icons" aria-hidden="true">chevron_left</span>
               </button>
               <span className="page-info">
                 Page {page} of {totalPages}
@@ -391,15 +506,19 @@ export function JournalTab() {
                 className="btn-secondary"
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages || loading}
+                aria-label="Next page"
+                title="Next page"
               >
-                <span className="material-icons">chevron_right</span>
+                <span className="material-icons" aria-hidden="true">chevron_right</span>
               </button>
               <button
                 className="btn-secondary"
                 onClick={() => setPage(totalPages)}
                 disabled={page === totalPages || loading}
+                aria-label="Last page"
+                title="Last page"
               >
-                <span className="material-icons">last_page</span>
+                <span className="material-icons" aria-hidden="true">last_page</span>
               </button>
             </div>
             <div className="pagination-right">

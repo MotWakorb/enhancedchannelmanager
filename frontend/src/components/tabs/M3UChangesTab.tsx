@@ -5,7 +5,7 @@ import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { formatTimestamp } from '../../utils/formatting';
+import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -53,21 +53,12 @@ function formatChangeType(changeType: M3UChangeType): string {
   }
 }
 
-// Format relative time (e.g., "2 hours ago")
-function formatRelativeTime(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return formatTimestamp(isoString);
-}
+// bd-juy2e: relative-time formatting (with a recency-threshold fallback to
+// an absolute date past 7 days) now comes from the shared
+// utils/formatting.formatRelativeTime — this file used to carry its own
+// copy-pasted implementation. Journal was the odd one out (always
+// absolute); it now uses the same shared helper so both tables apply one
+// consistent rule instead of two independently-maintained ones.
 
 export function M3UChangesTab() {
   // Data state
@@ -227,9 +218,19 @@ export function M3UChangesTab() {
           <h2>M3U Changes</h2>
           {summary && (
             <div className="header-stats">
-              <span className="header-stat">
+              {/* bd-fzny4: this count is `total_changes` from the /changes/summary
+                  endpoint, scoped to the selected Time Range filter below — a
+                  different, smaller-scoped number than the footer's "N total
+                  changes" (which counts all rows matching the table's own
+                  account/type/enabled filters, with no time bound). Naming the
+                  window explicitly here keeps the two from reading as a
+                  data-consistency bug. */}
+              <span
+                className="header-stat"
+                title="Changes detected within the selected Time Range filter below. The footer's total is unbounded by time and reflects the table's own filters instead."
+              >
                 <span className="material-icons">history</span>
-                {summary.total_changes} changes
+                {summary.total_changes} changes ({(hoursOptions.find((o) => Number(o.value) === hoursFilter)?.label ?? 'selected range').toLowerCase()})
               </span>
             </div>
           )}
@@ -392,6 +393,16 @@ export function M3UChangesTab() {
                 <div
                   className={`change-row ${expandedId === change.id ? 'expanded' : ''}`}
                   onClick={() => toggleExpand(change.id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedId === change.id}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleExpand(change.id);
+                    }
+                  }}
                 >
                   <span className="change-time" title={formatTimestamp(change.change_time)}>
                     {formatRelativeTime(change.change_time)}
@@ -512,16 +523,18 @@ export function M3UChangesTab() {
               onClick={() => setPage(1)}
               disabled={page === 1 || loading}
               title="First page"
+              aria-label="First page"
             >
-              <span className="material-icons">first_page</span>
+              <span className="material-icons" aria-hidden="true">first_page</span>
             </button>
             <button
               className="btn-secondary"
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page === 1 || loading}
               title="Previous page"
+              aria-label="Previous page"
             >
-              <span className="material-icons">chevron_left</span>
+              <span className="material-icons" aria-hidden="true">chevron_left</span>
             </button>
             <span className="page-info">
               Page {page} of {totalPages}
@@ -531,16 +544,18 @@ export function M3UChangesTab() {
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page === totalPages || loading}
               title="Next page"
+              aria-label="Next page"
             >
-              <span className="material-icons">chevron_right</span>
+              <span className="material-icons" aria-hidden="true">chevron_right</span>
             </button>
             <button
               className="btn-secondary"
               onClick={() => setPage(totalPages)}
               disabled={page === totalPages || loading}
               title="Last page"
+              aria-label="Last page"
             >
-              <span className="material-icons">last_page</span>
+              <span className="material-icons" aria-hidden="true">last_page</span>
             </button>
           </div>
           <div className="pagination-right">

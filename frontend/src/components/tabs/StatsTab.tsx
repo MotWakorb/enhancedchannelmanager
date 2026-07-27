@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy } from '../../types';
+import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy, EPGProgram } from '../../types';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
+import { getProgramStart, getProgramEnd, buildProgramsByTvgId, findCurrentProgram } from '../../utils/epgProgram';
 import {
   LineChart,
   Line,
@@ -16,13 +17,16 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { CustomSelect } from '../CustomSelect';
+import { OverflowMenu, type OverflowMenuItem } from '../OverflowMenu';
 import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
 import { BandwidthPanel } from './BandwidthPanel';
 import { UserStatsPanel } from './UserStatsPanel';
 import { ProvidersPanel } from './ProvidersPanel';
+import { ProviderStreamUsagePanel } from './ProviderStreamUsagePanel';
 import { AttributionBadge } from '../AttributionBadge';
+import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
 
@@ -36,6 +40,24 @@ interface HistoricalDataPoint {
 
 // Max number of data points to keep per channel
 const MAX_HISTORY_POINTS = 60;
+
+// Live Stats provider display (GH-481, bd-49obj): above this many providers,
+// the per-provider "tile" badges (.summary-stat) in the Live Stats header
+// stop being a legible way to scan capacity — beyond ~6 tiles the header
+// grows into several wrapped rows and, on the reporter's 11-provider
+// install, providers scroll out of view entirely. Auto-switch to a
+// condensed table above the threshold; keep the existing tile look below it
+// (it's the nicer, more scannable presentation for the common small-N case,
+// and this repo's local dev/test installs typically have few providers).
+// Chosen over a settings toggle (reporter's nice-to-have) — see component
+// comment for the follow-up-candidate note.
+const LIVE_STATS_CONDENSED_THRESHOLD = 6;
+
+// How often the EPG guide data (grid + tvg_id map) is considered fresh.
+// The grid covers "now" through +24h, so which program is Currently
+// Showing can be recomputed locally — a slow cadence only needs to pick
+// up guide refreshes, not program transitions.
+const EPG_REFRESH_MS = 30 * 60 * 1000;
 
 // Refresh interval options (in seconds)
 const REFRESH_OPTIONS = [
@@ -211,6 +233,11 @@ function DataTooltip({ active, payload }: { active?: boolean; payload?: Array<{ 
   return null;
 }
 
+// Format an EPG program boundary for the Currently Showing row (e.g. "8:00 PM")
+function formatProgramTime(date: Date): string {
+  return date.toLocaleTimeString(getDateLocale(), { hour: 'numeric', minute: '2-digit' });
+}
+
 export function StatsTab() {
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
@@ -237,9 +264,30 @@ export function StatsTab() {
   const [topWatchedSortBy, setTopWatchedSortBy] = useState<TopWatchedSortBy>('views');
   const topWatchedSortByRef = useRef<TopWatchedSortBy>(topWatchedSortBy);
 
-  // Build lookup maps for channel names by UUID and stream profiles by ID
-  const channelNameMap = useRef<Map<string, { name: string; number: number | null }>>(new Map());
+  // Build lookup maps for channel names by UUID and stream profiles by ID.
+  // The channel map also carries logo_id so the Active Channels rows can render
+  // the channel logo (#1); the URL is resolved via channelLogoMap (logo_id -> url),
+  // plus tvg_id/epg_data_id so the Currently Showing row can join the active
+  // stream (keyed by UUID only) to its EPG guide programs.
+  const channelNameMap = useRef<Map<string, { id: number; name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>>(new Map());
+  const channelLogoMap = useRef<Map<number, string>>(new Map());
   const streamProfileMap = useRef<Map<string, string>>(new Map());
+
+  // EPG guide data for the Currently Showing row. Programs come from the
+  // Dispatcharr grid proxy (now → +24h); epgTvgIdByDataId resolves a
+  // channel's epg_data_id to the guide's tvg_id (which can differ from
+  // channel.tvg_id — same double-hop the Guide tab uses).
+  const [epgPrograms, setEpgPrograms] = useState<EPGProgram[]>([]);
+  const epgTvgIdByDataId = useRef<Map<number, string>>(new Map());
+  const lastEpgFetchRef = useRef<number>(0);
+
+  // Clock for recomputing which program is Currently Showing; ticks every
+  // minute so program transitions surface even in Manual refresh mode.
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Historical data for charts (per channel)
   const channelHistory = useRef<Map<string, HistoricalDataPoint[]>>(new Map());
@@ -250,7 +298,7 @@ export function StatsTab() {
     const startTime = Date.now();
 
     try {
-      const map = new Map<string, { name: string; number: number | null }>();
+      const map = new Map<string, { id: number; name: string; number: number | null; logo_id: number | null; tvg_id: string | null; epg_data_id: number | null }>();
       let page = 1;
       let hasMore = true;
       const pageSize = 500;
@@ -259,7 +307,7 @@ export function StatsTab() {
         const result = await api.getChannels({ page, pageSize });
         for (const ch of result.results || []) {
           if (ch.uuid) {
-            map.set(ch.uuid, { name: ch.name, number: ch.channel_number });
+            map.set(ch.uuid, { id: ch.id, name: ch.name, number: ch.channel_number, logo_id: ch.logo_id, tvg_id: ch.tvg_id, epg_data_id: ch.epg_data_id });
           }
         }
         hasMore = result.next !== null;
@@ -274,6 +322,26 @@ export function StatsTab() {
     } catch (err) {
       const elapsed = Date.now() - startTime;
       logger.error(`Stats Tab: Failed to load channels for name lookup after ${elapsed}ms`, err);
+    }
+  }, []);
+
+  // Load all logos for Active Channels logo rendering (#1). Channels carry a
+  // logo_id; the displayable URL lives on the logo record (cache_url/url). Built
+  // once on mount alongside the channel map — auto-refresh reuses both.
+  const loadAllLogos = useCallback(async () => {
+    try {
+      const logos = await api.getAllLogos();
+      const map = new Map<number, string>();
+      for (const logo of logos) {
+        const url = logo.cache_url || logo.url;
+        if (logo.id != null && url) {
+          map.set(logo.id, url);
+        }
+      }
+      channelLogoMap.current = map;
+      logger.debug(`Stats Tab: Loaded ${map.size} logo URLs for lookup`);
+    } catch (err) {
+      logger.error('Stats Tab: Failed to load logos for lookup', err);
     }
   }, []);
 
@@ -297,6 +365,26 @@ export function StatsTab() {
     }
   }, []);
 
+  // Load EPG guide data (grid programs + epg_data_id → tvg_id map) for the
+  // Currently Showing row. Non-fatal: on failure the row simply doesn't
+  // render. The attempt timestamp is stamped up front so a failing EPG
+  // backend is retried on the slow EPG_REFRESH_MS cadence, not every poll.
+  const loadEpgGuide = useCallback(async () => {
+    lastEpgFetchRef.current = Date.now();
+    try {
+      const [grid, epgData] = await Promise.all([api.getEPGGrid(), api.getEPGData()]);
+      const map = new Map<number, string>();
+      for (const epg of epgData || []) {
+        map.set(epg.id, epg.tvg_id);
+      }
+      epgTvgIdByDataId.current = map;
+      setEpgPrograms(grid || []);
+      logger.debug(`Stats Tab: Loaded ${grid?.length || 0} EPG programs and ${map.size} EPG data entries for Currently Showing`);
+    } catch (err) {
+      logger.warn('Stats Tab: EPG guide data unavailable for Currently Showing', err);
+    }
+  }, []);
+
   // Fetch stats data
   const fetchData = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -305,6 +393,12 @@ export function StatsTab() {
 
     logger.debug('Stats Tab: Starting stats refresh');
     const startTime = Date.now();
+
+    // Re-fetch EPG guide data when stale so Currently Showing tracks guide
+    // refreshes. Fire-and-forget — errors are handled inside loadEpgGuide.
+    if (Date.now() - lastEpgFetchRef.current > EPG_REFRESH_MS) {
+      loadEpgGuide();
+    }
 
     try {
       logger.debug('Stats Tab: Fetching channel stats, events, bandwidth, and top watched channels');
@@ -420,7 +514,7 @@ export function StatsTab() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [loadEpgGuide]);
 
   // Fetch only top watched channels (for sort changes without full refresh)
   const fetchTopWatched = useCallback(async (sortBy: TopWatchedSortBy) => {
@@ -472,8 +566,10 @@ export function StatsTab() {
         logger.debug('Stats Tab: Loading lookup data (channels, profiles, M3U accounts)');
         await Promise.all([
           loadAllChannels(),
+          loadAllLogos(),
           loadStreamProfiles(),
           loadM3UAccounts(),
+          loadEpgGuide(),
         ]);
 
         // Now load stats
@@ -491,7 +587,7 @@ export function StatsTab() {
       }
     };
     loadLookups();
-  }, [loadAllChannels, loadStreamProfiles, loadM3UAccounts, fetchData]);
+  }, [loadAllChannels, loadAllLogos, loadStreamProfiles, loadM3UAccounts, loadEpgGuide, fetchData]);
 
   // Auto-refresh timer (pauses when tab/window is not visible)
   useEffect(() => {
@@ -554,6 +650,36 @@ export function StatsTab() {
     }
   };
 
+  // Per-channel stats drill-down (enhancedchannelmanager-hq3de.g). Target
+  // carries both ids since the two endpoints key differently: detail stats
+  // by the integer Channel.id (resolved via channelNameMap), popularity by
+  // the stream UUID already on the Active-Channels row.
+  const [drillDownTarget, setDrillDownTarget] = useState<{ channelId: number | null; uuid: string; name: string } | null>(null);
+
+  // Per-client disconnect (enhancedchannelmanager-hq3de.h). Dispatcharr's
+  // underlying stop-client call is channel-scoped, not client-id-scoped (see
+  // api.stopClient) — it disconnects "a" client on the channel, not
+  // guaranteed to be the exact row clicked. The confirm copy says so.
+  const [disconnectingChannelId, setDisconnectingChannelId] = useState<string | number | null>(null);
+  const handleDisconnectClient = async (channelId: string | number) => {
+    if (!confirm(
+      'Disconnect a client from this channel? Dispatcharr disconnects one connection on this ' +
+      "channel — it may not be exactly the row you clicked if there are multiple clients."
+    )) return;
+
+    setDisconnectingChannelId(channelId);
+    try {
+      await api.stopClient(channelId);
+      logger.info(`Stats Tab: Disconnected a client from channel ${channelId}`);
+      fetchData(false);
+    } catch (err) {
+      logger.error(`Stats Tab: Failed to disconnect client from channel ${channelId}`, err);
+      alert('Failed to disconnect client');
+    } finally {
+      setDisconnectingChannelId(null);
+    }
+  };
+
   // Toggle expanded channel
   const toggleExpanded = (channelId: string | number) => {
     setExpandedChannels(prev => {
@@ -576,6 +702,40 @@ export function StatsTab() {
   // Calculate totals
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
+
+  // Section jump nav (bead 09x38.15 item 9): ~10 sections stack inside
+  // .stats-content with no way to jump between them but scrolling. The
+  // first four are conditionally rendered (only when their data is
+  // non-empty); the rest are always-mounted child panels. Only list a
+  // conditional section when it will actually be in the DOM to scroll to.
+  const statsSectionNavItems: OverflowMenuItem[] = useMemo(() => {
+    const scrollToSection = (id: string) => () => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    const items: OverflowMenuItem[] = [];
+    if (activeChannels > 0) {
+      items.push({ label: 'Active Channels', icon: 'live_tv', onClick: scrollToSection('stats-section-active-channels') });
+    }
+    if (streamingEvents.length > 0) {
+      items.push({ label: 'Recent Events', icon: 'event_note', onClick: scrollToSection('stats-section-recent-events') });
+    }
+    if (topWatchedChannels.length > 0) {
+      items.push({ label: 'Top Watched Channels', icon: 'trending_up', onClick: scrollToSection('stats-section-top-watched') });
+    }
+    if (bandwidthStats) {
+      items.push({ label: 'Bandwidth Usage', icon: 'data_usage', onClick: scrollToSection('stats-section-bandwidth-usage') });
+    }
+    items.push(
+      { label: 'Bandwidth In/Out', icon: 'swap_vert', onClick: scrollToSection('stats-section-bandwidth-panel') },
+      { label: 'Enhanced Statistics', icon: 'insights', onClick: scrollToSection('stats-section-enhanced') },
+      { label: 'Popularity Rankings', icon: 'star', onClick: scrollToSection('stats-section-popularity') },
+      { label: 'Watch History', icon: 'history', onClick: scrollToSection('stats-section-watch-history') },
+      { label: 'User Watch Time', icon: 'person', onClick: scrollToSection('stats-section-user-watch-time') },
+      { label: 'Providers', icon: 'cloud_queue', onClick: scrollToSection('stats-section-providers') },
+      { label: 'Provider Stream Usage', icon: 'table_rows', onClick: scrollToSection('stats-section-provider-stream-usage') },
+    );
+    return items;
+  }, [activeChannels, streamingEvents.length, topWatchedChannels.length, bandwidthStats]);
 
   // bd-ox5q8: M3U account name lookup for the Active Channels stream
   // badge. Backend's /api/stats/channels enrichment surfaces each row's
@@ -734,6 +894,9 @@ export function StatsTab() {
     return prepareBandwidthChartData(bandwidthStats.daily_history);
   }, [bandwidthStats?.daily_history]);
 
+  // Guide programs grouped by tvg_id for the Currently Showing lookup
+  const programsByTvgId = useMemo(() => buildProgramsByTvgId(epgPrograms), [epgPrograms]);
+
   if (loading) {
     return (
       <div className="stats-tab">
@@ -766,7 +929,12 @@ export function StatsTab() {
                 <div className="stat-label">Connected Clients</div>
               </div>
             </div>
-            {m3uConnectionStats.map((m3u) => {
+            {/* bd-49obj / GH-481: below the condensed threshold, keep the
+                tile presentation (nicer at a glance for a handful of
+                providers). At/above it, the tiles below are skipped and the
+                condensed table (rendered after header-summary) takes over —
+                see LIVE_STATS_CONDENSED_THRESHOLD comment. */}
+            {m3uConnectionStats.length <= LIVE_STATS_CONDENSED_THRESHOLD && m3uConnectionStats.map((m3u) => {
               // bd-lhxfu Unknown bucket: no upstream max to show — render
               // bare current count so the operator can read it as
               // "this many unattributed live streams" without a fake
@@ -789,6 +957,43 @@ export function StatsTab() {
               );
             })}
           </div>
+
+          {/* Condensed provider table (bd-49obj / GH-481): with many
+              providers, per-provider tile badges wrap into several rows and
+              providers scroll out of view (reporter: 11 providers, "many of
+              them are not visible at all"). A dense table keeps every
+              provider visible at once. Scrolls internally (max-height) only
+              if the provider count still overflows the available header
+              space — never clips silently. */}
+          {m3uConnectionStats.length > LIVE_STATS_CONDENSED_THRESHOLD && (
+            <div className="provider-live-table-wrapper" data-testid="provider-live-table-wrapper">
+              <table className="provider-live-table">
+                <caption className="visually-hidden">Active connections per provider</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Provider</th>
+                    <th scope="col">Active</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {m3uConnectionStats.map((m3u) => {
+                    const isUnknown = m3u.id === -1;
+                    return (
+                      <tr key={m3u.id} className={isUnknown ? 'unknown-bucket' : undefined}>
+                        <td>
+                          {isUnknown && <span className="material-icons">help_outline</span>}
+                          {m3u.name}
+                        </td>
+                        <td className="provider-live-table-count">
+                          {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="header-actions">
@@ -817,6 +1022,8 @@ export function StatsTab() {
             <span className="material-icons">refresh</span>
             Refresh
           </button>
+
+          <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
         </div>
       </div>
 
@@ -841,7 +1048,7 @@ export function StatsTab() {
 
         {/* Active Channels */}
         {activeChannels > 0 && (
-          <div className="active-channels">
+          <div className="active-channels" id="stats-section-active-channels">
             <h3 className="section-title">Active Channels</h3>
 
             {channelStats?.channels?.map((channel) => {
@@ -859,6 +1066,12 @@ export function StatsTab() {
               // Determine channel number (priority: ECM lookup > API channel_number > none)
               const channelNum = lookupData?.number || channel.channel_number;
               const displayNumber = channelNum ? `Ch ${channelNum}` : null;
+
+              // #1: resolve the channel logo URL via logo_id -> channelLogoMap.
+              // Null when the channel has no logo or it isn't in the map yet —
+              // the row renders without a logo (no broken-image icon).
+              const logoId = lookupData?.logo_id ?? null;
+              const logoUrl = logoId != null ? (channelLogoMap.current.get(logoId) ?? null) : null;
 
               // M3U source info
               const m3uSource = channel.m3u_profile_name || null;
@@ -910,10 +1123,36 @@ export function StatsTab() {
                   )
                 : null;
 
+              // Currently Showing: resolve the channel's guide tvg_id via
+              // epg_data_id → EPGData (preferred — the guide's tvg_id can
+              // differ from channel.tvg_id), falling back to the channel's
+              // own tvg_id. Dummy EPG sources key programs by channel UUID;
+              // findCurrentProgram covers that fallback.
+              const epgDataId = lookupData?.epg_data_id ?? null;
+              const guideTvgId = (epgDataId != null ? epgTvgIdByDataId.current.get(epgDataId) : null)
+                ?? lookupData?.tvg_id
+                ?? null;
+              const nowShowing = findCurrentProgram(
+                programsByTvgId,
+                guideTvgId,
+                isUUID ? channelIdStr : null,
+                currentTime,
+              );
+
               return (
               <div key={channel.channel_id} className="channel-card">
                 <div className="channel-card-header">
                   <div className="channel-info">
+                    {logoUrl && (
+                      <img
+                        src={logoUrl}
+                        alt=""
+                        className="channel-logo-mini"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    )}
                     {displayNumber && (
                       <span className="channel-number" title={`ID: ${channelIdStr}`}>
                         {displayNumber}
@@ -980,10 +1219,22 @@ export function StatsTab() {
 
                   <div className="channel-actions">
                     <button
+                      onClick={() => setDrillDownTarget({
+                        channelId: lookupData?.id ?? null,
+                        uuid: channelIdStr,
+                        name: displayName,
+                      })}
+                      title="View details"
+                      aria-label={`View details for ${displayName}`}
+                    >
+                      <span className="material-icons" aria-hidden="true">query_stats</span>
+                    </button>
+                    <button
                       onClick={() => toggleExpanded(channel.channel_id)}
                       title={expandedChannels.has(channel.channel_id) ? 'Collapse' : 'Expand'}
+                      aria-label={expandedChannels.has(channel.channel_id) ? 'Collapse channel details' : 'Expand channel details'}
                     >
-                      <span className="material-icons">
+                      <span className="material-icons" aria-hidden="true">
                         {expandedChannels.has(channel.channel_id) ? 'expand_less' : 'expand_more'}
                       </span>
                     </button>
@@ -991,11 +1242,30 @@ export function StatsTab() {
                       className="stop-btn"
                       onClick={() => handleStopChannel(channel.channel_id)}
                       title="Stop channel"
+                      aria-label="Stop channel"
                     >
-                      <span className="material-icons">stop</span>
+                      <span className="material-icons" aria-hidden="true">stop</span>
                     </button>
                   </div>
                 </div>
+
+                {/* Currently Showing (EPG) */}
+                {nowShowing && (
+                  <div className="channel-now-playing" data-testid="channel-now-playing">
+                    <span className="material-icons">live_tv</span>
+                    <span className="now-playing-label">Now Showing</span>
+                    <span
+                      className="now-playing-title"
+                      title={nowShowing.description || nowShowing.title}
+                    >
+                      {nowShowing.title}
+                      {nowShowing.sub_title ? ` — ${nowShowing.sub_title}` : ''}
+                    </span>
+                    <span className="now-playing-time">
+                      {formatProgramTime(getProgramStart(nowShowing))} – {formatProgramTime(getProgramEnd(nowShowing))}
+                    </span>
+                  </div>
+                )}
 
                 {/* Quick Stats */}
                 <div className="channel-stats">
@@ -1408,6 +1678,17 @@ export function StatsTab() {
                                 {client.current_rate_KBps.toFixed(1)} KB/s
                               </span>
                             )}
+                            <button
+                              className="client-disconnect-btn"
+                              onClick={() => handleDisconnectClient(channel.channel_id)}
+                              disabled={disconnectingChannelId === channel.channel_id}
+                              title="Disconnect a client from this channel"
+                              aria-label="Disconnect client"
+                            >
+                              <span className="material-icons" aria-hidden="true">
+                                {disconnectingChannelId === channel.channel_id ? 'hourglass_empty' : 'link_off'}
+                              </span>
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -1422,7 +1703,7 @@ export function StatsTab() {
 
         {/* System Events - only show streaming-related events */}
         {streamingEvents.length > 0 && (
-          <div className="events-section">
+          <div className="events-section" id="stats-section-recent-events">
             <div className="events-header">
               <h3 className="section-title">Recent Events</h3>
               <div className="events-filter">
@@ -1457,7 +1738,10 @@ export function StatsTab() {
                     <span className="event-message">
                       {event.channel_name && `[${event.channel_name}] `}
                       {event.message || event.event_type}
-                      {event.ip_address && ` - ${event.ip_address}`}
+                      {/* #2: show the connecting/disconnecting username
+                          (resolved server-side). Fall back to the client IP
+                          when no username attributes the connection. */}
+                      {(event.username || event.ip_address) && ` - ${event.username || event.ip_address}`}
                     </span>
                   </div>
                 );
@@ -1468,7 +1752,7 @@ export function StatsTab() {
 
         {/* Top Watched Channels */}
         {topWatchedChannels.length > 0 && (
-          <div className="top-watched-section">
+          <div className="top-watched-section" id="stats-section-top-watched">
             <div className="top-watched-header">
               <h3 className="section-title">Top Watched Channels</h3>
               <div className="top-watched-toggle">
@@ -1512,7 +1796,7 @@ export function StatsTab() {
 
         {/* Bandwidth Usage Summary */}
         {bandwidthStats && (
-          <div className="bandwidth-section">
+          <div className="bandwidth-section" id="stats-section-bandwidth-usage">
             <h3 className="section-title">Bandwidth Usage</h3>
             <div className="bandwidth-summary">
               <div className="bandwidth-stat">
@@ -1621,7 +1905,19 @@ export function StatsTab() {
 
         {/* Providers (v0.17.0 — GH-59, bd-skqln.18) */}
         <ProvidersPanel />
+
+        {/* Provider Stream Usage (GH-482, bd-n5cwp) */}
+        <ProviderStreamUsagePanel />
       </div>
+
+      {drillDownTarget && (
+        <ChannelStatsDetailModal
+          channelId={drillDownTarget.channelId}
+          uuid={drillDownTarget.uuid}
+          name={drillDownTarget.name}
+          onClose={() => setDrillDownTarget(null)}
+        />
+      )}
     </div>
   );
 }

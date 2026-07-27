@@ -67,7 +67,7 @@ class TestGetChannelProfiles:
 
     @pytest.mark.asyncio
     async def test_returns_profiles(self, async_client):
-        """Returns list of channel profiles."""
+        """Returns list of channel profiles forwarded verbatim from client."""
         mock_client = AsyncMock()
         mock_client.get_channel_profiles.return_value = [
             {"id": 1, "name": "Default"},
@@ -80,10 +80,13 @@ class TestGetChannelProfiles:
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
+        assert data[0] == {"id": 1, "name": "Default"}
+        assert data[1] == {"id": 2, "name": "Kids"}
+        mock_client.get_channel_profiles.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
-        """Returns 500 on client error."""
+        """Returns 500 on a genuine (non-HTTP) client error."""
         mock_client = AsyncMock()
         mock_client.get_channel_profiles.side_effect = Exception("Timeout")
 
@@ -92,13 +95,30 @@ class TestGetChannelProfiles:
 
         assert response.status_code == 500
 
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 4xx surfaces its real status + detail, not an opaque 500
+        (bd-lsctv, GH #720)."""
+        request = httpx.Request("GET", "http://disp/api/channels/profiles/")
+        upstream = httpx.Response(400, request=request, text='{"detail": "Invalid filter param."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel_profiles.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-profiles")
+
+        assert response.status_code == 400
+        assert "Invalid filter param" in response.json()["detail"]
+
 
 class TestCreateChannelProfile:
     """Tests for POST /api/channel-profiles."""
 
     @pytest.mark.asyncio
     async def test_creates_profile(self, async_client):
-        """Creates a new channel profile."""
+        """Creates a new channel profile, forwarding the client result verbatim."""
         mock_client = AsyncMock()
         mock_client.create_channel_profile.return_value = {
             "id": 3, "name": "New Profile",
@@ -111,7 +131,45 @@ class TestCreateChannelProfile:
             )
 
         assert response.status_code == 200
-        assert response.json()["name"] == "New Profile"
+        assert response.json() == {"id": 3, "name": "New Profile"}
+        mock_client.create_channel_profile.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 4xx (e.g. name conflict) surfaces its real status +
+        detail, not an opaque 500 (bd-lsctv, GH #720)."""
+        request = httpx.Request("POST", "http://disp/api/channels/profiles/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"name": ["channel profile with this name already exists."]}',
+        )
+        mock_client = AsyncMock()
+        mock_client.create_channel_profile.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-profiles",
+                json={"name": "Default"},
+            )
+
+        assert response.status_code == 400
+        assert "already exists" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lsctv, GH #720)."""
+        mock_client = AsyncMock()
+        mock_client.create_channel_profile.side_effect = RuntimeError("boom")
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channel-profiles",
+                json={"name": "New Profile"},
+            )
+
+        assert response.status_code == 500
 
 
 class TestGetChannelProfile:
@@ -134,7 +192,7 @@ class TestGetChannelProfile:
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
-        """Returns 500 when client raises."""
+        """Returns 500 on a genuine (non-HTTP) client error."""
         mock_client = AsyncMock()
         mock_client.get_channel_profile.side_effect = Exception("Not found")
 
@@ -142,6 +200,23 @@ class TestGetChannelProfile:
             response = await async_client.get("/api/channel-profiles/999")
 
         assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 404 for a missing profile surfaces as 404 with detail,
+        not an opaque 500 (bd-lsctv, GH #720)."""
+        request = httpx.Request("GET", "http://disp/api/channels/profiles/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.get_channel_profile.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-profiles/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestUpdateChannelProfile:
@@ -164,6 +239,43 @@ class TestUpdateChannelProfile:
         assert response.status_code == 200
         mock_client.update_channel_profile.assert_called_once_with(1, {"name": "Updated Name"})
 
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 4xx (e.g. rename conflict) surfaces its real status +
+        detail, not an opaque 500 (bd-lsctv, GH #720)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/profiles/1/")
+        upstream = httpx.Response(
+            400, request=request,
+            text='{"name": ["channel profile with this name already exists."]}',
+        )
+        mock_client = AsyncMock()
+        mock_client.update_channel_profile.side_effect = httpx.HTTPStatusError(
+            "400 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/1",
+                json={"name": "Kids"},
+            )
+
+        assert response.status_code == 400
+        assert "already exists" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_server_error_still_500(self, async_client):
+        """A non-upstream error stays a 500 (bd-lsctv, GH #720)."""
+        mock_client = AsyncMock()
+        mock_client.update_channel_profile.side_effect = RuntimeError("boom")
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/1",
+                json={"name": "Updated Name"},
+            )
+
+        assert response.status_code == 500
+
 
 class TestDeleteChannelProfile:
     """Tests for DELETE /api/channel-profiles/{profile_id}."""
@@ -182,7 +294,7 @@ class TestDeleteChannelProfile:
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
-        """Returns 500 when client raises."""
+        """Returns 500 on a genuine (non-HTTP) client error."""
         mock_client = AsyncMock()
         mock_client.delete_channel_profile.side_effect = Exception("Error")
 
@@ -190,6 +302,23 @@ class TestDeleteChannelProfile:
             response = await async_client.delete("/api/channel-profiles/999")
 
         assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 404 for a missing profile surfaces as 404 with detail,
+        not an opaque 500 (bd-lsctv, GH #720)."""
+        request = httpx.Request("DELETE", "http://disp/api/channels/profiles/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.delete_channel_profile.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-profiles/999")
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]
 
 
 class TestBulkUpdateProfileChannels:
@@ -288,7 +417,7 @@ class TestUpdateProfileChannel:
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
-        """Returns 500 when client raises."""
+        """Returns 500 on a genuine (non-HTTP) client error."""
         mock_client = AsyncMock()
         mock_client.update_profile_channel.side_effect = Exception("Error")
 
@@ -299,3 +428,23 @@ class TestUpdateProfileChannel:
             )
 
         assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_upstream_4xx_surfaces_status_and_detail(self, async_client):
+        """An upstream 4xx (e.g. missing profile/channel id) surfaces its real
+        status + detail, not an opaque 500 (bd-lsctv, GH #720)."""
+        request = httpx.Request("PATCH", "http://disp/api/channels/profiles/1/channels/999/")
+        upstream = httpx.Response(404, request=request, text='{"detail": "Not found."}')
+        mock_client = AsyncMock()
+        mock_client.update_profile_channel.side_effect = httpx.HTTPStatusError(
+            "404 Client Error", request=request, response=upstream
+        )
+
+        with patch("routers.profiles.get_client", return_value=mock_client):
+            response = await async_client.patch(
+                "/api/channel-profiles/1/channels/999",
+                json={"enabled": False},
+            )
+
+        assert response.status_code == 404
+        assert "Not found" in response.json()["detail"]

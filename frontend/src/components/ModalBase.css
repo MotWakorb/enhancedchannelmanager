@@ -776,6 +776,19 @@
   background-color: var(--input-bg, #1a1a2e);
 }
 
+/* Keyboard-active (roving aria-activedescendant) option in a listbox. */
+.dropdown-options[role="listbox"] { outline: none; }
+.dropdown-option.active {
+  background-color: var(--input-bg, #1a1a2e);
+  outline: 2px solid var(--accent, #6c8cff);
+  outline-offset: -2px;
+}
+
+/* Warning variant of the small helper text under a field. */
+.modal-form-group .form-hint.form-hint-warning {
+  color: var(--warning, #f0b429);
+}
+
 .dropdown-option-item.selected,
 .logo-option-none.selected {
   background-color: var(--accent-15);
@@ -1695,4 +1708,211 @@
 
 .modal-preview-no-match .material-icons {
   font-size: 18px;
+}
+
+
+/* =============================================================================
+   TWO-PANE MODAL LAYOUT SYSTEM  (bead m1s38.1)
+   -----------------------------------------------------------------------------
+   Generic, reusable layout primitives for dense configuration modals: a main
+   configuration column beside a persistent sticky rail, an optional full-width
+   step-wizard strip, an intent card, collapsible purpose subgroups, and nested
+   "why / when to use" disclosures. These are deliberately editor-AGNOSTIC — the
+   Event Sync editor is the first consumer; the standard rule builder (bead
+   m1s38.3) is the second. Keep the names generic and do NOT fold any
+   editor-specific styling in here. Single-column collapse at 820px drops the
+   rail below the main column.
+
+     .modal-twopane        grid wrapper: main column + rail
+     .modal-main           the scrolling configuration column
+     .modal-rail           sticky companion rail (intent / impacts / preview)
+     .modal-stepper        full-width step-pill strip (drives the main column)
+     .modal-stepper-item   one step pill; aria-current="step" marks the active
+     .modal-stepper-num    the circular step number inside a pill
+     .modal-intent         plain-language intent card at the top of the rail
+     .modal-subgroup       labeled collapsible cluster with an "N changed" badge
+     .modal-why            nested rationale disclosure inside a subgroup control
+   ============================================================================= */
+
+.modal-twopane {
+  display: grid;
+  grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.modal-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.modal-rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Full-width step strip. Pills drive the main column only; the rail is
+   persistent across steps. */
+.modal-stepper {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.modal-stepper-item {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.modal-stepper-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.modal-stepper-item[aria-current='step'] {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.modal-stepper-item:focus-visible {
+  outline: 2px solid var(--button-primary-bg, #6366f1);
+  outline-offset: 2px;
+}
+
+.modal-stepper-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.modal-stepper-item[aria-current='step'] .modal-stepper-num {
+  background: var(--button-primary-bg, #6366f1);
+  color: var(--button-primary-text, #fff);
+}
+
+/* Intent card — plain-language "what this will do" summary. */
+.modal-intent {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg, 8px);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal-intent-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.modal-intent-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.modal-intent-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.modal-intent-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Purpose subgroup — a labeled collapsible cluster. Self-contained so any modal
+   can use it without an editor-specific base class. */
+.modal-subgroup {
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 4px);
+}
+
+.modal-subgroup > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.modal-subgroup > summary:focus-visible {
+  outline: 2px solid var(--button-primary-bg, #6366f1);
+  outline-offset: -2px;
+}
+
+.modal-subgroup-badge {
+  margin-left: auto;
+}
+
+/* Nested "why / when to use" disclosure inside a subgroup control. */
+.modal-why {
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 4px);
+  margin-top: 2px;
+}
+
+.modal-why > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+}
+
+.modal-why > summary:focus-visible {
+  outline: 2px solid var(--button-primary-bg, #6366f1);
+  outline-offset: -2px;
+}
+
+/* Single-column collapse: the rail drops below the main column. */
+@media (max-width: 820px) {
+  .modal-twopane {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-rail {
+    position: static;
+  }
+
+  .modal-stepper {
+    flex-wrap: wrap;
+  }
 }

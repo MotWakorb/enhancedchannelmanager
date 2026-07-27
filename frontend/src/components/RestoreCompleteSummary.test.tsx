@@ -1,0 +1,268 @@
+/**
+ * Tests for RestoreCompleteSummary — the aggregate restore-result surface
+ * (bead 0i2vt.20). Renders the tri-state outcome banner + per-entity
+ * created/updated/skipped/failed breakdown, and mirrors the dry-run preview
+ * shape (same component, `mode` prop).
+ */
+import { describe, it, expect } from 'vitest';
+import { render, screen, within, fireEvent } from '@testing-library/react';
+import { RestoreCompleteSummary } from './RestoreCompleteSummary';
+import type {
+  EntityCategoryReport,
+  RestoreReport,
+} from '../services/api';
+
+function category(overrides: Partial<EntityCategoryReport>): EntityCategoryReport {
+  return {
+    entity_type: 'channel',
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    would_create: 0,
+    would_update: 0,
+    would_skip: 0,
+    skip_details: [],
+    failure_details: [],
+    ...overrides,
+  };
+}
+
+function appliedReport(overrides: Partial<RestoreReport> = {}): RestoreReport {
+  return {
+    contract_version: 1,
+    is_dry_run: false,
+    outcome: 'success',
+    logo_misses: 0,
+    started_at: null,
+    completed_at: null,
+    notes: [],
+    categories: [
+      category({
+        entity_type: 'channel',
+        created: 12,
+        updated: 3,
+        skipped: 2,
+        failed: 0,
+        skip_details: [
+          { reason: 'already_exists_identical', label: 'CNN HD' },
+          { reason: 'excluded_by_operator', label: 'Local Access 5' },
+        ],
+      }),
+    ],
+    ...overrides,
+  };
+}
+
+function dryRunReport(overrides: Partial<RestoreReport> = {}): RestoreReport {
+  return {
+    contract_version: 1,
+    is_dry_run: true,
+    outcome: null,
+    logo_misses: 0,
+    started_at: null,
+    completed_at: null,
+    notes: [],
+    categories: [
+      category({
+        entity_type: 'channel',
+        would_create: 8,
+        would_update: 1,
+        would_skip: 4,
+        skip_details: [{ reason: 'already_exists_identical', label: 'ESPN' }],
+      }),
+    ],
+    ...overrides,
+  };
+}
+
+describe('RestoreCompleteSummary — per-entity counts', () => {
+  it('renders created/updated/skipped/failed counts for an applied category', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+    const row = screen.getByTestId('rcs-category-channel');
+    expect(within(row).getByTestId('rcs-count-created')).toHaveTextContent('12');
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('3');
+    expect(within(row).getByTestId('rcs-count-skipped')).toHaveTextContent('2');
+    expect(within(row).getByTestId('rcs-count-failed')).toHaveTextContent('0');
+  });
+
+  it('labels the category by its human-readable entity name', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+    const row = screen.getByTestId('rcs-category-channel');
+    expect(within(row).getByText('Channels')).toBeInTheDocument();
+  });
+
+  it('renders a row per category', () => {
+    const report = appliedReport({
+      categories: [
+        category({ entity_type: 'm3u_account', created: 1 }),
+        category({ entity_type: 'epg_source', created: 2 }),
+        category({ entity_type: 'channel', created: 3 }),
+      ],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    expect(screen.getByTestId('rcs-category-m3u_account')).toBeInTheDocument();
+    expect(screen.getByTestId('rcs-category-epg_source')).toBeInTheDocument();
+    expect(screen.getByTestId('rcs-category-channel')).toBeInTheDocument();
+  });
+
+  it('handles an empty/zero-count category gracefully', () => {
+    const report = appliedReport({
+      categories: [category({ entity_type: 'logo' })],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-logo');
+    expect(within(row).getByTestId('rcs-count-created')).toHaveTextContent('0');
+    // A zero-count category exposes no expandable reason detail.
+    expect(within(row).queryByTestId('rcs-skip-details')).not.toBeInTheDocument();
+    expect(within(row).queryByTestId('rcs-failure-details')).not.toBeInTheDocument();
+  });
+
+  it('renders gracefully with no categories at all', () => {
+    const report = appliedReport({ categories: [] });
+    render(<RestoreCompleteSummary report={report} />);
+    expect(screen.getByTestId('rcs-empty')).toBeInTheDocument();
+  });
+
+  it('labels the settings category (core settings / comskip apply counts)', () => {
+    // Bead lc6zu: the backend report carries an EntityType.SETTINGS category
+    // (updated/skipped apply counts for core_settings + comskip) — it must
+    // render with a human label, not an undefined lookup.
+    const report = appliedReport({
+      categories: [category({ entity_type: 'settings', updated: 2, skipped: 1 })],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-settings');
+    expect(within(row).getByText('Settings')).toBeInTheDocument();
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
+  });
+});
+
+describe('RestoreCompleteSummary — expandable reasons', () => {
+  it('expands skipped to its reasons + human labels', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+    const row = screen.getByTestId('rcs-category-channel');
+    fireEvent.click(within(row).getByTestId('rcs-skip-toggle'));
+    const details = within(row).getByTestId('rcs-skip-details');
+    expect(within(details).getByText('CNN HD')).toBeInTheDocument();
+    expect(within(details).getByText('Local Access 5')).toBeInTheDocument();
+    // Human-readable reason label, not the raw enum value.
+    expect(within(details).getByText('Already exists (identical)')).toBeInTheDocument();
+    expect(within(details).getByText('Excluded by operator')).toBeInTheDocument();
+    expect(within(details).queryByText('already_exists_identical')).not.toBeInTheDocument();
+  });
+
+  it('expands failed to its reasons + sanitized messages', () => {
+    const report = appliedReport({
+      outcome: 'partial_failed_rolled_back',
+      categories: [
+        category({
+          entity_type: 'channel',
+          failed: 1,
+          failure_details: [
+            {
+              reason: 'upstream_api_error',
+              label: 'BBC One',
+              message: 'Dispatcharr returned 500',
+            },
+          ],
+        }),
+      ],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-channel');
+    fireEvent.click(within(row).getByTestId('rcs-failure-toggle'));
+    const details = within(row).getByTestId('rcs-failure-details');
+    expect(within(details).getByText('BBC One')).toBeInTheDocument();
+    expect(within(details).getByText('Upstream API error')).toBeInTheDocument();
+    expect(within(details).getByText('Dispatcharr returned 500')).toBeInTheDocument();
+  });
+});
+
+describe('RestoreCompleteSummary — tri-state outcome banner', () => {
+  it('renders a positive banner for success', () => {
+    render(<RestoreCompleteSummary report={appliedReport({ outcome: 'success' })} />);
+    const banner = screen.getByTestId('rcs-outcome-banner');
+    expect(banner).toHaveAttribute('data-outcome', 'success');
+    expect(banner).toHaveTextContent('Restore complete');
+  });
+
+  it('labels partial_failed_rolled_back as a FAILURE that was rolled back — never success', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({ outcome: 'partial_failed_rolled_back' })}
+      />
+    );
+    const banner = screen.getByTestId('rcs-outcome-banner');
+    expect(banner).toHaveAttribute('data-outcome', 'partial_failed_rolled_back');
+    expect(banner).toHaveTextContent(/restore failed/i);
+    expect(banner).toHaveTextContent(/rolled back/i);
+    // Hard contract: a rolled-back restore is NEVER labeled success/complete.
+    expect(banner.textContent ?? '').not.toMatch(/\bsuccess\b/i);
+    expect(banner.textContent ?? '').not.toMatch(/restore complete/i);
+  });
+
+  it('gives failed_rollback_incomplete the loudest treatment + residue note', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          outcome: 'failed_rollback_incomplete',
+          notes: ['2 entities could not be removed: channel id=44, channel id=51'],
+        })}
+      />
+    );
+    const banner = screen.getByTestId('rcs-outcome-banner');
+    expect(banner).toHaveAttribute('data-outcome', 'failed_rollback_incomplete');
+    expect(banner).toHaveTextContent(/could not be fully rolled back|not be fully rolled back|NOT be fully rolled back/i);
+    expect(banner.textContent ?? '').not.toMatch(/\bsuccess\b/i);
+    // The ledger residue note is surfaced for manual cleanup.
+    const residue = screen.getByTestId('rcs-residue-note');
+    expect(residue).toHaveTextContent('2 entities could not be removed: channel id=44, channel id=51');
+  });
+
+  it('renders no outcome banner on a dry-run (a plan has no realized outcome)', () => {
+    render(<RestoreCompleteSummary report={dryRunReport()} mode="dry-run" />);
+    expect(screen.queryByTestId('rcs-outcome-banner')).not.toBeInTheDocument();
+  });
+});
+
+describe('RestoreCompleteSummary — dry-run vs applied framing (shared shape)', () => {
+  it('renders applied framing (created/updated/skipped) in applied mode', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} mode="applied" />);
+    const summary = screen.getByTestId('restore-complete-summary');
+    expect(summary).toHaveAttribute('data-mode', 'applied');
+    const row = screen.getByTestId('rcs-category-channel');
+    expect(within(row).getByTestId('rcs-count-created')).toHaveTextContent('12');
+    expect(within(row).getByTestId('rcs-label-created')).toHaveTextContent(/^Created$/);
+  });
+
+  it('renders preview framing (will create/update/skip) in dry-run mode from the same shape', () => {
+    render(<RestoreCompleteSummary report={dryRunReport()} mode="dry-run" />);
+    const summary = screen.getByTestId('restore-complete-summary');
+    expect(summary).toHaveAttribute('data-mode', 'dry-run');
+    const row = screen.getByTestId('rcs-category-channel');
+    // Dry-run reads the would_* counts.
+    expect(within(row).getByTestId('rcs-count-created')).toHaveTextContent('8');
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('1');
+    expect(within(row).getByTestId('rcs-count-skipped')).toHaveTextContent('4');
+    // Dry-run framing reads "Will create", not "Created".
+    expect(within(row).getByTestId('rcs-label-created')).toHaveTextContent(/^Will create$/);
+  });
+
+  it('infers mode from is_dry_run when no mode prop is given', () => {
+    render(<RestoreCompleteSummary report={dryRunReport()} />);
+    expect(screen.getByTestId('restore-complete-summary')).toHaveAttribute('data-mode', 'dry-run');
+  });
+});
+
+describe('RestoreCompleteSummary — logo-miss banner seam (bead .19)', () => {
+  it('renders the bannerSlot at the top of the summary (insertion point for .19)', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport()}
+        bannerSlot={<div data-testid="injected-banner">RED BANNER</div>}
+      />
+    );
+    expect(screen.getByTestId('injected-banner')).toBeInTheDocument();
+  });
+});

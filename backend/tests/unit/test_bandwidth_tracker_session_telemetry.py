@@ -35,7 +35,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import database
-from bandwidth_tracker import BandwidthTracker, _coerce_session_user_id
+from bandwidth_tracker import (
+    LOCAL_TUNER_PROVIDER_ID,
+    LOCAL_TUNER_PROVIDER_NAME,
+    BandwidthTracker,
+    _coerce_session_user_id,
+)
 from models import ChannelWatchStats, SessionTelemetry, UniqueClientConnection, User
 
 
@@ -93,17 +98,21 @@ def mock_client():
             "limit": 1000,
         }
     )
+    # ADR-013 §D2: real settings so telemetry_write_interval resolves to its
+    # default (10s) rather than a Mock attribute (bead 312nk.3).
+    from config import DispatcharrSettings
+    client.settings = DispatcharrSettings()
     return client
 
 
 @pytest.fixture
-def tracker(mock_client):
+def tracker(mock_client, telemetry_clock):
     """A BandwidthTracker wired to the stub client.
 
     Tracker is not ``start()``ed — tests drive ``_collect_stats`` directly
     so they can fix the poll-by-poll sequence without sleeping.
     """
-    return BandwidthTracker(client=mock_client, poll_interval=10)
+    return BandwidthTracker(client=mock_client, poll_interval=10, now_fn=telemetry_clock)
 
 
 @pytest.fixture
@@ -808,8 +817,12 @@ async def test_resolver_batches_lookup_once_per_poll(
     # both polls because step (a) writes the connection-open row too, so
     # the fetch happens on the first poll for both channels).
     assert call_count_after_first == 1
-    # Second poll: one additional fetch (cache resets per poll).
-    assert call_count_after_second == 2
+    # Second poll: NO additional fetch — ADR-013 §D3 (bead 312nk.4) makes the
+    # stream->provider cache process-lived (not per-poll), so the same stream
+    # ids (100, 200) are served from cache. ``get_streams_by_ids`` is now rare:
+    # it fires on cold start, on genuinely new ids, and right after a
+    # stream_rehash / channels_created invalidation.
+    assert call_count_after_second == 1
 
     session = patched_session_local()
     try:
@@ -826,19 +839,22 @@ async def test_resolver_batches_lookup_once_per_poll(
 
 
 @pytest.mark.asyncio
-async def test_resolver_cache_does_not_leak_across_polls(
+async def test_resolver_provider_hop_picked_up_after_invalidation(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
 ):
-    """Cache is scoped to a single ``_collect_stats`` invocation. A
-    stream that newly hops providers between polls picks up the new
-    mapping immediately — the previous-poll cache is not consulted.
+    """ADR-013 §D3 (bead 312nk.4): the stream->provider cache is process-lived,
+    NOT per-poll. A stream's provider hop is therefore NOT picked up
+    automatically on the next poll — it is signaled by the WS
+    ``stream_rehash`` / ``channels_created`` event (which clears the cache) or,
+    on the degraded poll-fallback path, bounded by the safety TTL.
+
+    This replaces the old per-poll-reset contract (the legacy
+    ``ChannelStreamsCache`` was per-invocation; the new stream->provider cache
+    is the rare-fetch cache the ADR mandates).
     """
-    # Poll 1 + Poll 2 — both look up stream_id=555. The stream's provider
-    # changes between polls (provider 1 → provider 2). Without a per-poll
-    # cache reset, the second poll would still report provider 1.
     poll1_response = [{"id": 555, "m3u_account": 1}]
     poll2_response = [{"id": 555, "m3u_account": 2}]
     mock_client.get_streams_by_ids = AsyncMock(
@@ -856,7 +872,11 @@ async def test_resolver_cache_does_not_leak_across_polls(
         stream_id=555,
     )
 
+    # Two polls with NO invalidation between them: the cache serves the
+    # poll-1 provider on poll 2 (one fetch total). The provider hop is NOT
+    # observed yet — this is the bounded-staleness the ADR accepts.
     await _drive_two_polls(tracker, mock_client, first, second)
+    assert mock_client.get_streams_by_ids.await_count == 1
 
     session = patched_session_local()
     try:
@@ -869,7 +889,30 @@ async def test_resolver_cache_does_not_leak_across_polls(
         session.close()
     assert len(rows) == 2
     assert rows[0].provider_id == 1
-    assert rows[1].provider_id == 2
+    assert rows[1].provider_id == 1  # served from cache — hop not yet observed
+
+    # Now the WS stream_rehash event fires → cache cleared → the NEXT poll
+    # re-fetches and observes the new provider (2).
+    tracker.invalidate_stream_provider_cache(reason="stream_rehash")
+    third = _channel_payload(
+        total_bytes=3_000_000,
+        client_user_ids={"10.0.0.1": seed_synthetic_user},
+        stream_id=555,
+    )
+    mock_client.get_channel_stats.return_value = {"channels": [third]}
+    await tracker._collect_stats()
+    assert mock_client.get_streams_by_ids.await_count == 2
+
+    session = patched_session_local()
+    try:
+        latest = (
+            session.query(SessionTelemetry)
+            .order_by(SessionTelemetry.id.desc())
+            .first()
+        )
+    finally:
+        session.close()
+    assert latest.provider_id == 2  # hop observed after invalidation
 
 
 @pytest.mark.asyncio
@@ -977,18 +1020,24 @@ async def test_resolver_skips_lookup_when_no_resolvable_streams(
 
 
 @pytest.mark.asyncio
-async def test_resolver_handles_null_m3u_account_on_stream(
+async def test_resolver_tags_null_m3u_account_stream_as_local_tuner(
     patched_session_local,
     seed_synthetic_user,
     tracker,
     mock_client,
     caplog,
 ):
-    """Stream exists in Dispatcharr but ``m3u_account`` is None
-    (orphaned stream — provider was deleted). ``provider_id`` stays
-    NULL. bd-gy5nd: the WARN this previously emitted is retired
-    (legitimate "stream has no provider" is normal data; only the
-    bulk lookup-raised path still WARNs).
+    """Stream exists in Dispatcharr but ``m3u_account`` is None — a
+    non-M3U / local-tuner source (HDHomeRun, direct tuner, custom
+    stream, or an orphaned stream whose provider was deleted).
+
+    bd-oj02b: this is a RESOLVED outcome, not an attribution failure.
+    The writer tags such rows with the synthetic local-tuner
+    ``provider_id`` (LOCAL_TUNER_PROVIDER_ID) so the provider-stats
+    panel surfaces them as their own "HD HomeRun" series instead of
+    folding them into the genuinely-unknown NULL "Unknown" bucket.
+    (Pre-bd-oj02b these rows wrote ``provider_id=NULL``.)
+    bd-gy5nd: no per-channel WARN fires.
     """
     import logging as _logging
 
@@ -1015,12 +1064,47 @@ async def test_resolver_handles_null_m3u_account_on_stream(
         rows = session.query(SessionTelemetry).all()
     finally:
         session.close()
-    assert rows and all(r.provider_id is None for r in rows)
+    assert rows and all(
+        r.provider_id == LOCAL_TUNER_PROVIDER_ID for r in rows
+    ), [r.provider_id for r in rows]
     # bd-gy5nd: the per-channel WARN is retired.
     assert not any(
         "[STATS_V2] provider_resolution_failed" in r.message
         for r in caplog.records
     ), [r.message for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_resolver_distinguishes_local_tuner_from_genuinely_unknown(
+    patched_session_local,
+    tracker,
+):
+    """bd-oj02b: the resolver must give a found-but-no-m3u_account stream
+    the synthetic local-tuner identity (provider_id + "HD HomeRun" name),
+    but leave a genuinely-not-found stream as the all-NULL resolution.
+    Driven directly against ``_resolve_provider_ids`` to assert the
+    resolution shape (the writer just persists ``.provider_id``)."""
+    # ch-local: stream 700 is in the catalogue with no m3u_account.
+    # ch-missing: stream 999 requested but absent from the response.
+    tracker.client.get_streams_by_ids = AsyncMock(
+        return_value=[{"id": 700, "m3u_account": None, "name": "Local CBS"}]
+    )
+    snapshot = [
+        {"channel_uuid": "ch-local", "stream_id": 700},
+        {"channel_uuid": "ch-missing", "stream_id": 999},
+    ]
+
+    result = await tracker._resolve_provider_ids(snapshot)
+
+    local = result["ch-local"]
+    assert local.provider_id == LOCAL_TUNER_PROVIDER_ID
+    assert local.provider_name == LOCAL_TUNER_PROVIDER_NAME
+    assert local.stream_id == 700
+    assert local.stream_name == "Local CBS"
+
+    missing = result["ch-missing"]
+    assert missing.provider_id is None
+    assert missing.provider_name is None
 
 
 # ---------------------------------------------------------------------------
@@ -1227,14 +1311,17 @@ async def test_resolver_mixed_batch_url_and_stream_id_share_one_lookup(
     await tracker._collect_stats()
     call_count_after_second = mock_client.get_streams_by_ids.call_count
 
-    # One call per poll, regardless of how many channels needed URL parsing.
+    # One call on the FIRST poll regardless of how many channels needed URL
+    # parsing (direct + URL-derived ids share the batch). ADR-013 §D3 (bead
+    # 312nk.4): the second poll hits the process-lived stream->provider cache
+    # for both ids → NO second fetch.
     assert call_count_after_first == 1
-    assert call_count_after_second == 2
+    assert call_count_after_second == 1
 
-    # And the single call covered BOTH stream ids — the set passed to
-    # the lookup must contain 100 (direct) and 85796 (URL-derived).
-    second_poll_call_args = mock_client.get_streams_by_ids.call_args_list[1]
-    ids_arg = second_poll_call_args.args[0]
+    # And the single first-poll call covered BOTH stream ids — the set passed
+    # to the lookup must contain 100 (direct) and 85796 (URL-derived).
+    first_poll_call_args = mock_client.get_streams_by_ids.call_args_list[0]
+    ids_arg = first_poll_call_args.args[0]
     assert set(ids_arg) == {100, 85796}, ids_arg
 
     session = patched_session_local()
@@ -2337,9 +2424,13 @@ async def test_resolver_called_once_per_poll_with_buffer_ingest(
     await tracker._collect_stats()
     after_second = mock_client.get_streams_by_ids.await_count
 
-    # Two polls → exactly two resolver calls, no extras from buffer ingest.
+    # First poll → exactly ONE resolver call, no extras from buffer ingest
+    # (the buffer ingest shares the resolver's result, never re-fetches).
     assert after_first == 1
-    assert after_second == 2
+    # Second poll → still one call total: ADR-013 §D3 (bead 312nk.4) serves the
+    # same stream_id from the process-lived cache. The buffer ingest still adds
+    # no extra round-trip.
+    assert after_second == 1
 
 
 @pytest.mark.asyncio

@@ -38,14 +38,46 @@ class TokenRevokedError(Exception):
 # In-memory store for revoked tokens (in production, use Redis or database)
 _revoked_tokens: set = set()
 
+# One-shot flag so the first fallback to the per-process random secret is
+# logged at ERROR with a full traceback; repeats log at WARNING without one.
+_fallback_logged = False
+
 
 def _get_secret_key() -> str:
-    """Get the JWT secret key from settings or use default."""
+    """Get the JWT secret key from settings, or fall back to a per-process
+    random default when settings are genuinely unavailable.
+
+    Only ImportError (settings module unavailable, e.g. stripped test
+    environments or an import cycle during early startup) and OSError
+    (config directory/file unreadable) trigger the fallback — any other
+    exception is a bug and propagates so it surfaces as a logged 500
+    instead of being silently converted into an auth lockout (bd-0gt2i:
+    the old bare ``except Exception`` masked every failure as a fallback
+    to a random secret, invalidating all sessions with no visible cause).
+    """
+    global _fallback_logged
     try:
         from .settings import get_jwt_secret_key
         return get_jwt_secret_key()
-    except Exception as e:
-        logger.warning("[AUTH] JWT secret key unavailable, using default: %s", e)
+    except (ImportError, OSError) as e:
+        if not _fallback_logged:
+            _fallback_logged = True
+            logger.error(
+                "[AUTH] JWT secret key unavailable (%s: %s) — falling back to a "
+                "per-process RANDOM secret. All existing sessions/tokens are "
+                "invalid until auth settings become readable, and every process "
+                "restart invalidates them again.",
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "[AUTH] JWT secret key still unavailable (%s: %s) — using "
+                "per-process random fallback secret",
+                type(e).__name__,
+                e,
+            )
         return _DEFAULT_SECRET_KEY
 
 
@@ -106,12 +138,18 @@ def create_refresh_token(user_id: int) -> str:
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
 
 
-def decode_token(token: str) -> dict:
+def decode_token(token: str, ignore_revocation: bool = False) -> dict:
     """
     Decode and validate a JWT token.
 
     Args:
         token: The JWT token string to decode.
+        ignore_revocation: Skip the in-process jti revocation check while
+            still enforcing signature and expiry. Used ONLY by the refresh
+            rotation grace window (bd-x67qe): a rotated-away predecessor's
+            jti is blacklisted the moment the winner rotates, but the token
+            may still be honored by the DB-side grace check. Never use this
+            for authorization decisions.
 
     Returns:
         The decoded token claims.
@@ -119,6 +157,8 @@ def decode_token(token: str) -> dict:
     Raises:
         TokenExpiredError: If the token has expired.
         InvalidTokenError: If the token is invalid.
+        TokenRevokedError: If the token has been revoked (unless
+            ``ignore_revocation``).
     """
     if not token or not isinstance(token, str):
         raise InvalidTokenError("Invalid token format")
@@ -133,7 +173,7 @@ def decode_token(token: str) -> dict:
 
         # Check if token is revoked
         jti = payload.get("jti")
-        if jti and jti in _revoked_tokens:
+        if not ignore_revocation and jti and jti in _revoked_tokens:
             raise TokenRevokedError("Token has been revoked")
 
         # Convert sub back to int for API compatibility

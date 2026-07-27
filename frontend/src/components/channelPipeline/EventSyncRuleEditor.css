@@ -1,0 +1,408 @@
+/**
+ * EventSyncRuleEditor styles
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .form-group, .form-hint,
+ * .checkbox-group, .checkbox-option, .warning-message, .spinning,
+ * .badge, .badge-sm, .badge-info, .badge-warning
+ *
+ * Uses the SHARED two-pane modal layout system in ModalBase.css (bead
+ * m1s38.1) for the wizard layout: .modal-twopane / .modal-main / .modal-rail,
+ * the .modal-stepper step pills, the .modal-intent card, and the
+ * .modal-subgroup / .modal-why collapsibles. Those replaced the former
+ * event-sync-* layout variants (grid / main / rail / intent / scrollspy /
+ * subgroup / why) — do NOT reintroduce editor-specific copies of them here.
+ *
+ * The classes below are the parts that stay component-local: the editor shell
+ * (content region + footer), the per-step phase headings, the wizard impact
+ * block, the Review summary, and Event-Sync-specific form widgets.
+ */
+
+/* The parent modal-container owns the height (max-height 90vh); the editor
+   fills the space between the sticky header and footer and lets its content
+   region own the scroll — no inner max-height (that double-constrained the
+   height and clipped the top/bottom). */
+.event-sync-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.event-sync-editor-content {
+  overflow-y: auto;
+  padding: 16px 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.event-sync-rail-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Step-reactive impact block in the rail (bead m1s38.1). */
+.event-sync-impact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-sync-impact-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.event-sync-impact-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.event-sync-impact-chips {
+  margin: 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Phase spine: strong step-section headings for Scope / Matching / Behavior /
+   Review. Each step section is toggled with the `hidden` attribute. */
+.event-sync-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* An explicit `display` above overrides the UA `[hidden] { display: none }`
+   rule, so the hidden (non-active) step sections would otherwise all render.
+   Re-assert the hide so the wizard actually swaps the left column per step. */
+.event-sync-phase[hidden] {
+  display: none;
+}
+
+.event-sync-phase-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--border-primary);
+}
+
+.event-sync-phase-title:focus-visible {
+  outline: 2px solid var(--button-primary-bg);
+  outline-offset: 2px;
+}
+
+.event-sync-phase-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* Review-step summary (bead m1s38.1) with per-row jump-back links. */
+.event-sync-review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+.event-sync-review-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.event-sync-review-row dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-sync-review-row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.event-sync-review-warn {
+  color: var(--warning, #f59e0b);
+  font-weight: 600;
+}
+
+/* bead y8yby: emphasise the "Test is no longer zero-write" consequence of the
+   refresh-providers-before-run toggle. */
+.event-sync-warning-hint {
+  color: var(--warning, #f59e0b);
+}
+
+.event-sync-review-jump {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 4px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.event-sync-review-jump:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.event-sync-review-jump .material-icons {
+  font-size: 16px;
+}
+
+.event-sync-quick-path {
+  margin: 0;
+}
+
+/* S4b: inline "use the master group's own streams" anchor in the Secondary
+   section — a link-styled button (no new primitive). */
+.event-sync-inline-link {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.event-sync-inline-link:hover {
+  text-decoration: underline;
+}
+
+.event-sync-inline-link:focus-visible {
+  outline: 2px solid var(--button-primary-bg);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.event-sync-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-sync-section-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-primary);
+  padding-bottom: 4px;
+}
+
+.event-sync-editor input[type='text'],
+.event-sync-editor input[type='number'],
+.event-sync-editor textarea {
+  width: 100%;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.event-sync-secondary-search {
+  max-width: 320px;
+}
+
+.event-sync-secondary-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.event-sync-inline-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.event-sync-inline-warn .material-icons {
+  font-size: 14px;
+}
+
+/* bead x82s3: round-trip guard hint — an already-selected group that's
+   disabled/hidden from the default enabled-only filter still renders, with
+   this subtle marker. */
+.event-sync-disabled-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.event-sync-status-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.event-sync-status-ok .material-icons {
+  font-size: 16px;
+}
+
+.event-sync-pattern-list {
+  gap: 10px;
+}
+
+/* Keep the checkbox inline with the pattern title rather than wrapped onto its
+   own line above it. The base .checkbox-option is `flex-wrap: wrap` +
+   `align-items: center`, and the text column has no width bound, so the long
+   description pushes the column below the box. Top-align the box to the first
+   line, forbid wrapping, and let the text column take the remaining width and
+   wrap its own text (min-width: 0 lets it shrink below content size). */
+.event-sync-pattern-option {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.event-sync-pattern-option > span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.event-sync-pattern-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-sync-pattern-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.event-sync-pattern-example {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+
+.event-sync-details {
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+}
+
+.event-sync-details > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.event-sync-details > summary:focus-visible {
+  outline: 2px solid var(--button-primary-bg);
+  outline-offset: -2px;
+}
+
+.event-sync-details-body {
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-override {
+  margin-top: 6px;
+}
+
+.event-sync-editor-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* The Back / Save / Next cluster sits at the far right; Cancel stays far
+   left. */
+.event-sync-footer-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.event-sync-save-error {
+  color: var(--text-primary);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Guided-setup fix buttons inside the auto-sync warnings (ti939.3.4). */
+.event-sync-fix-btn {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.rule-active-window {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.rule-active-window legend {
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.rule-active-window-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .rule-active-window-fields {
+    grid-template-columns: 1fr;
+  }
+}

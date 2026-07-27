@@ -38,21 +38,40 @@ import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModa
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
+import { compareChannelNames, type ChannelSortOrder } from '../utils/channelSort';
 import { getDateLocale } from '../utils/formatting';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useDropdown } from '../hooks/useDropdown';
-import { useContextMenu } from '../hooks/useContextMenu';
 import { useModal } from '../hooks/useModal';
 import { useNormalizePreview } from '../hooks/useNormalizePreview';
 import { ChannelListItem } from './ChannelListItem';
 import { StreamListItem } from './StreamListItem';
+import { ShowMoreRows } from './ShowMoreRows';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
 import { MergeChannelsModal } from './MergeChannelsModal';
+import { SelectionActionBar } from './SelectionActionBar';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
+
+// Incremental rendering for large groups (bd-bed9r). Expanding a group
+// renders at most this many channel rows initially; a ShowMoreRows sentinel
+// renders the next chunk on scroll or click. Bounds the DOM cost of huge
+// groups (427-channel group previously ≈ 2,000+ nodes on expand) without a
+// virtualization dependency and without unmounting rows @dnd-kit is using.
+const GROUP_RENDER_CHUNK_SIZE = 100;
+
+/**
+ * Window-level event that navigates to Settings → Maintenance → Orphaned
+ * Channel Groups (bead 09x38.15 item 3). Follows the same cross-tree
+ * navigation pattern as `ecm:open-task-editor` (App.tsx listens and calls
+ * `setHash`) rather than prop-drilling the hash-route setter down through
+ * ChannelManagerTab — ChannelsPane has no other reason to know about
+ * Settings sub-pages.
+ */
+export const NAVIGATE_TO_ORPHANED_GROUPS_EVENT = 'ecm:navigate-settings-maintenance';
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -171,7 +190,7 @@ interface SortDropdownButtonProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
 }
 
 // Sort mode labels for journal/description. Module-scoped so it's stable
@@ -185,6 +204,7 @@ const SORT_MODE_LABELS: Record<SortMode, string> = {
   m3u_priority: 'M3U priority',
   audio_channels: 'audio channels',
   custom_streams: 'Custom streams',
+  catchup: 'Catch-up',
 };
 
 const SortDropdownButton = memo(function SortDropdownButton({
@@ -194,13 +214,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
   className = '',
   showLabel = false,
   labelText = 'Sort',
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
 }: SortDropdownButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if any criteria are enabled (for Smart Sort to be useful)
-  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels || enabledCriteria.custom_streams;
+  const anyEnabled = enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.video_codec || enabledCriteria.m3u_priority || enabledCriteria.audio_channels || enabledCriteria.custom_streams || enabledCriteria.catchup;
 
   // Close on outside click
   useEffect(() => {
@@ -226,12 +246,13 @@ const SortDropdownButton = memo(function SortDropdownButton({
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled || isLoading || !anyEnabled}
         title={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
+        aria-label={isLoading ? 'Sorting streams...' : !anyEnabled ? 'No sort criteria enabled' : 'Sort streams'}
       >
-        <span className={`material-icons ${isLoading ? 'spinning' : ''}`}>
+        <span className={`material-icons ${isLoading ? 'spinning' : ''}`} aria-hidden="true">
           {isLoading ? 'sync' : 'sort'}
         </span>
         {showLabel && <span>{labelText}</span>}
-        <span className="material-icons sort-dropdown-arrow">arrow_drop_down</span>
+        <span className="material-icons sort-dropdown-arrow" aria-hidden="true">arrow_drop_down</span>
       </button>
       {isOpen && (
         <div className="sort-dropdown-menu">
@@ -286,13 +307,22 @@ const SortDropdownButton = memo(function SortDropdownButton({
               <span>By Custom Streams</span>
             </button>
           )}
+          {enabledCriteria.catchup && (
+            <button className="sort-dropdown-item" onClick={() => handleModeClick('catchup')}>
+              <span className="material-icons">history</span>
+              <span>By Catch-up</span>
+            </button>
+          )}
         </div>
       )}
     </div>
   );
 });
 
-// Pane-level three-dot menu for toolbar actions
+// Pane-level three-dot menu for toolbar actions.
+// Selection-dependent bulk actions live in SelectionActionBar (bead
+// 09x38.17) — this menu holds ONLY pane-level items: Channel Profiles,
+// Hidden Groups, Sort All Streams, Renumber All Groups, and the CSV trio.
 interface PaneToolbarMenuProps {
   isEditMode: boolean;
   onExportCSV: () => void;
@@ -302,24 +332,8 @@ interface PaneToolbarMenuProps {
   onImportCSV: () => void;
   onSortAllByMode: (mode: SortMode) => void;
   bulkSortingByQuality: boolean;
-  sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
-  onAssignEPG: () => void;
-  onFetchLCN: () => void;
-  onNormalize: () => void;
-  onFindDuplicates: () => void;
-  onRenumber: () => void;
+  sortEnabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
   onRenumberAllGroups: () => void;
-  onSetLogoFromM3U: () => void;
-  onSetLogoFromEPG: () => void;
-  onSortSelectedByMode: (mode: SortMode) => void;
-  onProbe: () => void;
-  hasSelection: boolean;
-  bulkEPGLoading: boolean;
-  bulkLCNLoading: boolean;
-  bulkLogoLoading: boolean;
-  probingChannels: boolean;
-  channelProfiles: ChannelProfile[];
-  onBulkAssignProfile: (profileId: number, enable: boolean) => void;
 }
 
 const PaneToolbarMenu = memo(function PaneToolbarMenu({
@@ -331,36 +345,17 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   onImportCSV,
   onSortAllByMode,
   bulkSortingByQuality,
-  sortEnabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false, custom_streams: false },
-  onAssignEPG,
-  onFetchLCN,
-  onNormalize,
-  onFindDuplicates,
-  onRenumber,
+  sortEnabledCriteria = { resolution: true, bitrate: true, framerate: true, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
   onRenumberAllGroups,
-  onSetLogoFromM3U,
-  onSetLogoFromEPG,
-  onSortSelectedByMode,
-  onProbe,
-  hasSelection,
-  bulkEPGLoading,
-  bulkLCNLoading,
-  bulkLogoLoading,
-  probingChannels,
-  channelProfiles,
-  onBulkAssignProfile,
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sortSubMenuOpen, setSortSubMenuOpen] = useState(false);
-  const [sortSelectedSubMenuOpen, setSortSelectedSubMenuOpen] = useState(false);
-  const [enableProfileSubMenuOpen, setEnableProfileSubMenuOpen] = useState(false);
-  const [disableProfileSubMenuOpen, setDisableProfileSubMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const anyLoading = bulkEPGLoading || bulkLCNLoading || bulkLogoLoading || bulkSortingByQuality || probingChannels;
-  const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels || sortEnabledCriteria.custom_streams;
+  const anyLoading = bulkSortingByQuality;
+  const anySortEnabled = sortEnabledCriteria.resolution || sortEnabledCriteria.bitrate || sortEnabledCriteria.framerate || sortEnabledCriteria.m3u_priority || sortEnabledCriteria.audio_channels || sortEnabledCriteria.custom_streams || sortEnabledCriteria.catchup;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -372,9 +367,6 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
       ) {
         setMenuOpen(false);
         setSortSubMenuOpen(false);
-        setSortSelectedSubMenuOpen(false);
-        setEnableProfileSubMenuOpen(false);
-        setDisableProfileSubMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -384,19 +376,11 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
   const close = () => {
     setMenuOpen(false);
     setSortSubMenuOpen(false);
-    setSortSelectedSubMenuOpen(false);
-    setEnableProfileSubMenuOpen(false);
-    setDisableProfileSubMenuOpen(false);
   };
 
   const handleSortAllClick = (mode: SortMode) => {
     close();
     onSortAllByMode(mode);
-  };
-
-  const handleSortSelectedClick = (mode: SortMode) => {
-    close();
-    onSortSelectedByMode(mode);
   };
 
   return (
@@ -415,8 +399,9 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
           }
         }}
         title="More actions"
+        aria-label="More actions"
       >
-        <span className={`material-icons ${anyLoading ? 'spinning' : ''}`}>
+        <span className={`material-icons ${anyLoading ? 'spinning' : ''}`} aria-hidden="true">
           {anyLoading ? 'sync' : 'more_vert'}
         </span>
       </button>
@@ -430,7 +415,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
           {/* Manage & Groups */}
           <button className="pane-toolbar-menu-item" onClick={() => { close(); onOpenProfiles(); }}>
             <span className="material-icons">group</span>
-            <span>Manage Profiles</span>
+            <span>Channel Profiles</span>
           </button>
           {isEditMode && (
             <button className="pane-toolbar-menu-item" onClick={() => { close(); onShowHiddenGroups(); }}>
@@ -447,7 +432,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                 <>
                   <button
                     className={`pane-toolbar-menu-item has-submenu ${sortSubMenuOpen ? 'submenu-open' : ''} ${bulkSortingByQuality ? 'loading' : ''}`}
-                    onClick={() => { setSortSubMenuOpen(!sortSubMenuOpen); setSortSelectedSubMenuOpen(false); }}
+                    onClick={() => setSortSubMenuOpen(!sortSubMenuOpen)}
                     disabled={bulkSortingByQuality}
                   >
                     <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
@@ -500,6 +485,12 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                           <span>By Custom Streams</span>
                         </button>
                       )}
+                      {sortEnabledCriteria.catchup && (
+                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
+                          <span className="material-icons">history</span>
+                          <span>By Catch-up</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -526,203 +517,6 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
               <span className="material-icons">upload_file</span>
               <span>Import CSV</span>
             </button>
-          )}
-
-          {/* Selection-dependent actions (edit mode with selection) */}
-          {isEditMode && hasSelection && (
-            <>
-              <div className="pane-toolbar-menu-divider" />
-              <div className="pane-toolbar-menu-section-label">Selection</div>
-              <button
-                className={`pane-toolbar-menu-item ${bulkEPGLoading ? 'loading' : ''}`}
-                onClick={() => !bulkEPGLoading && (() => { close(); onAssignEPG(); })()}
-                disabled={bulkEPGLoading}
-              >
-                <span className={`material-icons ${bulkEPGLoading ? 'spinning' : ''}`}>
-                  {bulkEPGLoading ? 'sync' : 'live_tv'}
-                </span>
-                <span>Assign EPG</span>
-              </button>
-              <button
-                className={`pane-toolbar-menu-item ${bulkLCNLoading ? 'loading' : ''}`}
-                onClick={() => !bulkLCNLoading && (() => { close(); onFetchLCN(); })()}
-                disabled={bulkLCNLoading}
-              >
-                <span className={`material-icons ${bulkLCNLoading ? 'spinning' : ''}`}>
-                  {bulkLCNLoading ? 'sync' : 'confirmation_number'}
-                </span>
-                <span>Fetch Gracenote IDs</span>
-              </button>
-              <button className="pane-toolbar-menu-item" onClick={() => { close(); onNormalize(); }}>
-                <span className="material-icons">text_format</span>
-                <span>Normalize Names</span>
-              </button>
-              <button className="pane-toolbar-menu-item" onClick={() => { close(); onFindDuplicates(); }}>
-                <span className="material-icons">merge_type</span>
-                <span>Find Duplicates</span>
-              </button>
-              <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumber(); }}>
-                <span className="material-icons">tag</span>
-                <span>Renumber</span>
-              </button>
-              <button
-                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
-                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromM3U(); })()}
-                disabled={bulkLogoLoading}
-              >
-                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
-                  {bulkLogoLoading ? 'sync' : 'image'}
-                </span>
-                <span>Set Logo from M3U</span>
-              </button>
-              <button
-                className={`pane-toolbar-menu-item ${bulkLogoLoading ? 'loading' : ''}`}
-                onClick={() => !bulkLogoLoading && (() => { close(); onSetLogoFromEPG(); })()}
-                disabled={bulkLogoLoading}
-              >
-                <span className={`material-icons ${bulkLogoLoading ? 'spinning' : ''}`}>
-                  {bulkLogoLoading ? 'sync' : 'image'}
-                </span>
-                <span>Set Logo from EPG</span>
-              </button>
-
-              {/* Sort Selected Streams submenu */}
-              {anySortEnabled && (
-                <>
-                  <button
-                    className={`pane-toolbar-menu-item has-submenu ${sortSelectedSubMenuOpen ? 'submenu-open' : ''} ${bulkSortingByQuality ? 'loading' : ''}`}
-                    onClick={() => { setSortSelectedSubMenuOpen(!sortSelectedSubMenuOpen); setSortSubMenuOpen(false); }}
-                    disabled={bulkSortingByQuality}
-                  >
-                    <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
-                      {bulkSortingByQuality ? 'sync' : 'sort'}
-                    </span>
-                    <span>Sort Streams</span>
-                    <span className="material-icons submenu-arrow">
-                      {sortSelectedSubMenuOpen ? 'expand_less' : 'expand_more'}
-                    </span>
-                  </button>
-                  {sortSelectedSubMenuOpen && (
-                    <div className="pane-toolbar-menu-submenu">
-                      <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('smart')}>
-                        <span className="material-icons">auto_awesome</span>
-                        <span>Smart Sort</span>
-                      </button>
-                      {sortEnabledCriteria.resolution && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('resolution')}>
-                          <span className="material-icons">aspect_ratio</span>
-                          <span>By Resolution</span>
-                        </button>
-                      )}
-                      {sortEnabledCriteria.bitrate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('bitrate')}>
-                          <span className="material-icons">speed</span>
-                          <span>By Bitrate</span>
-                        </button>
-                      )}
-                      {sortEnabledCriteria.framerate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('framerate')}>
-                          <span className="material-icons">slow_motion_video</span>
-                          <span>By Framerate</span>
-                        </button>
-                      )}
-                      {sortEnabledCriteria.m3u_priority && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('m3u_priority')}>
-                          <span className="material-icons">low_priority</span>
-                          <span>By M3U Priority</span>
-                        </button>
-                      )}
-                      {sortEnabledCriteria.audio_channels && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('audio_channels')}>
-                          <span className="material-icons">surround_sound</span>
-                          <span>By Audio Channels</span>
-                        </button>
-                      )}
-                      {sortEnabledCriteria.custom_streams && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortSelectedClick('custom_streams')}>
-                          <span className="material-icons">edit_note</span>
-                          <span>By Custom Streams</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              <button
-                className={`pane-toolbar-menu-item ${probingChannels ? 'loading' : ''}`}
-                onClick={() => !probingChannels && (() => { close(); onProbe(); })()}
-                disabled={probingChannels}
-              >
-                <span className={`material-icons ${probingChannels ? 'spinning' : ''}`}>
-                  {probingChannels ? 'sync' : 'speed'}
-                </span>
-                <span>Probe Streams</span>
-              </button>
-
-              {channelProfiles.length > 0 && (
-                <>
-                  <button
-                    className={`pane-toolbar-menu-item has-submenu ${enableProfileSubMenuOpen ? 'submenu-open' : ''}`}
-                    onClick={() => {
-                      setEnableProfileSubMenuOpen(!enableProfileSubMenuOpen);
-                      setDisableProfileSubMenuOpen(false);
-                      setSortSubMenuOpen(false);
-                      setSortSelectedSubMenuOpen(false);
-                    }}
-                  >
-                    <span className="material-icons">visibility</span>
-                    <span>Enable in Profile</span>
-                    <span className="material-icons submenu-arrow">
-                      {enableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
-                    </span>
-                  </button>
-                  {enableProfileSubMenuOpen && (
-                    <div className="pane-toolbar-menu-submenu">
-                      {channelProfiles.map(profile => (
-                        <button
-                          key={profile.id}
-                          className="pane-toolbar-menu-item submenu-item"
-                          onClick={() => { close(); onBulkAssignProfile(profile.id, true); }}
-                        >
-                          <span className="material-icons">group</span>
-                          <span>{profile.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <button
-                    className={`pane-toolbar-menu-item has-submenu ${disableProfileSubMenuOpen ? 'submenu-open' : ''}`}
-                    onClick={() => {
-                      setDisableProfileSubMenuOpen(!disableProfileSubMenuOpen);
-                      setEnableProfileSubMenuOpen(false);
-                      setSortSubMenuOpen(false);
-                      setSortSelectedSubMenuOpen(false);
-                    }}
-                  >
-                    <span className="material-icons">visibility_off</span>
-                    <span>Disable in Profile</span>
-                    <span className="material-icons submenu-arrow">
-                      {disableProfileSubMenuOpen ? 'expand_less' : 'expand_more'}
-                    </span>
-                  </button>
-                  {disableProfileSubMenuOpen && (
-                    <div className="pane-toolbar-menu-submenu">
-                      {channelProfiles.map(profile => (
-                        <button
-                          key={profile.id}
-                          className="pane-toolbar-menu-item submenu-item"
-                          onClick={() => { close(); onBulkAssignProfile(profile.id, false); }}
-                        >
-                          <span className="material-icons">group</span>
-                          <span>{profile.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </>
           )}
         </div>,
         document.body
@@ -788,7 +582,6 @@ interface DroppableGroupHeaderProps {
   onRenameGroup?: () => void;
   onSelectAll?: () => void;
   onStreamDropOnGroup?: (groupId: number | 'ungrouped', streamIds: number[]) => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
   // Drag handle props: `{ ...attributes, ...listeners }` from @dnd-kit/sortable's
   // useSortable(). `attributes` is ARIA/a11y metadata (strings/booleans) and `listeners`
   // is a map of DOM event handlers. dnd-kit's SyntheticListenerMap (Record<string, Function>)
@@ -799,7 +592,7 @@ interface DroppableGroupHeaderProps {
   onSortStreamsByQuality?: () => void;
   onSortStreamsByMode?: (mode: SortMode) => void;
   isSortingByQuality?: boolean;
-  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams', boolean>;
+  enabledCriteria?: Record<'resolution' | 'bitrate' | 'framerate' | 'video_codec' | 'm3u_priority' | 'audio_channels' | 'custom_streams' | 'catchup', boolean>;
   failedChannelCount?: number;
   successChannelCount?: number;
 }
@@ -821,14 +614,13 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   onRenameGroup,
   onSelectAll,
   onStreamDropOnGroup,
-  onContextMenu,
   dragHandleProps,
   onProbeGroup,
   isProbing = false,
   onSortStreamsByQuality,
   onSortStreamsByMode,
   isSortingByQuality = false,
-  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false },
+  enabledCriteria = { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false },
   failedChannelCount = 0,
   successChannelCount = 0,
 }: DroppableGroupHeaderProps) {
@@ -952,21 +744,37 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
       ref={setNodeRef}
       className={`group-header ${isOver && isEditMode ? 'drop-target' : ''} ${streamDragOver ? 'stream-drag-over' : ''}`}
       onClick={onToggle}
-      onContextMenu={onContextMenu}
       onDragOver={handleStreamDragOver}
       onDragLeave={handleStreamDragLeave}
       onDrop={handleStreamDrop}
     >
       {isEditMode && !isEmpty && (
-        <span
+        /* Semantic, keyboard-operable group select-all (bead
+           enhancedchannelmanager-s8xpd, tri-state fix from the round-2
+           review of that bead's PR): a real <button role="checkbox"> is
+           natively focusable and Space/Enter fire click; aria-checked
+           carries the true tri-state (true/false/"mixed") instead of the
+           boolean aria-pressed the first pass shipped, which announced
+           "none selected" and "some selected" identically. StreamsPane's
+           equivalent group-selection-checkbox got the same fix in the same
+           round, so the two panes' group-header semantics stay consistent. */
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={allSelected ? true : someSelected ? 'mixed' : false}
           className={`group-checkbox ${allSelected ? 'checked' : ''} ${someSelected ? 'indeterminate' : ''}`}
           onClick={handleCheckboxClick}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          draggable={false}
           title={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
+          aria-label={allSelected ? 'Deselect all channels in group' : 'Select all channels in group'}
         >
-          <span className="material-icons">
+          <span className="material-icons" aria-hidden="true">
             {allSelected ? 'check_box' : someSelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
           </span>
-        </span>
+        </button>
       )}
       {isEditMode && groupId !== 'ungrouped' && (
         <span
@@ -977,13 +785,43 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           ⋮⋮
         </span>
       )}
-      <span className="group-toggle">{isExpanded ? '▼︎' : '▶︎'}</span>
-      <span className="group-name">
-        {groupName}
-        {groupId === 'ungrouped' && (
-          <span className="group-subtext"> – Channels without a specific group</span>
-        )}
-      </span>
+      {/* Expand/collapse toggle, restructured to a sibling <button> (round-2
+          review of bead enhancedchannelmanager-s8xpd's PR): the group select-
+          all button above used to be nested inside this row's own
+          role="button" div, which is two conflicting interactive elements
+          one inside the other -- a nesting the accessibility tree and some
+          assistive tech handle poorly regardless of the click-guard below.
+          Pulling expand/collapse out into its own real <button> (native
+          Enter/Space handling, no manual keydown needed) makes it a sibling
+          of the select-all button instead of an ancestor, which removes the
+          nesting outright. The outer row keeps onClick={onToggle} as a
+          mouse-only "click anywhere in the row" convenience; every
+          interactive child (this button, the select-all checkbox, the probe
+          button, the group menu button) stops propagation on click so that
+          convenience handler can't double-fire. Because the row itself is
+          no longer focusable (no role="button"/tabIndex), it can never be
+          the keydown event's own target, which is the structurally safer
+          replacement for the old bd-6n14l target-check guard: that guard
+          existed only to stop this row's keydown handler reacting to
+          Enter/Space bubbling up from a focused nested button, and a
+          non-focusable row can't receive a keydown of its own to react to. */}
+      <button
+        type="button"
+        className="group-toggle-btn"
+        aria-expanded={isExpanded}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+      >
+        <span className="group-toggle">{isExpanded ? '▼︎' : '▶︎'}</span>
+        <span className="group-name">
+          {groupName}
+          {groupId === 'ungrouped' && (
+            <span className="group-subtext"> – Channels without a specific group</span>
+          )}
+        </span>
+      </button>
       {isAutoSync && (
         <span className="group-auto-sync-badge" title="Auto-populated by channel sync">
           Auto-Sync
@@ -1020,8 +858,9 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
           }}
           disabled={isProbing}
           title={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
+          aria-label={isProbing ? 'Probing streams...' : 'Probe all streams in this group'}
         >
-          <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+          <span className={`material-icons ${isProbing ? 'spinning' : ''}`} aria-hidden="true">
             {isProbing ? 'sync' : 'speed'}
           </span>
         </button>
@@ -1044,8 +883,9 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
               }
             }}
             title="Group actions"
+            aria-label="Group actions"
           >
-            <span className="material-icons">more_vert</span>
+            <span className="material-icons" aria-hidden="true">more_vert</span>
           </button>
           {groupMenuOpen && menuPosition && createPortal(
             <div
@@ -1068,7 +908,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </button>
               )}
               {/* Sort Streams sub-menu */}
-              {(onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.custom_streams) && (
+              {(onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.custom_streams || enabledCriteria.catchup) && (
                 <>
                   <div className="group-menu-divider" />
                   <button
@@ -1124,6 +964,12 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                         <button className="group-menu-item submenu-item" onClick={() => handleSortModeClick('custom_streams')}>
                           <span className="material-icons">edit_note</span>
                           <span>By Custom Streams</span>
+                        </button>
+                      )}
+                      {enabledCriteria.catchup && (
+                        <button className="group-menu-item submenu-item" onClick={() => handleSortModeClick('catchup')}>
+                          <span className="material-icons">history</span>
+                          <span>By Catch-up</span>
                         </button>
                       )}
                     </div>
@@ -1206,6 +1052,35 @@ const DroppableGroupEnd = memo(function DroppableGroupEnd({
     </div>
   );
 });
+
+/** Capability tiers in display order — highest resolution first. */
+const CAPABILITY_TIER_ORDER = ['4K', 'FHD', 'HD', 'SD'] as const;
+
+/**
+ * Distinct resolution capability tiers among a channel's successfully-probed
+ * streams, ordered highest-first (4K → FHD → HD → SD). Streams without a
+ * successful probe or a parseable resolution contribute nothing; a channel
+ * with no probed streams yields an empty array (no pills). Height buckets
+ * mirror StreamListItem's formatResolution.
+ */
+function channelCapabilityTiers(
+  streamIds: number[],
+  statsMap: Map<number, StreamStats>,
+): string[] {
+  const tiers = new Set<string>();
+  for (const streamId of streamIds) {
+    const stats = statsMap.get(streamId);
+    if (!stats || stats.probe_status !== 'success' || !stats.resolution) continue;
+    const match = stats.resolution.match(/(\d+)x(\d+)/);
+    if (!match) continue;
+    const height = parseInt(match[2], 10);
+    if (height >= 2160) tiers.add('4K');
+    else if (height >= 1080) tiers.add('FHD');
+    else if (height >= 720) tiers.add('HD');
+    else tiers.add('SD');
+  }
+  return CAPABILITY_TIER_ORDER.filter((tier) => tiers.has(tier));
+}
 
 export function ChannelsPane({
   channelGroups,
@@ -1311,6 +1186,9 @@ export function ChannelsPane({
   void onCreateChannel;
   void onStageAddStream;
   const [expandedGroups, setExpandedGroups] = useState<GroupState>({});
+  // Per-group render limit for incremental rendering (bd-bed9r). Absent key
+  // means the initial chunk size; reset when the group is toggled.
+  const [groupRenderLimits, setGroupRenderLimits] = useState<Record<number, number>>({});
   const [groupOrder, setGroupOrder] = useState<number[]>([]); // Custom order for groups
   const [dragOverChannelId, setDragOverChannelId] = useState<number | null>(null);
   const [localChannels, setLocalChannels] = useState<Channel[]>(channels);
@@ -1352,6 +1230,11 @@ export function ChannelsPane({
 
   // Stream stats state for displaying probe metadata
   const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  // Dispatcharr-stale stream ids (bead enhancedchannelmanager-po78p / GH
+  // #696) — the single source of truth for stale-stream decoration in this
+  // pane. Populated best-effort by the mount effect below; an empty set
+  // just means no decorations render, not an error state.
+  const [staleStreamIds, setStaleStreamIds] = useState<Set<number>>(new Set());
   const [probingChannels, setProbingChannels] = useState<Set<number>>(new Set());
   const [probingGroups, setProbingGroups] = useState<Set<number | 'ungrouped'>>(new Set());
 
@@ -1445,13 +1328,6 @@ export function ChannelsPane({
   const mergeModal = useModal();
   const [mergeChannelIds, setMergeChannelIds] = useState<number[]>([]);
 
-  // Context menu management
-  const {
-    contextMenu,
-    showContextMenu,
-    hideContextMenu,
-  } = useContextMenu<{ channelIds: number[] }>();
-
   // Cross-group move modal state
   const crossGroupMoveModal = useModal();
   const [crossGroupMoveData, setCrossGroupMoveData] = useState<{
@@ -1484,6 +1360,10 @@ export function ChannelsPane({
   const [sortRenumberStartingNumber, setSortRenumberStartingNumber] = useState<string>('');
   const [sortStripNumbers, setSortStripNumbers] = useState<boolean>(true);
   const [sortIgnoreCountry, setSortIgnoreCountry] = useState<boolean>(false);
+  // enhancedchannelmanager-hf8t9: asc/desc order toggle. Semantics shared
+  // with the sort_group pipeline action (backend/channel_pipeline_sort.py)
+  // via frontend/src/utils/channelSort.ts.
+  const [sortRenumberOrder, setSortRenumberOrder] = useState<ChannelSortOrder>('asc');
   const [sortRenumberUpdateNames, setSortRenumberUpdateNames] = useState<boolean>(true);
 
   // Mass Renumber modal state
@@ -1581,6 +1461,16 @@ export function ChannelsPane({
     }
     return map;
   }, [logos]);
+
+  const epgDataById = useMemo(
+    () => new Map((epgData || []).map((e) => [e.id, e])),
+    [epgData]
+  );
+
+  const epgSourceById = useMemo(
+    () => new Map((epgSources || []).map((s) => [s.id, s])),
+    [epgSources]
+  );
 
   // Load streams when a channel is selected
   // In edit mode, staged streams may not exist in the API yet, so we need to
@@ -1706,6 +1596,22 @@ export function ChannelsPane({
     };
     preloadAllStreamStats();
   }, [channels]);
+
+  // Fetch Dispatcharr-stale stream ids once on mount (bead
+  // enhancedchannelmanager-po78p / GH #696). Best-effort decoration — a
+  // failure here just means stale streams render undecorated, same posture
+  // as the stream-stats preload above.
+  useEffect(() => {
+    const loadStaleStreamIds = async () => {
+      try {
+        const response = await api.getStaleStreamIds();
+        setStaleStreamIds(new Set(response.stale_stream_ids));
+      } catch (err) {
+        logger.debug('Failed to load stale stream ids:', err);
+      }
+    };
+    loadStaleStreamIds();
+  }, []);
 
   // Handle probe channel request - probes all streams in a channel
   const handleProbeChannel = useCallback(async (channel: Channel) => {
@@ -2007,31 +1913,11 @@ export function ChannelsPane({
     }
   };
 
-  // Handle context menu (right-click)
-  const handleContextMenu = (channel: Channel, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Only show context menu in edit mode when channels are selected
-    if (!isEditMode || selectedChannelIds.size === 0) return;
-
-    // If right-clicked channel isn't selected, select only it
-    if (!selectedChannelIds.has(channel.id)) {
-      if (onToggleChannelSelection) {
-        onToggleChannelSelection(channel.id, false);
-      }
-      showContextMenu(e.clientX, e.clientY, { channelIds: [channel.id] });
-    } else {
-      // Use all selected channels
-      showContextMenu(e.clientX, e.clientY, { channelIds: Array.from(selectedChannelIds) });
-    }
-  };
-
+  // Move the current selection to a group (invoked from the selection action
+  // bar's "Move to group" submenu — was previously the right-click menu).
   const handleMoveToGroup = (targetGroupId: number | null) => {
-    if (!contextMenu) return;
-
     const channelsToMove = localChannels
-      .filter(ch => contextMenu.metadata.channelIds.includes(ch.id))
+      .filter(ch => selectedChannelIds.has(ch.id))
       .sort((a, b) => naturalCompare(a.name, b.name));
     if (channelsToMove.length === 0) return;
 
@@ -2108,16 +1994,23 @@ export function ChannelsPane({
       sourceGroupMinChannel,
     });
     crossGroupMoveModal.open();
-    hideContextMenu();
   };
 
   const handleCreateGroupAndMove = () => {
-    if (!contextMenu) return;
-    hideContextMenu();
     setCreateGroupShouldMoveChannels(true);  // Flag to move channels after creating group
     createGroupModal.open();
     setNewGroupName('');
   };
+
+  // Move-to-group targets for the selection action bar, sorted by name.
+  // Lists every group (the old right-click menu only listed groups in the
+  // active group filter, which showed nothing with the default empty filter).
+  const sortedMoveTargetGroups = useMemo(
+    () => [...channelGroups]
+      .sort((a, b) => naturalCompare(a.name, b.name))
+      .map((g) => ({ id: g.id, name: g.name })),
+    [channelGroups],
+  );
 
   const handleBulkAssignProfile = useCallback(async (
     profileId: number,
@@ -2163,22 +2056,6 @@ export function ChannelsPane({
       await onChannelProfilesChange();
     }
   }, [channelProfiles, notifications, onChannelProfilesChange]);
-
-  // Handle context menu on group header (when entire group is selected)
-  const handleGroupContextMenu = (groupChannelIds: number[], e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Only show context menu in edit mode when channels in this group are selected
-    if (!isEditMode || selectedChannelIds.size === 0) return;
-
-    // Get the intersection of selected channels and channels in this group
-    const selectedInGroup = groupChannelIds.filter(id => selectedChannelIds.has(id));
-
-    if (selectedInGroup.length === 0) return;
-
-    showContextMenu(e.clientX, e.clientY, { channelIds: selectedInGroup });
-  };
 
   // Handle copying channel URL to clipboard
   const handleCopyChannelUrl = async (url: string, channelName: string) => {
@@ -3146,49 +3023,11 @@ export function ChannelsPane({
     onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
   };
 
-  // Helper function to strip leading/trailing/middle channel numbers from a name for sorting purposes
-  // Matches same patterns as computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name", "Name | 123"
-  // Memoized with useCallback - no dependencies as it's a pure function
-  const getNameForSorting = useCallback((channelName: string): string => {
-    // Try stripping mid-position number first: "US | 5034 - Name" -> "US - Name"
-    const midMatch = channelName.match(/^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$/);
-    if (midMatch) {
-      return (midMatch[1] + midMatch[2]).trim();
-    }
-
-    // Try stripping prefix: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
-    const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
-    if (prefixMatch) {
-      return prefixMatch[2].trim();
-    }
-
-    // Try stripping suffix: "Name | 123"
-    const suffixMatch = channelName.match(/^(.+)\s*[|\-.]\s*(\d+(?:\.\d+)?)$/);
-    if (suffixMatch) {
-      return suffixMatch[1].trim();
-    }
-
-    // No number prefix/suffix found, return as-is
-    return channelName;
-  }, []);
-
-  // Helper function to strip country prefix from channel name for sorting
-  // Common patterns: "US | Name", "UK: Name", "CA - Name", "AU Name"
-  // Country codes are typically 2-3 uppercase letters at the start
-  const stripCountryPrefix = useCallback((channelName: string): string => {
-    // Match country code (2-3 uppercase letters) followed by separator and the rest
-    // Supports: "US | Name", "UK: Name", "CA - Name", "USA | Name", etc.
-    const match = channelName.match(/^[A-Z]{2,3}\s*[|:-]\s*(.+)$/);
-    if (match) {
-      return match[1].trim();
-    }
-    // Also try without separator: "US Name" (2-3 uppercase followed by space and uppercase)
-    const noSepMatch = channelName.match(/^[A-Z]{2,3}\s+([A-Z].+)$/);
-    if (noSepMatch) {
-      return noSepMatch[1].trim();
-    }
-    return channelName;
-  }, []);
+  // getNameForSorting / stripCountryPrefix used to live here as local
+  // useCallback pure functions — extracted to frontend/src/utils/
+  // channelSort.ts (enhancedchannelmanager-hf8t9) so the Channel Pipeline
+  // sort_group action's backend port (backend/channel_pipeline_sort.py)
+  // has one frontend source of truth to mirror. Imported above.
 
   // Handle editing channel number
   const handleStartEditNumber = (e: React.MouseEvent, channel: Channel) => {
@@ -3284,6 +3123,14 @@ export function ChannelsPane({
 
   const toggleGroup = (groupId: number) => {
     setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+    // Reset incremental rendering so a re-expanded group starts at the
+    // initial chunk again (bd-bed9r).
+    setGroupRenderLimits((prev) => {
+      if (!(groupId in prev)) return prev;
+      const next = { ...prev };
+      delete next[groupId];
+      return next;
+    });
   };
 
   const handleStreamDragOver = (e: React.DragEvent, channelId: number) => {
@@ -3612,9 +3459,14 @@ export function ChannelsPane({
 
     // Empty group checks
     if (!groupHasChannels) {
-      // If showEmptyGroups is off, only show if newly created and showNewlyCreatedGroups is on
+      // If showEmptyGroups is off, only show if newly created and showNewlyCreatedGroups is on,
+      // or if the user explicitly checked this group in the group filter dropdown — an explicit
+      // selection is a deliberate request to see (and drop into) that group.
       if (!channelListFilters.showEmptyGroups) {
-        if (isNewlyCreated && channelListFilters.showNewlyCreatedGroups) {
+        const isExplicitlySelected = selectedGroups.includes(groupId);
+        if (isExplicitlySelected) {
+          // Allow explicitly selected empty groups
+        } else if (isNewlyCreated && channelListFilters.showNewlyCreatedGroups) {
           // Allow newly created empty groups
         } else {
           return false;
@@ -3638,7 +3490,7 @@ export function ChannelsPane({
     }
 
     return true;
-  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap]);
+  }, [channelListFilters, channelsByGroup, newlyCreatedGroupIds, autoSyncRelatedGroups, providerSettingsMap, selectedGroups]);
 
   // Filter sorted channel groups based on filter settings
   const filteredChannelGroups = useMemo(() => {
@@ -4812,6 +4664,7 @@ export function ChannelsPane({
     setSortRenumberStartingNumber('');
     setSortStripNumbers(true);
     setSortIgnoreCountry(false);
+    setSortRenumberOrder('asc');
   };
 
   const handleSortRenumberConfirm = () => {
@@ -4820,23 +4673,17 @@ export function ChannelsPane({
     const startingNumber = parseInt(sortRenumberStartingNumber, 10);
     if (isNaN(startingNumber) || startingNumber < 1) return;
 
-    // Sort channels alphabetically by name (case-insensitive, natural sort for numbers)
-    // Apply optional transformations for sorting
-    const sortedChannels = [...sortRenumberData.channels].sort((a, b) => {
-      let nameA = a.name;
-      let nameB = b.name;
-      // Strip channel numbers if enabled
-      if (sortStripNumbers) {
-        nameA = getNameForSorting(nameA);
-        nameB = getNameForSorting(nameB);
-      }
-      // Strip country prefix if enabled
-      if (sortIgnoreCountry) {
-        nameA = stripCountryPrefix(nameA);
-        nameB = stripCountryPrefix(nameB);
-      }
-      return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
-    });
+    // Sort channels alphabetically by name (case-insensitive, natural sort
+    // for numbers), applying the same optional transforms + order as the
+    // sort_group pipeline action (backend/channel_pipeline_sort.py) —
+    // shared semantics live in utils/channelSort.ts.
+    const sortedChannels = [...sortRenumberData.channels].sort((a, b) =>
+      compareChannelNames(a.name, b.name, {
+        stripNumbers: sortStripNumbers,
+        ignoreCountry: sortIgnoreCountry,
+        order: sortRenumberOrder,
+      })
+    );
 
     // Start a batch for the entire operation
     if (sortedChannels.length > 1 && onStartBatch) {
@@ -5162,6 +5009,20 @@ export function ChannelsPane({
       ? { min: Math.min(...channelNumbers), max: Math.max(...channelNumbers) }
       : null;
 
+    // Incremental rendering (bd-bed9r): cap the rows in the DOM; the
+    // ShowMoreRows sentinel below the list renders the next chunk on
+    // scroll/click. Selection, select-all, and drop handlers keep operating
+    // on the FULL groupChannels list — only rendering is windowed.
+    const renderLimit = groupRenderLimits[numericGroupId] ?? GROUP_RENDER_CHUNK_SIZE;
+    const isTruncated = groupChannels.length > renderLimit;
+    const visibleChannels = isTruncated ? groupChannels.slice(0, renderLimit) : groupChannels;
+    const handleShowMoreChannels = () => {
+      setGroupRenderLimits((prev) => ({
+        ...prev,
+        [numericGroupId]: (prev[numericGroupId] ?? GROUP_RENDER_CHUNK_SIZE) + GROUP_RENDER_CHUNK_SIZE,
+      }));
+    };
+
     // Handler to select/deselect all channels in this group
     const handleSelectAllInGroup = () => {
       if (!onSelectGroupChannels) return;
@@ -5205,7 +5066,6 @@ export function ChannelsPane({
           onRenameGroup={group ? () => handleRenameGroupClick(group) : undefined}
           onSelectAll={handleSelectAllInGroup}
           onStreamDropOnGroup={handleStreamDropOnGroup}
-          onContextMenu={(e) => handleGroupContextMenu(groupChannels.map(ch => ch.id), e)}
           onProbeGroup={() => handleProbeGroup(groupId, groupName)}
           isProbing={probingGroups.has(groupId)}
           onSortStreamsByQuality={() => handleSortGroupStreamsByQuality(groupId)}
@@ -5225,11 +5085,11 @@ export function ChannelsPane({
         {isExpanded && !isEmpty && (
           <>
             <SortableContext
-              items={groupChannels.map((c) => c.id)}
+              items={visibleChannels.map((c) => c.id)}
               strategy={verticalListSortingStrategy}
             >
               <div className="group-channels">
-                {groupChannels.map((channel) => {
+                {visibleChannels.map((channel) => {
                   // Check if drop indicator should show before this channel
                   const showIndicatorBefore = dropIndicator &&
                     dropIndicator.channelId === channel.id &&
@@ -5245,6 +5105,12 @@ export function ChannelsPane({
                     streamInsertIndicator.channelId === channel.id &&
                     streamInsertIndicator.position === 'before' &&
                     streamInsertIndicator.groupId === groupId;
+                  // Applied EPG record for the TVG subtitle. The channel's own
+                  // tvg_id takes precedence over the linked EPG's (same rule as
+                  // EditChannelModal's lookupTvgId).
+                  const appliedEpg = channel.epg_data_id != null
+                    ? epgDataById.get(channel.epg_data_id)
+                    : undefined;
 
                   return (
                   <div key={channel.id} className="channel-wrapper">
@@ -5355,9 +5221,12 @@ export function ChannelsPane({
                       onDelete={() => handleDeleteChannelClick(channel)}
                       onEditChannel={() => handleEditChannel(channel)}
                       onCopyChannelUrl={dispatcharrUrl && channel.uuid ? () => handleCopyChannelUrl(`${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}`, channel.name) : undefined}
-                      onContextMenu={(e) => handleContextMenu(channel, e)}
                       channelUrl={dispatcharrUrl && channel.uuid ? `${dispatcharrUrl}/proxy/ts/stream/${channel.uuid}` : undefined}
                       showStreamUrls={showStreamUrls}
+                      tvgId={channel.tvg_id || appliedEpg?.tvg_id || null}
+                      tvgName={appliedEpg?.name || null}
+                      epgSourceName={appliedEpg ? epgSourceById.get(appliedEpg.epg_source)?.name || null : null}
+                      capabilities={channelCapabilityTiers(channel.streams, streamStatsMap)}
                       onProbeChannel={() => handleProbeChannel(channel)}
                       isProbing={probingChannels.has(channel.id)}
                       hasFailedStreams={channel.streams.some(streamId => {
@@ -5372,6 +5241,8 @@ export function ChannelsPane({
                         const stats = streamStatsMap.get(streamId);
                         return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
+                      hasStaleStreams={channel.streams.some(streamId => staleStreamIds.has(streamId))}
+                      staleStreamCount={channel.streams.filter(streamId => staleStreamIds.has(streamId)).length}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                       proposedNormalizedName={(() => {
                         const preview = normalizePreviews.get(channel.id);
@@ -5436,6 +5307,7 @@ export function ChannelsPane({
                                           showStreamUrls={showStreamUrls}
                                           streamStats={streamStatsMap.get(stream.id) ?? null}
                                           strikeThreshold={strikeThreshold}
+                                          isStale={staleStreamIds.has(stream.id)}
                                         />
                                       </div>
                                     ))}
@@ -5458,6 +5330,7 @@ export function ChannelsPane({
                                       showStreamUrls={showStreamUrls}
                                       streamStats={streamStatsMap.get(stream.id) ?? null}
                                       strikeThreshold={strikeThreshold}
+                                      isStale={staleStreamIds.has(stream.id)}
                                     />
                                   </div>
                                 ))}
@@ -5477,6 +5350,14 @@ export function ChannelsPane({
                 })}
               </div>
             </SortableContext>
+            {/* Incremental rendering sentinel (bd-bed9r) */}
+            {isTruncated && (
+              <ShowMoreRows
+                remaining={groupChannels.length - visibleChannels.length}
+                noun="channels"
+                onShowMore={handleShowMoreChannels}
+              />
+            )}
             {/* Drop zone at the end of the group - outside SortableContext for better detection */}
             <DroppableGroupEnd
               groupId={groupId}
@@ -5589,27 +5470,9 @@ export function ChannelsPane({
               </button>
             );
           })()}
-          {isEditMode && selectedChannelIds.size > 0 && (
-            <div className="selection-info">
-              <span className="selection-count">{selectedChannelIds.size} selected</span>
-              <div className="selection-actions">
-                <button
-                  className="bulk-action-btn bulk-action-btn--danger"
-                  onClick={handleBulkDeleteClick}
-                  title="Delete selected channels"
-                >
-                  <span className="material-icons">delete</span>
-                </button>
-                <button
-                  className="bulk-action-btn bulk-action-btn--clear"
-                  onClick={onClearChannelSelection}
-                  title="Clear selection"
-                >
-                  <span className="material-icons">close</span>
-                </button>
-              </div>
-            </div>
-          )}
+          {/* The floating SelectionActionBar (bottom of viewport) shows the
+              selection count and carries delete/clear — the old mini
+              "N selected" header strip was absorbed by it (bead 09x38.17). */}
         </div>
         <div className="pane-header-actions">
           {isEditMode && onUndo && onRedo && onCreateSavePoint && onRevertToSavePoint && onDeleteSavePoint && (
@@ -5636,15 +5499,17 @@ export function ChannelsPane({
                 className="create-channel-btn"
                 onClick={() => onOpenCreateChannelModal?.()}
                 title="Create new channel"
+                aria-label="Create new channel"
               >
-                <span className="material-icons create-channel-icon">add</span>
+                <span className="material-icons create-channel-icon" aria-hidden="true">add</span>
               </button>
               <button
                 className="create-group-btn"
                 onClick={() => createGroupModal.open()}
                 title="Create new channel group"
+                aria-label="Create new channel group"
               >
-                <span className="material-icons create-channel-icon">create_new_folder</span>
+                <span className="material-icons create-channel-icon" aria-hidden="true">create_new_folder</span>
               </button>
             </>
           )}
@@ -5658,39 +5523,57 @@ export function ChannelsPane({
             onSortAllByMode={handleSortAllStreamsByMode}
             bulkSortingByQuality={bulkSortingByQuality}
             sortEnabledCriteria={channelDefaults?.streamSortEnabled}
-            onAssignEPG={() => {
-              setBulkEPGLoading(true);
-              setTimeout(() => bulkEPGModal.open(), 50);
-            }}
-            onFetchLCN={() => {
-              setBulkLCNLoading(true);
-              setTimeout(() => bulkLCNModal.open(), 50);
-            }}
-            onNormalize={() => normalizeModal.open()}
-            onFindDuplicates={() => findDuplicatesModal.open()}
-            onRenumber={handleMassRenumberClick}
             onRenumberAllGroups={() => {
               setRenumberAllStartingNumber('1');
               setRenumberAllUpdateNames(true);
               setRenumberAllGroupOverrides({});
               renumberAllGroupsModal.open();
             }}
-            onSortSelectedByMode={handleSortSelectedStreamsByMode}
-            onSetLogoFromM3U={handleBulkSetLogoFromM3U}
-            onSetLogoFromEPG={handleBulkSetLogoFromEPG}
-            onProbe={handleBulkProbe}
-            hasSelection={selectedChannelIds.size > 0}
-            bulkEPGLoading={bulkEPGLoading}
-            bulkLCNLoading={bulkLCNLoading}
-            bulkLogoLoading={bulkLogoLoading}
-            probingChannels={probingChannels.size > 0}
-            channelProfiles={channelProfiles}
-            onBulkAssignProfile={(profileId, enable) =>
-              handleBulkAssignProfile(profileId, Array.from(selectedChannelIds), enable)
-            }
           />
         </div>
       </div>
+
+      {/* Floating selection action bar — fixed to the viewport bottom under
+          both panes while channels are selected (bead 09x38.17). */}
+      {isEditMode && selectedChannelIds.size > 0 && (
+        <SelectionActionBar
+          selectedCount={selectedChannelIds.size}
+          onDelete={handleBulkDeleteClick}
+          onProbe={handleBulkProbe}
+          probing={probingChannels.size > 0}
+          onFindDuplicates={() => findDuplicatesModal.open()}
+          onRenumber={handleMassRenumberClick}
+          onAssignEPG={() => {
+            setBulkEPGLoading(true);
+            setTimeout(() => bulkEPGModal.open(), 50);
+          }}
+          assigningEPG={bulkEPGLoading}
+          onMerge={() => {
+            setMergeChannelIds(Array.from(selectedChannelIds));
+            mergeModal.open();
+          }}
+          onClear={() => onClearChannelSelection?.()}
+          groups={sortedMoveTargetGroups}
+          onMoveToGroup={handleMoveToGroup}
+          onNewGroup={handleCreateGroupAndMove}
+          onNormalize={() => normalizeModal.open()}
+          onSetLogoFromM3U={handleBulkSetLogoFromM3U}
+          onSetLogoFromEPG={handleBulkSetLogoFromEPG}
+          settingLogo={bulkLogoLoading}
+          sortEnabledCriteria={channelDefaults?.streamSortEnabled}
+          onSortStreams={handleSortSelectedStreamsByMode}
+          sortingStreams={bulkSortingByQuality}
+          onFetchGracenote={() => {
+            setBulkLCNLoading(true);
+            setTimeout(() => bulkLCNModal.open(), 50);
+          }}
+          fetchingGracenote={bulkLCNLoading}
+          profiles={channelProfiles}
+          onSetProfileVisibility={(profileId, enable) =>
+            handleBulkAssignProfile(profileId, Array.from(selectedChannelIds), enable)
+          }
+        />
+      )}
 
       {/* Create Channel Group Modal */}
       {createGroupModal.isOpen && (
@@ -6091,6 +5974,7 @@ export function ChannelsPane({
       {/* Find Duplicates Modal */}
       {findDuplicatesModal.isOpen && (
         <FindDuplicatesModal
+          channelIds={Array.from(selectedChannelIds)}
           onClose={() => findDuplicatesModal.close()}
           onMerged={() => {
             findDuplicatesModal.close();
@@ -6556,6 +6440,33 @@ export function ChannelsPane({
                   </span>
                 )}
               </div>
+              <div className="sort-renumber-field sort-renumber-order-field">
+                <label id="sort-renumber-order-label">Sort Order</label>
+                <div
+                  className="sort-renumber-order"
+                  role="radiogroup"
+                  aria-labelledby="sort-renumber-order-label"
+                >
+                  <label className="sort-renumber-checkbox">
+                    <input
+                      type="radio"
+                      name="sort-renumber-order"
+                      checked={sortRenumberOrder === 'asc'}
+                      onChange={() => setSortRenumberOrder('asc')}
+                    />
+                    <span>Ascending (A → Z)</span>
+                  </label>
+                  <label className="sort-renumber-checkbox">
+                    <input
+                      type="radio"
+                      name="sort-renumber-order"
+                      checked={sortRenumberOrder === 'desc'}
+                      onChange={() => setSortRenumberOrder('desc')}
+                    />
+                    <span>Descending (Z → A)</span>
+                  </label>
+                </div>
+              </div>
               <label className="sort-renumber-checkbox">
                 <input
                   type="checkbox"
@@ -6584,22 +6495,16 @@ export function ChannelsPane({
 
             {/* Preview of sorted order */}
             <div className="sort-renumber-preview">
-              <label>Preview (sorted A–Z)</label>
+              <label>Preview (sorted {sortRenumberOrder === 'desc' ? 'Z–A' : 'A–Z'})</label>
               <ul className="sort-renumber-preview-list">
                 {[...sortRenumberData.channels]
-                  .sort((a, b) => {
-                    let nameA = a.name;
-                    let nameB = b.name;
-                    if (sortStripNumbers) {
-                      nameA = getNameForSorting(nameA);
-                      nameB = getNameForSorting(nameB);
-                    }
-                    if (sortIgnoreCountry) {
-                      nameA = stripCountryPrefix(nameA);
-                      nameB = stripCountryPrefix(nameB);
-                    }
-                    return naturalCompare(nameA.toLowerCase(), nameB.toLowerCase());
-                  })
+                  .sort((a, b) =>
+                    compareChannelNames(a.name, b.name, {
+                      stripNumbers: sortStripNumbers,
+                      ignoreCountry: sortIgnoreCountry,
+                      order: sortRenumberOrder,
+                    })
+                  )
                   .slice(0, 5)
                   .map((ch, index) => {
                     const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
@@ -6797,8 +6702,8 @@ export function ChannelsPane({
                 setRenumberAllStartingNumber('1');
                 setRenumberAllUpdateNames(true);
                 setRenumberAllGroupOverrides({});
-              }}>
-                <span className="material-icons">close</span>
+              }} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -6923,8 +6828,9 @@ export function ChannelsPane({
                 className="search-clear-btn"
                 onClick={() => onSearchChange('')}
                 title="Clear search"
+                aria-label="Clear search"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -6963,8 +6869,9 @@ export function ChannelsPane({
                 });
               }}
               title="Expand all groups"
+              aria-label="Expand all groups"
             >
-              <span className="material-icons">unfold_more</span>
+              <span className="material-icons" aria-hidden="true">unfold_more</span>
             </button>
             <button
               className="expand-collapse-btn"
@@ -6973,8 +6880,9 @@ export function ChannelsPane({
                 setExpandedGroups({});
               }}
               title="Collapse all groups"
+              aria-label="Collapse all groups"
             >
-              <span className="material-icons">unfold_less</span>
+              <span className="material-icons" aria-hidden="true">unfold_less</span>
             </button>
           </div>
         </div>
@@ -7008,8 +6916,9 @@ export function ChannelsPane({
                     className="group-filter-search-clear"
                     onClick={() => setGroupFilterSearch('')}
                     title="Clear search"
+                    aria-label="Clear search"
                   >
-                    <span className="material-icons">close</span>
+                    <span className="material-icons" aria-hidden="true">close</span>
                   </button>
                 )}
               </div>
@@ -7074,8 +6983,9 @@ export function ChannelsPane({
             className={`filter-settings-button${channelListFilters?.filterMissingLogo || channelListFilters?.filterMissingTvgId || channelListFilters?.filterMissingEpgData || channelListFilters?.filterMissingGracenote || !channelListFilters?.filterFailedStreams || !channelListFilters?.filterWorkingStreams || !channelListFilters?.filterUnprobedStreams ? ' filter-active' : ''}`}
             onClick={() => setFilterSettingsOpen(!filterSettingsOpen)}
             title="Channel List Filters"
+            aria-label="Channel List Filters"
           >
-            <span className="material-icons" style={{ fontSize: '18px' }}>tune</span>
+            <span className="material-icons" style={{ fontSize: '18px' }} aria-hidden="true">tune</span>
           </button>
           {filterSettingsOpen && channelListFilters && (
             <div className="filter-settings-menu">
@@ -7181,6 +7091,18 @@ export function ChannelsPane({
                   />
                   <span>Unprobed Streams</span>
                 </label>
+                <div className="filter-settings-separator" />
+                <button
+                  type="button"
+                  className="filter-settings-link"
+                  onClick={() => {
+                    setFilterSettingsOpen(false);
+                    window.dispatchEvent(new CustomEvent(NAVIGATE_TO_ORPHANED_GROUPS_EVENT));
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '16px' }}>cleaning_services</span>
+                  Clean up empty groups&hellip;
+                </button>
               </div>
             </div>
           )}
@@ -7381,151 +7303,6 @@ export function ChannelsPane({
           )
         )}
 
-        {/* Context menu */}
-        {contextMenu && (
-          <div
-            className="context-menu"
-            ref={(el) => {
-              if (!el) return;
-              const rect = el.getBoundingClientRect();
-              const viewportHeight = window.innerHeight;
-              const viewportWidth = window.innerWidth;
-              // Flip upward if menu would overflow the bottom
-              if (contextMenu.y + rect.height > viewportHeight) {
-                el.style.top = `${Math.max(0, contextMenu.y - rect.height)}px`;
-              }
-              // Flip left if menu would overflow the right
-              if (contextMenu.x + rect.width > viewportWidth) {
-                el.style.left = `${Math.max(0, contextMenu.x - rect.width)}px`;
-              }
-            }}
-            style={{
-              position: 'fixed',
-              top: contextMenu.y,
-              left: contextMenu.x,
-              zIndex: 10000,
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            <div className="context-menu-item" onClick={() => {
-              // Show submenu of groups to move to
-              const submenu = document.createElement('div');
-              submenu.className = 'context-menu-submenu';
-              submenu.style.position = 'fixed';
-              submenu.style.top = `${contextMenu.y}px`;
-              submenu.style.left = `${contextMenu.x + 200}px`;
-
-              // Uncategorized option
-              const uncategorizedOption = document.createElement('div');
-              uncategorizedOption.className = 'context-menu-item';
-              uncategorizedOption.textContent = 'Uncategorized';
-              uncategorizedOption.onclick = () => {
-                handleMoveToGroup(null);
-                document.body.removeChild(submenu);
-              };
-              submenu.appendChild(uncategorizedOption);
-
-              // Group options (only show visible/selected groups)
-              channelGroups.filter(group => selectedGroups.includes(group.id)).forEach(group => {
-                const option = document.createElement('div');
-                option.className = 'context-menu-item';
-                option.textContent = group.name;
-                option.onclick = () => {
-                  handleMoveToGroup(group.id);
-                  document.body.removeChild(submenu);
-                };
-                submenu.appendChild(option);
-              });
-
-              document.body.appendChild(submenu);
-
-              // Add scroll indicator if content is scrollable
-              const checkScrollable = () => {
-                if (submenu.scrollHeight > submenu.clientHeight) {
-                  submenu.classList.add('scrollable');
-                  // Update scroll indicator based on position
-                  const updateScrollIndicator = () => {
-                    const atTop = submenu.scrollTop <= 0;
-                    const atBottom = submenu.scrollTop + submenu.clientHeight >= submenu.scrollHeight - 1;
-                    submenu.classList.toggle('scroll-top', !atTop);
-                    submenu.classList.toggle('scroll-bottom', !atBottom);
-                  };
-                  updateScrollIndicator();
-                  submenu.addEventListener('scroll', updateScrollIndicator);
-                }
-              };
-              // Check after render
-              requestAnimationFrame(checkScrollable);
-
-              // Close submenu when clicking outside
-              const closeSubmenu = (e: MouseEvent) => {
-                if (!submenu.contains(e.target as Node)) {
-                  document.body.removeChild(submenu);
-                  document.removeEventListener('mousedown', closeSubmenu);
-                }
-              };
-              setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
-            }}>
-              Move channels to... <span className="context-menu-arrow">▶</span>
-            </div>
-            <div className="context-menu-item" onClick={handleCreateGroupAndMove}>
-              Create new group and move
-            </div>
-            {channelProfiles.length > 0 && (() => {
-              const renderProfileSubmenu = (enable: boolean) => {
-                const submenu = document.createElement('div');
-                submenu.className = 'context-menu-submenu';
-                submenu.style.position = 'fixed';
-                submenu.style.top = `${contextMenu.y}px`;
-                submenu.style.left = `${contextMenu.x + 200}px`;
-
-                const channelIds = contextMenu.metadata.channelIds;
-                channelProfiles.forEach(profile => {
-                  const option = document.createElement('div');
-                  option.className = 'context-menu-item';
-                  option.textContent = profile.name;
-                  option.onclick = () => {
-                    handleBulkAssignProfile(profile.id, channelIds, enable);
-                    if (submenu.parentNode) document.body.removeChild(submenu);
-                    hideContextMenu();
-                  };
-                  submenu.appendChild(option);
-                });
-
-                document.body.appendChild(submenu);
-
-                const closeSubmenu = (e: MouseEvent) => {
-                  if (!submenu.contains(e.target as Node)) {
-                    if (submenu.parentNode) document.body.removeChild(submenu);
-                    document.removeEventListener('mousedown', closeSubmenu);
-                  }
-                };
-                setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
-              };
-
-              return (
-                <>
-                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(true)}>
-                    Enable in profile... <span className="context-menu-arrow">▶</span>
-                  </div>
-                  <div className="context-menu-item" onClick={() => renderProfileSubmenu(false)}>
-                    Disable in profile... <span className="context-menu-arrow">▶</span>
-                  </div>
-                </>
-              );
-            })()}
-            {contextMenu.metadata.channelIds.length >= 2 && (
-              <div className="context-menu-item" onClick={() => {
-                setMergeChannelIds(contextMenu.metadata.channelIds);
-                mergeModal.open();
-                hideContextMenu();
-              }}>
-                Merge channels ({contextMenu.metadata.channelIds.length})
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Stream Preview Modal */}
         <PreviewStreamModal
           isOpen={previewStream !== null || previewChannel !== null}
@@ -7569,6 +7346,7 @@ export function ChannelsPane({
               id: s.id,
               name: s.name,
               source_type: s.source_type,
+              priority: s.priority,
             }))}
             channelGroups={channelGroups}
             streamProfiles={streamProfiles}

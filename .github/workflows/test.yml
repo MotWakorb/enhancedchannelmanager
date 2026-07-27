@@ -298,6 +298,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Full history so the build-advance step below can read the base
+          # branch's frontend/package.json via `git show origin/<base>:...`.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -306,6 +310,58 @@ jobs:
 
       - name: Verify version touchpoints agree
         run: python scripts/check_version_consistency.py
+
+      # ─── Build-number ADVANCE gate (bead enhancedchannelmanager-w9irb) ──
+      # The consistency check above proves the three touchpoints MATCH; this
+      # step proves the canonical BUILD number strictly ADVANCED past the base
+      # branch — closing the failure mode where ~9 source PRs shipped to dev
+      # at 0.17.6-0084 with no bump, undetected. Additive: it does not weaken
+      # the consistency check.
+      #
+      # Scope / exemptions:
+      #   - Runs ONLY on pull_request events whose base is `dev`. A release-cut
+      #     PR targets `main` (base_ref=main) and is therefore skipped here;
+      #     the shared script *also* exempts a no-suffix (X.Y.Z) version as a
+      #     second safety net.
+      #   - Docs-only PRs never reach this job: test.yml has
+      #     `paths-ignore: ['**.md', '.beads/**']`, so a docs-only PR runs no
+      #     real job — docs-only-pass.yml posts the "Version Consistency"
+      #     check-run instead. The docs-only exemption is inherited for free.
+      # The CHANGELOG [Unreleased] check inside the script is SOFT: it emits a
+      # ::warning:: annotation and never fails the job.
+      - name: Verify build number advances past base (PRs to dev only)
+        if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          python scripts/check_version_advances.py \
+            --baseline-ref "origin/${{ github.base_ref }}"
+
+  # ─── Fake-test guard (bd-ulp7q.9) ────────────────────────────────────────
+  # Fails the PR if `assert True` (Python) or `expect(true).toBe(true)`
+  # (TypeScript) appear in any test file. Both patterns always pass and
+  # provide zero regression signal — they are the canonical fake-test
+  # anti-pattern from the ulp7q audit.
+  #
+  # No Python deps needed: the script uses only stdlib (pathlib, re, sys).
+  # No Node deps needed: it scans the source tree with pathlib, no build step.
+  #
+  # Convention doc: docs/style_guide.md § "Test validity / anti-patterns".
+  # Suppression: add `# fake-test-ok: <reason>` (Python) or
+  # `// fake-test-ok: <reason>` (TypeScript) on the same line.
+  fake-test-guard:
+    name: Fake-Test Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check for fake-test markers
+        run: python scripts/check_fake_tests.py
 
   # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
   # Screenshots the Heatmap chart primitive in isolation and diffs against

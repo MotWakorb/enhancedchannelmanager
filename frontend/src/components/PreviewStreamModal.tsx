@@ -161,8 +161,8 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
               <span className="preview-stream-channel">{channelName}</span>
             )}
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

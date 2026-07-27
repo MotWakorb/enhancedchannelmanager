@@ -1,0 +1,190 @@
+/**
+ * EventSyncReviewQueue styles (bead ti939.3.2)
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .form-hint,
+ * .error-banner, .empty-state, .spinning-cw
+ */
+
+.event-sync-review-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-sync-review-header h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.event-sync-review-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent-primary);
+  color: var(--text-on-accent, #fff);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.event-sync-review-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* Contested-pairing caution (bead 8rzkq): rejecting one side may auto-attach
+   the sibling — surface it inline on contested cards so the reject is not a
+   surprise. */
+.event-sync-review-contested-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-warning, var(--border-primary));
+  border-radius: 6px;
+  background: var(--bg-warning-subtle, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.event-sync-review-contested-note .material-icons {
+  font-size: 18px;
+  flex-shrink: 0;
+  color: var(--text-warning, var(--text-secondary));
+}
+
+.event-sync-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-review-card {
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-review-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event-sync-review-rule {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-sync-review-provider {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.event-sync-review-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.event-sync-review-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.event-sync-review-side-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.event-sync-review-raw-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.event-sync-review-parsed {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.event-sync-review-parsed dt {
+  color: var(--text-secondary);
+}
+
+.event-sync-review-parsed dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.event-sync-review-evidence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event-sync-review-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary, var(--bg-primary));
+}
+
+.event-sync-review-chip .material-icons {
+  font-size: 14px;
+}
+
+.event-sync-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event-sync-review-row-error {
+  margin-top: 4px;
+}

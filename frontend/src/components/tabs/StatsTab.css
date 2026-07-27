@@ -14,10 +14,18 @@
   overscroll-behavior: contain;
 }
 
+/* Shared header/toolbar overflow policy (bead 09x38.2): wrap so the
+   "Refresh" control drops below the provider tiles instead of being clipped
+   by the overflow:hidden .stats-tab ancestor at 1440px. The inner tile
+   cluster (.header-left / .header-summary) wraps too so the 6 provider tiles
+   reflow gracefully. See docs/css_guidelines.md § "Header / toolbar overflow
+   policy". */
 .stats-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
   margin-bottom: 1rem;
   flex-shrink: 0;
 }
@@ -25,7 +33,9 @@
 .header-left {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
 }
 
 .header-left h2 {
@@ -37,7 +47,9 @@
 .header-summary {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.5rem;
+  row-gap: 0.75rem;
 }
 
 .summary-stat {
@@ -82,10 +94,86 @@
   color: var(--accent-warning, #f59e0b);
 }
 
+/* Condensed Live Stats provider table (bd-49obj / GH-481). Auto-switches in
+   above LIVE_STATS_CONDENSED_THRESHOLD providers — see StatsTab.tsx comment.
+   Dense rows over the tile badges so many providers stay visible at once;
+   internal scroll is a safety net, not the primary layout mechanism. */
+.provider-live-table-wrapper {
+  width: 100%;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md, 6px);
+  margin-top: 0.5rem;
+}
+
+.provider-live-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.provider-live-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.provider-live-table tbody td {
+  padding: 0.3125rem 0.75rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-secondary, var(--border-primary));
+}
+
+.provider-live-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.provider-live-table .provider-live-table-count {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.provider-live-table tr.unknown-bucket td {
+  color: var(--accent-warning, #f59e0b);
+}
+
+.provider-live-table tr.unknown-bucket .material-icons {
+  font-size: 14px;
+  vertical-align: text-bottom;
+  margin-right: 0.25rem;
+}
+
+/* WCAG-compliant visually-hidden utility — visible to screen readers,
+ * removed from visual flow. Same recipe as UserStatsPanel.css /
+ * ProvidersPanel.css (each panel scopes its own copy — no shared global
+ * class in this codebase). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 .header-actions {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .refresh-indicator {
@@ -201,6 +289,15 @@
   gap: 1rem;
   flex: 1;
   min-width: 0;
+}
+
+/* #1: small channel logo beside the channel number in Active Channels rows. */
+.channel-card .channel-logo-mini {
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
 }
 
 .channel-card .channel-number {
@@ -331,6 +428,47 @@
 
 .channel-actions button .material-icons {
   font-size: 18px;
+}
+
+/* Currently Showing (EPG) row */
+.channel-now-playing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  min-width: 0;
+}
+
+.channel-now-playing .material-icons {
+  font-size: 16px;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.channel-now-playing .now-playing-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.channel-now-playing .now-playing-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.channel-now-playing .now-playing-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Channel Stats Grid */
@@ -466,6 +604,29 @@
   min-width: 80px;
   text-align: right;
   font-family: monospace;
+}
+
+/* Per-client disconnect (enhancedchannelmanager-hq3de.h) */
+.client-disconnect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.client-disconnect-btn:hover:not(:disabled) {
+  color: var(--error, #ff6b6b);
+  border-color: var(--error, #ff6b6b);
+}
+
+.client-disconnect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Events Section */

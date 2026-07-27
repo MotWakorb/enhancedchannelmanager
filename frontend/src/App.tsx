@@ -10,6 +10,7 @@ import {
   EditModeExitDialog,
   TabNavigation,
   UserMenu,
+  NAVIGATE_TO_ORPHANED_GROUPS_EVENT,
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
@@ -25,6 +26,7 @@ import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPromptContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   setTelemetryRuntimeEnabled,
@@ -34,9 +36,9 @@ import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // All known sort criteria - used to merge new criteria into saved settings
-const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams'];
+const ALL_SORT_CRITERIA: api.SortCriterion[] = ['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams', 'catchup'];
 const DEFAULT_SORT_ENABLED: api.SortEnabledMap = {
-  resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false
+  resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false
 };
 
 // Merge saved sort criteria with any new criteria that may have been added
@@ -72,9 +74,7 @@ const M3UChangesTab = lazy(() => withImportTelemetry(import('./components/tabs/M
 const JournalTab = lazy(() => withImportTelemetry(import('./components/tabs/JournalTab')).then(m => ({ default: m.JournalTab })));
 const StatsTab = lazy(() => withImportTelemetry(import('./components/tabs/StatsTab')).then(m => ({ default: m.StatsTab })));
 const SettingsTab = lazy(() => withImportTelemetry(import('./components/tabs/SettingsTab')).then(m => ({ default: m.SettingsTab })));
-const AutoCreationTab = lazy(() => withImportTelemetry(import('./components/autoCreation/AutoCreationTab')).then(m => ({ default: m.AutoCreationTab })));
-const FFMPEGBuilderTab = lazy(() => withImportTelemetry(import('./components/ffmpegBuilder/FFMPEGBuilderTab')).then(m => ({ default: m.FFMPEGBuilderTab })));
-const ExportTab = lazy(() => withImportTelemetry(import('./components/tabs/ExportTab')).then(m => ({ default: m.ExportTab })));
+const ChannelPipelineTab = lazy(() => withImportTelemetry(import('./components/channelPipeline/ChannelPipelineTab')).then(m => ({ default: m.ChannelPipelineTab })));
 
 // Self-contained timer component — updates only itself every second,
 // not the entire App tree (which was the previous behavior)
@@ -101,7 +101,15 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
       ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
       : `${Math.floor(seconds / 60)}m`;
 
-  return <span className="edit-mode-timer">({display})</span>;
+  // bd-b2vf5: with no label, "Edit Mode (1m 20s)" reads ambiguously — a
+  // first-time user could easily mistake it for a countdown-to-cancel
+  // warning instead of what it actually is, elapsed time since Edit Mode
+  // was entered (it only ever counts up).
+  return (
+    <span className="edit-mode-timer" title="Time elapsed since Edit Mode was entered (counts up, not a countdown)">
+      ({display})
+    </span>
+  );
 }
 
 function App() {
@@ -191,6 +199,12 @@ function App() {
   // review" toast that fires after an M3U refresh queues pending merges.
   // Sourced from `settings.dedup_m3u_toast_suppressed` (BD-K Settings UI).
   const [dedupM3uToastSuppressed, setDedupM3uToastSuppressed] = useState(false);
+  // bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+  // guard — when true, a channel group already auto-synced by another M3U
+  // account is no longer locked; the toggle/Start#/Settings stay usable
+  // (with a shared-ownership indicator). Sourced from
+  // `settings.allow_multi_provider_auto_sync` (admin-only, default false).
+  const [allowMultiProviderAutoSync, setAllowMultiProviderAutoSync] = useState(false);
   const [normalizeOnChannelCreate, setNormalizeOnChannelCreate] = useState(false);
   const [showVLCHelperModal, setShowVLCHelperModal] = useState(false);
   const [vlcModalStreamUrl, setVlcModalStreamUrl] = useState('');
@@ -523,6 +537,17 @@ function App() {
     return () => window.removeEventListener('ecm:open-task-editor', handler);
   }, [setHash]);
 
+  // Listen for "Clean up empty groups" navigation from ChannelsPane's
+  // Channel List Filters panel (bead 09x38.15 item 3) — links to Settings →
+  // Maintenance → Orphaned Channel Groups rather than embedding the tool.
+  useEffect(() => {
+    const handler = () => {
+      setHash('settings', 'maintenance');
+    };
+    window.addEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
+    return () => window.removeEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
+  }, [setHash]);
+
   // Check settings and load initial data
   useEffect(() => {
     const init = async () => {
@@ -548,6 +573,7 @@ function App() {
         setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
         setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
         setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+        setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
         setNormalizeOnChannelCreate(settings.normalize_on_channel_create ?? false);
         // Store VLC settings globally for vlc utility to access
         const vlcBehavior = (settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only') || 'm3u_fallback';
@@ -772,6 +798,7 @@ function App() {
       setGracenoteConflictMode(settings.gracenote_conflict_mode || 'ask');
       setEpgAutoMatchThreshold(settings.epg_auto_match_threshold ?? 80);
       setDedupM3uToastSuppressed(settings.dedup_m3u_toast_suppressed ?? false);
+      setAllowMultiProviderAutoSync(settings.allow_multi_provider_auto_sync ?? false);
       setChannelDefaults({
         includeChannelNumberInName: settings.include_channel_number_in_name,
         channelNumberSeparator: settings.channel_number_separator,
@@ -1150,7 +1177,7 @@ function App() {
     };
   }, [channelFilters.search]);
 
-  // Refresh channels/groups when auto-creation pipeline modifies them
+  // Refresh channels/groups when the channel pipeline modifies them
   // Uses api.* directly and channelGroupsRef to avoid stale closures (empty [] deps)
   useEffect(() => {
     const handleChannelsChanged = async () => {
@@ -2186,6 +2213,7 @@ function App() {
 
   return (
     <NotificationProvider position="top-right">
+    <BackupDestinationPromptProvider>
     <div className="app">
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <h1>
@@ -2492,7 +2520,9 @@ function App() {
               streamProfiles={streamProfiles}
               onChannelGroupsChange={loadChannelGroups}
               onAccountsChange={() => { loadProviders(); loadStreamGroups(); }}
+              onStreamProfilesChange={loadStreamProfiles}
               hideM3uUrls={hideM3uUrls}
+              allowMultiProviderAutoSync={allowMultiProviderAutoSync}
             />
             </ErrorBoundary>
           )}
@@ -2527,14 +2557,9 @@ function App() {
               <M3UChangesTab />
             </ErrorBoundary>
           )}
-          {activeTab === 'auto-creation' && (
-            <ErrorBoundary key="tab-auto-creation" scopeLabel="Auto-Creation tab" reloadMode="reset">
-              <AutoCreationTab />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'export' && (
-            <ErrorBoundary key="tab-export" scopeLabel="Export tab" reloadMode="reset">
-              <ExportTab />
+          {activeTab === 'channel-pipeline' && (
+            <ErrorBoundary key="tab-channel-pipeline" scopeLabel="Channel Pipeline tab" reloadMode="reset">
+              <ChannelPipelineTab />
             </ErrorBoundary>
           )}
           {activeTab === 'journal' && (
@@ -2545,11 +2570,6 @@ function App() {
           {activeTab === 'stats' && (
             <ErrorBoundary key="tab-stats" scopeLabel="Stats tab" reloadMode="reset">
               <StatsTab />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'ffmpeg-builder' && (
-            <ErrorBoundary key="tab-ffmpeg-builder" scopeLabel="FFMPEG Builder tab" reloadMode="reset">
-              <FFMPEGBuilderTab />
             </ErrorBoundary>
           )}
           {activeTab === 'settings' && (
@@ -2592,6 +2612,7 @@ function App() {
         streamName={vlcModalStreamName || 'Stream'}
       />
     </div>
+    </BackupDestinationPromptProvider>
     </NotificationProvider>
   );
 }

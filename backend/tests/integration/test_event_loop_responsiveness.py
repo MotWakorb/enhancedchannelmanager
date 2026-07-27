@@ -71,15 +71,24 @@ class TestHealthRespondsDuringCpuBoundWork:
             health_response = await async_client.get("/api/health")
             health_elapsed = time.monotonic() - start
 
+            # Capture BEFORE draining: if health had been serialized behind the
+            # blocking sync call, that call would already be finished by the
+            # time health returned. Checking that the slow request is STILL in
+            # flight — rather than asserting a fixed 0.5s wall-clock budget —
+            # preserves the non-blocking property while giving CI contention
+            # full headroom (any margin up to the 0.8s blocking duration).
+            slow_still_in_flight = not slow_task.done()
+
             # Drain the slow task
             slow_response = await slow_task
 
         assert health_response.status_code == 200
         assert health_response.json()["status"] == "healthy"
-        assert health_elapsed < 0.5, (
-            f"/api/health took {health_elapsed:.3f}s while a "
-            f"{slow_engine.sleep_seconds}s sync CPU call was in flight — "
-            "event loop was blocked (CPU work not offloaded to threadpool)"
+        assert slow_still_in_flight, (
+            f"/api/health only returned after {health_elapsed:.3f}s, by which "
+            f"point the {slow_engine.sleep_seconds}s sync CPU call had already "
+            "finished — event loop was blocked (CPU work not offloaded to "
+            "threadpool)"
         )
         # Slow request should still have completed successfully
         assert slow_response.status_code == 200
@@ -154,12 +163,19 @@ class TestHealthRespondsDuringCpuBoundWork:
             health_response = await async_client.get("/api/health")
             health_elapsed = time.monotonic() - start
 
+            # Capture BEFORE draining: if health had been serialized behind the
+            # 0.8s generate_xmltv() call, that call would already be done by now.
+            # Asserting the slow request is STILL in flight — instead of a fixed
+            # 0.5s budget — keeps the non-blocking check robust to CI jitter.
+            slow_still_in_flight = not slow_task.done()
+
             await slow_task
 
         assert health_response.status_code == 200
-        assert health_elapsed < 0.5, (
-            f"/api/health took {health_elapsed:.3f}s during XMLTV generation — "
-            "event loop blocked by synchronous generate_xmltv()"
+        assert slow_still_in_flight, (
+            f"/api/health only returned after {health_elapsed:.3f}s during XMLTV "
+            "generation, by which point the 0.8s generate_xmltv() call had "
+            "finished — event loop blocked by synchronous generate_xmltv()"
         )
 
 

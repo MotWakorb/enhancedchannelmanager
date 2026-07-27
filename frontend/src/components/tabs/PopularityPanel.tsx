@@ -97,14 +97,14 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
 
   if (loading && rankings.length === 0) {
     return (
-      <div className="popularity-panel">
+      <div className="popularity-panel" id="stats-section-popularity">
         <div className="loading-state">Loading popularity data...</div>
       </div>
     );
   }
 
   return (
-    <div className="popularity-panel">
+    <div className="popularity-panel" id="stats-section-popularity">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Popularity Rankings</h3>
@@ -144,6 +144,15 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
                   key={channel.channel_id}
                   className={`ranking-item ${expandedChannel === channel.channel_id ? 'expanded' : ''}`}
                   onClick={() => toggleExpanded(channel.channel_id)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expandedChannel === channel.channel_id}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleExpanded(channel.channel_id);
+                    }
+                  }}
                 >
                   <div className="ranking-main">
                     <span className="rank">#{channel.rank}</span>

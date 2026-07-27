@@ -6,6 +6,17 @@ descriptions, and URLs from regex groups. The Python engine lives in
 `frontend/src/utils/templateEngine.ts` so the in-browser live preview and the
 server-side XMLTV output are always byte-identical.
 
+> **Supported surface: Dummy EPG Profiles.** This engine backs the **Dummy EPG
+> Profiles** section of the EPG Manager tab (the `dummy_epg_profiles` table and
+> the `/api/dummy-epg/*` endpoints) — the supported way to author dummy EPG in
+> ECM, and the one Event Sync integrates with. A second, older surface exists:
+> Dispatcharr-native EPG sources of `source_type=dummy` (created via the legacy
+> "Dummy EPG Sources" section) also store the same fields in `custom_properties`.
+> That legacy path is **deprecated** (bead 09x38.4): its section only appears
+> when such sources already exist, and it no longer offers new-creation.
+> Existing legacy sources are grandfathered (still editable); nothing is
+> deleted. New dummy EPG should be authored as a Dummy EPG Profile.
+
 ## Syntax
 
 ### Placeholders

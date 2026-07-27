@@ -62,8 +62,9 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
           handleCopyCommand(command);
         }}
         title="Copy to clipboard"
+        aria-label="Copy to clipboard"
       >
-        <span className="material-icons">
+        <span className="material-icons" aria-hidden="true">
           {copiedCommand === command ? 'check' : 'content_copy'}
         </span>
       </button>
@@ -75,8 +76,8 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
       <div className="modal-container modal-lg">
         <div className="modal-header">
           <h2>VLC Protocol Not Available</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 

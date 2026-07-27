@@ -1,0 +1,366 @@
+/**
+ * Tests for LogoMissBanner — the restore-complete logo-miss RED banner
+ * (bead 0i2vt.19, ADR-012 D9 "unmissable surfacing").
+ *
+ * Contract note: ADR-012 D9 mandates "a WARN log + an aggregate count + a
+ * prominent red banner". The aggregate `logo_misses: number` still gates the red
+ * banner. Bead qhui4 ADDED an optional per-logo detail list
+ * (`logo_miss_details: LogoMissDetail[]`, each id + name) — when present and
+ * non-empty the banner enumerates which logos are missing as a drill-down; when
+ * absent (legacy report) it falls back to the aggregate-only behaviour. The
+ * banner also links to the Dispatcharr Channels page (same `${dispatcharrUrl}/…`
+ * pattern the rest of the app uses, ChannelsPane) for the one-off fix.
+ */
+import { describe, it, expect } from 'vitest';
+import { render, screen, within } from '@testing-library/react';
+import { LogoMissBanner } from './LogoMissBanner';
+import { RestoreCompleteSummary } from './RestoreCompleteSummary';
+import type { RestoreReport } from '../services/api';
+
+function report(overrides: Partial<RestoreReport> = {}): RestoreReport {
+  return {
+    contract_version: 1,
+    is_dry_run: false,
+    outcome: 'success',
+    logo_misses: 0,
+    started_at: null,
+    completed_at: null,
+    notes: [],
+    categories: [],
+    ...overrides,
+  };
+}
+
+const DISPATCHARR_URL = 'https://dispatcharr.example.test';
+
+describe('LogoMissBanner — render gating', () => {
+  it('does NOT render when logo_misses is 0 (all logos attached)', () => {
+    const { container } = render(
+      <LogoMissBanner report={report({ logo_misses: 0 })} dispatcharrUrl={DISPATCHARR_URL} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('logo-miss-banner')).not.toBeInTheDocument();
+  });
+
+  it('renders when logo_misses > 0', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 12 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — copy names the count (plain language, colorblind-safe)', () => {
+  it('names the exact count in plain language — as LOGOS, matching what logo_misses counts', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 12 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    const banner = screen.getByTestId('logo-miss-banner');
+    // logo_misses counts MISSED LOGOS (one shared logo affecting several
+    // channels is ONE miss), so the aggregate copy must say logos, not
+    // channels (PR #743 review item 3). The word "missing" carries the meaning
+    // (not red-only; WCAG 1.4.1 — colorblind-safe).
+    expect(within(banner).getByText(/12 logos are missing after this restore/i)).toBeInTheDocument();
+    expect(within(banner).getByText(/missing/i)).toBeInTheDocument();
+  });
+
+  it('uses a singular LOGO phrasing for a single miss', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 1 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    const banner = screen.getByTestId('logo-miss-banner');
+    expect(within(banner).getByText(/1 logo is missing after this restore/i)).toBeInTheDocument();
+  });
+
+  it('says "1 logo" (not "1 channel") when ONE shared missed logo affects TWO channels', () => {
+    // The shared-logo regression frozen by the PR #743 review: aggregate counts
+    // logos; the nested rows carry the affected channels.
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 21,
+              label: 'ESPN',
+              channels: [
+                { channel_id: 505, name: 'CNN' },
+                { channel_id: 506, name: 'CNN International' },
+              ],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const banner = screen.getByTestId('logo-miss-banner');
+    expect(within(banner).getByText(/1 logo is missing after this restore/i)).toBeInTheDocument();
+    expect(within(banner).queryByText(/1 channel is missing/i)).not.toBeInTheDocument();
+    // Both affected channels still render as nested rows under the one logo.
+    expect(within(banner).getAllByTestId('logo-miss-channel-row')).toHaveLength(2);
+  });
+
+  it('renders a warning icon (icon + text, never colour alone)', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 5 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    const banner = screen.getByTestId('logo-miss-banner');
+    expect(within(banner).getByTestId('logo-miss-icon')).toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — accessibility', () => {
+  it('has role="alert" so it is announced', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 3 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    expect(screen.getByRole('alert')).toBe(screen.getByTestId('logo-miss-banner'));
+  });
+});
+
+describe('LogoMissBanner — detail/fix link to the Dispatcharr Channels page', () => {
+  it('links to the Dispatcharr Channels page built from the base url (existing ${dispatcharrUrl}/… pattern)', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 4 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    const link = screen.getByTestId('logo-miss-detail-link');
+    expect(link).toHaveAttribute('href', `${DISPATCHARR_URL}/channels`);
+    // Opens the Dispatcharr UI in a new tab, hardened against reverse-tabnabbing.
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+  });
+
+  it('strips a trailing slash on the base url so the link is not doubled', () => {
+    render(
+      <LogoMissBanner
+        report={report({ logo_misses: 2 })}
+        dispatcharrUrl={`${DISPATCHARR_URL}/`}
+      />,
+    );
+    expect(screen.getByTestId('logo-miss-detail-link')).toHaveAttribute(
+      'href',
+      `${DISPATCHARR_URL}/channels`,
+    );
+  });
+
+  it('omits the fix link (but still warns) when no Dispatcharr base url is known', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 7 })} />);
+    expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
+    expect(within(screen.getByTestId('logo-miss-banner')).getByText(/7 logos/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-detail-link')).not.toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — per-logo detail drill-down (bead qhui4)', () => {
+  it('lists each affected logo by name when logo_miss_details is present', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 2,
+          logo_miss_details: [
+            { source_export_id: 10, label: 'ESPN HD' },
+            { source_export_id: 11, label: 'Disney Channel' },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const list = screen.getByTestId('logo-miss-detail-list');
+    expect(within(list).getByText('ESPN HD')).toBeInTheDocument();
+    expect(within(list).getByText('Disney Channel')).toBeInTheDocument();
+    // One row per affected logo.
+    expect(within(list).getAllByTestId('logo-miss-detail-row')).toHaveLength(2);
+  });
+
+  it('does NOT render the detail list when logo_miss_details is absent (legacy report)', () => {
+    render(<LogoMissBanner report={report({ logo_misses: 3 })} dispatcharrUrl={DISPATCHARR_URL} />);
+    // Banner still warns with the aggregate count + fix link.
+    expect(screen.getByTestId('logo-miss-banner')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-detail-list')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the detail list when logo_miss_details is empty', () => {
+    render(
+      <LogoMissBanner
+        report={report({ logo_misses: 1, logo_miss_details: [] })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    expect(screen.queryByTestId('logo-miss-detail-list')).not.toBeInTheDocument();
+  });
+
+  it('renders a fallback label for a logo with a blank name', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [{ source_export_id: 99, label: '' }],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const list = screen.getByTestId('logo-miss-detail-list');
+    expect(within(list).getByText(/unnamed logo/i)).toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — affected-channel rows with Dispatcharr links (bead cm9bi)', () => {
+  // Dispatcharr's SPA router has NO per-channel route (verified against the
+  // live bundle: only top-level paths like /channels). Per-channel links
+  // therefore FALL BACK to the /channels list page; the row still names the
+  // channel + its destination id so the operator can find it there.
+  it('lists each affected channel (name + destination id) under its logo row', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const row = screen.getByTestId('logo-miss-detail-row');
+    const channelRows = within(row).getAllByTestId('logo-miss-channel-row');
+    expect(channelRows).toHaveLength(1);
+    expect(within(channelRows[0]).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRows[0]).getByText(/channel 505/i)).toBeInTheDocument();
+  });
+
+  it('renders a per-channel Dispatcharr link (fallback: the /channels list page), hardened and named after the channel', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const link = screen.getByTestId('logo-miss-channel-link');
+    expect(link).toHaveAttribute('href', `${DISPATCHARR_URL}/channels`);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveAccessibleName(/open espn in dispatcharr/i);
+  });
+
+  it('lists EVERY affected channel when one missed logo is shared by several channels', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'League Logo',
+              channels: [
+                { channel_id: 505, name: 'ESPN' },
+                { channel_id: 606, name: 'ESPN 2' },
+              ],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    // Still ONE logo row (aggregate counts logos), TWO channel rows under it.
+    expect(screen.getAllByTestId('logo-miss-detail-row')).toHaveLength(1);
+    const channelRows = screen.getAllByTestId('logo-miss-channel-row');
+    expect(channelRows).toHaveLength(2);
+    expect(within(channelRows[0]).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRows[1]).getByText('ESPN 2')).toBeInTheDocument();
+  });
+
+  it('falls back to the logo-name-only row when a miss carries no channel context', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [{ source_export_id: 42, label: 'ESPN HD', channels: [] }],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    expect(screen.getByText('ESPN HD')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-channel-list')).not.toBeInTheDocument();
+    // The aggregate /channels fix link still offers the way in.
+    expect(screen.getByTestId('logo-miss-detail-link')).toHaveAttribute(
+      'href',
+      `${DISPATCHARR_URL}/channels`,
+    );
+  });
+
+  it('renders a channel with no destination id by name alone (no "(channel …)" suffix)', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: null, name: 'ESPN' }],
+            },
+          ],
+        })}
+        dispatcharrUrl={DISPATCHARR_URL}
+      />,
+    );
+    const channelRow = screen.getByTestId('logo-miss-channel-row');
+    expect(within(channelRow).getByText('ESPN')).toBeInTheDocument();
+    expect(within(channelRow).queryByText(/channel\s/i)).not.toBeInTheDocument();
+  });
+
+  it('renders channel rows without links when no Dispatcharr base url is known', () => {
+    render(
+      <LogoMissBanner
+        report={report({
+          logo_misses: 1,
+          logo_miss_details: [
+            {
+              source_export_id: 42,
+              label: 'ESPN HD',
+              channels: [{ channel_id: 505, name: 'ESPN' }],
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByTestId('logo-miss-channel-row')).toBeInTheDocument();
+    expect(screen.queryByTestId('logo-miss-channel-link')).not.toBeInTheDocument();
+  });
+});
+
+describe('LogoMissBanner — integration through RestoreCompleteSummary bannerSlot', () => {
+  it('appears above the outcome banner when passed through the summary bannerSlot', () => {
+    const r = report({ logo_misses: 9 });
+    render(
+      <RestoreCompleteSummary
+        report={r}
+        mode="applied"
+        bannerSlot={<LogoMissBanner report={r} dispatcharrUrl={DISPATCHARR_URL} />}
+      />,
+    );
+
+    const logoBanner = screen.getByTestId('logo-miss-banner');
+    const outcomeBanner = screen.getByTestId('rcs-outcome-banner');
+    expect(logoBanner).toBeInTheDocument();
+    expect(outcomeBanner).toBeInTheDocument();
+
+    // The logo-miss banner must precede the outcome banner in document order.
+    expect(logoBanner.compareDocumentPosition(outcomeBanner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('does not inject a banner through the slot when there are no logo misses', () => {
+    const r = report({ logo_misses: 0 });
+    render(
+      <RestoreCompleteSummary
+        report={r}
+        mode="applied"
+        bannerSlot={<LogoMissBanner report={r} dispatcharrUrl={DISPATCHARR_URL} />}
+      />,
+    );
+    expect(screen.queryByTestId('logo-miss-banner')).not.toBeInTheDocument();
+    // The summary itself is unaffected.
+    expect(screen.getByTestId('restore-complete-summary')).toBeInTheDocument();
+  });
+});

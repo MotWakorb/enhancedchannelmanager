@@ -128,6 +128,97 @@ class TestStruckStreamCleanupTask:
         assert result.success is False
         assert result.failed_count == 1
 
+    @pytest.mark.asyncio
+    async def test_outer_exception_handler_on_channel_fetch_failure(self, test_session):
+        """A failure fetching channels hits the OUTER handler → success=False + error.
+
+        u8qr6.4: the existing test_handles_api_error only exercises the INNER
+        per-channel ``update_channel`` failure path. Nothing covered the outer
+        try/except (lines 212-220) that wraps the whole fetch/pagination/removal
+        block. Here ``get_channels`` itself raises, so the pagination loop blows
+        up before any per-channel work and the outer handler must convert it into
+        a failed TaskResult carrying the error string — not propagate the
+        exception out of execute().
+        """
+        from models import StreamStats
+
+        test_session.add(StreamStats(stream_id=10, stream_name="s10", probe_status="failed", consecutive_failures=5))
+        test_session.commit()
+
+        task = self._make_task()
+
+        mock_settings = MagicMock()
+        mock_settings.strike_threshold = 3
+
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(side_effect=RuntimeError("Dispatcharr unreachable"))
+        mock_client.update_channel = AsyncMock()
+
+        with patch("tasks.struck_stream_cleanup.get_settings", return_value=mock_settings), \
+             patch("tasks.struck_stream_cleanup.get_session", return_value=test_session), \
+             patch("tasks.struck_stream_cleanup.get_client", return_value=mock_client):
+            result = await task.execute()
+
+        assert result.success is False
+        assert "failed" in result.message.lower()
+        assert result.error == "Dispatcharr unreachable"
+        # The fetch blew up before any channel could be mutated.
+        mock_client.update_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_multi_page_pagination_fetches_all_channels(self, test_session):
+        """The pagination loop fetches every page and removes struck streams across pages.
+
+        u8qr6.4: all prior tests returned a single page (all_channels >= count
+        after page 1), so the multi-page loop (lines 107-124) was never taken.
+        Here page 1 does not yet cover ``count``, forcing a second fetch; assert
+        both pages are requested (page=1 then page=2) and that struck streams on
+        BOTH pages are removed.
+        """
+        from models import StreamStats
+
+        test_session.add(StreamStats(stream_id=10, stream_name="s10", probe_status="failed", consecutive_failures=5))
+        test_session.commit()
+
+        task = self._make_task()
+
+        mock_settings = MagicMock()
+        mock_settings.strike_threshold = 3
+
+        page1 = {
+            "results": [
+                {"id": 1, "name": "CH1", "streams": [10]},
+                {"id": 2, "name": "CH2", "streams": [40]},
+            ],
+            "count": 3,
+        }
+        page2 = {
+            "results": [
+                {"id": 3, "name": "CH3", "streams": [10, 50]},
+            ],
+            "count": 3,
+        }
+
+        mock_client = AsyncMock()
+        mock_client.get_channels = AsyncMock(side_effect=[page1, page2])
+        mock_client.update_channel = AsyncMock()
+
+        with patch("tasks.struck_stream_cleanup.get_settings", return_value=mock_settings), \
+             patch("tasks.struck_stream_cleanup.get_session", return_value=test_session), \
+             patch("tasks.struck_stream_cleanup.get_client", return_value=mock_client):
+            result = await task.execute()
+
+        assert result.success is True
+        # Both pages fetched, in order.
+        assert mock_client.get_channels.call_count == 2
+        mock_client.get_channels.assert_any_call(page=1, page_size=100)
+        mock_client.get_channels.assert_any_call(page=2, page_size=100)
+        # Struck stream 10 removed from CH1 (page 1) and CH3 (page 2); CH2 untouched.
+        assert mock_client.update_channel.call_count == 2
+        mock_client.update_channel.assert_any_call(1, {"streams": []})
+        mock_client.update_channel.assert_any_call(3, {"streams": [50]})
+        assert result.success_count == 2
+
     def test_get_config_empty(self):
         """get_config returns empty dict."""
         task = self._make_task()

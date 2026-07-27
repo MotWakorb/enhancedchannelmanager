@@ -12,6 +12,7 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime
+from typing import Optional
 
 from dispatcharr_client import get_client
 from config import (
@@ -66,6 +67,14 @@ from observability import (  # noqa: E402
 
 install_observability(level=getattr(logging, initial_log_level))
 
+# Exit-path diagnostics (bd-0gt2i / GH #546): make any silent process death
+# self-diagnosing from docker logs. atexit + sys.excepthook +
+# threading.excepthook are installed here at import time; the asyncio loop
+# exception handler needs a running loop and is installed in startup_event.
+import exit_diagnostics  # noqa: E402
+
+exit_diagnostics.install()
+
 logger = logging.getLogger(__name__)
 
 # OpenAPI tags for organizing endpoints in Swagger UI
@@ -98,12 +107,15 @@ tags_metadata = [
     {"name": "Popularity", "description": "Channel popularity scores, rankings, and trending analysis"},
     {"name": "Stream Preview", "description": "Live stream and channel preview endpoints"},
     {"name": "Admin", "description": "User management (admin only)"},
-    {"name": "FFMPEG Profiles", "description": "Save and load FFMPEG Builder profiles"},
     {"name": "Backup", "description": "Backup and restore ECM configuration"},
     {"name": "Lookup Tables", "description": "Named key→value tables used by the dummy EPG template engine"},
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
+    {"name": "Event Sync Reviews", "description": "Event Sync ambiguous-match review queue — fingerprint-keyed accept/reject decisions (bead ti939.3.2)"},
+    {"name": "Event Sync Exclusions", "description": "Event Sync operator never-attach exclusions — fingerprint-keyed standing orders consulted before the attach band (bead ti939.3.5)"},
     {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
+    {"name": "Sync Targets", "description": "Cross-instance live-sync destinations (remote Dispatcharr-B) — CRUD for sync targets (epic i39wu)"},
+    {"name": "Event Sync", "description": "Event Sync operator settings — team-alias dictionary consulted by the matcher's team-token layer (bead ti939.4.2)"},
 ]
 
 app = FastAPI(
@@ -130,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.17.5",
+    version="0.18.0",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -180,6 +192,18 @@ from auth.routes import limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# BaseException containment (GH #546 / bead xzdx9) — MUST stay the FIRST
+# add_middleware call so it is the INNERMOST user middleware. Starlette's
+# add_middleware prepends (later registration = more OUTER), so being first
+# here places this guard directly around the router, inside the same asyncio
+# task that runs route handlers and their dependencies. That position is what
+# lets it catch a SystemExit/KeyboardInterrupt raised by handler code BEFORE
+# asyncio.Task.__step re-raises it out of the event loop and silently kills
+# the whole process with ExitCode 0 (uvicorn skips its shutdown sequence and
+# a bare SystemExit prints nothing). See exit_diagnostics.py for the full
+# mechanism write-up.
+app.add_middleware(exit_diagnostics.BaseExceptionContainmentMiddleware)
+
 # CORS for development
 app.add_middleware(
     CORSMiddleware,
@@ -188,6 +212,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
 )
+
+
+# GH #720 Part B round-9 (B4 — MAIN IS THE SOLE WRITER): in the HTTPS subprocess
+# ONLY, forward the profile-mutating route allowlist to the main process so
+# channel-profile writes + reconcile execute only there (the in-process lock is
+# authoritative). No-op in the main process. See tls/subprocess_proxy.py.
+from tls.subprocess_proxy import subprocess_proxy_middleware  # noqa: E402
+app.middleware("http")(subprocess_proxy_middleware)
 
 
 @app.middleware("http")
@@ -206,7 +238,15 @@ async def security_headers_middleware(request: Request, call_next):
 # middleware piggy-backs on the same request cycle to emit counter/histogram
 # samples labeled by route *pattern* — NOT raw path — so cardinality stays
 # bounded regardless of traffic mix.
-@app.middleware("http")
+#
+# NOTE (bd-cng0d): deliberately NOT registered with @app.middleware here.
+# Starlette's add_middleware() prepends, so the LAST registration becomes the
+# OUTERMOST layer. This middleware is registered explicitly at the end of the
+# middleware section (after auth_middleware / actor_source_middleware) so it
+# wraps EVERYTHING — including requests the auth middleware rejects with 401.
+# When it was registered first (innermost), auth rejections short-circuited
+# before ever reaching it: no structured ecm.access line, no metrics sample,
+# no X-Request-ID header on 401s.
 async def observability_middleware(request: Request, call_next):
     """Correlate requests and instrument them for Prometheus.
 
@@ -394,13 +434,12 @@ _REQUEST_TIMEOUT_SECONDS = float(os.environ.get("ECM_REQUEST_TIMEOUT_SECONDS", "
 # by exempting here until we move XMLTV to a background cache refresh.
 _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/stream-preview/",   # streaming endpoints
-    "/api/ffmpeg/",            # long-running ffmpeg jobs
     "/api/tasks/",             # task triggering / status
     "/api/backup/",            # backup/restore can be large
     # Note: /api/auto-creation/ was previously exempt as a hotfix (bd-zv6pi)
     # for synchronous /run handlers that could exceed the 30s budget. As of
     # bd-enfsy those handlers are now 202+poll background tasks (the
-    # supervisor lives in routers/auto_creation.py), so the prefix is back
+    # supervisor lives in routers/channel_pipeline.py), so the prefix is back
     # under the timeout — every CRUD and the now-fast enqueue must respect
     # the budget.
 )
@@ -484,6 +523,11 @@ from auth.dependencies import get_token_from_request, decode_token_safe
 
 
 @app.middleware("http")
+# NOTE: this body runs OUTSIDE BaseExceptionContainmentMiddleware's task
+# boundary (that guard is innermost, registered at line 205) — a
+# BaseException raised in here escapes containment. Known, accepted
+# structural ceiling; see docs/auth_middleware.md "Known limitation" and
+# bead enhancedchannelmanager-17v07.
 async def auth_middleware(request: Request, call_next):
     """Reject unauthenticated requests to /api/* unless path is exempt."""
     path = request.url.path
@@ -518,6 +562,128 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+_DEPRECATED_ADMIN_ROUTER_PREFIX = "/api/admin"
+
+
+@app.middleware("http")
+async def deprecated_admin_router_middleware(request: Request, call_next):
+    """WARNING-log every hit on the legacy, duplicate ``/api/admin/*`` router.
+
+    ``auth.admin_routes`` (main.py:608) fully duplicates the canonical
+    ``/api/auth/admin/*`` user-CRUD surface (``auth/routes.py``); the
+    frontend exclusively calls the canonical path, so this router is live,
+    unreached attack surface. Step 1 of a two-step deprecation
+    (bd-d53lz): log every hit — path, method, client IP, and the
+    authenticated user if the request carries a decodeable token — so a
+    follow-on bead can confirm a zero-traffic observation window before
+    deleting the router outright. Never logs the token/credentials
+    themselves, only the resolved username.
+
+    Registered AFTER ``auth_middleware`` (later registration = more OUTER
+    layer, same Starlette add_middleware-prepends reasoning documented on
+    ``observability_middleware`` below) so this fires even when
+    ``auth_middleware`` or the route's own ``get_current_active_admin``
+    dependency rejects the request with 401/403 — an unauthenticated hit on
+    a deprecated admin surface is exactly the signal this log exists to
+    catch, not a case to skip.
+    """
+    if request.url.path.startswith(_DEPRECATED_ADMIN_ROUTER_PREFIX):
+        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (
+            request.client.host if request.client else "unknown"
+        )
+        username = None
+        token = get_token_from_request(request)
+        if token:
+            payload = decode_token_safe(token)
+            if payload:
+                username = payload.get("username")
+        logger.warning(
+            "[DEPRECATED-ADMIN-ROUTER] %s %s client_ip=%s user=%s "
+            "(duplicate legacy router — canonical path is /api/auth/admin/*, bd-d53lz)",
+            request.method, request.url.path, client_ip, username or "anonymous",
+        )
+
+    return await call_next(request)
+
+
+import journal as _journal
+from auth.dependencies import _is_mcp_service_token
+
+
+def _resolve_request_mutation_source(request: Request) -> Optional[str]:
+    """Resolve the actor/origin for a journaled mutation from the principal.
+
+    PRINCIPAL-BASED detection (enhancedchannelmanager-vp1rx / W3): the bearer
+    credential, not a client-supplied header, decides the actor — a client
+    cannot forge or forget it.
+
+    * Static MCP API key  → ``"mcp_ai"`` (the AI agent principal)
+    * A decodeable JWT     → ``"ui"``    (an operator via the web UI)
+    * Anything else        → ``None``    (unknown — leaves the row's
+      ``mutation_source`` NULL rather than mislabeling it)
+
+    Scheduler / auto-creation mutations never reach this middleware (no HTTP
+    request); those paths stamp ``mutation_source`` explicitly at their call
+    sites.
+    """
+    token = get_token_from_request(request)
+    if not token:
+        return None
+    if _is_mcp_service_token(token):
+        return _journal.MUTATION_SOURCE_MCP_AI
+    if decode_token_safe(token):
+        return _journal.MUTATION_SOURCE_UI
+    return None
+
+
+@app.middleware("http")
+async def actor_source_middleware(request: Request, call_next):
+    """Stamp the request-scoped mutation actor/origin for the journal (W3).
+
+    Resolves the actor from the auth principal once per request and stashes it
+    in the ``journal`` contextvar so every ``journal.log_entry`` call made while
+    handling this request is attributed correctly without each call site having
+    to thread the actor through. Only ``/api/*`` requests carry an actor; static
+    files and SPA routes do not mutate state.
+    """
+    source_token = None
+    batch_token = None
+    automated_token = None
+    if request.url.path.startswith("/api/"):
+        try:
+            # Automation marker (uliyr follow-up): a client that sends a
+            # non-empty X-ECM-Automated-Client header self-declares as an
+            # automated test client (the backend E2E harness); every other
+            # /api/* request is an operator (real UI / MCP). Captured FIRST —
+            # before the token decode below — so a principal-resolution
+            # failure can never leave an operator row unmarked (NULL is the
+            # purgeable legacy classification).
+            automated_token = _journal.set_automated_client(
+                bool(request.headers.get("X-ECM-Automated-Client"))
+            )
+            source_token = _journal.set_mutation_source(
+                _resolve_request_mutation_source(request)
+            )
+            # Optional bulk-operation correlation id. The MCP bulk_delete tool
+            # sends one X-ECM-Batch-Id for its whole loop so the N single-channel
+            # deletes share one journal batch_id. Truncate to the column width
+            # (String(50)) and ignore anything non-stringy/oversized.
+            raw_batch = request.headers.get("X-ECM-Batch-Id")
+            if raw_batch:
+                batch_token = _journal.set_request_batch_id(raw_batch[:50])
+        except Exception:  # never let attribution break the request
+            logger.warning("[JOURNAL] Failed to resolve request mutation source", exc_info=True)
+    try:
+        return await call_next(request)
+    finally:
+        if batch_token is not None:
+            _journal.reset_request_batch_id(batch_token)
+        if source_token is not None:
+            _journal.reset_mutation_source(source_token)
+        if automated_token is not None:
+            _journal.reset_automated_client(automated_token)
+
+
 # Include auth router
 from auth.routes import router as auth_router
 app.include_router(auth_router)
@@ -534,6 +700,19 @@ app.include_router(tls_router)
 from routers import all_routers
 for _router in all_routers:
     app.include_router(_router)
+
+# Channel Pipeline router: mounted explicitly (not via the generic all_routers
+# loop) because it needs TWO prefixes during the phase 3/4 migration window —
+# the canonical route, and a deprecated alias kept alive until the frontend
+# (phase 4, enhancedchannelmanager-xwwe4) stops calling the old path.
+from routers.channel_pipeline import router as channel_pipeline_router
+app.include_router(channel_pipeline_router, prefix="/api/channel-pipeline", tags=["Channel Pipeline"])
+app.include_router(
+    channel_pipeline_router,
+    prefix="/api/auto-creation",
+    tags=["Channel Pipeline (deprecated alias)"],
+    include_in_schema=False,
+)
 
 
 # Request Timing and Rate Tracking Middleware (for CPU diagnostics)
@@ -596,6 +775,17 @@ async def request_timing_middleware(request: Request, call_next):
             )
 
     return response
+
+
+# Register the observability middleware LAST so it is the OUTERMOST layer
+# (Starlette's add_middleware prepends — the last registration wraps every
+# earlier one). This guarantees the structured ecm.access log line, the
+# Prometheus sample, and the X-Request-ID header are emitted for EVERY
+# request, including 401/403 rejections short-circuited by auth_middleware
+# (bd-cng0d), and that the trace-id contextvar is bound before any other
+# middleware runs. If you add a new @app.middleware("http") below this line,
+# move this registration after it.
+app.middleware("http")(observability_middleware)
 
 
 # Diagnostic Endpoint for Request Rate Stats
@@ -697,6 +887,22 @@ async def startup_event():
     logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
     logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
 
+    # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
+    # can only be installed once the event loop is running. Logs loudly on
+    # any unhandled loop exception, then delegates to the default handler.
+    _running_loop = asyncio.get_running_loop()
+    exit_diagnostics.install_loop_handler(_running_loop)
+
+    # Runtime proof of the active event-loop implementation (bead wadu3):
+    # ECM pins --loop asyncio because uvloop 0.22.1 has open upstream
+    # data-exposure (#645) and segfault (#706) issues. This line makes the
+    # actual loop in use auditable from docker logs.
+    logger.info(
+        "[MAIN] Event loop implementation: %s.%s",
+        type(_running_loop).__module__,
+        type(_running_loop).__qualname__,
+    )
+
     # Initialize journal database
     init_db()
 
@@ -738,6 +944,21 @@ async def startup_event():
             _gauge_seed_sess.close()
     except Exception as _gauge_seed_err:
         logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
+
+    # Probe the cloud-backup encryption key's integrity at startup (bead
+    # m40pn): mode/ownership violations surface at every container start
+    # instead of at the first scheduled backup. Log-loudly-but-boot — the
+    # probe never raises (it logs an unmissable ERROR itself), and actual
+    # crypto use remains fail-closed inside cloud_storage.crypto. The outer
+    # try only guards an unexpected import/probe crash.
+    try:
+        from cloud_storage.crypto import verify_key_integrity_at_startup
+        verify_key_integrity_at_startup()
+    except Exception as _key_probe_err:
+        logger.error(
+            "[MAIN] Cloud-backup key integrity startup probe crashed: %s",
+            _key_probe_err,
+        )
 
     # Purge all expired user sessions
     try:
@@ -874,11 +1095,11 @@ async def startup_event():
 
     # Repair duplicate auto-creation rule priorities
     try:
-        from models import AutoCreationRule
+        from models import ChannelPipelineRule
         sess = get_session()
         try:
-            all_rules = sess.query(AutoCreationRule).order_by(
-                AutoCreationRule.priority, AutoCreationRule.id
+            all_rules = sess.query(ChannelPipelineRule).order_by(
+                ChannelPipelineRule.priority, ChannelPipelineRule.id
             ).all()
             priorities = [r.priority for r in all_rules]
             if len(priorities) != len(set(priorities)):
@@ -1284,8 +1505,17 @@ if os.path.exists(static_dir):
 
 if __name__ == "__main__":
     import uvicorn
+    from tls.https_server import resolve_loop_choice
     # Support ECM_PORT for direct invocation consistency with entrypoint.sh
     # This is an app-level runtime configuration and is not persisted to settings.json.
     port = get_http_port()
     logger.info("[MAIN] Starting uvicorn on port %s (from ECM_PORT environment variable)", port)
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # loop= mirrors entrypoint.sh --loop (bead wadu3): pin stdlib asyncio,
+    # ECM_UVICORN_LOOP is the escape hatch.
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=True,
+        loop=resolve_loop_choice(),
+    )

@@ -35,7 +35,7 @@ certifi==2026.2.25
     #   httpx
 cffi==2.0.0
     # via cryptography
-click==8.3.2
+click==8.3.3
     # via uvicorn
 coverage==7.13.5
     # via pytest-cov
@@ -116,7 +116,7 @@ propcache==0.4.1
     #   yarl
 py-cpuinfo==9.0.0
     # via pytest-benchmark
-pyasn1==0.6.3
+pyasn1==0.6.4
     # via
     #   python-jose
     #   rsa
@@ -184,12 +184,17 @@ starlette==1.3.1
     #   fastapi
 typing-extensions==4.15.0
     # via
+    #   aiohttp
+    #   aiosignal
     #   alembic
+    #   anyio
     #   fastapi
     #   limits
     #   pydantic
     #   pydantic-core
+    #   pytest-asyncio
     #   sqlalchemy
+    #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
     # via

@@ -4,7 +4,7 @@
  * Locks the three new retention inputs added to the Database Cleanup
  * task config UI:
  *
- * 1. Auto-creation execution BLOB retention (days) — default 30
+ * 1. Channel Pipeline execution BLOB retention (days) — default 30
  * 2. Health checks retention (days) — default 7
  * 3. Notifications retention (days) — default 30
  *
@@ -52,11 +52,18 @@ vi.mock('../contexts/NotificationContext', () => ({
   }),
 }));
 
-// autoCreationApi is imported but only called when the task references
+// The modal uses BackupDestinationPromptContext to fire the backup-destination
+// choice when a dbas_backup schedule is enabled/created (bead s5a3o). Stub it so
+// these retention-field tests render without a provider.
+vi.mock('../contexts/BackupDestinationPromptContext', () => ({
+  useBackupDestinationPrompt: () => ({ promptBackupDestination: vi.fn() }),
+}));
+
+// channelPipelineApi is imported but only called when the task references
 // auto_creation_rules in its parameter schema — our mock returns empty,
 // so loaders.has('auto_creation_rules') is false. Still stub to be safe.
-vi.mock('../services/autoCreationApi', () => ({
-  getAutoCreationRules: vi.fn().mockResolvedValue([]),
+vi.mock('../services/channelPipelineApi', () => ({
+  getChannelPipelineRules: vi.fn().mockResolvedValue([]),
 }));
 
 function makeCleanupTask(configOverrides: Record<string, unknown> = {}): TaskStatus {
@@ -97,7 +104,7 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the auto-creation BLOB retention input with the config value', async () => {
+  it('renders the channel pipeline BLOB retention input with the config value', async () => {
     render(
       <TaskEditorModal
         task={makeCleanupTask({ auto_creation_blob_days: 45 })}
@@ -106,7 +113,7 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
       />
     );
 
-    const label = await screen.findByText(/auto-creation execution blob retention/i);
+    const label = await screen.findByText(/channel pipeline execution blob retention/i);
     expect(label).toBeInTheDocument();
     // The number input sibling holds the configured value.
     const input = label.parentElement?.querySelector('input[type="number"]');
@@ -156,7 +163,7 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
       />
     );
 
-    const blobLabel = await screen.findByText(/auto-creation execution blob retention/i);
+    const blobLabel = await screen.findByText(/channel pipeline execution blob retention/i);
     const blobInput = blobLabel.parentElement?.querySelector('input[type="number"]') as HTMLInputElement;
     // fireEvent.change sets the value atomically — userEvent.type on number
     // inputs is unreliable in jsdom (browser behavior diverges on number

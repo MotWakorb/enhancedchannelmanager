@@ -12,9 +12,10 @@ import time
 import uuid
 from datetime import date
 from typing import Optional, Literal, Union
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Response
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -24,6 +25,7 @@ from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
+from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
 import journal
 
@@ -128,6 +130,30 @@ class MergeChannelsRequest(BaseModel):
 
 class ClearAutoCreatedRequest(BaseModel):
     group_ids: list[int]
+
+
+class FindDuplicatesRequest(BaseModel):
+    """Optional scope for POST /channels/find-duplicates (enhancedchannelmanager-uahp6).
+
+    ``channel_ids`` absent — or the request body omitted entirely — scans all
+    channels (global, backward-compatible default for MCP/script callers).
+    When present, the scan is restricted to exactly those channel ids (used
+    by the frontend's checkbox-selection-scoped "Find Duplicates" action).
+    An explicit empty list is a valid scope of "no channels": it returns an
+    empty result (0 groups) rather than silently falling back to a global
+    scan — a caller that asked to scope to nothing should not get everything.
+
+    ``fold_match_key`` (GH #645 / bead 0vao3): when True, channels are
+    grouped by the shared canonical fold key — casefold + strip ALL
+    whitespace (``match_fold.fold_match_key``) applied to the normalized
+    name — so "Eurosport 2" and "Eurosport2" land in one duplicate group,
+    matching what an auto-creation rule with its own ``fold_match_key``
+    flag would merge. Default False preserves the existing grouping
+    (normalized name, case-insensitive). Comparison key only — displayed
+    names are never altered.
+    """
+    channel_ids: Optional[list[int]] = None
+    fold_match_key: bool = False
 
 
 class BulkMergeItem(BaseModel):
@@ -298,8 +324,12 @@ class BulkCommitResponse(BaseModel):
 
 @router.get("")
 async def get_channels(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead 1a5mf): page<1 / page_size<1 were passed
+    # straight to the upstream Dispatcharr client, which raised and surfaced as
+    # a 500. FastAPI Query validation now returns 422 for out-of-range values.
+    # Upper bound is generous — App.tsx legitimately requests page_size=5000.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=10000, description="Results per page"),
     search: Optional[str] = None,
     channel_group: Optional[int] = None,
 ):
@@ -422,25 +452,141 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
 # Logos — MUST be defined before /api/channels/{channel_id} routes
 # ---------------------------------------------------------------------------
 
+# Fallback browser-cache policy for the logo image proxy when Dispatcharr
+# sends no Cache-Control of its own (live-observed it sends 3600s for
+# remote-origin logos / 14400s for local files). Long max-age is safe because
+# the rewritten cache_url preserves Dispatcharr's ?v=<hash> cache-buster, so
+# a replaced logo gets a new URL. Without browser caching every channel-list
+# render would round-trip ECM -> Dispatcharr once per logo.
+_LOGO_IMAGE_DEFAULT_CACHE_CONTROL = "public, max-age=86400"
+
+
+def _ecm_origin(request: Request) -> str:
+    """Browser-facing origin (``scheme://host[:port]``) for absolute ECM URLs.
+
+    Honors ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` (first value of a
+    comma list wins) so reverse-proxied deployments produce the public
+    scheme/host — mirroring main.py's existing X-Forwarded-For convention —
+    and otherwise falls back to the request's own scheme and Host header.
+    The Host fallback is browser-reachable by construction: it is the host
+    the browser itself dialed. Always yields an http(s) URL, which matters
+    because LogoModal.tsx's preview sanitizer silently drops any other
+    scheme (GH #662 / bead enhancedchannelmanager-hhmat).
+    """
+    proto = request.headers.get("x-forwarded-proto")
+    scheme = (proto.split(",")[0].strip() if proto else request.url.scheme) or "http"
+    if scheme not in ("http", "https"):
+        scheme = "http"
+    fwd_host = request.headers.get("x-forwarded-host")
+    host = fwd_host.split(",")[0].strip() if fwd_host else request.url.netloc
+    return f"{scheme}://{host}"
+
+
+def _rewrite_logo_cache_url(logo, origin: str):
+    """Point a logo dict's ``cache_url`` at ECM's same-origin image proxy.
+
+    Dispatcharr builds ``cache_url`` from the Host header it saw on ECM's
+    server-side request — often a docker-internal hostname or LAN IP the
+    operator's browser cannot resolve, which breaks every logo (GH #662).
+    Rewriting to ``{origin}/api/channels/logos/{id}/image`` keeps the bytes
+    flowing through ECM's authenticated upstream client instead.
+
+    Preserves Dispatcharr's ``?v=<hash>`` cache-buster so long browser
+    caching stays correct across logo replacements. Leaves a falsy
+    ``cache_url`` untouched (the frontend then falls back to ``logo.url``,
+    which may be a browser-reachable external URL) and never touches
+    ``url`` itself. Mutates and returns ``logo``.
+    """
+    if not isinstance(logo, dict):
+        return logo
+    logo_id = logo.get("id")
+    cache_url = logo.get("cache_url")
+    if logo_id is None or not cache_url:
+        return logo
+    version = parse_qs(urlsplit(str(cache_url)).query).get("v", [None])[0]
+    suffix = f"?v={quote(version, safe='')}" if version else ""
+    logo["cache_url"] = f"{origin}/api/channels/logos/{logo_id}/image{suffix}"
+    return logo
+
+
 @router.get("/logos")
 async def get_logos(
-    page: int = 1,
-    page_size: int = 100,
+    request: Request,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
+    # Dispatcharr client, which raised and surfaced as a 500. Upper bound
+    # matches sibling get_channels (channels.py) — App.tsx's getAllLogos()
+    # direct calls legitimately request page_size=10000 (services/api.ts).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=10000, description="Results per page"),
     search: Optional[str] = None,
+    sort_by: Optional[Literal["name", "channel_count"]] = Query(
+        None, description="Column to sort by. Requires ECM-side aggregation (see below)."
+    ),
+    sort_order: Literal["asc", "desc"] = Query("asc", description="Sort direction"),
+    unused_only: bool = Query(False, description="Only return logos with channel_count == 0"),
 ):
-    """List logos with pagination and search.
+    """List logos with pagination, search, sort, and an unused-only filter.
 
     Emits a single-line INFO diagnostic per request (bd-nh50y) so operators
     can grep one log line per request and see page/page_size/search/result
     count/elapsed/next-flag without enabling DEBUG. Per-row logging is
     intentionally avoided — at page_size=500 this is the channel-edit-modal
     fetch path and per-row would flood the log.
+
+    Sort/filter (bead enhancedchannelmanager-09x38.13): Dispatcharr's
+    LogoViewSet has no ordering support and its ``search`` query param is a
+    no-op (only ``name``/``used``/``ids`` are read — confirmed by reading
+    apps/channels/api_views.py in the live dispatcharr container). So when
+    ``sort_by``, ``unused_only``, or a non-empty ``search`` is requested,
+    this endpoint fetches the COMPLETE logo list from Dispatcharr in one
+    call (client.get_all_logos_raw(), via Dispatcharr's `no_pagination=true`
+    escape hatch) and sorts/filters/paginates it locally in Python — this
+    is what makes sort and the unused-only filter truthful across pages.
+    Requests using none of those three params take the original zero-
+    overhead single-Dispatcharr-page passthrough (unchanged, backward
+    compatible with LogoModal's picker, AutoSyncSettingsModal, GuideTab,
+    and getAllLogos()).
     """
     logger.debug("[CHANNELS-LOGO] GET /channels/logos - page=%s search=%s", page, search)
     client = get_client()
     try:
         start = time.time()
-        result = await client.get_logos(page=page, page_size=page_size, search=search)
+        if sort_by is not None or unused_only or search:
+            all_logos = await client.get_all_logos_raw()
+            if search:
+                search_lower = search.lower()
+                all_logos = [
+                    logo for logo in all_logos
+                    if search_lower in (logo.get("name") or "").lower()
+                ]
+            if unused_only:
+                all_logos = [logo for logo in all_logos if (logo.get("channel_count") or 0) == 0]
+
+            reverse = sort_order == "desc"
+            if sort_by == "channel_count":
+                all_logos.sort(key=lambda logo: logo.get("channel_count") or 0, reverse=reverse)
+            else:
+                all_logos.sort(key=lambda logo: (logo.get("name") or "").lower(), reverse=reverse)
+
+            total = len(all_logos)
+            start_idx = (page - 1) * page_size
+            page_items = all_logos[start_idx:start_idx + page_size]
+            result = {
+                "count": total,
+                "next": "true" if start_idx + page_size < total else None,
+                "previous": "true" if page > 1 else None,
+                "results": page_items,
+            }
+        else:
+            result = await client.get_logos(page=page, page_size=page_size, search=search)
+        # Same-origin logo proxy rewrite (GH #662 / bead hhmat): see
+        # _rewrite_logo_cache_url. Applied to both branches so the
+        # passthrough and aggregate-and-sort paths stay consistent.
+        origin = _ecm_origin(request)
+        if isinstance(result, dict):
+            for logo in result.get("results", []):
+                _rewrite_logo_cache_url(logo, origin)
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logos in %.1fms", elapsed_ms)
         # Single-line INFO diagnostic for the operator-grepable trace (bd-nh50y).
@@ -470,13 +616,14 @@ async def get_logos(
 
 
 @router.get("/logos/{logo_id}")
-async def get_logo(logo_id: int):
+async def get_logo(logo_id: int, request: Request):
     """Get a single logo by ID."""
     logger.debug("[CHANNELS-LOGO] GET /channels/logos/%s", logo_id)
     client = get_client()
     try:
         start = time.time()
         result = await client.get_logo(logo_id)
+        _rewrite_logo_cache_url(result, _ecm_origin(request))
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS-LOGO] Fetched logo id=%s in %.1fms", logo_id, elapsed_ms)
         return result
@@ -485,8 +632,83 @@ async def get_logo(logo_id: int):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/logos/{logo_id}/image")
+async def get_logo_image(logo_id: int, request: Request):
+    """Proxy the logo image bytes from Dispatcharr's cache endpoint.
+
+    Browsers frequently cannot reach the host in Dispatcharr's ``cache_url``
+    (GH #662 / bead enhancedchannelmanager-hhmat): Dispatcharr builds it from
+    the Host header it saw on ECM's server-side request, which is often a
+    docker-internal hostname or LAN IP. get_logos/get_logo rewrite
+    ``cache_url`` to point here; this endpoint fetches the bytes server-side
+    over ECM's authenticated Dispatcharr client and serves them same-origin.
+
+    Live-observed upstream behavior (2026-07-18, against the deployed
+    Dispatcharr): ``/api/channels/logos/{id}/cache/`` returns 200 + bytes for
+    BOTH local-file and external-URL logos (it downloads and caches remote
+    originals server-side), 404 JSON for unknown ids, emits Cache-Control
+    (3600s remote / 14400s local) and no ETag, and never redirects.
+    Cache-Control and any future ETag pass through; ``If-None-Match``
+    forwards upstream so a 304 can short-circuit.
+
+    Auth: intentionally NOT in main.py's AUTH_EXEMPT_PATHS — same-origin
+    ``<img>`` tags send the httpOnly ``access_token`` cookie, so the global
+    auth middleware admits real browser sessions without any frontend change.
+    """
+    logger.debug("[CHANNELS-LOGO] GET /channels/logos/%s/image", logo_id)
+    client = get_client()
+    upstream_headers = {}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match:
+        upstream_headers["If-None-Match"] = if_none_match
+    try:
+        upstream = await client._request(
+            "GET",
+            f"/api/channels/logos/{logo_id}/cache/",
+            headers=upstream_headers,
+        )
+    except Exception as e:
+        # Log only the exception TYPE — httpx error text can embed the full
+        # request URL (same hygiene rule as dispatcharr_client._request).
+        logger.warning(
+            "[CHANNELS-LOGO] Logo image proxy transport failure id=%s: %s",
+            logo_id,
+            type(e).__name__,
+        )
+        raise HTTPException(
+            status_code=502, detail="Failed to fetch logo image from Dispatcharr"
+        )
+
+    if upstream.status_code == 304:
+        return Response(status_code=304)
+    if upstream.status_code == 404:
+        raise HTTPException(status_code=404, detail="Logo image not found")
+    if upstream.status_code >= 400:
+        logger.warning(
+            "[CHANNELS-LOGO] Logo image upstream error id=%s status=%s",
+            logo_id,
+            upstream.status_code,
+        )
+        raise HTTPException(status_code=502, detail="Upstream logo fetch failed")
+
+    headers = {
+        "Cache-Control": upstream.headers.get("cache-control")
+        or _LOGO_IMAGE_DEFAULT_CACHE_CONTROL,
+    }
+    etag = upstream.headers.get("etag")
+    if etag:
+        headers["ETag"] = etag
+    return Response(
+        content=upstream.content,
+        media_type=upstream.headers.get("content-type") or "application/octet-stream",
+        headers=headers,
+    )
+
+
 @router.post("/logos")
-async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
+async def create_logo(
+    request: CreateLogoRequest, http_request: Request, _admin=RequireAdminIfEnabled
+):
     """Create a logo from a URL. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] POST /channels/logos - name=%s", request.name)
     client = get_client()
@@ -495,7 +717,10 @@ async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
         result = await client.create_logo({"name": request.name, "url": request.url})
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Created logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
-        return result
+        # Rewrite so a just-created logo renders immediately — ChannelsPane
+        # and AutoSyncSettingsModal consume this response object directly
+        # (GH #662 / bead hhmat).
+        return _rewrite_logo_cache_url(result, _ecm_origin(http_request))
     except Exception as e:
         error_str = str(e)
         # Check if this is a "logo already exists" error from Dispatcharr
@@ -504,7 +729,9 @@ async def create_logo(request: CreateLogoRequest, _admin=RequireAdminIfEnabled):
                 existing_logo = await client.find_logo_by_url(request.url)
                 if existing_logo:
                     logger.info("[CHANNELS-LOGO] Found existing logo id=%s name=%s", existing_logo.get('id'), existing_logo.get('name'))
-                    return existing_logo
+                    return _rewrite_logo_cache_url(
+                        existing_logo, _ecm_origin(http_request)
+                    )
                 else:
                     logger.warning("[CHANNELS-LOGO] Logo exists but could not find it by URL: %s", request.url)
             except Exception as search_err:
@@ -533,14 +760,17 @@ async def upload_logo(request: Request, file: UploadFile = File(...), _admin=Req
         )
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Uploaded logo id=%s name=%s in %.1fms", result.get('id'), name, elapsed_ms)
-        return result
+        # Rewrite so a just-uploaded logo renders immediately (GH #662).
+        return _rewrite_logo_cache_url(result, _ecm_origin(request))
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Logo upload failed: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/logos/{logo_id}")
-async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
+async def update_logo(
+    logo_id: int, data: dict, request: Request, _admin=RequireAdminIfEnabled
+):
     """Update a logo. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS-LOGO] PATCH /channels/logos/%s", logo_id)
     client = get_client()
@@ -549,7 +779,8 @@ async def update_logo(logo_id: int, data: dict, _admin=RequireAdminIfEnabled):
         result = await client.update_logo(logo_id, data)
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS-LOGO] Updated logo id=%s in %.1fms", logo_id, elapsed_ms)
-        return result
+        # Rewrite so the edited logo renders immediately (GH #662).
+        return _rewrite_logo_cache_url(result, _ecm_origin(request))
     except Exception as e:
         logger.exception("[CHANNELS-LOGO] Failed to update logo id=%s", logo_id)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -1021,11 +1252,16 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     start = time.time()
     original_count = len(operations)
 
-    # First pass: find channels to be deleted
+    # First pass: find channels to be deleted and temp channels to be created.
+    # Both sets are computed up front so that create+delete cancellation is
+    # order-independent (a deleteChannel may precede its matching createChannel).
     channels_to_delete: set[int] = set()
+    channels_to_create: set[int] = set()
     for op in operations:
         if op.type == "deleteChannel":
             channels_to_delete.add(op.channelId)
+        elif op.type == "createChannel":
+            channels_to_create.add(op.tempId)
 
     # Track final state for each operation type
     channel_final_updates: dict[int, dict] = {}  # channelId -> merged data
@@ -1033,7 +1269,6 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
     stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
-    temp_ids_created: set[int] = set()
 
     for op in operations:
         if op.type == "bulkAssignChannelNumbers":
@@ -1065,14 +1300,13 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 entry["removed"] = op
 
         elif op.type == "createChannel":
-            if op.tempId in channels_to_delete:
-                temp_ids_created.add(op.tempId)
-            else:
+            # Create + delete of the same temp channel cancel out.
+            if op.tempId not in channels_to_delete:
                 ordered_ops.append(op)
 
         elif op.type == "deleteChannel":
-            if op.channelId < 0 and op.channelId in temp_ids_created:
-                pass  # Create + delete cancel out
+            if op.channelId < 0 and op.channelId in channels_to_create:
+                pass  # Create + delete cancel out (order-independent)
             else:
                 ordered_ops.append(op)
 
@@ -2695,14 +2929,29 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
 
 
 @router.post("/find-duplicates")
-async def find_duplicate_channels():
-    """Scan all channels and find duplicates by normalized name.
+async def find_duplicate_channels(request: Optional[FindDuplicatesRequest] = None):
+    """Scan channels and find duplicates by normalized name.
 
     Applies the user's normalization rules to every channel name,
     then groups channels that resolve to the same normalized name.
     Returns only groups with 2+ channels.
+
+    Scope (enhancedchannelmanager-uahp6): when ``request.channel_ids`` is
+    provided, the scan is restricted to those channel ids. Absent body /
+    absent field = global scan across all channels (backward compatible —
+    MCP and script callers that never send a body keep working unchanged).
+    An explicit empty list scopes the scan to nothing (see
+    ``FindDuplicatesRequest`` docstring).
     """
-    logger.debug("[CHANNELS] POST /channels/find-duplicates")
+    scoped_ids: Optional[set[int]] = None
+    if request is not None and request.channel_ids is not None:
+        scoped_ids = set(request.channel_ids)
+    # GH #645 / bead 0vao3: opt-in whitespace/case fold on the grouping key —
+    # same canonicalization the auto-creation fold_match_key rule flag uses.
+    fold = bool(request.fold_match_key) if request is not None else False
+
+    logger.debug("[CHANNELS] POST /channels/find-duplicates scoped=%s fold=%s",
+                 scoped_ids is not None, fold)
     from normalization_engine import get_normalization_engine
 
     client = get_client()
@@ -2711,20 +2960,46 @@ async def find_duplicate_channels():
     try:
         engine = get_normalization_engine(session)
 
-        # Fetch all channels (paginated)
+        # Fetch channels (paginated). Dispatcharr's list endpoint has no
+        # id-filter, so a scoped scan still has to walk pages — but it filters
+        # each page down to the requested ids and stops early once all of
+        # them have been found, instead of walking the whole install for a
+        # handful of selected channels.
         all_channels = []
-        page = 1
-        while True:
-            result = await client.get_channels(page=page, page_size=500)
-            batch = result.get("results", [])
-            if not batch:
-                break
-            all_channels.extend(batch)
-            if not result.get("next"):
-                break
-            page += 1
+        if scoped_ids is None:
+            page = 1
+            while True:
+                result = await client.get_channels(page=page, page_size=500)
+                batch = result.get("results", [])
+                if not batch:
+                    break
+                all_channels.extend(batch)
+                if not result.get("next"):
+                    break
+                page += 1
+        elif scoped_ids:
+            remaining = set(scoped_ids)
+            page = 1
+            while remaining:
+                result = await client.get_channels(page=page, page_size=500)
+                batch = result.get("results", [])
+                if not batch:
+                    break
+                matched = [ch for ch in batch if ch.get("id") in remaining]
+                all_channels.extend(matched)
+                remaining -= {ch.get("id") for ch in matched}
+                if not result.get("next"):
+                    break
+                page += 1
+        # else: scoped_ids == set() — explicit empty scope, nothing to fetch.
 
-        logger.info("[CHANNELS] find-duplicates: scanning %d channels", len(all_channels))
+        if scoped_ids is not None:
+            logger.info(
+                "[CHANNELS] find-duplicates: scanning %d channels (scoped to %d selected)",
+                len(all_channels), len(scoped_ids),
+            )
+        else:
+            logger.info("[CHANNELS] find-duplicates: scanning %d channels", len(all_channels))
 
         # Group by normalized name
         groups: dict[str, list[dict]] = {}
@@ -2735,7 +3010,7 @@ async def find_duplicate_channels():
             if not normalized:
                 continue
 
-            key = normalized.lower()
+            key = fold_match_key(normalized) if fold else normalized.lower()
             if key not in groups:
                 groups[key] = []
             groups[key].append({

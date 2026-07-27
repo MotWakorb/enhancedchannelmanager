@@ -1,0 +1,635 @@
+/* RuleBuilder Styles */
+
+.rule-builder {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.rule-builder.loading {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-primary);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+
+.rule-builder-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* Sections */
+.rule-section {
+  margin-bottom: 32px;
+}
+
+.rule-section .section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.rule-section .section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+  text-align: left;
+}
+
+.rule-section .section-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.section-error {
+  padding: 10px 14px;
+  background: rgba(220, 53, 69, 0.1);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  border-radius: var(--radius-lg);
+  color: var(--error-color, #dc3545);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* Form Fields */
+.form-field {
+  margin-bottom: 16px;
+}
+
+.form-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-field input[type="text"],
+.form-field input[type="number"],
+.form-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.form-field input:disabled,
+.form-field textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-field input[aria-invalid="true"] {
+  border-color: var(--error-color, #dc3545);
+}
+
+.form-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.form-field input[type="number"] {
+  width: 120px;
+}
+
+.field-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--error-color, #dc3545);
+}
+
+.field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Form Row */
+.form-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.form-row .form-field {
+  flex: 1;
+  min-width: 150px;
+}
+
+/* Checkbox Group */
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 8px 0;
+}
+
+.checkbox-group .checkbox-item {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-primary);
+  white-space: nowrap;
+  margin-bottom: 0;
+}
+
+.checkbox-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Legacy checkbox-field support */
+.checkbox-field label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkbox-field span {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* Sort Config */
+.sort-config-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.sort-config-row .custom-select-container {
+  min-width: 180px;
+}
+
+/* Conditions & Actions Lists */
+.conditions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 16px;
+}
+
+.actions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+/* Connector Toggle (AND/OR between conditions) */
+.condition-connector {
+  text-align: center;
+  margin: 4px 0;
+}
+
+.connector-toggle {
+  padding: 4px 16px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+
+.connector-toggle:hover {
+  border-color: var(--button-primary-bg);
+  color: var(--text-primary);
+}
+
+.connector-toggle.connector-or {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
+}
+
+.connector-toggle.connector-or:hover {
+  opacity: 0.85;
+}
+
+/* Add Item Button */
+.add-item-wrapper {
+  position: relative;
+}
+
+.add-item-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: transparent;
+  border: 2px dashed var(--border-primary);
+  border-radius: var(--radius-xl);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.add-item-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.add-item-btn .material-icons {
+  font-size: 20px;
+}
+
+/* Type Selector Dropdown */
+.type-selector-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: var(--z-dropdown);
+  min-width: 280px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  margin-top: 8px;
+}
+
+.type-selector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-primary);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.type-selector-header .close-btn {
+  padding: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.type-selector-header .close-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.type-category {
+  padding: 8px 0;
+}
+
+.type-category-label {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.type-option {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.type-option:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Footer */
+.rule-builder-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+}
+
+/* Wizard nav cluster (Back · Save · Next) sits at the trailing edge; Cancel
+   stays at the leading edge (bead 09x38.10). */
+.rule-builder-footer-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Buttons */
+.btn {
+  padding: 10px 20px;
+  border-radius: var(--radius-lg);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--button-primary-bg);
+  border: none;
+  color: var(--button-primary-text);
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.btn-danger {
+  background: var(--error-color, #dc3545);
+  border: none;
+  color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+/* Confirm Dialog - uses ModalBase.css (modal-overlay, modal-container modal-sm) */
+
+/* Responsive */
+@media (max-width: 600px) {
+  .form-row {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .form-row .form-field {
+    min-width: 100%;
+  }
+
+  .rule-builder-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rule-builder-footer-nav {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rule-builder-footer .btn {
+    width: 100%;
+  }
+}
+
+.checkbox-group.vertical {
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+}
+
+.norm-group-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.norm-group-actions .text-button {
+  background: none;
+  border: none;
+  color: var(--accent-primary, #3b82f6);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.norm-group-actions .text-button:hover {
+  color: var(--text-primary);
+}
+
+.norm-group-actions .text-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.norm-group-disabled {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.norm-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--warning);
+  margin-left: 4px;
+}
+
+.norm-hint-icon {
+  font-size: 14px;
+}
+
+/* ============================================================================
+   Grouped two-pane redesign (bead m1s38.3) — consumes the shared .modal-*
+   primitives from ModalBase.css (.modal-twopane / .modal-main / .modal-rail /
+   .modal-stepper / .modal-intent / .modal-why). Only the standard-builder-
+   specific pieces live here.
+   ============================================================================ */
+
+/* Compact always-visible header: name*, enabled, description. */
+.rule-builder-headerbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.rule-builder-headerbar-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.rule-builder-name-field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.rule-builder-headerbar .form-field {
+  margin-bottom: 0;
+}
+
+.rule-builder-enabled {
+  flex-shrink: 0;
+  padding-bottom: 10px;
+}
+
+.rule-active-window {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.rule-active-window legend {
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.rule-active-window-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .rule-active-window-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Wizard step sections (bead 09x38.10): exactly one renders at a time via the
+   `hidden` attribute, so the old stacked-phase separator (margin/border between
+   adjacent phases) no longer applies — each step stands alone. */
+.rule-phase {
+  scroll-margin-top: 8px;
+}
+
+.rule-phase-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  margin: 0 0 16px;
+}
+
+.rule-phase-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--button-primary-bg, #6366f1);
+  color: var(--button-primary-text, #fff);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Collapsible "Why / when to use" body text. */
+.rule-why-body {
+  margin: 0;
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Rail: advisory save hint. */
+.rule-save-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rule-save-hint .material-icons {
+  font-size: 16px;
+  color: var(--info, #3b82f6);
+  flex-shrink: 0;
+}
+
+/* Rail: advisory analyzer chips. */
+.rule-analyzer-chips {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rule-analyzer-chip {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.35;
+  text-align: left;
+}

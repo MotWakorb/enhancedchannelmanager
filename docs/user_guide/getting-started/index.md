@@ -2,7 +2,9 @@
 
 > **Audience:** Operator, day one. You have ECM installed (or are about to) and need to get it talking to Dispatcharr.
 >
-> **Status:** Stub — articles below are placeholders.
+> **Status:** In progress. The installation/Dispatcharr-connection articles are
+> still stubs (planned below), but the end-to-end "build your first channels"
+> workflow tutorial has shipped.
 
 ## Section purpose
 
@@ -14,6 +16,12 @@ Get a new operator from "I just installed ECM" to "ECM is connected to Dispatcha
 - **Operator** rebuilding after a migration, container rebuild, or Dispatcharr URL change.
 
 End users do not read this section.
+
+## Articles
+
+| Article | Purpose | Status |
+|-|-|-|
+| [`your-first-channels.md`](your-first-channels.md) | End-to-end workflow tutorial: add an M3U account, add an EPG source, choose which stream groups to sync, refresh, then create channels, channel groups, and stream assignments in Channel Manager. Spans M3U Manager → EPG Manager → Channel Manager. | **Shipped** |
 
 ## Planned articles
 

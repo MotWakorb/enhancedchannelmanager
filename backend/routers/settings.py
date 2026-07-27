@@ -3,6 +3,7 @@ Settings router — Dispatcharr connection, preferences, and service management 
 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
+import asyncio
 import ipaddress
 import logging
 import re
@@ -10,13 +11,17 @@ import secrets
 import socket
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
+import journal
 from auth import RequireAdminIfEnabled
+from auth.dependencies import get_current_user, is_mcp_service_principal
+from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
-from dispatcharr_client import get_client, reset_client
+from dispatcharr_client import get_client, reset_client, _settings_hash
 from emby_client import EmbyClient, EmbyClientError
 from jellyfin_client import JellyfinClient, JellyfinClientError
 from plex_client import PlexClient, PlexClientError
@@ -36,6 +41,271 @@ _DISCORD_WEBHOOK_RE = re.compile(
 )
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
+
+# bd-snryv: serializes the entire stop/construct/set_tracker/set_prober/start
+# sequence in ``_restart_background_services()``. Without it, two overlapping
+# calls (the manual POST /restart-services racing the automatic rebuild this
+# bead adds to ``update_settings()``, or two rapid settings saves) can
+# interleave across that sequence — whichever ``set_tracker()``/``set_prober()``
+# call lands last wins, orphaning the other call's live, running
+# tracker/prober with no remaining reference able to stop it (a leak). One
+# lock per process is correct here: there is exactly one tracker/prober
+# singleton pair for the whole app, so there is nothing to shard the lock by.
+_rebuild_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# kgz3k — field-level admin gate for POST /api/settings.
+# ---------------------------------------------------------------------------
+# POST /api/settings is ONE blob that mixes admin-only configuration
+# (outbound base URLs, integration secrets, notification credentials,
+# Dispatcharr connection) with per-user display preferences (theme,
+# date_format, timezone). The whole endpoint historically had NO admin
+# dependency, so any authenticated caller — INCLUDING the static MCP API
+# key — could rewrite outbound base URLs + API keys, turning the runtime
+# media-server pollers into an SSRF + key-exfiltration primitive.
+#
+# We can't admin-gate the whole endpoint (that would break a non-admin
+# saving their own theme/timezone), and we can't split the endpoint without
+# a frontend rewrite. So the gate is FIELD-LEVEL: a non-admin (auth enabled)
+# may change ONLY non-admin-only fields; any attempt to CHANGE an admin-only
+# field is rejected 403. ``SettingsRequest`` field name -> ``DispatcharrSettings``
+# attribute name; only the attribute on the LEFT is compared against the
+# stored value, so a field whose value is unchanged never trips the gate
+# (lets a non-admin POST the full settings blob the UI already holds).
+_ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
+    # Dispatcharr connection (outbound base URL + credentials).
+    "url": "url",
+    "auth_method": "auth_method",
+    "username": "username",
+    # Outbound media-server base URLs (the SSRF sinks — runtime pollers GET
+    # <base>/Sessions with the stored key every few seconds).
+    "emby_base_url": "emby_base_url",
+    "plex_base_url": "plex_base_url",
+    "jellyfin_base_url": "jellyfin_base_url",
+    # Outbound notification credentials.
+    "discord_webhook_url": "discord_webhook_url",
+    "telegram_bot_token": "telegram_bot_token",
+    "telegram_chat_id": "telegram_chat_id",
+    "smtp_host": "smtp_host",
+    "smtp_port": "smtp_port",
+    "smtp_user": "smtp_user",
+    "smtp_from_email": "smtp_from_email",
+    "smtp_from_name": "smtp_from_name",
+    "smtp_use_tls": "smtp_use_tls",
+    "smtp_use_ssl": "smtp_use_ssl",
+    # Integration enable toggles (flipping these arms/disarms outbound pollers).
+    "emby_enabled": "emby_enabled",
+    "plex_enabled": "plex_enabled",
+    "jellyfin_enabled": "jellyfin_enabled",
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Install-wide safety
+    # knobs, NOT per-user prefs: lowering/disabling the channel cap re-opens the
+    # runaway-creation OOM blast radius (186 -> 2400+ channels, container
+    # crash), so changing them is an admin action. A non-admin / MCP key
+    # supplying a different value is rejected 403.
+    "max_auto_created_channels_per_run": "max_auto_created_channels_per_run",
+    "max_auto_creation_log_entries": "max_auto_creation_log_entries",
+    # bd-dgs64 (GH #591): enabling this removes the frontend guard that
+    # prevents auto-syncing the same (global) Dispatcharr channel_group ID
+    # from more than one M3U provider — an install-wide duplicate-channel
+    # risk, so it's an admin action, not a per-user preference.
+    "allow_multi_provider_auto_sync": "allow_multi_provider_auto_sync",
+}
+# Credential fields use preserve-on-omit (None/empty => keep stored value), so
+# a plain attribute compare can't see a "change". They are admin-only by
+# nature: any NON-EMPTY value supplied by a non-admin is a change attempt ->
+# 403. Checked separately from the dict above against the raw request value.
+# (Identifiers here are deliberately neutral — only the field *names* are ever
+# logged, never their values — so the clear-text-logging analyzer has no
+# credential-named token flowing into the log sink.)
+_ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
+    "password",
+    "dispatcharr_api_key",
+    "api_key",
+    "emby_api_key",
+    "plex_token",
+    "jellyfin_api_key",
+    "smtp_password",
+)
+
+
+async def _resolve_settings_admin(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> bool:
+    """Resolve whether the caller may write admin-only settings fields.
+
+    Mirrors ``auth.dependencies.resolve_is_admin_if_enabled`` (no rejection —
+    returns a bool the handler acts on) with ONE deliberate divergence: the
+    static MCP service principal is treated as NON-admin here. The MCP key is
+    an automation credential for channel/stream operations, not an operator
+    identity; it has no business rewriting outbound base URLs or secrets, and
+    the kgz3k threat model requires MCP-key-only callers be denied the
+    admin-field path even though the principal carries ``is_admin=True`` for
+    its other (channel-management) routes.
+
+    Returns ``True`` when the caller may write admin-only fields (auth disabled
+    / setup incomplete, or an authenticated human admin), ``False`` for an
+    authenticated non-admin OR the MCP service principal. A missing/invalid
+    token in auth-enabled mode still raises 401 via ``get_current_user``.
+    """
+    auth_settings = get_auth_settings()
+    # Auth disabled (setup mode) — single-operator install, treat as admin so
+    # behaviour is unchanged from before the gate existed.
+    if not auth_settings.require_auth or not auth_settings.setup_complete:
+        return True
+
+    user = await get_current_user(request, session)
+    # MCP service principal: explicitly NON-admin for settings writes (kgz3k).
+    if is_mcp_service_principal(user):
+        return False
+    return bool(user.is_admin)
+
+
+def _assert_admin_for_changed_fields(
+    request: "SettingsRequest",
+    current: DispatcharrSettings,
+    is_admin: bool,
+) -> None:
+    """Reject (403) a non-admin attempting to CHANGE any admin-only field.
+
+    No-op when ``is_admin`` is True. For a non-admin, compares each admin-only
+    field in the request against the stored value and raises 403 on the first
+    real change. Secret fields are change-attempts whenever a non-empty value
+    is supplied (preserve-on-omit makes an empty/omitted secret a no-op).
+    """
+    if is_admin:
+        return
+
+    changed: list[str] = []
+    for req_field, attr in _ADMIN_ONLY_SETTINGS_FIELDS.items():
+        new_value = getattr(request, req_field)
+        old_value = getattr(current, attr, None)
+        if new_value != old_value:
+            changed.append(req_field)
+    for protected_field in _ADMIN_ONLY_PROTECTED_FIELDS:
+        # A non-empty value in the body is always an attempted write; an
+        # empty/None value is preserve-on-omit and never a change.
+        if getattr(request, protected_field):
+            changed.append(protected_field)
+
+    if changed:
+        # ``changed`` holds field NAMES only — never any field VALUE — so this
+        # log line discloses which admin-only setting a non-admin tried to
+        # touch, not its (possibly credential) value.
+        logger.warning(
+            "[SETTINGS] Non-admin caller attempted to change admin-only "
+            "field(s): %s — rejected 403", ", ".join(sorted(set(changed)))
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Admin access required to change connection, integration, or "
+                "notification settings. Non-admin users may only update "
+                "personal preferences (theme, date format, timezone)."
+            ),
+        )
+
+
+def _validate_outbound_base_url_on_save(field_label: str, raw_url: str) -> str:
+    """Validate + normalize an outbound base URL at SAVE time (kgz3k SEC-1/2).
+
+    Until now ``_sanitize_base_url`` ran ONLY in the test-connection endpoints,
+    so a malicious base URL (``http://169.254.169.254/`` etc.) was stored
+    verbatim and the runtime media-server pollers happily GET'd it with the
+    stored key every few seconds — SSRF + key exfiltration. This closes that
+    by validating EVERY non-empty outbound base URL on save.
+
+    Two-stage validation, reusing the existing chokepoints (no new policy):
+
+    1. :func:`_sanitize_base_url` — scheme allowlist (http/https only) and
+       netloc-only reconstruction (strips any path/query/fragment an attacker
+       embedded). Raises 400 on a bad scheme / missing host.
+    2. ``security.ssrf.validate_outbound_url`` under the persisted
+       ``ssrf_outbound_mode`` — the CANONICAL, mode-aware host validator
+       (PR #560 nngkg). LAN-friendly allows RFC1918; public-only blocks it;
+       the always-on denylist (loopback / link-local / IMDS / ULA / CGNAT /
+       multicast) is rejected in BOTH modes. Routing through it here means the
+       save path respects the same outbound policy as the DBAS cloud adapters.
+
+    Empty input is the caller's responsibility to skip (empty = operator
+    disabling an integration; must remain allowed). Returns the sanitized URL
+    (scheme + netloc only) for storage.
+    """
+    from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
+
+    sanitized, err = _sanitize_base_url(raw_url)
+    if err is not None or sanitized is None:
+        logger.info(
+            "[SETTINGS] Rejected %s on save (scheme/host): %s", field_label, err
+        )
+        raise HTTPException(
+            status_code=400, detail=f"Invalid {field_label}: {err}"
+        )
+
+    try:
+        # Host validation under the active outbound mode. We persist the
+        # sanitized scheme+netloc URL (the runtime media-server client
+        # re-validates + connects-by-IP at request time); here we just refuse
+        # to STORE a base URL whose host the policy denies.
+        validate_outbound_url(sanitized, get_ssrf_mode())
+    except SSRFError as exc:
+        # The chokepoint fails CLOSED on DNS resolution failure (correct for
+        # the connect path). On the SAVE path that is too aggressive: a
+        # legitimate LAN media server that is simply offline right now would
+        # become un-saveable, and an unrelated pref edit could be blocked.
+        # So we ALLOW a save whose host could not be RESOLVED (the runtime
+        # client re-validates before it ever connects), but we REJECT a host
+        # that positively resolves to — or is a literal — denied address
+        # (loopback / link-local / IMDS / RFC1918-in-public-only / …). That
+        # keeps the SSRF block on the attack (point ECM at 169.254.169.254 /
+        # 127.0.0.1) while not breaking the offline-LAN-server save.
+        message = str(exc)
+        resolution_failure = (
+            "could not resolve host" in message.lower()
+            or "resolved to no usable address" in message.lower()
+        )
+        if resolution_failure:
+            logger.info(
+                "[SETTINGS] %s host did not resolve on save; allowing store "
+                "(runtime re-validates before connect): %s", field_label, exc
+            )
+            return sanitized
+        # Positively-denied host (or bad literal IP) — reject. Message is
+        # admin-safe and carries no secret; surface the policy reason inline.
+        logger.info(
+            "[SETTINGS] Rejected %s on save (SSRF policy): %s", field_label, exc
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_label}: {exc}",
+        )
+    return sanitized
+
+
+def _validate_discord_webhook_on_save(raw_url: str) -> None:
+    """Validate ``discord_webhook_url`` at save time against the Discord allowlist.
+
+    The Discord webhook is POSTed VERBATIM by the notification service (a
+    POST-SSRF, strictly worse than the GET sinks) and the URL's PATH is
+    significant — so we do NOT run ``_sanitize_base_url`` (it would strip the
+    path). Instead we require the canonical Discord webhook host+path shape via
+    the existing :data:`_DISCORD_WEBHOOK_RE` (also used by the test-discord
+    endpoint). Empty is allowed (disables the integration). Raises 400 on a
+    non-Discord host.
+    """
+    if not raw_url:
+        return
+    if not _DISCORD_WEBHOOK_RE.match(raw_url):
+        logger.info("[SETTINGS] Rejected discord_webhook_url on save (non-Discord host)")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid Discord webhook URL — must be an https webhook on "
+                "discord.com / discordapp.com (e.g. "
+                "https://discord.com/api/webhooks/...)."
+            ),
+        )
 
 
 class NormalizationTag(BaseModel):
@@ -79,6 +349,9 @@ class SettingsRequest(BaseModel):
     date_format: str = "auto"
     default_channel_profile_ids: list[int] = []
     linked_m3u_accounts: list[list[int]] = []
+    # bd-dgs64 (GH #591): opt out of the M3UGroupsModal single-owner auto-sync
+    # guard. Admin-only (see _ADMIN_ONLY_SETTINGS_FIELDS). Default False.
+    allow_multi_provider_auto_sync: bool = False
     epg_auto_match_threshold: int = 80
     # bd-ugzn4 (BD-K): dedup epic operator settings. Defaults match
     # config.DispatcharrSettings so an older frontend bundle that doesn't
@@ -109,8 +382,8 @@ class SettingsRequest(BaseModel):
     probe_retry_count: int = 1  # Retries on transient ffprobe failure (0 = no retry, max 5)
     probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"]  # Priority order for Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "m3u_priority": False, "audio_channels": False}  # Which criteria are enabled
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]  # Priority order for Smart Sort
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool = False  # Run ffmpeg blackdetect after successful probe
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
@@ -142,6 +415,14 @@ class SettingsRequest(BaseModel):
     auto_creation_excluded_terms: list[str] = []
     auto_creation_excluded_groups: list[str] = []
     auto_creation_exclude_auto_sync_groups: bool = False
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Admin-only — these
+    # are install-wide safety/config knobs, not per-user prefs, so they live in
+    # _ADMIN_ONLY_SETTINGS_FIELDS below. Defaults match config.DispatcharrSettings
+    # so an older frontend bundle that omits them persists the stored value
+    # rather than resetting it. <= 0 disables the cap (config validator
+    # normalizes a negative to 0).
+    max_auto_created_channels_per_run: int = 500
+    max_auto_creation_log_entries: int = 500
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
     # Default ON; honored by both the backend /api/client-errors endpoint
     # and the frontend clientErrorReporter.
@@ -206,6 +487,8 @@ class SettingsResponse(BaseModel):
     date_format: str
     default_channel_profile_ids: list[int]
     linked_m3u_accounts: list[list[int]]
+    # bd-dgs64 (GH #591): see DispatcharrSettings.allow_multi_provider_auto_sync.
+    allow_multi_provider_auto_sync: bool
     epg_auto_match_threshold: int
     dedup_threshold: float
     dedup_m3u_toast_suppressed: bool
@@ -265,8 +548,19 @@ class SettingsResponse(BaseModel):
     auto_creation_excluded_terms: list[str]
     auto_creation_excluded_groups: list[str]
     auto_creation_exclude_auto_sync_groups: bool
+    # GH #473 auto-creation OOM safety-valve caps (skg35). Editable via the
+    # Settings > Auto Creation UI (admin-gated on write). <= 0 disables.
+    max_auto_created_channels_per_run: int
+    max_auto_creation_log_entries: int
     # MCP integration
     mcp_api_key_configured: bool  # Whether an MCP API key has been generated
+    # bd-p8fx9 (W4): MCP destructive-bulk batch-size caps. Read by the MCP
+    # guardrails; surfaced read-only here so an operator/agent can inspect them.
+    mcp_bulk_delete_soft_cap: int
+    mcp_bulk_delete_hard_cap: int
+    mcp_clear_auto_created_group_soft_cap: int
+    mcp_bulk_merge_soft_cap: int
+    mcp_bulk_merge_hard_cap: int
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m)
     telemetry_client_errors_enabled: bool
     # Emby integration (bd-8wc6q, epic bd-2cenq). The API key itself is NOT
@@ -288,6 +582,24 @@ class SettingsResponse(BaseModel):
     jellyfin_api_key_configured: bool
     # bd-mlcla: trusted media/proxy networks (ranking hint only).
     trusted_media_networks: list[str]
+    # nngkg / bead 0i2vt.5: DBAS outbound-policy mode ("lan_friendly" |
+    # "public_only"). The single wizard knob the first-run modal + Settings >
+    # Security section read/write; consumed by security/ssrf.py. The always-on
+    # denylist is enforced unconditionally regardless of this value.
+    ssrf_outbound_mode: str
+
+
+class SecuritySettingsRequest(BaseModel):
+    """Dedicated payload for the DBAS outbound-policy mode (nngkg).
+
+    A focused PATCH so the Settings > Security section (and the first-run
+    wizard) can persist the operator's LAN-vs-public choice WITHOUT a full
+    settings round-trip — mirroring the dedicated mcp-api-key endpoints. The
+    only field is the closed-enum mode; the always-on denylist is never
+    operator-togglable (threat model §B6).
+    """
+
+    ssrf_outbound_mode: str
 
 
 class EmbyTestConnectionRequest(BaseModel):
@@ -409,6 +721,7 @@ async def get_current_settings():
         date_format=settings.date_format,
         default_channel_profile_ids=settings.default_channel_profile_ids,
         linked_m3u_accounts=settings.linked_m3u_accounts,
+        allow_multi_provider_auto_sync=settings.allow_multi_provider_auto_sync,
         epg_auto_match_threshold=settings.epg_auto_match_threshold,
         dedup_threshold=settings.dedup_threshold,
         dedup_m3u_toast_suppressed=settings.dedup_m3u_toast_suppressed,
@@ -471,7 +784,17 @@ async def get_current_settings():
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
+        # GH #473 auto-creation safety-valve caps (skg35) — surfaced so the
+        # operator can view + (as admin) adjust them from the Auto Creation UI.
+        max_auto_created_channels_per_run=settings.max_auto_created_channels_per_run,
+        max_auto_creation_log_entries=settings.max_auto_creation_log_entries,
         mcp_api_key_configured=bool(settings.mcp_api_key),
+        # bd-p8fx9 (W4): MCP destructive-bulk batch caps (read-only surface).
+        mcp_bulk_delete_soft_cap=settings.mcp_bulk_delete_soft_cap,
+        mcp_bulk_delete_hard_cap=settings.mcp_bulk_delete_hard_cap,
+        mcp_clear_auto_created_group_soft_cap=settings.mcp_clear_auto_created_group_soft_cap,
+        mcp_bulk_merge_soft_cap=settings.mcp_bulk_merge_soft_cap,
+        mcp_bulk_merge_hard_cap=settings.mcp_bulk_merge_hard_cap,
         telemetry_client_errors_enabled=settings.telemetry_client_errors_enabled,
         # Emby integration (bd-8wc6q). Surface the toggle + base URL so the
         # operator sees what's configured; the API key itself is masked —
@@ -489,14 +812,51 @@ async def get_current_settings():
         jellyfin_api_key_configured=bool(settings.jellyfin_api_key),
         # bd-mlcla: trusted media/proxy networks (ranking hint only).
         trusted_media_networks=settings.trusted_media_networks,
+        # nngkg: DBAS outbound-policy mode (LAN-friendly default).
+        ssrf_outbound_mode=settings.ssrf_outbound_mode,
     )
 
 
 @router.post("")
-async def update_settings(request: SettingsRequest):
-    """Update Dispatcharr connection settings."""
+async def update_settings(
+    request: SettingsRequest,
+    is_settings_admin: bool = Depends(_resolve_settings_admin),
+):
+    """Update Dispatcharr connection settings.
+
+    kgz3k: this endpoint mixes admin-only configuration (outbound URLs,
+    secrets, notification credentials) with per-user preferences. A
+    field-level admin gate (``_assert_admin_for_changed_fields``) rejects a
+    non-admin — including the MCP service principal — who attempts to change
+    any admin-only field, while still letting a non-admin save personal prefs.
+    Every non-empty outbound base URL is SSRF-validated on save and the
+    Discord webhook is checked against the Discord host allowlist.
+    """
     logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
+
+    # kgz3k field-level admin gate — reject a non-admin (or MCP key) trying to
+    # change any admin-only field BEFORE any validation or write side effect.
+    _assert_admin_for_changed_fields(request, current_settings, is_settings_admin)
+
+    # kgz3k SSRF-on-save — validate every CHANGED, NON-EMPTY outbound base URL
+    # through the canonical mode-aware chokepoint, and the Discord webhook
+    # against the Discord allowlist. Empty = operator disabling an integration
+    # (allowed). We validate only on CHANGE: an already-stored value was either
+    # validated on a prior save or predates this guard, and an unreachable-but-
+    # legitimate LAN host that is already configured must not be un-saveable on
+    # an unrelated pref edit. A change to a blocked host is the attack we stop.
+    # Sanitized URLs replace the raw request values so storage is normalized.
+    if request.url and request.url != current_settings.url:
+        request.url = _validate_outbound_base_url_on_save("Dispatcharr URL", request.url)
+    if request.emby_base_url and request.emby_base_url != current_settings.emby_base_url:
+        request.emby_base_url = _validate_outbound_base_url_on_save("Emby base URL", request.emby_base_url)
+    if request.plex_base_url and request.plex_base_url != current_settings.plex_base_url:
+        request.plex_base_url = _validate_outbound_base_url_on_save("Plex base URL", request.plex_base_url)
+    if request.jellyfin_base_url and request.jellyfin_base_url != current_settings.jellyfin_base_url:
+        request.jellyfin_base_url = _validate_outbound_base_url_on_save("Jellyfin base URL", request.jellyfin_base_url)
+    if request.discord_webhook_url != current_settings.discord_webhook_url:
+        _validate_discord_webhook_on_save(request.discord_webhook_url)
 
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
@@ -627,6 +987,7 @@ async def update_settings(request: SettingsRequest):
         date_format=request.date_format,
         default_channel_profile_ids=request.default_channel_profile_ids,
         linked_m3u_accounts=request.linked_m3u_accounts,
+        allow_multi_provider_auto_sync=request.allow_multi_provider_auto_sync,
         epg_auto_match_threshold=request.epg_auto_match_threshold,
         dedup_threshold=request.dedup_threshold,
         dedup_m3u_toast_suppressed=request.dedup_m3u_toast_suppressed,
@@ -689,6 +1050,12 @@ async def update_settings(request: SettingsRequest):
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
+        # GH #473 safety-valve caps (skg35). Threaded from the request so an
+        # admin can adjust them; the config validator normalizes a negative to
+        # the 0 = disabled sentinel. Admin-gated on write (see
+        # _ADMIN_ONLY_SETTINGS_FIELDS) so a non-admin / MCP key cannot change them.
+        max_auto_created_channels_per_run=request.max_auto_created_channels_per_run,
+        max_auto_creation_log_entries=request.max_auto_creation_log_entries,
         # MCP API key is preserved from current settings — see comment above
         # where mcp_api_key is captured (bd-vj8n9).
         mcp_api_key=mcp_api_key,
@@ -714,10 +1081,80 @@ async def update_settings(request: SettingsRequest):
         # otherwise reset it to False and re-arm the one-time league-strip heal,
         # re-clobbering the user's require_delimiter choice on the next boot.
         league_delimiter_heal_applied=current_settings.league_delimiter_heal_applied,
+        # ADR-013 (bead 312nk.2): WS channel_stats subscriber flags. Not yet
+        # surfaced in the UI (operator-driven soak via settings.json), so they
+        # MUST be preserved from current settings — rebuilding the model here
+        # would otherwise reset an operator's opt-in back to the default OFF on
+        # the next UI settings-save.
+        use_ws_channel_stats=current_settings.use_ws_channel_stats,
+        ws_suppress_poll_when_healthy=current_settings.ws_suppress_poll_when_healthy,
+        # ADR-013 §D2 (bead 312nk.3): steady-state session_telemetry write
+        # cadence. Like the WS flags above it is operator-driven via
+        # settings.json (not surfaced in the UI), so it MUST be preserved from
+        # current settings — rebuilding the model here would otherwise reset an
+        # operator's tuned value back to the default on the next UI settings-save.
+        telemetry_write_interval=current_settings.telemetry_write_interval,
+        # ADR-013 §D3/§D4 (bead 312nk.4): stream->provider and user->username
+        # cache TTLs. Operator-driven via settings.json (not surfaced in the
+        # UI), so they MUST be preserved from current settings — rebuilding the
+        # model here would otherwise reset a tuned value back to the default on
+        # the next UI settings-save.
+        stream_provider_cache_ttl=current_settings.stream_provider_cache_ttl,
+        user_username_cache_ttl=current_settings.user_username_cache_ttl,
+        # nngkg: DBAS outbound-policy mode is written ONLY through the dedicated
+        # PATCH /api/settings/security endpoint (like mcp_api_key), never by the
+        # general settings form. It MUST be preserved from current settings here
+        # — rebuilding the model would otherwise reset an operator's public-only
+        # choice back to the lan_friendly default on the next UI settings-save.
+        ssrf_outbound_mode=current_settings.ssrf_outbound_mode,
+        # ti939.4.2: the Event Sync team-alias dictionary is written ONLY
+        # through the dedicated PUT /api/event-sync/team-aliases endpoint
+        # (validated + journaled there), never by the general settings form.
+        # It MUST be preserved from current settings here — rebuilding the
+        # model would otherwise wipe the operator's dictionary on every
+        # ordinary settings save.
+        event_sync_team_aliases=current_settings.event_sync_team_aliases,
     )
     save_settings(new_settings)
     clear_settings_cache()
     reset_client()
+
+    # bd-snryv: does this save change anything get_client() would return
+    # differently? Reuse dispatcharr_client._settings_hash() — the exact
+    # function get_client() itself uses to decide whether to recreate the
+    # client — instead of hand-rolling an equivalent field-by-field
+    # comparison. This guarantees connection_changed tracks get_client()'s
+    # own cache-invalidation decision exactly. Must run AFTER save_settings()
+    # above: save_settings() mirrors a populated dispatcharr_api_key into the
+    # legacy api_key field on new_settings in place, and that mirroring is
+    # exactly what the next get_client() call will see, so hashing before the
+    # mirror would compare against a new_settings.api_key that doesn't match
+    # reality yet.
+    connection_changed = _settings_hash(current_settings) != _settings_hash(new_settings)
+
+    # reset_client() only swaps the get_client() singleton. The standing
+    # BandwidthTracker / StreamProber (and the stream_probe /
+    # failed_stream_reprobe / black_screen_scan task instances holding a
+    # reference to the old prober) captured the OLD client at construction
+    # time and never re-fetch get_client() themselves — so a Dispatcharr
+    # credential change here left them permanently stuck on stale credentials
+    # until an operator separately discovered and hit "restart services" (or
+    # restarted the container). Rebuild + rewire them here, same as the
+    # restart-services endpoint, whenever a connection-relevant field changed.
+    #
+    # This rebuild is fire-and-forget (asyncio.create_task, not awaited): the
+    # rebuild does a real paginated Dispatcharr fetch
+    # (BandwidthTracker._initialize_channel_maps(), up to 20 pages / 30s
+    # httpx timeout each, no aggregate bound) plus an ffprobe availability
+    # check (StreamProber.start()). Awaiting it inline would hang the
+    # settings-save HTTP response for minutes against a slow/unreachable
+    # Dispatcharr host during a credential rotation — the settings save
+    # itself already succeeded above, so the caller shouldn't wait on it.
+    # ``_rebuild_background_services_after_settings_change()`` wraps the call
+    # so a failure (or an outcome the call reports as unsuccessful without
+    # raising) is still logged — nothing else awaits this task to observe it.
+    if connection_changed:
+        asyncio.create_task(_rebuild_background_services_after_settings_change(new_settings))
 
     # If the Dispatcharr URL changed, invalidate all cached data from the old server
     server_changed = request.url != current_settings.url
@@ -760,6 +1197,35 @@ async def update_settings(request: SettingsRequest):
     if new_settings.backend_log_level != current_settings.backend_log_level:
         logger.info("[SETTINGS] Applying new backend log level: %s", new_settings.backend_log_level)
         set_log_level(new_settings.backend_log_level)
+
+    # bd-dgs64 (GH #591): audit trail for the multi-provider auto-sync guard
+    # opt-out. This is an install-wide duplicate-channel-risk toggle (see
+    # _ADMIN_ONLY_SETTINGS_FIELDS above), so a value change is worth both a
+    # log line (mirroring the backend_log_level pattern immediately above)
+    # and a journal entry capturing before/after state (mirroring the
+    # group-settings PATCH in routers/m3u.py's update_m3u_group_settings,
+    # which journals before/after for auto-sync-related field changes). No
+    # other field in this handler journals today, so this introduces the
+    # "settings" journal category — category is a free-text String(20)
+    # column (backend/models.py), not an enum, so a new value is safe.
+    if new_settings.allow_multi_provider_auto_sync != current_settings.allow_multi_provider_auto_sync:
+        logger.info(
+            "[SETTINGS] allow_multi_provider_auto_sync changed: %s -> %s",
+            current_settings.allow_multi_provider_auto_sync,
+            new_settings.allow_multi_provider_auto_sync,
+        )
+        journal.log_entry(
+            category="settings",
+            action_type="update",
+            entity_name="allow_multi_provider_auto_sync",
+            description=(
+                "Multi-provider auto-sync guard opt-out changed: "
+                f"{current_settings.allow_multi_provider_auto_sync} -> "
+                f"{new_settings.allow_multi_provider_auto_sync}"
+            ),
+            before_value={"allow_multi_provider_auto_sync": current_settings.allow_multi_provider_auto_sync},
+            after_value={"allow_multi_provider_auto_sync": new_settings.allow_multi_provider_auto_sync},
+        )
 
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
@@ -1430,26 +1896,109 @@ async def test_jellyfin_connection(
     return {"ok": True}
 
 
-@router.post("/restart-services")
-async def restart_services():
-    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
-    logger.debug("[SETTINGS] POST /api/settings/restart-services")
-    settings = get_settings()
+async def _rebuild_background_services_after_settings_change(settings: DispatcharrSettings) -> None:
+    """Fire-and-forget wrapper around ``_restart_background_services()`` for
+    ``update_settings()`` (bd-snryv).
 
-    # Stop existing tracker
-    tracker = get_tracker()
-    if tracker:
-        await tracker.stop()
-        logger.info("[SETTINGS] Stopped existing bandwidth tracker")
+    ``update_settings()`` schedules this via ``asyncio.create_task()`` rather
+    than awaiting it, so nothing else observes an exception raised here or a
+    ``{"success": False, ...}`` result returned without raising — both are
+    logged here at WARNING so a failed rebuild is never silently mistaken for
+    routine background-service maintenance.
+    """
+    try:
+        restart_result = await _restart_background_services(settings)
+        if restart_result.get("success"):
+            logger.info(
+                "[SETTINGS] Rebuilt background services after Dispatcharr connection change: %s",
+                restart_result,
+            )
+        else:
+            logger.warning(
+                "[SETTINGS] Background service rebuild did not succeed after Dispatcharr connection change: %s",
+                restart_result,
+            )
+    except Exception as e:
+        logger.warning(
+            "[SETTINGS] Failed to rebuild background services after Dispatcharr connection change: %s", e
+        )
 
-    # Stop existing stream prober
-    prober = get_prober()
-    if prober:
-        await prober.stop()
-        logger.info("[SETTINGS] Stopped existing stream prober")
 
-    # Start new tracker and prober with current settings
-    if settings.is_configured():
+async def _restart_background_services(settings: DispatcharrSettings) -> dict:
+    """Stop and rebuild the BandwidthTracker / StreamProber singletons from the
+    CURRENT ``get_client()``, rewire their notification callbacks, and
+    reconnect the prober-dependent task instances (``stream_probe``,
+    ``failed_stream_reprobe``, ``black_screen_scan``) to the fresh prober.
+
+    Extracted from ``restart_services()`` (bd-snryv) so ``update_settings()``
+    can call the same rebuild-and-rewire logic automatically when a
+    Dispatcharr connection-relevant field changes, instead of leaving the
+    standing tracker/prober stuck on a stale client until an operator
+    separately discovers and hits POST /api/settings/restart-services.
+
+    Guarded by ``_rebuild_lock`` for the whole stop/construct/set/start
+    sequence: two overlapping calls (the manual restart-services endpoint
+    racing the automatic rebuild ``update_settings()`` now schedules, or two
+    rapid settings saves) must not interleave, or whichever ``set_tracker()``/
+    ``set_prober()`` call lands last wins and orphans the other call's live,
+    running tracker/prober with no remaining reference able to stop it.
+    """
+    async with _rebuild_lock:
+        # Stop existing tracker
+        tracker = get_tracker()
+        if tracker:
+            await tracker.stop()
+            logger.info("[SETTINGS] Stopped existing bandwidth tracker")
+
+        # Stop existing stream prober. A rebuild used to only fire from a
+        # deliberate manual "restart services" click; it now also fires
+        # automatically from update_settings() on any connection-relevant
+        # save, so a probe that happens to be running gets hard-cancelled
+        # (StreamProber.stop() sets _probe_cancelled, which the probe loop
+        # treats as an abort — active asyncio tasks cancelled, pending
+        # streams abandoned, not a graceful drain) without the operator
+        # having asked for that. Make the interruption loud in the logs
+        # since deferring the rebuild until the probe finishes would add
+        # real complexity for a rare timing window.
+        prober = get_prober()
+        if prober:
+            # ``is True`` (not a bare truthiness check) is deliberate: real
+            # StreamProber always sets this to an actual Python bool, so the
+            # stricter check is exactly as correct for production while not
+            # spuriously firing against a bare Mock/AsyncMock test double in
+            # unrelated tests, whose auto-vivified attribute access would
+            # otherwise be truthy.
+            if getattr(prober, "_probing_in_progress", False) is True:
+                logger.warning(
+                    "[SETTINGS] Rebuilding stream prober while a probe is actively "
+                    "running - the in-progress probe is being hard-cancelled and its "
+                    "pending results discarded."
+                )
+            await prober.stop()
+            logger.info("[SETTINGS] Stopped existing stream prober")
+
+        # bd-snryv: ChannelPipelineEngine has the identical stale-client bug —
+        # it captures ``self.client`` once at construction and never re-fetches
+        # get_client(). routers/channel_pipeline.py's _ensure_engine() only builds
+        # a fresh engine when get_channel_pipeline_engine() returns None, so
+        # clearing the singleton here is sufficient: the next _ensure_engine()
+        # call naturally rebuilds it against the current (fresh) get_client().
+        from channel_pipeline_engine import reset_channel_pipeline_engine
+        reset_channel_pipeline_engine()
+
+        # Start new tracker and prober with current settings
+        if not settings.is_configured():
+            # bd-snryv: StreamProber.stop() only flips a cancellation flag —
+            # later probe entry points reset it back to False — so the
+            # just-stopped prober object stays truthy and reusable. Without
+            # clearing the singletons here, callers like
+            # channel_pipeline_engine's ``prober = get_prober(); if not prober:
+            # skip`` guard would pass and proceed against a client for
+            # settings that are no longer configured.
+            set_tracker(None)
+            set_prober(None)
+            return {"success": False, "message": "Settings not configured"}
+
         try:
             # Restart bandwidth tracker
             new_tracker = BandwidthTracker(get_client(), poll_interval=settings.stats_poll_interval)
@@ -1510,8 +2059,14 @@ async def restart_services():
         except Exception as e:
             logger.exception("[SETTINGS] Failed to restart services: %s", e)
             return {"success": False, "message": "Failed to restart services"}
-    else:
-        return {"success": False, "message": "Settings not configured"}
+
+
+@router.post("/restart-services")
+async def restart_services():
+    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
+    logger.debug("[SETTINGS] POST /api/settings/restart-services")
+    settings = get_settings()
+    return await _restart_background_services(settings)
 
 
 @router.post("/reset-stats")
@@ -1592,6 +2147,38 @@ async def revoke_mcp_api_key():
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
+
+
+@router.patch("/security")
+async def update_security_settings(
+    request: SecuritySettingsRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Set the DBAS outbound-policy mode (LAN-friendly vs public-only).
+
+    nngkg / bead 0i2vt.5. A focused, admin-gated write so the first-run wizard
+    and the Settings > Security section persist the operator's choice without a
+    full settings round-trip (mirrors the dedicated mcp-api-key endpoints). The
+    mode is a closed enum; the always-on denylist enforced in
+    ``security/ssrf.py`` is never operator-togglable (threat model §B6).
+    """
+    from security.ssrf import SSRFMode
+
+    try:
+        mode = SSRFMode(request.ssrf_outbound_mode)
+    except ValueError:
+        valid = ", ".join(m.value for m in SSRFMode)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid ssrf_outbound_mode {request.ssrf_outbound_mode!r} (expected one of: {valid})",
+        )
+
+    settings = get_settings()
+    settings.ssrf_outbound_mode = mode.value
+    save_settings(settings)
+    clear_settings_cache()
+    logger.info("[SETTINGS] Outbound-policy mode set to %s", mode.value)
+    return {"ssrf_outbound_mode": mode.value}
 
 
 @router.get("/mcp-status")

@@ -221,10 +221,15 @@ class TestRestoreSaved:
 
     @pytest.mark.asyncio
     async def test_restore_saved_admin_guarded(self, async_client, backups_dir):
-        """restore-saved is admin-gated — a non-admin caller gets 403."""
+        """restore-saved is admin-gated — a non-admin caller gets 403.
+
+        bead 6n76m: the endpoint now uses ``RequireHumanAdminIfEnabled`` (which
+        additionally rejects the MCP service principal), so the override targets
+        that dependency.
+        """
         from fastapi import HTTPException, status
         from main import app
-        from auth import RequireAdminIfEnabled as _prebuilt
+        from auth import RequireHumanAdminIfEnabled as _prebuilt
 
         async def _reject() -> None:
             raise HTTPException(

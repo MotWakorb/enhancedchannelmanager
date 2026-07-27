@@ -82,7 +82,15 @@ def e2e_client():
     all retries the entire suite is skipped with an explanatory message
     rather than letting every authed test fail with 401.
     """
-    with httpx.Client(base_url=BASE_URL, timeout=15) as client:
+    # X-ECM-Automated-Client (bead uliyr): self-declare every request from
+    # this harness as automated so the journal rows it churns out (rule
+    # create/delete pairs, etc.) carry automated_client=True and are eligible
+    # for the Journal Noise Purge task — operator rows (no header) are kept.
+    with httpx.Client(
+        base_url=BASE_URL,
+        timeout=15,
+        headers={"X-ECM-Automated-Client": "e2e"},
+    ) as client:
         authenticated = _login(client)
         if not authenticated:
             pytest.skip(

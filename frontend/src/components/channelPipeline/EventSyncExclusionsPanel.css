@@ -1,0 +1,135 @@
+/**
+ * EventSyncExclusionsPanel styles (bead ti939.3.5)
+ *
+ * Uses common.css for: .btn-secondary, .form-hint, .error-banner,
+ * .spinning-cw — and mirrors the EventSyncReviewQueue card/chip idiom so
+ * the two surfaces read as one Event Sync management area.
+ */
+
+.event-sync-exclusions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.event-sync-exclusions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-sync-exclusions-header h3 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.event-sync-exclusions-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--accent-primary);
+  color: var(--text-on-accent, #fff);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.event-sync-exclusions-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.event-sync-exclusions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-sync-exclusion-card {
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-sync-exclusion-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.event-sync-exclusion-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.event-sync-exclusion-pairing {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.event-sync-exclusion-pairing .event-sync-raw-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.event-sync-exclusion-never {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.event-sync-exclusion-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.event-sync-exclusion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--bg-tertiary, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.event-sync-exclusion-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.event-sync-exclusion-row-error {
+  margin-top: 4px;
+}

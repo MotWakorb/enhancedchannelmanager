@@ -17,10 +17,9 @@ describe('parseHash', () => {
     expect(_parseHash('#channel-manager')).toEqual({ tab: 'channel-manager', settingsPage: null });
     expect(_parseHash('#guide')).toEqual({ tab: 'guide', settingsPage: null });
     expect(_parseHash('#logo-manager')).toEqual({ tab: 'logo-manager', settingsPage: null });
-    expect(_parseHash('#auto-creation')).toEqual({ tab: 'auto-creation', settingsPage: null });
+    expect(_parseHash('#channel-pipeline')).toEqual({ tab: 'channel-pipeline', settingsPage: null });
     expect(_parseHash('#journal')).toEqual({ tab: 'journal', settingsPage: null });
     expect(_parseHash('#stats')).toEqual({ tab: 'stats', settingsPage: null });
-    expect(_parseHash('#ffmpeg-builder')).toEqual({ tab: 'ffmpeg-builder', settingsPage: null });
     expect(_parseHash('#settings')).toEqual({ tab: 'settings', settingsPage: null });
   });
 
@@ -39,6 +38,22 @@ describe('parseHash', () => {
 
   it('returns settings with null page for invalid settings sub-page', () => {
     expect(_parseHash('#settings/invalid-page')).toEqual({ tab: 'settings', settingsPage: null });
+  });
+});
+
+describe('legacy hash aliases (Auto-Creation -> Channel Pipeline rename)', () => {
+  it('resolves the old top-level auto-creation hash to channel-pipeline', () => {
+    expect(_parseHash('#auto-creation')).toEqual({ tab: 'channel-pipeline', settingsPage: null });
+  });
+
+  it('resolves the old settings/auto-creation sub-page hash to settings/channel-pipeline', () => {
+    expect(_parseHash('#settings/auto-creation')).toEqual({ tab: 'settings', settingsPage: 'channel-pipeline' });
+  });
+});
+
+describe('legacy hash alias (Security page removal, bead 09x38.12)', () => {
+  it('resolves the old settings/security sub-page hash to settings/backup-restore', () => {
+    expect(_parseHash('#settings/security')).toEqual({ tab: 'settings', settingsPage: 'backup-restore' });
   });
 });
 

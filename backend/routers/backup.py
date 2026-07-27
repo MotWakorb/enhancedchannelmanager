@@ -4,6 +4,8 @@ Backup & Restore router — create and restore ECM configuration backups.
 Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
+import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -11,26 +13,32 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
+import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
+from dbas import artifact_crypto
+from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     DummyEPGChannelAssignment,
+    EventSyncExclusion,
+    EventSyncReview,
     FFmpegProfile,
     NormalizationRuleGroup,
     NormalizationRule,
@@ -61,9 +69,24 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
 # Directories to include in backup (relative to CONFIG_DIR)
 BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
-# App version for manifest (imported at call time to avoid circular imports)
+# App version for manifest (imported at call time to avoid circular imports).
+#
+# IMPORTANT (versioning.md touchpoint): APP_VERSION is a CI-enforced version
+# literal. scripts/check_version_consistency.py greps for the exact
+# ``APP_VERSION = "..."`` shape and fails the PR if it diverges from
+# frontend/package.json and backend/main.py. Do NOT rename it, change its
+# shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
+# ECM build produced this artifact") — it is NOT a compatibility gate.
+APP_VERSION = "0.18.0"
 
-APP_VERSION = "0.17.5"
+# DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
+# DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
+# APP_VERSION string above. Restore gates on THIS value (manifest_version <=
+# BACKUP_SCHEMA_VERSION accepted; a newer artifact is refused with the
+# user-facing "Unsupported backup version"). Bump by +1 only on a
+# backward-incompatible artifact-format change; never tie it to APP_VERSION.
+# Starts at 1 for the first v0.18.0 DBAS artifact (0i2vt.7).
+BACKUP_SCHEMA_VERSION = 1
 
 REDACTED = "***REDACTED***"
 
@@ -75,7 +98,7 @@ REDACTED = "***REDACTED***"
 # redaction would have caught.
 # Back-compat: drop 'api_key' from this tuple in v0.19.0 (bd-ewm4h) when
 # the legacy field is removed from the model. The debug-bundle redactor in
-# routers/auto_creation.py imports this tuple, so a single edit there
+# routers/channel_pipeline.py imports this tuple, so a single edit there
 # propagates everywhere.
 _SETTINGS_CREDENTIAL_FIELDS = (
     "password",
@@ -90,6 +113,88 @@ _SETTINGS_CREDENTIAL_FIELDS = (
 # the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
 # in lock-step with the API-response masking already shipped to clients.
 _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+
+# SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
+# D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
+# (_redact_credentials_deep) that runs over EVERY category — including
+# Dispatcharr-sourced sections (M3U / EPG accounts), which the shipped YAML
+# export does NOT scrub on its own. Production Dispatcharr happens to never
+# return the M3U password (write-only, SHA1-hashed at fetch — see
+# docs/dispatcharr_api.md), but the artifact MUST NOT depend on that: redaction
+# is defense-in-depth and runs before any byte enters the archive. This union
+# folds in the settings + alert-method denylists so there is exactly one list
+# to maintain. Matched case-insensitively against dict keys.
+_REDACT_KEYS = frozenset(
+    {k.lower() for k in _SETTINGS_CREDENTIAL_FIELDS}
+    | {k.lower() for k in _ALERT_METHOD_CREDENTIAL_KEYS}
+    | {
+        # Dispatcharr / cloud-target credential-class keys that can ride along
+        # in gathered sections. Keep additive — never remove without confirming
+        # the field is not credential-bearing.
+        "password",
+        "passwd",
+        "secret",
+        "secret_key",
+        "access_key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "auth_token",
+        "bearer_token",
+    }
+)
+
+# Stream-record keys that are credential-class for an EMBEDDED channel stream and
+# must NEVER be carried in the channels producer (7i8rf). A Dispatcharr/IPTV
+# stream URL embeds provider credentials in its path/query
+# (``.../<user>/<pass>/<id>``); ``stream_hash`` / ``custom_url`` are equivalent
+# leak vectors. The channels producer embeds each stream as ID + the SAFE match
+# fields the restore matcher uses (name + m3u_account) ONLY — see
+# ``_safe_embedded_stream``. ``url`` is intentionally NOT added to the global
+# ``_REDACT_KEYS`` denylist because the M3U/EPG/settings categories legitimately
+# carry an operator-typed instance ``url`` that the restore needs; URL handling
+# for streams is therefore scoped to the producer that emits them.
+_STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
+
+
+def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
+    """Recursively replace any value whose key (case-insensitive) is in the
+    shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
+
+    NON-BYPASSABLE artifact-pipeline stage (0i2vt.7): there is no plaintext
+    switch. Walks dicts and lists in place-safe fashion (returns a new
+    structure) so credential-class values never enter the archive regardless of
+    which category/source produced them. Non-credential values are untouched.
+
+    ``preserve_keys`` is the opt-in ``include_credentials`` re-injection
+    allowlist (ADR-012 D12 / u81kh): a key in this set is NOT redacted — its real
+    value is carried so a cross-instance migration does not have to re-enter it.
+    This does NOT bypass redaction: redaction still runs over every key; only the
+    explicitly-approved migration creds are preserved, and the artifact is then
+    whole-passphrase-encrypted (the only context in which ``preserve_keys`` is
+    ever non-empty — see :func:`build_backup_artifact`). Keys NOT in this set
+    (and never approved — e.g. ``password_hash``, never in :data:`_REDACT_KEYS`)
+    stay redacted regardless.
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            klower = key.lower() if isinstance(key, str) else key
+            if isinstance(key, str) and klower in _REDACT_KEYS and klower not in preserve_keys:
+                # Only redact truthy values — preserve None/"" so restore-side
+                # preserve-on-omit semantics still distinguish "unset".
+                out[key] = REDACTED if value not in (None, "") else value
+            elif isinstance(key, str) and klower in preserve_keys:
+                # Approved migration cred — carried as-is (no recursion needed;
+                # a credential value is a scalar, not a nested structure).
+                out[key] = value
+            else:
+                out[key] = _redact_credentials_deep(value, preserve_keys)
+        return out
+    if isinstance(obj, list):
+        return [_redact_credentials_deep(item, preserve_keys) for item in obj]
+    return obj
 
 
 def _get_backup_filename() -> str:
@@ -107,18 +212,30 @@ def _build_manifest(files: list[str]) -> dict:
     }
 
 
-def _scrub_journal_db_to_temp(src: Path) -> Path:
+def _scrub_journal_db_to_temp(src: Path, include_credentials: bool = False) -> Path:
     """Copy journal.db to a temp file and redact credential-class keys in
     alert_methods.config rows. Returns the temp file path; caller must unlink.
 
     Per bd-l0nhi: PR #163 began storing SMTP password (and other creds) inside
     alert_methods.config JSON, so the live DB cannot be zipped raw without
     leaking credentials.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) preserves those
+    alert_methods.config creds (the SMTP password an operator would otherwise
+    re-enter on migration) instead of redacting them. It is only ever True from
+    :func:`build_backup_artifact` when a passphrase is set, so the cleartext-on-
+    disk default copy is always scrubbed. NOTE: any CloudStorageTarget /
+    SyncTarget credential columns in journal.db remain Fernet-ciphertext at rest
+    (ADR-012 D3) regardless of this flag; they are usable on the target only with
+    the same export key, else treated as absent on restore (checklist 19).
     """
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-backup-journal-", suffix=".db")
     os.close(fd)
     tmp_path = Path(tmp_name)
     shutil.copyfile(src, tmp_path)
+    if include_credentials:
+        # Approved cred-carrying migration path: do NOT scrub alert_methods creds.
+        return tmp_path
 
     try:
         conn = sqlite3.connect(str(tmp_path))
@@ -249,6 +366,836 @@ def _create_backup_zip() -> io.BytesIO:
     buf.seek(0)
     logger.info("[BACKUP] Backup created with %d files", len(files_added))
     return buf
+
+
+# ---------------------------------------------------------------------------
+# DBAS backup artifact builder (0i2vt.7)
+#
+# The NEW v0.18.0 DBAS artifact format. Distinct from the legacy
+# ``_create_backup_zip`` above (which the shipped GET /create + POST /save +
+# restore paths still use). The new artifact is a ZIP containing:
+#
+#   manifest.json                 — schema_version (int) + app_version (str) +
+#                                   created_at + per-file SHA-256 + redacted flag.
+#                                   This is the CLEARTEXT HEADER: schema_version
+#                                   is readable WITHOUT decrypting (encryption seam
+#                                   for u81kh — a future wrapper encrypts the whole
+#                                   ZIP file, but the schema_version must remain
+#                                   discoverable from the manifest before decrypt).
+#   categories/<name>.yaml        — per-category redacted config (reuses
+#                                   build_yaml_export / _gather_* — single source).
+#   journal.db                    — scrubbed via _scrub_journal_db_to_temp.
+#   binary/metadata.json          — logo inventory.
+#   binary/url-mappings.json      — logo-file -> source-URL map.
+#   binary/logos/<file>           — per-image logo files (streamed, not buffered).
+#
+# A SHA-256 checksum SIDECAR file is written ALONGSIDE the ZIP (ADR-012 D1):
+# ``<artifact>.sha256``, computed by STREAMING the finished ZIP file (never by
+# hashing an in-RAM blob). Redaction is a NON-BYPASSABLE pipeline stage that
+# runs BEFORE any bytes enter the archive: there is no "ship plaintext" switch.
+# ---------------------------------------------------------------------------
+
+# Path layout inside the new artifact ZIP.
+ARTIFACT_MANIFEST_NAME = "manifest.json"
+ARTIFACT_CATEGORY_DIR = "categories"
+ARTIFACT_BINARY_DIR = "binary"
+ARTIFACT_LOGO_DIR = "binary/logos"
+ARTIFACT_BINARY_METADATA = "binary/metadata.json"
+ARTIFACT_BINARY_URL_MAPPINGS = "binary/url-mappings.json"
+
+# Streaming chunk size for SHA-256 computation over the finished artifact.
+_SHA256_CHUNK = 1024 * 1024  # 1 MiB
+
+# Restore-upload streaming chunk size — the uploaded artifact is streamed to a
+# temp file ONE chunk at a time (never read whole-in-RAM, mirrors the .7/.15
+# streaming discipline; ADR-008 D8). 1 MiB chunks keep the per-read buffer small.
+_RESTORE_UPLOAD_CHUNK = 1024 * 1024  # 1 MiB
+
+# Hard cap on an uploaded restore artifact (the binary logo subtree can be large,
+# but a multi-GB upload is an abuse signal / DoS surface). The stream loop aborts
+# and cleans up the moment cumulative bytes exceed this — it never buffers the
+# whole upload to discover the size. 2 GiB is generous headroom over a realistic
+# redacted artifact while still bounding the temp-file write.
+_RESTORE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+
+# --- Decompression-bomb (D2) caps. -----------------------------------------
+# The 2 GiB upload cap above bounds only the COMPRESSED bytes. A small ZIP with a
+# high compression ratio can still expand to gigabytes on zf.read(), OOMing the
+# single-process container — reachable even on the admin dry-run path. These caps
+# implement the threat-model D2 control (docs/security/threat_model_dbas_import.md
+# §3.5 D2 / checklist 5): they are enforced by iterating zf.infolist() BEFORE any
+# zf.read(), so the bomb member is never decompressed. Values mirror the
+# checklist's ratified defaults (A4): 100x per-entry ratio, 1 GiB cumulative
+# uncompressed, 10,000 entries.
+_ARTIFACT_MAX_ENTRIES = 10_000
+_ARTIFACT_MAX_TOTAL_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB cumulative
+_ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
+# A small stored entry (e.g. a 12-byte manifest) has a degenerate ratio; only
+# entries whose compressed size exceeds this floor are ratio-checked, so a tiny
+# stored file is not falsely flagged. The cumulative + per-entry-size caps still
+# bound everything below the floor.
+_ARTIFACT_RATIO_MIN_COMPRESSED = 1024  # 1 KiB
+
+# Headroom multiplier for the pre-build free-disk check. The redacted source
+# (logos + journal.db) is read once into a compressed ZIP; we conservatively
+# require free space >= estimated_source_bytes (the ZIP is typically smaller,
+# but DEFLATE on already-compressed PNG/JPG logos barely shrinks them, so we do
+# not discount). A clear failure here beats filling /config and corrupting
+# journal.db mid-write (D8 / grooming note).
+_DISK_HEADROOM_BYTES = 64 * 1024 * 1024  # 64 MiB absolute floor on top of estimate
+
+
+class BackupArtifact:
+    """Result of :func:`build_backup_artifact`.
+
+    Attributes:
+        zip_path: Path to the sealed (redacted) ZIP artifact on disk.
+        sidecar_path: Path to the ``<zip>.sha256`` checksum sidecar.
+        schema_version: The integer schema version stamped in the manifest.
+        sha256: Hex SHA-256 of the final artifact bytes (== sidecar contents).
+            For an encrypted artifact this is over the ENCRYPTED envelope bytes
+            (the bytes actually on disk).
+        file_count: Number of member files written into the ZIP.
+        encrypted: True when the artifact is whole-passphrase-encrypted
+            (ADR-012 D12 / u81kh); the manifest/schema_version then live INSIDE
+            the ciphertext and only the envelope ``format_version`` is readable
+            pre-decrypt.
+    """
+
+    __slots__ = (
+        "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
+        "encrypted",
+    )
+
+    def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
+                 encrypted=False):
+        self.zip_path = zip_path
+        self.sidecar_path = sidecar_path
+        self.schema_version = schema_version
+        self.sha256 = sha256
+        self.file_count = file_count
+        self.encrypted = encrypted
+
+
+def _compute_sha256_streaming(path: Path) -> str:
+    """Compute the SHA-256 of a file by streaming it in chunks.
+
+    Never reads the whole file into RAM — the artifact can be multi-GB (D8).
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_SHA256_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _estimate_artifact_source_bytes() -> int:
+    """Estimate the on-disk byte cost of the artifact before building.
+
+    Sums journal.db plus every file under the backup directories (logos, tls,
+    m3u_uploads). DEFLATE rarely shrinks already-compressed logo images, so we
+    treat the raw source size as the floor for the free-disk pre-check.
+    """
+    total = 0
+    if JOURNAL_DB_FILE.exists():
+        try:
+            total += JOURNAL_DB_FILE.stat().st_size
+        except OSError:
+            pass
+    for dir_rel in BACKUP_DIRS:
+        dir_path = CONFIG_DIR / dir_rel
+        if not (dir_path.exists() and dir_path.is_dir()):
+            continue
+        for file_path in dir_path.rglob("*"):
+            try:
+                if file_path.is_file():
+                    total += file_path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _check_free_disk(target_dir: Path, required_bytes: int) -> None:
+    """Raise RuntimeError if ``target_dir``'s partition lacks ``required_bytes``
+    of free space (plus a fixed headroom floor).
+
+    A giant artifact can fill the /config partition and break the live
+    journal.db; failing loudly BEFORE we start writing is the safe behavior
+    (grooming note / D8).
+    """
+    needed = required_bytes + _DISK_HEADROOM_BYTES
+    try:
+        usage = shutil.disk_usage(str(target_dir))
+    except OSError as e:
+        # If we cannot stat the partition, do not block the backup outright —
+        # log and proceed; the write itself will fail loudly if truly full.
+        logger.warning("[BACKUP] Could not check free disk on %s: %s", target_dir, e)
+        return
+    if usage.free < needed:
+        raise RuntimeError(
+            "Insufficient free disk to build backup artifact: need ~%d bytes "
+            "(estimate %d + headroom %d), have %d free on %s"
+            % (needed, required_bytes, _DISK_HEADROOM_BYTES, usage.free, target_dir)
+        )
+
+
+def _build_artifact_manifest(
+    schema_version: int,
+    file_hashes: dict[str, str],
+    redacted: bool = True,
+) -> dict:
+    """Build the new-format artifact manifest (cleartext header).
+
+    ``schema_version`` is a dedicated integer, DISTINCT from ``app_version``
+    (the human-readable APP_VERSION string). Both are kept: ``app_version`` for
+    operator info, ``schema_version`` for the restore compatibility gate.
+    ``files`` carries a per-member SHA-256 so an unpacked member can be
+    integrity-checked independently of the whole-artifact sidecar.
+    """
+    return {
+        "schema_version": schema_version,
+        "app_version": APP_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "redacted": redacted,
+        "files": [
+            {"path": path, "sha256": sha}
+            for path, sha in sorted(file_hashes.items())
+        ],
+    }
+
+
+async def _gather_redacted_categories(include_credentials: bool = False) -> dict[str, str]:
+    """Produce the per-category redacted YAML payloads for the artifact.
+
+    REUSES build_yaml_export / _gather_settings / _gather_db_tables /
+    _gather_dispatcharr_sections — the SAME gather + redaction pipeline the
+    shipped YAML export uses. There is no second gather and no divergent
+    redaction list: settings credentials are masked by _gather_settings via the
+    shared _SETTINGS_CREDENTIAL_FIELDS denylist before any byte is emitted.
+
+    Returns a mapping of ``<category-name>.yaml`` -> YAML text. Each restorable
+    section is emitted as its own file so a future selective restore (Phase 2)
+    can read one category without parsing the whole archive.
+    """
+    # include_credentials (D12) preserves the approved migration-cred allowlist
+    # (== _REDACT_KEYS; password_hash is never in that set and so is never
+    # carried). Redaction STILL runs over every key — only the explicitly
+    # approved creds are preserved — so this is re-injection, not a redaction
+    # bypass (checklist 28). preserve_keys is empty unless the caller opted in
+    # AND set a passphrase (enforced in build_backup_artifact).
+    preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
+    out: dict[str, str] = {}
+    for key in RESTORABLE_SECTIONS:
+        # build_yaml_export routes settings/db/dispatcharr correctly and applies
+        # the settings-field redaction. That is NOT sufficient on its own:
+        # Dispatcharr-sourced sections (M3U / EPG accounts) can carry
+        # credential-class fields the settings redactor never touches. So every
+        # category's gathered payload passes through the shared NON-BYPASSABLE
+        # deep redactor before it is serialized into the archive — one denylist,
+        # every category, no plaintext path.
+        yaml_text = await build_yaml_export({key}, include_credentials=include_credentials)
+        parsed = yaml.safe_load(yaml_text)
+        redacted = _redact_credentials_deep(parsed, preserve_keys)
+        out["%s.yaml" % key] = yaml.dump(
+            redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
+        )
+    return out
+
+
+def _logo_basename_key(value) -> str | None:
+    """Lowercased basename of a logo url/path, the producer↔importer join key.
+
+    Mirrors ``dbas.importers.logos._basename_key`` (the importer's tier-3 file
+    match) so the producer-side source-id correlation and the restore-side file
+    match agree on what "same file" means.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    last = value.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    last = last.strip().lower()
+    return last or None
+
+
+async def _fetch_source_logo_index() -> dict[str, dict]:
+    """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
+
+    PR #743 review item 1 (cm9bi): the restore importer's affected-channel
+    drill-down keys on the SOURCE logo id (archive channels reference logos via
+    ``logo_id``), but an on-disk logo file carries no id. This index joins each
+    archived file to its Dispatcharr logo record by URL basename so the builder
+    can preserve the id in ``binary/metadata.json``. Best-effort: an unavailable
+    client or listing failure degrades to an empty index (the artifact still
+    carries the files; misses then simply list no affected channels), never a
+    build failure. On a basename collision the lowest id wins — the same
+    tie-break the importer's file match uses.
+    """
+    try:
+        client = get_client()
+        if not client:
+            return {}
+        logos = await client.get_all_logos_paginated()
+    except Exception as e:  # noqa: BLE001 - correlation is best-effort
+        logger.warning("[BACKUP] Could not list source logos for id correlation: %s", e)
+        return {}
+
+    index: dict[str, dict] = {}
+    for logo in logos or []:
+        if not isinstance(logo, dict):
+            continue
+        logo_id = logo.get("id")
+        if not isinstance(logo_id, int) or isinstance(logo_id, bool):
+            continue
+        key = _logo_basename_key(logo.get("url")) or _logo_basename_key(logo.get("filename"))
+        if key is None:
+            continue
+        existing = index.get(key)
+        if existing is None or logo_id < existing["id"]:
+            entry: dict = {"id": logo_id}
+            name = logo.get("name")
+            if isinstance(name, str) and name.strip():
+                entry["name"] = name
+            index[key] = entry
+    return index
+
+
+def _gather_logo_binary_subtree(
+    source_logo_index: Optional[dict] = None,
+) -> tuple[list[tuple[Path, str]], dict, dict]:
+    """Enumerate logo files for the binary subtree without reading them.
+
+    Returns ``(entries, metadata, url_mappings)`` where:
+      - ``entries`` is a list of ``(source_path, arcname)`` to stream into the
+        ZIP one file at a time (D8 streaming-upload model — the builder writes
+        each via zf.write(), which streams from disk, never buffering all logos
+        in RAM).
+      - ``metadata`` is the inventory written to binary/metadata.json. When
+        ``source_logo_index`` (see :func:`_fetch_source_logo_index`) resolves a
+        file's basename, the entry also carries the SOURCE Dispatcharr logo
+        ``id`` (+ display ``name``) — the correlation the restore decoder
+        attaches to each logo record so the importer's affected-channel lookup
+        works on genuine artifacts (PR #743 item 1). An uncorrelated file
+        carries no ``id`` (never fabricated).
+      - ``url_mappings`` maps each archived logo filename to its (best-effort)
+        source reference for restore-side re-hosting.
+    """
+    entries: list[tuple[Path, str]] = []
+    files_meta: list[dict] = []
+    url_mappings: dict[str, str] = {}
+    logo_index = source_logo_index or {}
+
+    logos_dir = CONFIG_DIR / "uploads" / "logos"
+    if logos_dir.exists() and logos_dir.is_dir():
+        for file_path in sorted(logos_dir.rglob("*")):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(logos_dir).as_posix()
+            arcname = "%s/%s" % (ARTIFACT_LOGO_DIR, rel)
+            entries.append((file_path, arcname))
+            try:
+                size = file_path.stat().st_size
+            except OSError:
+                size = None
+            file_meta: dict = {"filename": rel, "size_bytes": size}
+            correlated = logo_index.get(_logo_basename_key(rel) or "")
+            if correlated is not None:
+                file_meta["id"] = correlated["id"]
+                if correlated.get("name"):
+                    file_meta["name"] = correlated["name"]
+            files_meta.append(file_meta)
+            # Local logos are referenced by their on-disk relative path; the
+            # restore importer (Phase 2, 0i2vt.15) re-hosts them. Remote logo
+            # URL reconstruction is a restore-side concern and out of scope for
+            # the builder — record the local path so the mapping is complete.
+            url_mappings[rel] = "uploads/logos/%s" % rel
+
+    metadata = {
+        "logo_count": len(files_meta),
+        "logos": files_meta,
+    }
+    return entries, metadata, url_mappings
+
+
+async def build_backup_artifact(
+    dest_dir: Optional[Path] = None,
+    *,
+    passphrase: Optional[str] = None,
+    include_credentials: bool = False,
+    acknowledge_unrecoverable: bool = False,
+) -> BackupArtifact:
+    """Build the new-format DBAS backup artifact (0i2vt.7 + u81kh).
+
+    Streams a redacted, sealed ZIP to a temp file under ``dest_dir`` (defaults
+    to a temp dir on the CONFIG partition), then writes a SHA-256 sidecar
+    computed by streaming the finished file. Returns a :class:`BackupArtifact`.
+
+    Redaction is non-bypassable: there is no plaintext switch. The redacted
+    bytes are produced as a clean stream.
+
+    Optional whole-artifact passphrase encryption (ADR-012 D12 / u81kh):
+
+    * ``passphrase`` — when set, the sealed ZIP is encrypted off the event loop
+      via :mod:`dbas.artifact_crypto` (scrypt + chunked AEAD) and the artifact
+      on disk is the encrypted envelope (its ``format_version`` is readable
+      pre-decrypt; the backup ``schema_version`` then lives inside the
+      ciphertext). Requires ``acknowledge_unrecoverable=True`` (lost passphrase
+      = permanently unrecoverable, checklist 34) and a passphrase of at least
+      :data:`dbas.artifact_crypto.MIN_PASSPHRASE_LENGTH` chars (checklist 29).
+    * ``include_credentials`` — the explicit "include credentials for migration"
+      opt-in (checklist 27). It re-injects the approved migration-cred allowlist
+      before encryption; redaction still runs (structural redact-then-encrypt,
+      checklist 28). It REQUIRES ``passphrase`` — there is no switch that ships
+      unredacted creds without one.
+
+    On ANY failure, partial temp artifacts are cleaned up.
+    """
+    encrypt = passphrase is not None
+    if include_credentials and not encrypt:
+        # No unredacted-creds-without-a-passphrase path (checklist 27/28).
+        raise ValueError("include_credentials requires a passphrase")
+    if encrypt:
+        if not acknowledge_unrecoverable:
+            raise ValueError(
+                "Encrypted backup requires acknowledge_unrecoverable: a lost "
+                "passphrase makes the artifact permanently unrecoverable"
+            )
+        if len(passphrase) < artifact_crypto.MIN_PASSPHRASE_LENGTH:
+            raise ValueError(
+                "Passphrase must be at least %d characters"
+                % artifact_crypto.MIN_PASSPHRASE_LENGTH
+            )
+    # Flush WAL so journal.db is self-contained (same rationale as the legacy
+    # builder — see _create_backup_zip).
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            conn.commit()
+        if row and row[0]:
+            logger.warning("[BACKUP] WAL checkpoint completed (incomplete -- WAL busy)")
+        else:
+            logger.info("[BACKUP] WAL checkpoint completed")
+    except Exception as e:
+        logger.warning("[BACKUP] WAL checkpoint failed (non-fatal): %s", e)
+
+    # Pre-build free-disk check on the partition we will write to.
+    if dest_dir is None:
+        dest_dir = CONFIG_DIR
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    _check_free_disk(dest_dir, _estimate_artifact_source_bytes())
+
+    # Gather redacted payloads BEFORE opening the archive so a gather failure
+    # never leaves a half-written ZIP on disk. include_credentials only ever
+    # re-injects the approved migration creds (and only with a passphrase set,
+    # validated above); redaction still runs over everything else.
+    categories = await _gather_redacted_categories(include_credentials=include_credentials)
+    # Source-logo id correlation (PR #743 item 1) — best-effort join of each
+    # on-disk logo file to its Dispatcharr logo record, carried in metadata.json.
+    source_logo_index = await _fetch_source_logo_index()
+    logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree(
+        source_logo_index=source_logo_index
+    )
+
+    # e0r3h — the producer owns the CANONICAL timestamped name
+    # ``ecm-backup-<UTC ts>.zip`` (no post-build rename in the task layer). This is
+    # the name retention's ``_BACKUP_ZIP_FILENAME_RE`` allowlist + filename
+    # timestamp-sort require. ``_get_backup_filename`` is the single source of that
+    # shape. On the rare same-second collision (two runs in the same UTC second)
+    # we suffix a short uniquifier so we never clobber an existing artifact; the
+    # base name still matches the retention regex's ``\d{6}`` second field is the
+    # canonical case, and the collision fallback degrades retention discoverability
+    # of the SECOND file only (same trade-off the old rename made).
+    zip_path = dest_dir / _get_backup_filename()
+    if zip_path.exists():
+        fd, tmp_zip_name = tempfile.mkstemp(
+            prefix="ecm-backup-", suffix=".zip", dir=str(dest_dir)
+        )
+        os.close(fd)
+        zip_path = Path(tmp_zip_name)
+    sidecar_path = Path(str(zip_path) + ".sha256")
+    scrubbed_db_path: Optional[Path] = None
+    file_hashes: dict[str, str] = {}
+
+    def _writestr_hashed(zf: zipfile.ZipFile, arcname: str, data: bytes) -> None:
+        zf.writestr(arcname, data)
+        file_hashes[arcname] = hashlib.sha256(data).hexdigest()
+
+    def _write_hashed(zf: zipfile.ZipFile, src: Path, arcname: str) -> None:
+        # Stream the file into the ZIP AND hash it in the same single pass over
+        # the bytes (no second read, no whole-file buffer).
+        zinfo = zipfile.ZipInfo(arcname)
+        zinfo.compress_type = zipfile.ZIP_DEFLATED
+        h = hashlib.sha256()
+        with open(src, "rb") as fsrc, zf.open(zinfo, "w") as fdst:
+            for chunk in iter(lambda: fsrc.read(_SHA256_CHUNK), b""):
+                fdst.write(chunk)
+                h.update(chunk)
+        file_hashes[arcname] = h.hexdigest()
+
+    try:
+        # Open the ZIP on a writable FILE HANDLE (NamedTemporaryFile-class temp
+        # path), NOT io.BytesIO — the artifact is streamed to disk (D8).
+        with open(zip_path, "wb") as zfh:
+            with zipfile.ZipFile(zfh, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Per-category redacted YAML.
+                for name, yaml_text in categories.items():
+                    _writestr_hashed(
+                        zf,
+                        "%s/%s" % (ARTIFACT_CATEGORY_DIR, name),
+                        yaml_text.encode("utf-8"),
+                    )
+
+                # journal.db — scrubbed copy (alert_methods.config creds redacted,
+                # unless the cred-carrying migration opt-in preserves them).
+                if JOURNAL_DB_FILE.exists():
+                    scrubbed_db_path = _scrub_journal_db_to_temp(
+                        JOURNAL_DB_FILE, include_credentials=include_credentials
+                    )
+                    _write_hashed(zf, scrubbed_db_path, "journal.db")
+
+                # Binary subtree: metadata + url-mappings + per-image logo files.
+                _writestr_hashed(
+                    zf,
+                    ARTIFACT_BINARY_METADATA,
+                    json.dumps(logo_metadata, indent=2).encode("utf-8"),
+                )
+                _writestr_hashed(
+                    zf,
+                    ARTIFACT_BINARY_URL_MAPPINGS,
+                    json.dumps(url_mappings, indent=2).encode("utf-8"),
+                )
+                for src_path, arcname in logo_entries:
+                    _write_hashed(zf, src_path, arcname)
+
+                # Manifest LAST so it can carry every member's hash. For a
+                # PLAINTEXT artifact this is the cleartext header (schema_version
+                # readable pre-decrypt); for an ENCRYPTED artifact it is sealed
+                # inside the ciphertext, and the envelope's format_version is the
+                # pre-decrypt version gate instead (checklist 30).
+                manifest = _build_artifact_manifest(
+                    BACKUP_SCHEMA_VERSION, file_hashes, redacted=not include_credentials
+                )
+                # The manifest itself is not in file_hashes (it hashes the others).
+                zf.writestr(ARTIFACT_MANIFEST_NAME, json.dumps(manifest, indent=2))
+
+        # Optional whole-artifact passphrase encryption (ADR-012 D12 / u81kh).
+        # The sealed plaintext ZIP is encrypted OFF the event loop to a sibling
+        # temp, then atomically swapped into zip_path so the artifact on disk is
+        # the encrypted envelope. The plaintext is destroyed by the replace.
+        if encrypt:
+            enc_path = Path(str(zip_path) + ".enc")
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(
+                    None,
+                    artifact_crypto.encrypt_file,
+                    zip_path, passphrase, enc_path,
+                )
+                os.replace(enc_path, zip_path)  # plaintext ZIP -> encrypted bytes
+            except Exception:
+                # encrypt_file already unlinks its own partial output; clear any
+                # straggler so the outer cleanup sees a consistent state.
+                try:
+                    if enc_path.exists():
+                        enc_path.unlink()
+                except OSError:
+                    pass
+                raise
+
+        # SHA-256 of the FINISHED artifact (encrypted bytes if encrypted),
+        # computed by streaming the file.
+        artifact_sha = _compute_sha256_streaming(zip_path)
+        sidecar_path.write_text(
+            "%s  %s\n" % (artifact_sha, zip_path.name), encoding="utf-8"
+        )
+
+        logger.info(
+            "[BACKUP] Built artifact %s (schema_version=%d, %d members, "
+            "encrypted=%s, include_credentials=%s, sha256=%s)",
+            zip_path.name, BACKUP_SCHEMA_VERSION, len(file_hashes),
+            encrypt, include_credentials, artifact_sha,
+        )
+        return BackupArtifact(
+            zip_path=zip_path,
+            sidecar_path=sidecar_path,
+            schema_version=BACKUP_SCHEMA_VERSION,
+            sha256=artifact_sha,
+            file_count=len(file_hashes),
+            encrypted=encrypt,
+        )
+    except Exception:
+        # Clean up partial temp artifacts on ANY failure.
+        for p in (zip_path, sidecar_path):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError as e:
+                logger.warning("[BACKUP] Failed to clean up partial artifact %s: %s", p, e)
+        raise
+    finally:
+        if scrubbed_db_path is not None:
+            try:
+                scrubbed_db_path.unlink()
+            except OSError as e:
+                logger.warning(
+                    "[BACKUP] Failed to unlink scrubbed journal temp %s: %s",
+                    scrubbed_db_path, e,
+                )
+
+
+def verify_artifact_sha256(zip_path: Path, sidecar_path: Path) -> bool:
+    """Verify a built artifact against its SHA-256 sidecar.
+
+    Streams the artifact (no whole-file buffer) and compares against the hash in
+    the sidecar. Returns True on match, False on mismatch or unreadable sidecar.
+    """
+    try:
+        sidecar_text = Path(sidecar_path).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    expected = sidecar_text.split()[0] if sidecar_text else ""
+    if not expected:
+        return False
+    actual = _compute_sha256_streaming(Path(zip_path))
+    return actual == expected
+
+
+# ---------------------------------------------------------------------------
+# Restore-ingest schema_version gate (0i2vt.17, ADR-008 D1 + S4)
+#
+# The new-format DBAS artifact (build_backup_artifact) carries a CLEARTEXT
+# manifest.json whose dedicated integer ``schema_version`` is the restore
+# compatibility gate. On restore we MUST refuse an artifact built by a NEWER
+# ECM (schema_version > BACKUP_SCHEMA_VERSION) BEFORE any mutation — a v0.19
+# archive restored on a v0.18 build would otherwise silently partial-restore
+# and corrupt state. The rule (mirrors build_backup_artifact's contract):
+# manifest schema_version <= BACKUP_SCHEMA_VERSION is accepted; anything newer
+# (or missing/malformed) is refused.
+#
+# SECURITY (D1 + S4 — no schema-internals leakage): the user-facing message is
+# EXACTLY "Unsupported backup version" with NO version numbers and NO schema
+# internals. The actual detail (got X, support up to Y) is logged SERVER-SIDE
+# only for operator troubleshooting.
+#
+# NOTE: the manifest ``schema_version`` and the embedded journal.db
+# alembic_version are TWO DISTINCT axes. This gate is ONLY the manifest
+# schema_version.
+# ---------------------------------------------------------------------------
+
+# The ONLY user-facing string for a version refusal. No interpolation: it must
+# never carry a version number or any schema internal.
+UNSUPPORTED_BACKUP_VERSION_MESSAGE = "Unsupported backup version"
+
+
+class UnsupportedBackupVersionError(Exception):
+    """Raised when a restore artifact's manifest schema_version is unsupported.
+
+    ``str(err)`` is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` — the
+    user-facing message — and carries NO version numbers or schema internals
+    (ADR-008 D1 + S4). The actual version detail is logged server-side by the
+    raiser before this is raised.
+    """
+
+    def __init__(self, message: str = UNSUPPORTED_BACKUP_VERSION_MESSAGE):
+        super().__init__(message)
+
+
+def validate_restore_schema_version(manifest) -> None:
+    """Refuse a restore artifact whose manifest schema_version is unsupported.
+
+    Reusable version comparator for the restore-ingest chokepoint. Applies the
+    same rule build_backup_artifact stamps: ``schema_version <=
+    BACKUP_SCHEMA_VERSION`` is accepted; a NEWER artifact (or one with a
+    missing/malformed schema_version) is REFUSED.
+
+    Raises :class:`UnsupportedBackupVersionError` whose message is EXACTLY
+    :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE` (no version leak). The actual
+    detail is logged server-side (lazy %%-formatting) BEFORE raising.
+
+    Args:
+        manifest: The parsed manifest dict. A non-dict, a missing
+            ``schema_version``, or a non-int (bool excluded) value is treated as
+            unknown/invalid and refused — never accepted by default.
+
+    Returns:
+        None on an accepted (supported) version.
+    """
+    version = manifest.get("schema_version") if isinstance(manifest, dict) else None
+
+    # bool is an int subclass; reject it explicitly so True/False can't pass.
+    if not isinstance(version, int) or isinstance(version, bool):
+        logger.warning(
+            "[BACKUP] Refusing restore: manifest schema_version missing or "
+            "malformed (got %r); this build supports up to %d",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    if version > BACKUP_SCHEMA_VERSION:
+        logger.warning(
+            "[BACKUP] Refusing restore: artifact schema_version=%d is newer "
+            "than supported (this build supports up to %d). Refuse before any "
+            "mutation to avoid a silent partial restore.",
+            version, BACKUP_SCHEMA_VERSION,
+        )
+        raise UnsupportedBackupVersionError()
+
+    logger.debug(
+        "[BACKUP] Restore artifact schema_version=%d accepted (supported up to %d)",
+        version, BACKUP_SCHEMA_VERSION,
+    )
+
+
+def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
+    """Refuse a decompression-bomb archive BEFORE any member is ``zf.read()``.
+
+    Implements the threat-model D2 control
+    (``docs/security/threat_model_dbas_import.md`` §3.5 / checklist 5). The 2 GiB
+    upload cap bounds only the COMPRESSED bytes; a small high-ratio ZIP can still
+    expand to gigabytes and OOM the single-process container. This guard iterates
+    ``zf.infolist()`` (header metadata only — it never decompresses) and refuses
+    the archive if any of the D2 caps is exceeded:
+
+    * entry count   > :data:`_ARTIFACT_MAX_ENTRIES`
+    * per-entry decompressed:compressed ratio > :data:`_ARTIFACT_MAX_ENTRY_RATIO`
+      (only for entries whose compressed size exceeds
+      :data:`_ARTIFACT_RATIO_MIN_COMPRESSED`, so a tiny stored file is not
+      falsely flagged), and
+    * cumulative declared uncompressed size > :data:`_ARTIFACT_MAX_TOTAL_UNCOMPRESSED`.
+
+    This is the SINGLE shared guard called at the start of validation
+    (:func:`validate_artifact_manifest`) AND at the start of decode
+    (:func:`dbas.restore_artifact.decode_artifact_to_plan`) so both read sites are
+    protected from one place. The refusal message is GENERIC — it leaks no sizes,
+    ratios, or member names to the caller; the specifics are logged server-side.
+
+    Note: ``ZipInfo.file_size`` is the archive's own DECLARED uncompressed size and
+    is attacker-controlled, but that is exactly the point — a bomb DECLARES a huge
+    size, so refusing on the declared size stops the read before CPython would
+    decompress to discover the real size. A liar that under-declares to slip past
+    the ratio/cumulative check is still bounded by the per-entry write loop in the
+    importers (D8 one-at-a-time decode) and the 2 GiB compressed cap.
+    """
+    infos = zf.infolist()
+    if len(infos) > _ARTIFACT_MAX_ENTRIES:
+        logger.warning(
+            "[BACKUP] Refusing restore: archive has %d entries (max %d)",
+            len(infos), _ARTIFACT_MAX_ENTRIES,
+        )
+        raise HTTPException(status_code=400, detail="Backup archive rejected")
+
+    total_uncompressed = 0
+    for info in infos:
+        uncompressed = info.file_size
+        compressed = info.compress_size
+        total_uncompressed += uncompressed
+        if total_uncompressed > _ARTIFACT_MAX_TOTAL_UNCOMPRESSED:
+            logger.warning(
+                "[BACKUP] Refusing restore: cumulative uncompressed size exceeds "
+                "%d bytes (member %s)",
+                _ARTIFACT_MAX_TOTAL_UNCOMPRESSED, info.filename,
+            )
+            raise HTTPException(status_code=400, detail="Backup archive rejected")
+        if compressed > _ARTIFACT_RATIO_MIN_COMPRESSED:
+            ratio = uncompressed / compressed
+            if ratio > _ARTIFACT_MAX_ENTRY_RATIO:
+                logger.warning(
+                    "[BACKUP] Refusing restore: member %s compression ratio %.1f "
+                    "exceeds %dx (%d -> %d bytes)",
+                    info.filename, ratio, _ARTIFACT_MAX_ENTRY_RATIO,
+                    compressed, uncompressed,
+                )
+                raise HTTPException(status_code=400, detail="Backup archive rejected")
+
+
+def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> None:
+    """Verify each manifest-listed member's SHA-256 against the ZIP bytes.
+
+    Pairs with the version gate at the same chokepoint (grooming: validate
+    version + integrity together BEFORE mutation). A member whose bytes do not
+    match the manifest hash, or a manifest member absent from the ZIP, refuses
+    the restore with a generic integrity message that leaks NO schema internals
+    (no schema_version numbers). The detail (which member, hash mismatch) is
+    logged server-side.
+
+    NOTE: the whole-artifact SHA-256 sidecar (verify_artifact_sha256) lives
+    next to the file on disk and is not present inside an uploaded ZIP; this
+    per-member check is the integrity guarantee available at the ingest
+    chokepoint from the ZIP alone.
+    """
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        logger.warning("[BACKUP] Refusing restore: manifest has no per-file hash list")
+        raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+    names = set(zf.namelist())
+    for entry in files:
+        if not isinstance(entry, dict):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        path = entry.get("path")
+        expected = entry.get("sha256")
+        if not isinstance(path, str) or not isinstance(expected, str):
+            logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        if path not in names:
+            logger.warning("[BACKUP] Refusing restore: manifest member %s absent from artifact", path)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        actual = hashlib.sha256(zf.read(path)).hexdigest()
+        if actual != expected:
+            logger.warning(
+                "[BACKUP] Refusing restore: integrity mismatch on member %s "
+                "(expected %s, got %s)", path, expected, actual,
+            )
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+
+def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
+    """Validate a new-format DBAS artifact at the restore-ingest chokepoint.
+
+    Runs BEFORE any restore mutation, in this order:
+
+    1. parse the cleartext ``manifest.json`` header,
+    2. **version gate** — refuse a newer/unknown schema_version (the highest
+       priority: an incompatible artifact is rejected before we even trust its
+       integrity claims), then
+    3. **integrity** — verify each manifest-listed member's SHA-256.
+
+    Returns the parsed manifest on success. Refusals raise ``HTTPException(400)``
+    with a user-facing message that leaks NO schema internals; the version
+    refusal message is EXACTLY :data:`UNSUPPORTED_BACKUP_VERSION_MESSAGE`. All
+    detail is logged server-side.
+    """
+    # D2 zip-bomb guard FIRST — before any zf.read(), including the manifest read
+    # below. A high-ratio member must be refused before it can be decompressed.
+    guard_artifact_against_zip_bomb(zf)
+
+    if ARTIFACT_MANIFEST_NAME not in zf.namelist():
+        logger.warning("[BACKUP] Refusing restore: artifact missing %s", ARTIFACT_MANIFEST_NAME)
+        raise HTTPException(status_code=400, detail="Not a valid ECM backup artifact")
+
+    try:
+        manifest = json.loads(zf.read(ARTIFACT_MANIFEST_NAME))
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", e)
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    if not isinstance(manifest, dict):
+        logger.warning("[BACKUP] Refusing restore: artifact manifest is not an object")
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+
+    # 2. Version gate FIRST — refuse an incompatible artifact before trusting
+    #    anything else about it. Translate the internal exception into the
+    #    HTTP error WITHOUT adding any version detail to the body.
+    try:
+        validate_restore_schema_version(manifest)
+    except UnsupportedBackupVersionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 3. Integrity AFTER the version is known-supported.
+    _verify_artifact_member_integrity(zf, manifest)
+
+    return manifest
 
 
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
@@ -516,8 +1463,17 @@ async def create_backup(_admin=RequireAdminIfEnabled):
 
 
 @router.post("/restore")
-async def restore_backup(file: UploadFile = File(...), _admin=RequireAdminIfEnabled):
-    """Restore ECM configuration from an uploaded backup zip. Admin only."""
+async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminIfEnabled):
+    """Restore ECM configuration from an uploaded backup zip. Human-admin only.
+
+    kgz3k / bead 6n76m: gated with ``RequireHumanAdminIfEnabled`` (NOT the plain
+    ``RequireAdminIfEnabled``) so the static MCP service principal is rejected.
+    Restore rewrites the settings blob wholesale via ``_restore_from_zip`` ->
+    ``_merge_settings_preserving_redacted``, which would otherwise let the MCP
+    key flip every admin-only field (and restore non-redacted credentials from a
+    legacy ZIP) — bypassing the field-level gate ``_resolve_settings_admin``
+    enforces on POST /api/settings.
+    """
     logger.info("[BACKUP] Restore requested, filename=%s", file.filename)
 
     # Read uploaded file
@@ -587,14 +1543,235 @@ async def restore_backup_initial(file: UploadFile = File(...)):
     }
 
 
-def _gather_settings() -> dict:
-    """Read settings.json and return as dict (excluding sensitive fields)."""
+# ---------------------------------------------------------------------------
+# DBAS async restore-trigger endpoint (bead enhancedchannelmanager-o8tbv)
+#
+# The new-format DBAS artifact restore — the async, progress-emitting path that
+# makes restore user-triggerable. UNTRUSTED-ARTIFACT-UPLOAD surface:
+#   * admin-auth only (RequireAdminIfEnabled, like every restore endpoint here),
+#   * the upload is STREAMED to a temp file on the CONFIG partition one chunk at
+#     a time (never read whole-in-RAM — ADR-008 D8), mode 0600,
+#   * a hard size cap aborts + cleans up an oversize upload mid-stream,
+#   * validation (.17 version + integrity) runs INSIDE the task BEFORE any
+#     mutation, and the orchestrator's default-ON dry-run guardrail means APPLY
+#     requires an explicit confirm flag.
+# The endpoint kicks the DbasRestoreTask in the background and returns its
+# task id immediately; the frontend polls /api/tasks/{id} for per-stage progress.
+# ---------------------------------------------------------------------------
+
+DBAS_RESTORE_TASK_ID = "dbas_restore"
+_DBAS_RESTORE_TMP_DIR = CONFIG_DIR / "dbas" / "restore_uploads"
+
+# Age after which an abandoned restore temp is swept (O8TBV-4). The DbasRestoreTask
+# normally deletes its own temp in a finally; this only catches temps orphaned
+# when the fire-and-forget coroutine returns BEFORE execute() runs (task-not-found
+# or an ALREADY_RUNNING concurrency reject — neither reaches the task's finally).
+# A few hours is comfortably longer than the longest realistic restore, so the
+# sweep never races a live run that still owns its temp.
+_DBAS_RESTORE_TMP_MAX_AGE_SECONDS = 6 * 60 * 60  # 6 hours
+
+
+def _sweep_stale_restore_temps(dest_dir: Path) -> None:
+    """Best-effort removal of abandoned restore temp artifacts (O8TBV-4).
+
+    The DbasRestoreTask owns teardown of its own temp in a ``finally`` block, so
+    the common path leaves nothing behind. But the trigger endpoint schedules the
+    task fire-and-forget via ``asyncio.create_task``; if that coroutine returns
+    before ``execute()`` ever runs — ``run_task`` returns ``None`` (task id not
+    registered) or an ``ALREADY_RUNNING`` result for a concurrent run — the task's
+    ``finally`` never fires and the 0600 temp ZIP is orphaned. This sweep, run at
+    the START of each restore trigger, removes temps older than
+    :data:`_DBAS_RESTORE_TMP_MAX_AGE_SECONDS` so an orphan cannot accumulate.
+
+    It never deletes a fresh temp (a live run still owns it — the age floor is far
+    longer than any realistic restore) and never double-deletes (a finished task
+    already unlinked its own). Any error is swallowed with a WARN — a sweep
+    failure must never block a legitimate restore.
+    """
+    if not dest_dir.exists():
+        return
+    cutoff = time.time() - _DBAS_RESTORE_TMP_MAX_AGE_SECONDS
+    removed = 0
+    try:
+        candidates = list(dest_dir.glob("ecm-restore-*.zip"))
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not list restore temp dir for sweep: %s", exc)
+        return
+    for candidate in candidates:
+        try:
+            if candidate.stat().st_mtime < cutoff:
+                candidate.unlink()
+                removed += 1
+        except FileNotFoundError:
+            # Already gone (raced with a task's own finally) — fine.
+            continue
+        except OSError as exc:
+            logger.warning(
+                "[BACKUP] Failed to sweep stale restore temp %s: %s", candidate, exc
+            )
+    if removed:
+        logger.info("[BACKUP] Swept %d stale restore temp artifact(s)", removed)
+
+
+async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
+    """Stream an uploaded artifact to a 0600 temp file, chunk by chunk.
+
+    NEVER reads the whole upload into RAM (ADR-008 D8) — it copies
+    ``_RESTORE_UPLOAD_CHUNK`` bytes at a time and enforces
+    :data:`_RESTORE_MAX_UPLOAD_BYTES`, aborting + unlinking the partial temp the
+    moment the cumulative size exceeds the cap (so an oversize upload can never
+    fill the partition). The temp file is created mode 0600 (owner-only) because
+    the artifact may carry credential-bearing material (journal.db) even though
+    it is redacted-by-default.
+
+    Returns the temp file path on success. Raises ``HTTPException(413)`` on
+    oversize and ``HTTPException(400)`` on a read error — the partial temp is
+    cleaned up in both cases.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix="ecm-restore-", suffix=".zip", dir=str(dest_dir))
+    tmp_path = Path(tmp_name)
+    # Owner read/write only — the artifact may carry sensitive (if redacted) data.
+    try:
+        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:  # pragma: no cover — platform without fchmod
+        pass
+
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                try:
+                    chunk = await file.read(_RESTORE_UPLOAD_CHUNK)
+                except Exception as exc:  # noqa: BLE001 - any read error is a 400
+                    raise HTTPException(status_code=400, detail="Failed to read uploaded artifact") from exc
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _RESTORE_MAX_UPLOAD_BYTES:
+                    logger.warning(
+                        "[BACKUP] Refusing restore: upload exceeded size cap (%d bytes max)",
+                        _RESTORE_MAX_UPLOAD_BYTES,
+                    )
+                    raise HTTPException(
+                        status_code=413, detail="Uploaded artifact is too large"
+                    )
+                out.write(chunk)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to clean up partial restore upload: %s", exc)
+        raise
+
+    if total == 0:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Uploaded artifact is empty")
+
+    logger.info("[BACKUP] Streamed restore artifact to temp (%d bytes)", total)
+    return tmp_path
+
+
+@router.post("/restore-dbas")
+async def restore_dbas_artifact(
+    file: UploadFile = File(...),
+    confirm_apply: bool = Query(
+        default=False,
+        description="False (default) runs a counts-only dry-run; True runs the apply.",
+    ),
+    passphrase: Optional[str] = Form(
+        default=None,
+        description=(
+            "Operator passphrase for an encrypted artifact (ADR-012 D12). Omit "
+            "for a plain artifact. Sent as a form field, never a query string, "
+            "so it does not land in access logs."
+        ),
+    ),
+    _admin=RequireAdminIfEnabled,
+):
+    """Trigger an async DBAS artifact restore. Admin only.
+
+    Streams the uploaded artifact to a temp file on the CONFIG partition, then
+    kicks the :class:`tasks.dbas_restore.DbasRestoreTask` in the background and
+    returns its ``task_id`` so the frontend can poll ``/api/tasks/{task_id}`` for
+    per-stage progress and the terminal ``RestoreReport``.
+
+    DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
+    plan that makes ZERO mutation (the orchestrator's .16 guardrail enforces this
+    even if this flag were bypassed). Validation (.17 version + integrity) runs
+    inside the task BEFORE any decode or importer.
+    """
+    logger.info(
+        "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s)",
+        file.filename, confirm_apply,
+    )
+
+    # Sweep any temp orphaned by a previous fire-and-forget run that returned
+    # before its task's finally could clean up (task-not-found / ALREADY_RUNNING).
+    _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
+
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
+
+    # Configure + kick the restore task. The task owns temp-artifact teardown
+    # (cleanup_artifact=True) so the file never outlives the run.
+    parameters = {
+        "artifact_path": str(tmp_path),
+        "confirm_apply": bool(confirm_apply),
+        "cleanup_artifact": True,
+    }
+    # Forward the passphrase only when present (encrypted artifact). The task
+    # excludes it from get_config so it is never persisted or logged.
+    if passphrase:
+        parameters["passphrase"] = passphrase
+
+    try:
+        from task_engine import get_engine
+
+        engine = get_engine()
+        # Fire-and-forget: run_task awaits to completion, so schedule it as a
+        # background asyncio task and return the task id immediately. The
+        # frontend polls /api/tasks/{id} for live progress. The task's own
+        # finally-block cleans up the temp artifact on success AND failure.
+        asyncio.create_task(
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+        )
+    except Exception as exc:
+        logger.exception("[BACKUP] Failed to schedule DBAS restore task: %s", exc)
+        # Scheduling failed before the task could own cleanup — remove the temp.
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="Failed to start restore")
+
+    return {
+        "status": "started",
+        "task_id": DBAS_RESTORE_TASK_ID,
+        "is_dry_run": not confirm_apply,
+    }
+
+
+def _gather_settings(include_credentials: bool = False) -> dict:
+    """Read settings.json and return as dict (excluding sensitive fields).
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) preserves the settings-class
+    credentials (SMTP password, API keys, bot tokens) instead of redacting them,
+    for the opt-in passphrase-encrypted cred-carrying migration path. It is only
+    ever True inside :func:`build_backup_artifact` when a passphrase is set; the
+    review/portability YAML export path always redacts.
+    """
     settings = get_settings()
     data = settings.model_dump()
-    # Redact credentials — the export is for review/portability, not secret storage
-    for key in _SETTINGS_CREDENTIAL_FIELDS:
-        if key in data:
-            data[key] = REDACTED
+    if not include_credentials:
+        # Redact credentials — the export is for review/portability, not secret storage
+        for key in _SETTINGS_CREDENTIAL_FIELDS:
+            if key in data:
+                data[key] = REDACTED
     return data
 
 
@@ -667,7 +1844,7 @@ def _gather_db_tables() -> dict:
         sections["tag_groups"] = tag_groups_out
 
         # Auto-creation rules
-        ac_rules = session.query(AutoCreationRule).all()
+        ac_rules = session.query(ChannelPipelineRule).all()
         sections["auto_creation_rules"] = [r.to_dict() for r in ac_rules]
 
         # FFmpeg profiles
@@ -688,6 +1865,180 @@ def _gather_db_tables() -> dict:
         return sections
     finally:
         session.close()
+
+
+# Channel-list pagination cap for the channels producer. Dispatcharr's channel
+# list is paginated; the producer walks every page so the backup carries the FULL
+# channel set (a partial channel export would silently lose channels on restore).
+_CHANNELS_PAGE_SIZE = 1000
+_CHANNELS_MAX_PAGES = 1000  # hard stop so a misbehaving upstream cannot loop forever
+
+
+def _safe_embedded_stream(stream: dict) -> dict:
+    """Reduce a Dispatcharr stream record to the SAFE fields a channel embeds.
+
+    The DBAS round-trip restore (``dbas/importers/channels.py``) matches each
+    embedded stream against the destination's streams using the 4-tier matcher
+    (``dbas/stream_matcher.py``): name + provider (``m3u_account``) on Tiers 2-4.
+    Tier 1 (exact URL) is deliberately UNavailable here — a stream URL embeds
+    provider credentials (``_STREAM_CREDENTIAL_FIELDS``) and is NEVER carried in
+    the artifact (7i8rf redaction contract). We emit ONLY the stream id (for the
+    operator-facing label / ordering) and the credential-free match fields. The
+    non-bypassable deep redactor still runs over the result as defense in depth.
+    """
+    out: dict = {}
+    sid = stream.get("id")
+    if sid is not None:
+        out["id"] = sid
+    name = stream.get("name")
+    if name is not None:
+        out["name"] = name
+    # ``m3u_account`` is an integer FK (the provider id), not a credential — it is
+    # the matcher's "same provider" signal (Tier 2). Carried for match fidelity.
+    if "m3u_account" in stream:
+        out["m3u_account"] = stream.get("m3u_account")
+    return out
+
+
+async def _gather_channels_with_streams(client) -> list[dict]:
+    """Fetch every channel with its embedded streams reduced to SAFE fields.
+
+    A Dispatcharr channel's ``streams`` field is a list of stream IDs. For the
+    round-trip restore matcher to do better than a blind custom-stream synthesis,
+    each embedded stream is enriched to ``{id, name, m3u_account}`` (NEVER the
+    URL — see :func:`_safe_embedded_stream`) by joining against the stream records
+    fetched once for the whole export. A channel whose streams cannot be enriched
+    still carries its ordered ``[{id}, ...]`` so ordering and count survive.
+    """
+    # 1) Walk all channel pages.
+    channels: list[dict] = []
+    page = 1
+    while page <= _CHANNELS_MAX_PAGES:
+        resp = await client.get_channels(page=page, page_size=_CHANNELS_PAGE_SIZE)
+        if isinstance(resp, dict):
+            results = resp.get("results", []) or []
+            channels.extend(r for r in results if isinstance(r, dict))
+            if not resp.get("next"):
+                break
+        elif isinstance(resp, list):
+            channels.extend(r for r in resp if isinstance(r, dict))
+            break
+        else:
+            break
+        page += 1
+
+    if not channels:
+        return []
+
+    # 2) Build a stream-id -> safe-record index from the full stream list (one
+    #    paginated walk; the matcher only needs name + provider).
+    stream_index: dict = {}
+    spage = 1
+    while spage <= _CHANNELS_MAX_PAGES:
+        sresp = await client.get_streams(page=spage, page_size=_CHANNELS_PAGE_SIZE)
+        if isinstance(sresp, dict):
+            sresults = sresp.get("results", []) or []
+        elif isinstance(sresp, list):
+            sresults = sresp
+        else:
+            sresults = []
+        for s in sresults:
+            if isinstance(s, dict) and s.get("id") is not None:
+                stream_index[s["id"]] = _safe_embedded_stream(s)
+        if not (isinstance(sresp, dict) and sresp.get("next")):
+            break
+        spage += 1
+
+    # 3) Replace each channel's stream-id list with the enriched safe records,
+    #    preserving order. An id absent from the index degrades to {"id": id}.
+    enriched: list[dict] = []
+    for ch in channels:
+        out = dict(ch)
+        raw_streams = ch.get("streams")
+        if isinstance(raw_streams, list):
+            embedded = []
+            for sid in raw_streams:
+                if isinstance(sid, dict):
+                    # Already an object (some endpoints embed); reduce to safe.
+                    embedded.append(_safe_embedded_stream(sid))
+                else:
+                    embedded.append(stream_index.get(sid, {"id": sid}))
+            out["streams"] = embedded
+        enriched.append(out)
+    return enriched
+
+
+# Core-settings keys whose lower-cased name starts with this prefix belong to
+# the ``comskip`` artifact section, not ``core_settings``. Dispatcharr has NO
+# separate comskip endpoint: comskip config (``comskip_ini``, toggles, …) lives
+# in the same GET /api/core/settings/ namespace the settings importer PATCHes
+# per-key (see dispatcharr_client.get_core_settings / update_core_setting), so
+# the producer fetches once and SPLITS by this prefix. The split is disjoint —
+# no key can be applied twice on restore.
+_COMSKIP_KEY_PREFIX = "comskip"
+
+
+def _normalize_core_settings(raw) -> dict:
+    """Normalize the GET /api/core/settings/ payload into a flat key->value map.
+
+    Dispatcharr serializes core settings either as a mapping or as a list of
+    ``{key|name, value}`` records; the client deliberately returns the raw
+    payload and callers normalize (see ``dispatcharr_client.get_core_settings``).
+    Rows without a usable string key are dropped rather than guessed at.
+    """
+    if isinstance(raw, dict):
+        return dict(raw)
+    out: dict = {}
+    if isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("key")
+            if not isinstance(key, str) or not key:
+                key = row.get("name")
+            if isinstance(key, str) and key:
+                out[key] = row.get("value")
+    return out
+
+
+def _split_comskip_settings(settings: dict) -> tuple[dict, dict]:
+    """Split a normalized core-settings map into (core_settings, comskip) blobs.
+
+    A key whose lower-cased name starts with :data:`_COMSKIP_KEY_PREFIX` goes to
+    the comskip blob; everything else stays in core_settings. Disjoint by
+    construction, preserving iteration order within each blob.
+    """
+    core: dict = {}
+    comskip: dict = {}
+    for key, value in settings.items():
+        if isinstance(key, str) and key.lower().startswith(_COMSKIP_KEY_PREFIX):
+            comskip[key] = value
+        else:
+            core[key] = value
+    return core, comskip
+
+
+def _redact_marked_setting_values(blob: dict) -> dict:
+    """Redact the VALUE of any setting whose KEY the restore importer denylists.
+
+    Mirrors the importer-side conservative denylist (lc6zu): the settings
+    importer (``dbas.importers.settings_agents``) unconditionally SKIPS any key
+    failing :func:`is_safe_setting_key` — the SAME predicate imported here, so
+    the two sides can never drift. Because such a key is never applied on
+    restore, carrying its real value in the artifact is pure leak risk with
+    zero utility: the value is replaced with the REDACTED sentinel ALWAYS, even
+    on a cred-carrying (``include_credentials``) migration artifact. The key
+    NAME survives so the restore report can still surface the skip by name.
+    Falsy None/"" values are preserved (same rule as the deep redactor) so
+    "unset" stays distinguishable.
+    """
+    out: dict = {}
+    for key, value in blob.items():
+        if isinstance(key, str) and not is_safe_setting_key(key):
+            out[key] = REDACTED if value not in (None, "") else value
+        else:
+            out[key] = value
+    return out
 
 
 async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
@@ -722,6 +2073,39 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
         if "stream_profiles" in needed:
             profiles = await client.get_stream_profiles()
             result["stream_profiles"] = profiles or []
+        if "channels" in needed:
+            # Channels carry embedded streams reduced to credential-free match
+            # fields (7i8rf). This is the producer the restore channels importer
+            # (dbas/importers/channels.py) consumes.
+            result["channels"] = await _gather_channels_with_streams(client)
+        if "dispatcharr_users" in needed:
+            # Dispatcharr user accounts (Django auth). A GET never returns a
+            # password/hash (see dbas/importers/users.py policy 1); the deep
+            # redactor scrubs any credential-class field as a backstop.
+            users = await client.get_users()
+            result["dispatcharr_users"] = users or []
+        # lc6zu — the settings/agents producer set consumed by the Phase-2
+        # settings_agents importer. User agents and DVR rules are benign entity
+        # lists; the deep redactor still runs over them as defense in depth.
+        if "user_agents" in needed:
+            agents = await client.get_user_agents()
+            result["user_agents"] = agents or []
+        if "dvr_rules" in needed:
+            rules = await client.get_dvr_rules()
+            result["dvr_rules"] = rules or []
+        if "core_settings" in needed or "comskip" in needed:
+            # ONE fetch backs both sections (no comskip endpoint exists — see
+            # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
+            # here at the gather chokepoint so every downstream serialization
+            # (artifact category YAML, explicit ?sections= export) is covered.
+            raw_settings = await client.get_core_settings()
+            core_blob, comskip_blob = _split_comskip_settings(
+                _normalize_core_settings(raw_settings)
+            )
+            if "core_settings" in needed:
+                result["core_settings"] = _redact_marked_setting_values(core_blob)
+            if "comskip" in needed:
+                result["comskip"] = _redact_marked_setting_values(comskip_blob)
 
         return result
     except Exception as e:
@@ -729,14 +2113,31 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
         return {"_warning": "Dispatcharr not connected — %s" % str(e)}
 
 
-async def build_yaml_export(sections: Optional[set[str]] = None) -> str:
+async def build_yaml_export(
+    sections: Optional[set[str]] = None, include_credentials: bool = False
+) -> str:
     """Build a YAML export string, optionally limited to specific sections.
 
     If sections is None, all sections are included. Otherwise only the
     specified section keys (from RESTORABLE_SECTIONS) are included.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) flows down to
+    :func:`_gather_settings` to preserve settings-class creds for the opt-in
+    passphrase-encrypted migration path; it is only ever True from
+    :func:`build_backup_artifact`. The user-facing ``/export`` endpoint never
+    sets it (always redacts).
+
+    The default set (``sections=None``) excludes ``artifact_only`` categories
+    (channels / dispatcharr_users — 7i8rf): those are restorable only via the
+    DBAS artifact path, not the legacy YAML export/restore, so the user-facing
+    full YAML export keeps its pre-7i8rf shape. The artifact builder
+    (:func:`_gather_redacted_categories`) requests each category by its EXPLICIT
+    key, so it still emits the artifact_only producers.
     """
-    all_keys = set(RESTORABLE_SECTIONS.keys())
-    selected = sections if sections else all_keys
+    legacy_keys = {
+        k for k, v in RESTORABLE_SECTIONS.items() if not v.get("artifact_only")
+    }
+    selected = sections if sections else legacy_keys
 
     export_data: dict = {
         "ecm_export": {
@@ -747,7 +2148,7 @@ async def build_yaml_export(sections: Optional[set[str]] = None) -> str:
     }
 
     if "settings" in selected:
-        export_data["settings"] = _gather_settings()
+        export_data["settings"] = _gather_settings(include_credentials=include_credentials)
 
     # ECM database sections
     db_sections = _gather_db_tables()
@@ -765,10 +2166,16 @@ async def build_yaml_export(sections: Optional[set[str]] = None) -> str:
 
 @router.get("/export-sections")
 async def get_export_sections(_admin=RequireAdminIfEnabled):
-    """Return available section keys and labels for selective export."""
+    """Return available section keys and labels for selective export.
+
+    ``artifact_only`` categories (channels / dispatcharr_users — 7i8rf) are
+    omitted: they are restorable only through the DBAS artifact path, not the
+    legacy per-section YAML restore this list drives.
+    """
     return [
         {"key": key, "label": info["label"]}
         for key, info in RESTORABLE_SECTIONS.items()
+        if not info.get("artifact_only")
     ]
 
 
@@ -811,8 +2218,8 @@ async def export_yaml(
 # Keys map to the YAML structure paths; "db_key" is the key under "database".
 RESTORABLE_SECTIONS = {
     "settings": {"label": "Settings"},
-    "scheduled_tasks": {"label": "Scheduled Tasks", "db_key": "scheduled_tasks"},
-    "task_schedules": {"label": "Task Schedules", "db_key": "task_schedules"},
+    "scheduled_tasks": {"label": "Task Settings & Alerts", "db_key": "scheduled_tasks"},
+    "task_schedules": {"label": "Task Run Schedules", "db_key": "task_schedules"},
     "normalization_rule_groups": {"label": "Normalization Rules", "db_key": "normalization_rule_groups"},
     "tag_groups": {"label": "Tag Groups", "db_key": "tag_groups"},
     "auto_creation_rules": {"label": "Auto-Creation Rules", "db_key": "auto_creation_rules"},
@@ -824,6 +2231,43 @@ RESTORABLE_SECTIONS = {
     "channel_groups": {"label": "Channel Groups", "dispatcharr": True},
     "channel_profiles": {"label": "Channel Profiles", "dispatcharr": True},
     "stream_profiles": {"label": "Stream Profiles", "dispatcharr": True},
+    # 7i8rf — the v0.18.0 round-trip producers. The restore importers
+    # (dbas/importers/channels.py + users.py) existed but the builder did not
+    # emit these categories, so restoring channels/users was a no-op against a
+    # real backup. ``channels`` carries embedded streams reduced to
+    # credential-free match fields (id + name + m3u_account, NEVER the URL).
+    # ``dispatcharr_users`` is the Dispatcharr (Django) user category — distinct
+    # from ECM's own users; a GET never returns a password/hash.
+    #
+    # ``artifact_only`` (7i8rf): these categories are PRODUCED into the DBAS
+    # artifact (consumed by the Phase-2 restore importers via
+    # decode_artifact_to_plan -> orchestrator) but are NOT restorable through the
+    # LEGACY per-section YAML restore endpoint (/restore-yaml), which has no
+    # channel/user restorer. They are therefore hidden from the legacy
+    # export-sections / validate UI so an operator cannot select a section the
+    # legacy path cannot apply. The artifact builder still emits them (the gather
+    # pipeline iterates every RESTORABLE_SECTIONS key).
+    "channels": {"label": "Channels", "dispatcharr": True, "artifact_only": True},
+    "dispatcharr_users": {
+        "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
+    },
+    # lc6zu — the settings/agents producer set completing coverage of all 12
+    # categories in the v0.18 scope (plugins remain excluded per ADR-012
+    # D10). Same ``artifact_only`` rationale as channels /
+    # dispatcharr_users: produced into the DBAS artifact and consumed by the
+    # Phase-2 settings_agents importer; the legacy per-section YAML path has no
+    # restorer for them. ``core_settings`` + ``comskip`` are gathered from ONE
+    # endpoint (GET /api/core/settings/ — Dispatcharr has no separate comskip
+    # endpoint; the importer applies both via per-key PATCH on that same
+    # namespace) and split by the ``comskip`` key prefix.
+    "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
+    "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
+    "core_settings": {
+        "label": "Core Settings", "dispatcharr": True, "artifact_only": True,
+    },
+    "comskip": {
+        "label": "Comskip Settings", "dispatcharr": True, "artifact_only": True,
+    },
 }
 
 
@@ -878,6 +2322,10 @@ async def validate_yaml_export(file: UploadFile = File(...), _admin=RequireAdmin
     export_meta = data.get("ecm_export", {})
     sections = []
     for key, info in RESTORABLE_SECTIONS.items():
+        # artifact_only categories (channels / dispatcharr_users — 7i8rf) are not
+        # restorable via the legacy YAML path this validate drives; hide them.
+        if info.get("artifact_only"):
+            continue
         count = _count_section_items(data, key)
         sections.append({
             "key": key,
@@ -902,9 +2350,14 @@ class YamlRestoreRequest(BaseModel):
 async def restore_from_yaml(
     file: UploadFile = File(...),
     sections: str = Body(..., description="JSON array of section keys to restore"),
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminIfEnabled,
 ):
-    """Selectively restore ECM configuration from a YAML export.
+    """Selectively restore ECM configuration from a YAML export. Human-admin only.
+
+    kgz3k / bead 6n76m: uses ``RequireHumanAdminIfEnabled`` so the MCP service
+    principal is rejected. The ``settings`` section restore path
+    (``_restore_settings`` -> ``save_settings``) writes the settings blob
+    wholesale, the same admin-only-field-bypass surface as the ZIP restores.
 
     Accepts a YAML file and a list of section keys. Each section is restored
     independently; partial failures are reported without aborting other sections.
@@ -925,6 +2378,20 @@ async def restore_from_yaml(
     invalid = [s for s in selected_sections if s not in RESTORABLE_SECTIONS]
     if invalid:
         raise HTTPException(status_code=400, detail="Unknown sections: %s" % ", ".join(invalid))
+
+    # artifact_only categories (channels / dispatcharr_users — 7i8rf) have no
+    # legacy per-section restorer; they are restorable only via the DBAS artifact
+    # path. Reject them here rather than letting _restore_section raise.
+    artifact_only = [
+        s for s in selected_sections
+        if RESTORABLE_SECTIONS[s].get("artifact_only")
+    ]
+    if artifact_only:
+        raise HTTPException(
+            status_code=400,
+            detail="Sections not restorable via YAML (use a DBAS backup): %s"
+            % ", ".join(artifact_only),
+        )
 
     content = await file.read()
     data = _parse_yaml_export(content)
@@ -1152,15 +2619,90 @@ def _restore_tag_groups(items: list) -> dict:
 
 def _restore_auto_creation_rules(items: list) -> dict:
     """Delete all auto-creation rules and recreate from YAML."""
+    # ti939.1.3 (PR #612 review): validate restored event_sync configs but
+    # DOWNGRADE failures to warnings — restore is delete-all-and-recreate,
+    # so refusing the row would destroy the rule outright. Restoring the
+    # config as-is is the fail-safe direction: the KIND comes from the raw
+    # column (models.ChannelPipelineRule.is_event_sync), so even an invalid
+    # config keeps the rule excluded from pipeline execution.
+    from channel_pipeline_schema import validate_event_sync_config
+
     session = get_session()
+    warnings: list[str] = []
+    # bead 8fq6x: the delete-all below CASCADEs to event_sync_reviews, dropping
+    # every review row — including ANSWERED accept/reject decisions. Preserve
+    # them across the delete+recreate and re-key onto the restored rule by
+    # NAME (fingerprints are content-based and survive; only the rule_id FK
+    # breaks). Captured BEFORE the delete because the CASCADE fires on delete.
+    _REVIEW_FIELDS = (
+        "provider_id", "stream_name_hash", "event_key", "status",
+        "created_at", "last_seen_at", "resolved_at", "resolution_source",
+        "actor_token_id", "evidence",
+    )
+    # ti939.3.5: operator never-attach exclusions have the same CASCADE
+    # exposure as review decisions — preserve/re-key them identically.
+    _EXCLUSION_FIELDS = (
+        "provider_id", "stream_name_hash", "event_key",
+        "created_at", "note", "actor_token_id", "evidence",
+    )
     try:
-        session.query(AutoCreationRule).delete()
+        id_to_name = {
+            rid: name
+            for rid, name in session.query(
+                ChannelPipelineRule.id, ChannelPipelineRule.name
+            )
+        }
+        preserved_reviews: list[dict] = []
+        for rv in session.query(EventSyncReview).all():
+            rule_name = id_to_name.get(rv.rule_id)
+            if rule_name is None:
+                continue
+            preserved_reviews.append({
+                "rule_name": rule_name,
+                **{f: getattr(rv, f) for f in _REVIEW_FIELDS},
+            })
+        preserved_exclusions: list[dict] = []
+        for ex in session.query(EventSyncExclusion).all():
+            rule_name = id_to_name.get(ex.rule_id)
+            if rule_name is None:
+                continue
+            preserved_exclusions.append({
+                "rule_name": rule_name,
+                **{f: getattr(ex, f) for f in _EXCLUSION_FIELDS},
+            })
+
+        session.query(ChannelPipelineRule).delete()
+        # Clear the review table explicitly rather than relying on the FK
+        # CASCADE — deterministic regardless of the connection's
+        # foreign_keys pragma, and the captured rows above are re-inserted
+        # with the restored rules' new ids below.
+        session.query(EventSyncReview).delete()
+        session.query(EventSyncExclusion).delete()
         for item in items:
-            rule = AutoCreationRule(
+            # ti939.1.3: the export (to_dict) carries event_sync_config as a
+            # parsed dict — re-serialize for the Text column. Dropping it
+            # here would resurrect the rule as a STANDARD rule whose dormant
+            # conditions/actions execute on the next run.
+            event_sync_config = item.get("event_sync_config")
+            if event_sync_config is not None:
+                es_errors = validate_event_sync_config(event_sync_config)
+                if es_errors:
+                    warnings.append(
+                        f"Rule '{item.get('name')}': event_sync_config failed "
+                        f"validation ({len(es_errors)} error(s)); restored "
+                        f"as-is — the rule keeps the event_sync kind and "
+                        f"stays excluded from pipeline execution. First "
+                        f"error: {es_errors[0]}"
+                    )
+            rule = ChannelPipelineRule(
                 name=item["name"],
                 description=item.get("description"),
                 enabled=item.get("enabled", True),
                 priority=item.get("priority", 0),
+                active_from=(date.fromisoformat(item["active_from"])
+                             if item.get("active_from") else None),
+                active_until=(date.fromisoformat(item["active_until"])
+                              if item.get("active_until") else None),
                 m3u_account_id=item.get("m3u_account_id"),
                 target_group_id=item.get("target_group_id"),
                 conditions=json.dumps(item["conditions"]) if item.get("conditions") else "[]",
@@ -1185,10 +2727,94 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 # GH #298 (bd-kncun): None = "Auto" (preserves prior behavior).
                 # Backups predating this column omit it and inherit None.
                 match_scope_group_id=item.get("match_scope_group_id"),
+                # enhancedchannelmanager-orzck (W1): default False protects
+                # manual channels. Backups predating this column inherit False.
+                allow_manual_channel_merge=item.get("allow_manual_channel_merge", False),
+                fold_match_key=item.get("fold_match_key", False),
+                # ti939.1.3: keep the event_sync KIND across backup/restore.
+                # Backups predating this column omit it and inherit None
+                # (standard kind).
+                event_sync_config=(
+                    json.dumps(event_sync_config)
+                    if event_sync_config else None
+                ),
             )
             session.add(rule)
+        session.flush()  # assign ids to the recreated rules
+
+        # bead 8fq6x: re-attach the preserved review decisions to the restored
+        # rule by NAME. Rows whose rule is not in the restore set are dropped
+        # (warned). Dedup on (new_rule_id, fingerprint) so duplicate rule
+        # names can't collapse two rules' rows onto one id and violate the
+        # unique-fingerprint constraint.
+        name_to_new_id: dict[str, int] = {}
+        for rid, name in (
+            session.query(ChannelPipelineRule.id, ChannelPipelineRule.name)
+            .order_by(ChannelPipelineRule.id)
+        ):
+            name_to_new_id.setdefault(name, rid)  # lowest id wins
+        seen: set = set()
+        rekeyed = 0
+        orphaned = 0
+        for pr in preserved_reviews:
+            new_id = name_to_new_id.get(pr["rule_name"])
+            if new_id is None:
+                orphaned += 1
+                continue
+            key = (
+                new_id, pr["provider_id"], pr["stream_name_hash"],
+                pr["event_key"],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            session.add(EventSyncReview(
+                rule_id=new_id, **{f: pr[f] for f in _REVIEW_FIELDS}
+            ))
+            rekeyed += 1
+        if orphaned:
+            warnings.append(
+                f"{orphaned} Event Sync review decision(s) dropped on restore: "
+                f"their rule is not in the restored set."
+            )
+        if rekeyed:
+            logger.info(
+                "[BACKUP] Re-keyed %s Event Sync review decision(s) onto "
+                "restored rules by name", rekeyed,
+            )
+
+        # ti939.3.5: same re-key for the never-attach exclusions.
+        seen_ex: set = set()
+        ex_rekeyed = 0
+        ex_orphaned = 0
+        for pe in preserved_exclusions:
+            new_id = name_to_new_id.get(pe["rule_name"])
+            if new_id is None:
+                ex_orphaned += 1
+                continue
+            key = (
+                new_id, pe["provider_id"], pe["stream_name_hash"],
+                pe["event_key"],
+            )
+            if key in seen_ex:
+                continue
+            seen_ex.add(key)
+            session.add(EventSyncExclusion(
+                rule_id=new_id, **{f: pe[f] for f in _EXCLUSION_FIELDS}
+            ))
+            ex_rekeyed += 1
+        if ex_orphaned:
+            warnings.append(
+                f"{ex_orphaned} Event Sync never-attach exclusion(s) dropped "
+                f"on restore: their rule is not in the restored set."
+            )
+        if ex_rekeyed:
+            logger.info(
+                "[BACKUP] Re-keyed %s Event Sync exclusion(s) onto restored "
+                "rules by name", ex_rekeyed,
+            )
         session.commit()
-        return {"warnings": []}
+        return {"warnings": warnings}
     except Exception:
         session.rollback()
         raise
@@ -1519,8 +3145,13 @@ class RestoreSavedRequest(BaseModel):
 
 
 @router.post("/restore-saved")
-async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEnabled):
-    """Restore ECM configuration from an on-disk saved backup ZIP. Admin only.
+async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdminIfEnabled):
+    """Restore ECM configuration from an on-disk saved backup ZIP. Human-admin only.
+
+    kgz3k / bead 6n76m: uses ``RequireHumanAdminIfEnabled`` so the MCP service
+    principal is rejected — this reuses the EXACT ``_restore_from_zip`` settings-
+    blob write path as POST /restore, so it carries the same admin-field-bypass
+    risk. The shipped MCP ``restore_backup`` tool now receives a clean 403 here.
 
     Takes ``{"filename": "ecm-backup-<ts>.zip"}``, validates it through the
     strict regex + containment guard (zip-only allowlist), then restores from
@@ -1568,6 +3199,103 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireAdminIfEn
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+    }
+
+
+class RestoreDbasSavedRequest(BaseModel):
+    filename: str
+    confirm_apply: bool = False
+    # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh). Omit
+    # for a plain artifact. Travels in the JSON body of this admin-only endpoint,
+    # never a query string, so it does not land in access logs. It is forwarded
+    # to the restore task (which excludes it from get_config) and is NEVER logged
+    # or echoed back in the response by this endpoint.
+    passphrase: Optional[str] = None
+
+
+@router.post("/restore-dbas-saved")
+async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIfEnabled):
+    """Trigger an async DBAS restore from an on-disk SAVED artifact. Admin only.
+
+    Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
+    "passphrase": null}``, resolves the filename to its saved
+    ``/config/backups/`` path through the strict regex + containment guard, then
+    kicks :class:`tasks.dbas_restore.DbasRestoreTask` in the background (the SAME
+    fire-and-forget pattern as POST /restore-dbas) and returns its ``task_id`` so
+    the caller can poll ``/api/tasks/{task_id}`` for the terminal RestoreReport.
+
+    This is the SAVED-file analogue of the upload-based POST /restore-dbas, and
+    handles the v0.18.0 DBAS artifact format (incl. encrypted artifacts via
+    ``passphrase``) — unlike the LEGACY POST /restore-saved, which only restores
+    old-format ZIPs.
+
+    DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
+    plan that makes ZERO mutation. ``cleanup_artifact`` is DELIBERATELY False
+    here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
+    it MUST survive the restore.
+    """
+    filename = req.filename
+    logger.info(
+        "[BACKUP] DBAS restore-from-saved requested (filename=%s, confirm_apply=%s)",
+        filename, req.confirm_apply,
+    )
+    # NB: req.passphrase is intentionally NOT logged here (and is excluded from
+    # the task's get_config) — it must never surface in a log line or response.
+
+    # Path resolution by TRUSTED ENUMERATION (CodeQL py/path-injection,
+    # CWE-22/23/36/73/99). Unlike restore_saved_backup — whose validated path is
+    # consumed in-function — this path ESCAPES as the dbas_restore task's
+    # ``artifact_path`` (used to open the file in another function), so an
+    # in-function containment barrier is not tracked to that sink. Instead of
+    # building a path FROM the request, we enumerate the real saved backups (a
+    # trusted filesystem source) and select the matching one: the path we use
+    # then originates from ``iterdir()`` — a direct-child listing of BACKUPS_DIR,
+    # so no traversal is representable and the user value never reaches the sink.
+    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch).
+    if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    # Layer 2: select from the trusted directory listing (breaks the taint flow —
+    # the chosen Path comes from iterdir, not from the request body).
+    saved_backups = {}
+    try:
+        for entry in BACKUPS_DIR.iterdir():
+            if entry.is_file():
+                saved_backups[entry.name] = entry
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    path = saved_backups.get(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    # Kick the restore task against the SAVED path. cleanup_artifact=False so the
+    # operator's saved backup is NOT deleted after the restore.
+    parameters = {
+        "artifact_path": str(path),
+        "confirm_apply": bool(req.confirm_apply),
+        "cleanup_artifact": False,
+    }
+    # Forward the passphrase only when present (encrypted artifact). The task
+    # excludes it from get_config so it is never persisted or logged.
+    if req.passphrase:
+        parameters["passphrase"] = req.passphrase
+
+    try:
+        from task_engine import get_engine
+
+        engine = get_engine()
+        # Fire-and-forget: schedule as a background asyncio task and return the
+        # task id immediately. The caller polls /api/tasks/{id} for progress.
+        asyncio.create_task(
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+        )
+    except Exception as exc:
+        logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to start restore")
+
+    return {
+        "status": "started",
+        "task_id": DBAS_RESTORE_TASK_ID,
+        "is_dry_run": not req.confirm_apply,
     }
 
 

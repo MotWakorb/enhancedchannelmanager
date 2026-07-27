@@ -3,15 +3,18 @@ import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile,
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { categorizeStreamGroups } from '../utils/streamGroupCategories';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useDropdown } from '../hooks/useDropdown';
-import { useContextMenu } from '../hooks/useContextMenu';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
+import { StreamCreateMenu } from './StreamCreateMenu';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
+import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
+import { CatchupBadge } from './CatchupBadge';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -21,6 +24,11 @@ interface StreamGroup {
   streams: Stream[];
   expanded: boolean;
 }
+
+// Incremental rendering for large groups (bd-bed9r): expanding a group
+// renders at most this many stream rows initially; a ShowMoreRows sentinel
+// renders the next chunk on scroll or click. Mirrors ChannelsPane.
+const GROUP_RENDER_CHUNK_SIZE = 100;
 
 // Channel defaults from settings
 export interface ChannelDefaults {
@@ -185,8 +193,33 @@ export function StreamsPane({
     isExpanded: isGroupExpanded,
     toggleExpand: toggleGroup,
     expandAll: expandAllGroupsInternal,
-    collapseAll: collapseAllGroups,
+    collapseAll: collapseAllGroupsInternal,
   } = useExpandCollapse<string>();
+
+  // Per-group render limit for incremental rendering (bd-bed9r). Absent key
+  // means the initial chunk size; reset when the group is toggled.
+  const [groupRenderLimits, setGroupRenderLimits] = useState<Record<string, number>>({});
+
+  // Toggle a group and reset its incremental-render limit so a re-expanded
+  // group starts at the initial chunk again (bd-bed9r).
+  const handleToggleGroup = useCallback((groupName: string) => {
+    toggleGroup(groupName);
+    setGroupRenderLimits((prev) => {
+      if (!(groupName in prev)) return prev;
+      const next = { ...prev };
+      delete next[groupName];
+      return next;
+    });
+  }, [toggleGroup]);
+
+  const collapseAllGroups = useCallback(() => {
+    collapseAllGroupsInternal();
+    setGroupRenderLimits({});
+    // "Collapse all" collapses categories too (bead 09x38.5) -- otherwise
+    // the button would silently do nothing when categories are already
+    // hiding every group.
+    setExpandedCategoryNames(new Set());
+  }, [collapseAllGroupsInternal]);
 
   // Hide mapped streams toggle state (persisted in localStorage)
   const [hideMappedStreams, setHideMappedStreams] = useState(() => {
@@ -198,6 +231,37 @@ export function StreamsPane({
   useEffect(() => {
     localStorage.setItem('ecm-hide-mapped-streams', String(hideMappedStreams));
   }, [hideMappedStreams]);
+
+  // Category header collapse/expand state (bead 09x38.5), persisted in
+  // localStorage following the same idiom as hideMappedStreams above.
+  // Default is collapsed -- a category name is only "expanded" once the
+  // operator has explicitly opened it (or it's auto-surfaced by search,
+  // handled separately below without touching this persisted set).
+  const [expandedCategoryNames, setExpandedCategoryNames] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('ecm-streams-category-expanded');
+      if (stored) return new Set(JSON.parse(stored));
+    } catch {
+      // Corrupt/old localStorage value -- fall back to all-collapsed.
+    }
+    return new Set();
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ecm-streams-category-expanded', JSON.stringify(Array.from(expandedCategoryNames)));
+  }, [expandedCategoryNames]);
+
+  const toggleCategoryExpanded = useCallback((category: string) => {
+    setExpandedCategoryNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  }, []);
 
   // Copy feedback state
   const { copySuccess, copyError, handleCopy } = useCopyFeedback();
@@ -246,6 +310,13 @@ export function StreamsPane({
     return filtered;
   }, [channelGroups, providerGroupSettings, deletedGroupIds, isEditMode]);
 
+  // Whether a search is currently active. The `streams` prop itself is
+  // already search-filtered server-side (App.tsx sends `search` to the
+  // API), so this only governs local display decisions: whether to include
+  // empty lazy-load placeholder groups, and (bead 09x38.5) whether category
+  // headers auto-surface regardless of their persisted collapse state.
+  const isSearching = searchTerm.trim().length > 0;
+
   // Shared memoized grouping logic to avoid duplication
   // Groups and sorts streams, then returns sorted entries
   // When searching: only show groups with matching streams
@@ -263,7 +334,6 @@ export function StreamsPane({
   // Note: streamGroups is already filtered by provider from the API
   const sortedStreamGroups = useMemo((): [string, Stream[]][] => {
     const groups = new Map<string, Stream[]>();
-    const isSearching = searchTerm.trim().length > 0;
     const hasGroupFilter = selectedStreamGroups.length > 0;
 
     // When NOT searching, create empty entries for groups from the API
@@ -317,7 +387,7 @@ export function StreamsPane({
         if (b === 'Ungrouped') return -1;
         return naturalCompare(a, b);
       });
-  }, [filteredStreams, hideUngroupedStreams, streamGroups, searchTerm, selectedStreamGroups]);
+  }, [filteredStreams, hideUngroupedStreams, streamGroups, isSearching, selectedStreamGroups]);
 
   // Compute streams in display order (flattened array for selection)
   // This must be computed before useSelection so shift-click works correctly
@@ -421,13 +491,6 @@ export function StreamsPane({
   const [channelGroupExpanded, setChannelGroupExpanded] = useState(false);
   const [timezoneExpanded, setTimezoneExpanded] = useState(false);
 
-  // Context menu management
-  const {
-    contextMenu,
-    showContextMenu,
-    hideContextMenu,
-  } = useContextMenu<{ streamIds: number[] }>();
-
   // Dropdown state
   const [groupSearchFilter, setGroupSearchFilter] = useState('');
   const groupSearchInputRef = useRef<HTMLInputElement>(null);
@@ -463,6 +526,13 @@ export function StreamsPane({
   const useMultiSelectProviders = !!onSelectedProvidersChange;
   const useMultiSelectGroups = !!onSelectedStreamGroupsChange;
 
+  // Enabled/visible channel groups offered by the "Create in…" menu — same
+  // filter the deleted right-click submenu applied (bead zwhw4).
+  const enabledChannelGroups = useMemo(
+    () => channelGroups.filter((group) => selectedChannelGroups.includes(group.id)),
+    [channelGroups, selectedChannelGroups]
+  );
+
   // Group and sort streams
   // Convert sorted stream groups to StreamGroup objects with expanded state
   const groupedStreams = useMemo((): StreamGroup[] => {
@@ -473,14 +543,39 @@ export function StreamsPane({
     }));
   }, [sortedStreamGroups, isGroupExpanded]);
 
-  // Expand all groups (wrapper to pass group names)
+  // Bucket the visible (already filtered) groups under their derived
+  // category (bead 09x38.5). Categories apply AFTER provider/group filters
+  // and search have already narrowed `groupedStreams`, so a category only
+  // ever shows groups the operator can currently see.
+  const categorizedGroups = useMemo(() => categorizeStreamGroups(groupedStreams), [groupedStreams]);
+
+  // A category is visually expanded if the operator has toggled it open, OR
+  // a search is active. Search results are already narrowed to matching
+  // groups (see `isSearching` above), so forcing every remaining category
+  // open surfaces matches immediately instead of requiring the operator to
+  // also expand a collapsed category header to see them. This does not
+  // mutate the persisted expandedCategoryNames set -- clearing the search
+  // restores whatever collapse state the operator had before.
+  const isCategoryExpanded = useCallback(
+    (category: string) => isSearching || expandedCategoryNames.has(category),
+    [isSearching, expandedCategoryNames]
+  );
+
+  // Expand all groups (wrapper to pass group names). Also expands every
+  // category (bead 09x38.5) so the newly-expanded groups are actually
+  // visible instead of hidden behind still-collapsed category headers.
   const expandAllGroups = useCallback(() => {
     expandAllGroupsInternal(groupedStreams.map(g => g.name));
-  }, [groupedStreams, expandAllGroupsInternal]);
+    setExpandedCategoryNames(new Set(categorizedGroups.map(c => c.category)));
+  }, [groupedStreams, categorizedGroups, expandAllGroupsInternal]);
 
-  // Check if all groups are expanded or collapsed
-  const allExpanded = groupedStreams.length > 0 && expandedGroups.size === groupedStreams.length;
-  const allCollapsed = expandedGroups.size === 0;
+  // Check if all groups AND all categories are expanded/collapsed, so the
+  // expand-all/collapse-all buttons reflect the true fully-expanded state.
+  const allExpanded =
+    groupedStreams.length > 0 &&
+    expandedGroups.size === groupedStreams.length &&
+    (isSearching || expandedCategoryNames.size === categorizedGroups.length);
+  const allCollapsed = expandedGroups.size === 0 && (!isSearching && expandedCategoryNames.size === 0);
 
   // Clear selection when exiting edit mode
   useEffect(() => {
@@ -490,12 +585,12 @@ export function StreamsPane({
     }
   }, [isEditMode, clearSelection]);
 
-  // Keyboard shortcuts management
+  // Keyboard shortcuts management. The StreamCreateMenu handles its own
+  // Escape internally (close panel, refocus trigger) and stops propagation,
+  // so this document-level Escape only ever clears the selection.
   useKeyboardShortcuts({
     onSelectAll: selectAll,
     onClearSelection: clearSelection,
-    contextMenu,
-    onCloseContextMenu: hideContextMenu,
   });
 
 
@@ -797,28 +892,10 @@ export function StreamsPane({
     setBulkCreateModalOpen(true);
   }, [channelDefaults]);
 
-  // Context menu handlers
-  const closeContextMenu = useCallback(() => hideContextMenu(), [hideContextMenu]);
-
-  const handleContextMenu = useCallback((stream: Stream, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isEditMode) return;
-
-    // If right-clicked stream is not selected, select only it
-    let streamIds: number[];
-    if (!isSelected(stream.id)) {
-      clearSelection();
-      toggleSelect(stream.id);
-      streamIds = [stream.id];
-    } else {
-      streamIds = Array.from(selectedIds);
-    }
-
-    showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, isSelected, clearSelection, toggleSelect, selectedIds, showContextMenu]);
-
-  // Handler for "Create channel(s) in existing group" from context menu.
+  // Handler for "Create channel(s) in <existing group>" from the selection
+  // strip's "Create in…" menu (bead zwhw4 — migrated from the deleted
+  // right-click context menu with unchanged semantics; acts on the current
+  // stream selection).
   //
   // BD-I / bd-1lznl integration (ADR-008 §D1, trigger_context='add_stream'):
   // For a SINGLE-stream selection the dedup hook intercepts the click to
@@ -827,9 +904,8 @@ export function StreamsPane({
   // Create New / Cancel. For multi-stream selections we proceed unchanged
   // — bulk dedup is BD-J's surface, not this one.
   const handleCreateInGroup = useCallback((groupId: number) => {
-    if (!contextMenu) return;
-    const streamIds = contextMenu.metadata.streamIds;
-    closeContextMenu();
+    const streamIds = Array.from(selectedIds);
+    if (streamIds.length === 0) return;
 
     if (streamIds.length === 1) {
       const cache = selectedStreamsCacheRef.current;
@@ -851,12 +927,19 @@ export function StreamsPane({
     // current page and not in the cache, the dedup hook would have no
     // stream_name to look up, so we let the bulk-create modal handle it.
     openBulkCreateModalForStreamIds(streamIds, groupId);
-  }, [contextMenu, openBulkCreateModalForStreamIds, closeContextMenu, streams, addStreamDedup]);
+  }, [selectedIds, openBulkCreateModalForStreamIds, streams, addStreamDedup]);
 
-  // Handler for "Create channel(s) in new group" from context menu
+  // Handler for "Create in new group…" from the selection strip's
+  // "Create in…" menu (bead zwhw4 — migrated from the deleted right-click
+  // context menu). Uses the selection cache so streams filtered out of the
+  // current page since being selected are still included, matching
+  // openBulkCreateModalForSelection.
   const handleCreateInNewGroup = useCallback(() => {
-    if (!contextMenu) return;
-    const streamsList = streams.filter(s => contextMenu.metadata.streamIds.includes(s.id));
+    const cache = selectedStreamsCacheRef.current;
+    const streamsList = Array.from(selectedIds)
+      .map(id => streams.find(s => s.id === id) || cache.get(id))
+      .filter((s): s is Stream => s !== undefined);
+    if (streamsList.length === 0) return;
     setBulkCreateGroup(null);
     setBulkCreateGroups([]);
     setBulkCreateStreams(streamsList);
@@ -881,20 +964,7 @@ export function StreamsPane({
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
     setBulkCreateModalOpen(true);
-    closeContextMenu();
-  }, [contextMenu, streams, channelDefaults, closeContextMenu]);
-
-  // Handler for right-clicking on a stream group header
-  const handleGroupContextMenu = useCallback((group: StreamGroup, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isEditMode) return;
-
-    // Get all stream IDs in this group
-    const streamIds = group.streams.map(s => s.id);
-
-    showContextMenu(e.clientX, e.clientY, { streamIds });
-  }, [isEditMode, showContextMenu]);
+  }, [selectedIds, streams, channelDefaults]);
 
   // Toggle group selection (select/deselect all streams in group)
   const toggleGroupSelection = useCallback((group: StreamGroup) => {
@@ -1466,8 +1536,9 @@ export function StreamsPane({
               onClick={onRefreshStreams}
               title="Refresh streams from Dispatcharr"
               disabled={loading}
+              aria-label="Refresh streams from Dispatcharr"
             >
-              <span className={`material-icons${loading ? ' spinning' : ''}`}>sync</span>
+              <span className={`material-icons${loading ? ' spinning' : ''}`} aria-hidden="true">sync</span>
             </button>
           )}
         </h2>
@@ -1509,6 +1580,13 @@ export function StreamsPane({
                 Create
               </button>
             )}
+            {isEditMode && onBulkCreateFromGroup && (
+              <StreamCreateMenu
+                groups={enabledChannelGroups}
+                onCreateInGroup={handleCreateInGroup}
+                onCreateInNewGroup={handleCreateInNewGroup}
+              />
+            )}
             <button className="clear-selection-btn" onClick={() => {
               clearSelection();
               setSelectedGroupNames(new Set());
@@ -1535,8 +1613,9 @@ export function StreamsPane({
                 className="search-clear-btn"
                 onClick={() => onSearchChange('')}
                 title="Clear search"
+                aria-label="Clear search"
               >
-                <span className="material-icons">close</span>
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             )}
           </div>
@@ -1546,16 +1625,18 @@ export function StreamsPane({
               onClick={expandAllGroups}
               disabled={allExpanded || groupedStreams.length === 0}
               title="Expand all groups"
+              aria-label="Expand all groups"
             >
-              <span className="material-icons">unfold_more</span>
+              <span className="material-icons" aria-hidden="true">unfold_more</span>
             </button>
             <button
               className="expand-collapse-btn"
               onClick={collapseAllGroups}
               disabled={allCollapsed || groupedStreams.length === 0}
               title="Collapse all groups"
+              aria-label="Collapse all groups"
             >
-              <span className="material-icons">unfold_less</span>
+              <span className="material-icons" aria-hidden="true">unfold_less</span>
             </button>
           </div>
           {mappedStreamIds && mappedStreamIds.size > 0 && (
@@ -1672,8 +1753,10 @@ export function StreamsPane({
                           setGroupSearchFilter('');
                           groupSearchInputRef.current?.focus();
                         }}
+                        aria-label="Clear search"
+                        title="Clear search"
                       >
-                        <span className="material-icons">close</span>
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     )}
                   </div>
@@ -1759,8 +1842,9 @@ export function StreamsPane({
               className="clear-filters-btn"
               onClick={onClearStreamFilters}
               title="Clear all filters"
+              aria-label="Clear all filters"
             >
-              <span className="material-icons">filter_alt_off</span>
+              <span className="material-icons" aria-hidden="true">filter_alt_off</span>
             </button>
           )}
         </div>
@@ -1772,7 +1856,23 @@ export function StreamsPane({
         ) : (
           <>
             <div className="streams-list">
-              {groupedStreams.map((group) => (
+              {categorizedGroups.map(({ category, groups }) => (
+                <div key={category} className="stream-category">
+                  <button
+                    type="button"
+                    className="stream-category-header"
+                    onClick={() => toggleCategoryExpanded(category)}
+                    aria-expanded={isCategoryExpanded(category)}
+                  >
+                    <span className="material-icons expand-icon" aria-hidden="true">
+                      {isCategoryExpanded(category) ? 'expand_more' : 'chevron_right'}
+                    </span>
+                    <span className="category-name">{category}</span>
+                    <span className="category-count">{groups.length}</span>
+                  </button>
+                  {isCategoryExpanded(category) && (
+                    <div className="stream-category-groups">
+                      {groups.map((group) => (
                 <div key={group.name} className={`stream-group ${(isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))) && isEditMode ? 'group-selected' : ''}`}>
                   <div
                     className="stream-group-header"
@@ -1781,9 +1881,8 @@ export function StreamsPane({
                       if (!isGroupExpanded(group.name) && onGroupExpand) {
                         onGroupExpand(group.name);
                       }
-                      toggleGroup(group.name);
+                      handleToggleGroup(group.name);
                     }}
-                    onContextMenu={(e) => handleGroupContextMenu(group, e)}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
                       <span
@@ -1803,33 +1902,88 @@ export function StreamsPane({
                         <span className="material-icons">drag_indicator</span>
                       </span>
                     )}
-                    {isEditMode && onBulkCreateFromGroup && (
-                      <button
-                        type="button"
-                        className="group-selection-checkbox"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          toggleGroupSelection(group);
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onTouchStart={(e) => e.stopPropagation()}
-                        draggable={false}
-                        title={isGroupFullySelected(group) || selectedGroupNames.has(group.name) ? 'Deselect all streams in group' : 'Select all streams in group'}
-                      >
-                        <span className="material-icons">
-                          {isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name))
-                            ? 'check_box'
-                            : isGroupPartiallySelected(group)
-                              ? 'indeterminate_check_box'
-                              : 'check_box_outline_blank'}
-                        </span>
-                      </button>
-                    )}
-                    <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
-                    <span className="group-name">{group.name}</span>
+                    {isEditMode && onBulkCreateFromGroup && (() => {
+                      // Semantic, keyboard-operable group select-all
+                      // (round-2 review of bead enhancedchannelmanager-s8xpd's
+                      // PR): aria-checked now carries the true tri-state
+                      // (true/false/"mixed") instead of the boolean
+                      // aria-pressed the zwhw4 pass shipped, which announced
+                      // "none selected" and "some selected" identically.
+                      // ChannelsPane's equivalent group-checkbox got the same
+                      // fix in the same round, keeping both panes' group-
+                      // header semantics consistent.
+                      const fullySelected = isGroupFullySelected(group) || (group.streams.length === 0 && selectedGroupNames.has(group.name));
+                      const partiallySelected = isGroupPartiallySelected(group);
+                      return (
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={fullySelected ? true : partiallySelected ? 'mixed' : false}
+                          className="group-selection-checkbox"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            toggleGroupSelection(group);
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onTouchStart={(e) => e.stopPropagation()}
+                          draggable={false}
+                          title={fullySelected ? 'Deselect all streams in group' : 'Select all streams in group'}
+                          aria-label={fullySelected ? 'Deselect all streams in group' : 'Select all streams in group'}
+                        >
+                          <span className="material-icons" aria-hidden="true">
+                            {fullySelected ? 'check_box' : partiallySelected ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                          </span>
+                        </button>
+                      );
+                    })()}
+                    {/* Expand/collapse toggle, restructured to a sibling
+                        <button> (round-2 review of bead
+                        enhancedchannelmanager-s8xpd's PR): the group
+                        select-all button above used to be nested inside
+                        this row's own role="button" div -- see the matching
+                        comment in ChannelsPane's DroppableGroupHeader for
+                        the full nesting-conflict rationale and why a
+                        non-focusable row plus a real nested <button> is
+                        structurally safer than the old bd-6n14l target-check
+                        guard. The row keeps onClick above as a mouse-only
+                        "click anywhere" convenience; this button stops
+                        propagation so that handler can't double-fire. */}
+                    <button
+                      type="button"
+                      className="group-toggle-btn"
+                      aria-expanded={group.expanded}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isGroupExpanded(group.name) && onGroupExpand) {
+                          onGroupExpand(group.name);
+                        }
+                        handleToggleGroup(group.name);
+                      }}
+                    >
+                      <span className="expand-icon">{group.expanded ? '▼︎' : '▶︎'}</span>
+                      <span className="group-name">{group.name}</span>
+                    </button>
                     <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
+                    {(() => {
+                      // bead enhancedchannelmanager-po78p / GH #696 — group-level
+                      // stale-count pill. Streams pane rows already carry
+                      // Dispatcharr's own `is_stale` flag verbatim, so no extra
+                      // fetch is needed here (unlike ChannelsPane, which resolves
+                      // against a fetched stale-id set for cross-pane consistency).
+                      const staleCount = group.streams.filter((s) => s.is_stale).length;
+                      if (staleCount === 0) return null;
+                      return (
+                        <span
+                          className="group-stale-count"
+                          title={`${staleCount} stream${staleCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
+                        >
+                          <span className="material-icons" aria-hidden="true">history</span>
+                          {staleCount}
+                        </span>
+                      );
+                    })()}
                     {isEditMode && onBulkCreateFromGroup && (
                       <button
                         className="bulk-create-btn"
@@ -1838,24 +1992,32 @@ export function StreamsPane({
                           openBulkCreateModal(group);
                         }}
                         title="Create channels from this group"
+                        aria-label="Create channels from this group"
                       >
-                        <span className="material-icons">playlist_add</span>
+                        <span className="material-icons" aria-hidden="true">playlist_add</span>
                       </button>
                     )}
                   </div>
-                  {group.expanded && (
+                  {group.expanded && (() => {
+                    // Incremental rendering (bd-bed9r): cap rows in the DOM;
+                    // the ShowMoreRows sentinel renders the next chunk on
+                    // scroll/click. Selection/drag logic keeps operating on
+                    // the FULL group.streams list — only rendering is capped.
+                    const renderLimit = groupRenderLimits[group.name] ?? GROUP_RENDER_CHUNK_SIZE;
+                    const isTruncated = group.streams.length > renderLimit;
+                    const visibleStreams = isTruncated ? group.streams.slice(0, renderLimit) : group.streams;
+                    return (
                     <div className="stream-group-items">
-                      {group.streams.map((stream) => (
+                      {visibleStreams.map((stream) => (
                         <div
                           key={stream.id}
                           data-stream-id={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''} ${stream.is_stale ? 'is-stale' : ''}`}
                           onClick={(e) => {
                             // In edit mode, clicking the row does nothing (use checkbox to select)
                             // Outside edit mode, clicking the row does nothing either
                             e.stopPropagation();
                           }}
-                          onContextMenu={(e) => handleContextMenu(stream, e)}
                         >
                           {/* Drag handle - only in edit mode, positioned first like channel groups */}
                           {isEditMode && (
@@ -1869,7 +2031,18 @@ export function StreamsPane({
                             </span>
                           )}
                           {isEditMode && (
-                            <span
+                            /* Semantic, keyboard-operable selector (bead
+                               zwhw4 review): a real <button> is natively
+                               focusable and Space/Enter fire click;
+                               role="checkbox" + aria-checked announce the
+                               actual selection state. The group-header
+                               select-all above is already a semantic
+                               <button aria-pressed>. */
+                            <button
+                              type="button"
+                              role="checkbox"
+                              aria-checked={isSelected(stream.id)}
+                              aria-label={`Select stream ${stream.name}`}
                               className="selection-checkbox"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1881,10 +2054,10 @@ export function StreamsPane({
                               onTouchStart={(e) => e.stopPropagation()}
                               draggable={false}
                             >
-                              <span className="material-icons">
+                              <span className="material-icons" aria-hidden="true">
                                 {isSelected(stream.id) ? 'check_box' : 'check_box_outline_blank'}
                               </span>
-                            </span>
+                            </button>
                           )}
                           {stream.logo_url && (
                             <img
@@ -1898,6 +2071,19 @@ export function StreamsPane({
                           )}
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
+                            {stream.is_stale && (
+                              <span
+                                className="meta-tag stream-stale"
+                                title={stream.last_seen ? `No longer listed by provider — last seen ${stream.last_seen}` : 'No longer listed by provider (stale)'}
+                              >
+                                <span className="material-icons">history</span>
+                                STALE
+                              </span>
+                            )}
+                            {/* Catch-up (timeshift) support — bead
+                                enhancedchannelmanager-sy1sz. Renders only when
+                                Dispatcharr flags the stream is_catchup. */}
+                            <CatchupBadge isCatchup={stream.is_catchup} catchupDays={stream.catchup_days} />
                             {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}
@@ -1918,8 +2104,9 @@ export function StreamsPane({
                                   setPreviewStream(stream);
                                 }}
                                 title="Preview stream in browser"
+                                aria-label="Preview stream in browser"
                               >
-                                <span className="material-icons">visibility</span>
+                                <span className="material-icons" aria-hidden="true">visibility</span>
                               </button>
                               <button
                                 className="vlc-btn"
@@ -1928,8 +2115,9 @@ export function StreamsPane({
                                   openInVLC(stream.url!, stream.name);
                                 }}
                                 title="Open in VLC"
+                                aria-label="Open in VLC"
                               >
-                                <span className="material-icons">play_circle</span>
+                                <span className="material-icons" aria-hidden="true">play_circle</span>
                               </button>
                               <button
                                 className="copy-url-btn"
@@ -1938,12 +2126,31 @@ export function StreamsPane({
                                   handleCopyStreamUrl(stream.url!, stream.name);
                                 }}
                                 title="Copy stream URL"
+                                aria-label="Copy stream URL"
                               >
-                                <span className="material-icons">content_copy</span>
+                                <span className="material-icons" aria-hidden="true">content_copy</span>
                               </button>
                             </>
                           )}
                         </div>
+                      ))}
+                      {/* Incremental rendering sentinel (bd-bed9r) */}
+                      {isTruncated && (
+                        <ShowMoreRows
+                          remaining={group.streams.length - visibleStreams.length}
+                          noun="streams"
+                          onShowMore={() => {
+                            setGroupRenderLimits((prev) => ({
+                              ...prev,
+                              [group.name]: (prev[group.name] ?? GROUP_RENDER_CHUNK_SIZE) + GROUP_RENDER_CHUNK_SIZE,
+                            }));
+                          }}
+                        />
+                      )}
+                    </div>
+                    );
+                  })()}
+                </div>
                       ))}
                     </div>
                   )}
@@ -1953,89 +2160,6 @@ export function StreamsPane({
           </>
         )}
       </div>
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <div
-          className="streams-context-menu"
-          style={{
-            position: 'fixed',
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 10000,
-          }}
-        >
-          <div
-            className="streams-context-menu-item"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Create submenu with channel groups
-              const submenu = document.createElement('div');
-              submenu.className = 'streams-context-submenu';
-              submenu.style.cssText = `position:fixed;left:${contextMenu.x + 220}px;top:${contextMenu.y}px;z-index:10001;`;
-
-              // Add channel groups as options (only enabled/visible groups)
-              const enabledGroups = channelGroups.filter(group => selectedChannelGroups.includes(group.id));
-              enabledGroups.forEach(group => {
-                const option = document.createElement('div');
-                option.className = 'streams-context-menu-item';
-                option.textContent = group.name;
-                option.onclick = () => {
-                  handleCreateInGroup(group.id);
-                  if (document.body.contains(submenu)) {
-                    document.body.removeChild(submenu);
-                  }
-                };
-                submenu.appendChild(option);
-              });
-
-              // Add "no groups" message if empty
-              if (enabledGroups.length === 0) {
-                const noGroups = document.createElement('div');
-                noGroups.className = 'streams-context-menu-item disabled';
-                noGroups.textContent = 'No enabled channel groups';
-                submenu.appendChild(noGroups);
-              }
-
-              document.body.appendChild(submenu);
-
-              // Add scroll indicator if content is scrollable
-              const checkScrollable = () => {
-                if (submenu.scrollHeight > submenu.clientHeight) {
-                  submenu.classList.add('scrollable');
-                  // Update scroll indicator based on position
-                  const updateScrollIndicator = () => {
-                    const atTop = submenu.scrollTop <= 0;
-                    const atBottom = submenu.scrollTop + submenu.clientHeight >= submenu.scrollHeight - 1;
-                    submenu.classList.toggle('scroll-top', !atTop);
-                    submenu.classList.toggle('scroll-bottom', !atBottom);
-                  };
-                  updateScrollIndicator();
-                  submenu.addEventListener('scroll', updateScrollIndicator);
-                }
-              };
-              // Check after render
-              requestAnimationFrame(checkScrollable);
-
-              // Close submenu when clicking outside
-              const closeSubmenu = (evt: MouseEvent) => {
-                if (!submenu.contains(evt.target as Node)) {
-                  if (document.body.contains(submenu)) {
-                    document.body.removeChild(submenu);
-                  }
-                  document.removeEventListener('mousedown', closeSubmenu);
-                }
-              };
-              setTimeout(() => document.addEventListener('mousedown', closeSubmenu), 0);
-            }}
-          >
-            Create channel(s) in group <span className="streams-context-menu-arrow">▶</span>
-          </div>
-          <div className="streams-context-menu-item" onClick={handleCreateInNewGroup}>
-            Create channel(s) in new group
-          </div>
-        </div>
-      )}
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (
@@ -2052,8 +2176,8 @@ export function StreamsPane({
                       : `Create Channels from ${streamsToCreate.length} Selected Streams`
                 }
               </h3>
-              <button className="modal-close-btn" onClick={closeBulkCreateModal}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={closeBulkCreateModal} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
@@ -2307,8 +2431,10 @@ export function StreamsPane({
                                       e.stopPropagation();
                                       setBulkCreateGroupSearch('');
                                     }}
+                                    aria-label="Clear search"
+                                    title="Clear search"
                                   >
-                                    <span className="material-icons">close</span>
+                                    <span className="material-icons" aria-hidden="true">close</span>
                                   </button>
                                 )}
                               </div>

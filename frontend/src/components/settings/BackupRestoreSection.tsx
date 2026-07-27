@@ -2,6 +2,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { BackupRestoreModal } from '../BackupRestoreModal';
+import { DbasRestoreModal } from '../DbasRestoreModal';
+import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import { EncryptedBackupCard } from './EncryptedBackupCard';
+import { SyncTargetsCard } from './SyncTargetsCard';
+import { CloudTargetsCard } from './CloudTargetsCard';
+import { BackupScheduleBanner } from './BackupScheduleBanner';
+import { OutboundPolicyCard } from './OutboundPolicyCard';
 import { getDateLocale } from '../../utils/formatting';
 import './BackupRestoreSection.css';
 
@@ -16,6 +24,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<api.RestoreResult | null>(null);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [showDbasRestoreModal, setShowDbasRestoreModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Export section selection
@@ -26,6 +35,15 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [savedBackups, setSavedBackups] = useState<api.SavedBackup[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
+
+  // Restore-from-saved (bead rzhid): legacy full-ZIP restore-saved confirm
+  // dialog target, and DBAS-format restore-dbas-saved modal target. GET
+  // /backup/saved can't tell the two .zip formats apart (same naming
+  // convention) — both actions are offered on every saved .zip row, and the
+  // operator picks the one matching how the file was produced.
+  const [restoringLegacySaved, setRestoringLegacySaved] = useState<string | null>(null);
+  const [legacySavedBusy, setLegacySavedBusy] = useState(false);
+  const [dbasSavedTarget, setDbasSavedTarget] = useState<string | null>(null);
 
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
@@ -152,6 +170,23 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     }
   };
 
+  const handleConfirmLegacyRestore = async () => {
+    if (!restoringLegacySaved) return;
+    setLegacySavedBusy(true);
+    try {
+      const result = await api.restoreSavedBackup(restoringLegacySaved);
+      notifications.success(`Restored ${result.restored_files.length} files from ${restoringLegacySaved}`);
+      setRestoringLegacySaved(null);
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
+    } catch (err) {
+      notifications.error(err instanceof Error ? err.message : 'Restore failed', 'Restore Failed');
+    } finally {
+      setLegacySavedBusy(false);
+    }
+  };
+
   const handleDeleteSaved = async (filename: string) => {
     setDeletingFile(filename);
     try {
@@ -174,6 +209,42 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   return (
     <div className="backup-restore-section">
       <h2 className="settings-page-header">Backup & Restore</h2>
+
+      {/* One-time "Backups are not scheduled yet" setup nudge (bead ikv8z).
+          Scheduled DBAS backup ships OFF by default, so surface the unscheduled
+          state prominently to prevent an operator silently keeping zero backups. */}
+      <BackupScheduleBanner />
+
+      {/* Where backups can be sent (relocated from the removed Administration
+          → Security page, bead 09x38.12; original setting is bead nngkg). */}
+      <OutboundPolicyCard />
+
+      {/* "Which mechanism do I need" guidance (bead 09x38.15 item 7). This
+          page offers three overlapping-sounding restore paths; a first-time
+          operator has no way to tell them apart before reading every card
+          below. Text + light markup only — no new tool, just orientation. */}
+      <div className="backup-card backup-chooser-card">
+        <div className="backup-card-header">
+          <span className="material-icons">help_outline</span>
+          <h3>Which one do I need?</h3>
+        </div>
+        <ul className="backup-chooser-list">
+          <li>
+            <strong>YAML Export</strong> — a human-readable config file. Use it to version-control
+            settings, diff changes, or selectively restore just one section (e.g. only
+            Normalization Rules). Does not include logos or uploads.
+          </li>
+          <li>
+            <strong>DBAS Backup (.zip artifact)</strong> — the current (v0.18.0+) full-snapshot
+            format. Use it for disaster recovery: it's what scheduled backups produce, previews
+            changes before applying (dry run), and supports encryption and cloud upload.
+          </li>
+          <li>
+            <strong>Full Backup (legacy .zip)</strong> — the pre-v0.18.0 whole-app format. Only
+            needed to restore an older backup file created before the DBAS format existed.
+          </li>
+        </ul>
+      </div>
 
       {/* YAML Export (config only) */}
       <div className="backup-card">
@@ -290,6 +361,26 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                   </div>
                 </div>
                 <div className="saved-backup-actions">
+                  {backup.type === 'zip' && (
+                    <>
+                      <button
+                        className="btn-secondary saved-backup-btn"
+                        onClick={() => setRestoringLegacySaved(backup.filename)}
+                        aria-label="Restore as legacy full backup"
+                        title="Restore as legacy full backup (pre-v0.18.0 format)"
+                      >
+                        <span className="material-icons" aria-hidden="true">settings_backup_restore</span>
+                      </button>
+                      <button
+                        className="btn-secondary saved-backup-btn"
+                        onClick={() => setDbasSavedTarget(backup.filename)}
+                        aria-label="Restore as DBAS backup"
+                        title="Restore as DBAS backup (v0.18.0+ format, dry-run first)"
+                      >
+                        <span className="material-icons" aria-hidden="true">restore</span>
+                      </button>
+                    </>
+                  )}
                   <a
                     href={api.getSavedBackupDownloadUrl(backup.filename)}
                     className="btn-secondary saved-backup-btn"
@@ -301,8 +392,10 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                     className="btn-secondary saved-backup-btn saved-backup-delete"
                     onClick={() => handleDeleteSaved(backup.filename)}
                     disabled={deletingFile === backup.filename}
+                    aria-label={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
+                    title={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
                   >
-                    <span className="material-icons">
+                    <span className="material-icons" aria-hidden="true">
                       {deletingFile === backup.filename ? 'hourglass_empty' : 'delete'}
                     </span>
                   </button>
@@ -344,6 +437,34 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         )}
       </div>
 
+      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
+      <EncryptedBackupCard />
+
+      {/* Cross-Instance Sync — epic i39wu / nnl9s */}
+      <SyncTargetsCard />
+
+      {/* Cloud upload destinations for DBAS backup — relocated from the removed Export tab (vrrxv / 1w428) */}
+      <div className="backup-card">
+        <CloudTargetsCard />
+      </div>
+
+      {/* DBAS artifact restore (.zip, incl. encrypted) — bead 7euap */}
+      <div className="backup-card">
+        <div className="backup-card-header">
+          <span className="material-icons">restore</span>
+          <h3>Restore DBAS Backup</h3>
+        </div>
+        <p className="backup-card-description">
+          Restore a v0.18.0 backup artifact (.zip) — the format produced by scheduled backups and
+          the Encrypted Backup card. Preview the changes first (dry run), then apply. Encrypted
+          artifacts prompt for the passphrase.
+        </p>
+        <button className="btn-primary" onClick={() => setShowDbasRestoreModal(true)}>
+          <span className="material-icons">upload_file</span>
+          Restore from artifact...
+        </button>
+      </div>
+
       {/* Full ZIP Restore */}
       <div className="backup-card">
         <div className="backup-card-header">
@@ -363,7 +484,14 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         </div>
 
         <div className="restore-file-input">
+          {/* Visible label programmatically associated with the file chooser
+              so AT announces the control's purpose and accepted .zip format
+              (bead enhancedchannelmanager-db8ae). */}
+          <label className="restore-file-label" htmlFor="restoreFullBackupFile">
+            Choose ECM full-backup ZIP (.zip)
+          </label>
           <input
+            id="restoreFullBackupFile"
             ref={fileInputRef}
             type="file"
             accept=".zip"
@@ -399,6 +527,35 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
       {showRestoreModal && (
         <BackupRestoreModal onClose={() => setShowRestoreModal(false)} />
+      )}
+
+      {showDbasRestoreModal && (
+        <DbasRestoreModal onClose={() => setShowDbasRestoreModal(false)} />
+      )}
+
+      {restoringLegacySaved && (
+        <TypeToConfirmDialog
+          title="Restore Saved Backup"
+          message={
+            <>
+              This replaces all current settings, database records, and uploaded files with the
+              contents of <strong>{restoringLegacySaved}</strong>. The page reloads automatically
+              once the restore completes. This cannot be undone.
+            </>
+          }
+          confirmText={restoringLegacySaved}
+          confirmLabel="Restore this backup"
+          busy={legacySavedBusy}
+          onCancel={() => setRestoringLegacySaved(null)}
+          onConfirm={handleConfirmLegacyRestore}
+        />
+      )}
+
+      {dbasSavedTarget && (
+        <DbasRestoreSavedModal
+          filename={dbasSavedTarget}
+          onClose={() => setDbasSavedTarget(null)}
+        />
       )}
     </div>
   );

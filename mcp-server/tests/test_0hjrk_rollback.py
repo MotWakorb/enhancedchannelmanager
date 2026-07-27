@@ -27,7 +27,7 @@ class TestRollbackRefusalSurfaced:
     async def test_refusal_via_http_error_is_surfaced(self):
         """Backend 400 (engine refusal) -> call_endpoint raises -> tool returns
         the refusal text, not a phantom 'rolled back' success line."""
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -43,7 +43,7 @@ class TestRollbackRefusalSurfaced:
             f"POST /api/auto-creation/executions/5/rollback failed (400): {refusal}"
         )
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("rollback_auto_creation", {"execution_id": 5})
 
         text = result[0][0].text
@@ -56,7 +56,7 @@ class TestRollbackRefusalSurfaced:
     async def test_refusal_via_success_false_dict_is_surfaced(self):
         """Defensive: if the engine refusal reaches the tool as a dict
         (success False / error) instead of an exception, surface it too."""
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -71,12 +71,19 @@ class TestRollbackRefusalSurfaced:
             "error": refusal,
         })
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("rollback_auto_creation", {"execution_id": 9})
 
         text = result[0][0].text
         assert "cannot guarantee a rollback" in text.lower()
-        assert "rolled back" not in text.lower() or "refus" in text.lower()
+        # The tool surfaces the refusal as "Cannot roll back execution 9: ..."
+        # The old assertion 'not in ... or "refus" in' was always-True because
+        # the error path says "Cannot roll back" (no "rolled back" phrase).
+        # Assert the exact prefix so inversion/deletion of the success=False
+        # handling would fail this test.
+        assert text.startswith("Cannot roll back execution 9"), (
+            f"Expected refusal to start with 'Cannot roll back execution 9', got: {text!r}"
+        )
 
 
 class TestRollbackSuccessWording:
@@ -85,7 +92,7 @@ class TestRollbackSuccessWording:
     @pytest.mark.asyncio
     async def test_success_reports_deleted_and_unmerged(self):
         """N deleted + M restored renders both counts and explains un-merge."""
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -99,7 +106,7 @@ class TestRollbackSuccessWording:
             "entities_restored": 3,
         })
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("rollback_auto_creation", {"execution_id": 7})
 
         text = result[0][0].text
@@ -113,7 +120,7 @@ class TestRollbackSuccessWording:
     @pytest.mark.asyncio
     async def test_success_with_only_deletions(self):
         """A create-only run rollback reports deletions and 0 restored."""
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
         from mcp.server.fastmcp import FastMCP
 
         mcp = FastMCP("test")
@@ -127,7 +134,7 @@ class TestRollbackSuccessWording:
             "entities_restored": 0,
         })
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("rollback_auto_creation", {"execution_id": 8})
 
         text = result[0][0].text

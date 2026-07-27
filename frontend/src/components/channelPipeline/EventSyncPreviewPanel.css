@@ -1,0 +1,261 @@
+/**
+ * EventSyncPreviewPanel styles
+ *
+ * Uses common.css for: .btn-primary, .btn-secondary, .form-hint,
+ * .warning-message, .error-banner, .spinning, .badge, .badge-sm,
+ * .badge-warning (S5 provenance chips)
+ */
+
+.event-sync-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.event-sync-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.event-sync-preview-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Stale marking (bead m1s38.1): the config changed since this preview ran —
+   dim the results but keep them readable, and flag the re-run notice. */
+.event-sync-preview-results--stale {
+  opacity: 0.5;
+}
+
+.event-sync-preview-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning, #f59e0b);
+}
+
+.event-sync-preview-stale .material-icons {
+  font-size: 16px;
+}
+
+.event-sync-preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-sync-summary {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.event-sync-truncated {
+  color: var(--text-secondary);
+}
+
+/* Match cards — keyboard navigable, visible focus */
+.event-sync-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-card {
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-sync-card:focus-visible {
+  outline: 2px solid var(--button-primary-bg);
+  outline-offset: 2px;
+}
+
+.event-sync-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+
+.event-sync-badge .material-icons {
+  font-size: 14px;
+}
+
+.event-sync-provider {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.event-sync-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-primary);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.event-sync-flag .material-icons {
+  font-size: 14px;
+}
+
+/* S5 (bead sf8dj): provenance chip — a would-attach row admitted only by an
+   optional relaxation. `title` carries the caution; the help cursor hints it. */
+.event-sync-matched-via {
+  cursor: help;
+}
+
+.event-sync-card-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.event-sync-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  padding: 8px;
+  background: var(--bg-primary);
+}
+
+.event-sync-side-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.event-sync-raw-name {
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.event-sync-parsed {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.event-sync-parsed dt {
+  color: var(--text-muted);
+}
+
+.event-sync-parsed dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.event-sync-reject-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.event-sync-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.event-sync-verdict .material-icons {
+  font-size: 14px;
+}
+
+.event-sync-candidates,
+.event-sync-table-wrap {
+  overflow-x: auto;
+}
+
+.event-sync-candidates table,
+.event-sync-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.event-sync-candidates caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-bottom: 4px;
+}
+
+.event-sync-candidates th,
+.event-sync-candidates td,
+.event-sync-table-wrap th,
+.event-sync-table-wrap td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.event-sync-candidates th,
+.event-sync-table-wrap th {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.event-sync-section h4 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+}
+
+.event-sync-parse-failure {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.event-sync-parse-failure ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.event-sync-disabled-reason {
+  color: var(--text-secondary);
+}
+
+/* bead ti939.4.1: stream list inside a Would-promote unit row. */
+.event-sync-promote-streams {
+  margin: 0;
+  padding-left: 18px;
+}

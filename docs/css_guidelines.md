@@ -74,6 +74,52 @@ CSS is organized in layers. Always use the highest-level shared class available 
 - `.checkbox-group` / `.checkbox-option` — checkbox lists
 - `.filter-dropdown` — multi-select filter dropdown
 
+## Header / toolbar overflow policy
+
+**Every header/toolbar row that pairs a title with an action cluster MUST have
+a defined overflow behavior. The policy is: the row wraps.** This is one
+reusable idiom, not a per-tab judgment call — headers were repeatedly shipping
+with no overflow strategy, so a wide-enough toolbar either squeezed the title
+to min-content (M3U title wrapped one word per line at 1280px) or overflowed an
+`overflow: hidden` ancestor and clipped a button out of reach (Guide "Print
+Guide"). Bead 09x38.2 (build 0115) is the umbrella fix.
+
+### The rule (wrap-to-second-row)
+
+The header row is `display: flex` with `flex-wrap: wrap` and a `row-gap`. When
+the action cluster no longer fits beside the title, it drops to a second row
+instead of fighting the title for width. The title column grows
+(`flex: 1 1 auto; min-width: 0`); the action cluster keeps its natural size
+(`flex-shrink: 0`) and itself wraps (`flex-wrap: wrap; justify-content:
+flex-end`) so its buttons reflow at extreme widths. This matches the
+already-well-behaved Channel Pipeline header, which wraps cleanly at 1024px.
+
+`flex-wrap` is deliberately preferred over any "collapse past N buttons"
+threshold: there is no magic N to tune, so it can't silently regress when a
+button is added (the exact fragility called out in this bead's acceptance
+criteria).
+
+Shared consumers get this for free:
+
+- **`.page-header`** (via the `PageHeader` component — `PageHeader.css`)
+- **`.tab-header`** and **`.header-actions`** (`shared/common.css` § TAB HEADERS)
+
+Prefer the `PageHeader` component for new manager-tab headers. A bespoke header
+row (one carrying live content that can't move into `PageHeader` — e.g. Stats'
+provider tiles, the Guide timeline controls, the Normalization drag-drop list)
+must still apply the same `flex-wrap: wrap; row-gap` idiom to its row and to
+its action cluster, with a comment pointing back to this section.
+
+### Collapse-to-kebab (when a row has too many actions to wrap nicely)
+
+When wrapping alone still leaves an unwieldy row (M3U Manager had 7 buttons),
+move the **setup/admin** actions into the shared **`OverflowMenu`** kebab
+(`OverflowMenu.tsx`) and keep only the primary actions as buttons. The kebab is
+the generalized form of ChannelsPane's `PaneToolbarMenu`; pass it an
+`OverflowMenuItem[]` (`label`, `icon`, `onClick`, optional `disabled`/`title`).
+This is decluttering on top of — not instead of — the wrap policy: the row
+still wraps as its safety net.
+
 ## Settings Page Patterns (SettingsTab.css)
 
 ### Page Header

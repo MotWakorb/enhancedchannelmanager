@@ -30,9 +30,16 @@ container names) in nature.
   - [Exceptions](#exceptions)
   - [Operational notes](#operational-notes)
 - [Error Handling and Logging](#error-handling-and-logging)
+- [Shell Scripting](#shell-scripting)
+  - [Rule](#rule-1)
+  - [Whitelist env-var values that select behavior](#whitelist-env-var-values-that-select-behavior)
+  - [Fail closed with a warning, not a crash loop](#fail-closed-with-a-warning-not-a-crash-loop)
+  - [Why this matters](#why-this-matters)
+  - [Reference](#reference)
 - [CSS Conventions](#css-conventions)
 - [Frontend Lint Policy](#frontend-lint-policy)
 - [Test Conventions](#test-conventions)
+  - [Test validity / anti-patterns](#test-validity--anti-patterns)
 
 ---
 
@@ -40,9 +47,9 @@ container names) in nature.
 
 ### Python
 
-- **Modules / packages**: `snake_case` (`auto_creation_engine.py`, `safe_regex.py`).
+- **Modules / packages**: `snake_case` (`channel_pipeline_engine.py`, `safe_regex.py`).
 - **Functions / methods / variables**: `snake_case`.
-- **Classes**: `PascalCase` (`StreamNormalizer`, `AutoCreationRule`).
+- **Classes**: `PascalCase` (`StreamNormalizer`, `ChannelPipelineRule`).
 - **Constants**: `UPPER_SNAKE_CASE` at module top-of-file.
 - **Module-private symbols**: leading underscore (`_DISCORD_WEBHOOK_RE`,
   `_compile_pattern`). Underscore prefix is the project's signal that the
@@ -70,7 +77,7 @@ container names) in nature.
 - **Exports**: prefer named exports over default exports — they survive
   refactors better and surface in autocomplete consistently.
 - **Tab IDs**: kebab-case string literals on the `TabId` union
-  (`'channel-manager'`, `'auto-creation'`).
+  (`'channel-manager'`, `'channel-pipeline'`).
 
 ### CSS
 
@@ -99,7 +106,18 @@ container names) in nature.
   `BulkLCNFetchModal.tsx`.
 - **Hook files**: `use<Behavior>.ts` (no `.tsx` unless the hook returns JSX,
   which is rare).
-- **Markdown docs**: `snake_case.md` under `docs/`.
+- **Markdown docs**: `snake_case.md` under `docs/`, with one documented
+  exception: files under `docs/user_guide/` use `kebab-case.md` instead
+  (`runaway-safety-cap.md`, `debugging-rules.md`, `fuzzy-locals-matching.md`,
+  `sort-vs-numbering.md`, `cross-instance-sync.md`,
+  `stats-v2-history-cutover.md`, etc.) — every existing file in that subtree
+  already follows kebab-case, and `docs/user_guide/README.md` (the
+  subtree's own authoring guide) documents it as the convention for new
+  articles: "Filename matches the article title in kebab-case." Do not
+  rename these files to snake_case or flag them in review — the exception
+  is intentional. `index.md` and `README.md` filenames are exempt from
+  both conventions (single conventional names with no word-separator to
+  judge).
 
 ---
 
@@ -118,7 +136,7 @@ backend/
 │   ├── channels.py
 │   ├── epg.py
 │   └── ...
-├── auto_creation/             # Domain package — engine, schema, types
+├── channel_pipeline/          # Domain package — engine, schema, types
 ├── safe_regex.py              # Cross-cutting utility
 ├── regex_lint.py              # Cross-cutting utility
 └── tests/                     # mirrored tree under backend/tests/
@@ -152,7 +170,6 @@ frontend/src/
 ├── components/                # ~60+ components
 │   ├── tabs/                  # Tab-content components
 │   ├── autoCreation/          # Domain subfolder
-│   ├── ffmpegBuilder/
 │   ├── settings/
 │   └── *.tsx + *.css + *.test.tsx
 ├── contexts/                  # React Context providers
@@ -243,7 +260,7 @@ module.**
 
 A regex is "user-supplied" if the pattern originates from any of:
 
-- A database column (normalization rules, auto-creation rules, dummy-EPG
+- A database column (normalization rules, Channel Pipeline rules, dummy-EPG
   profiles, user settings)
 - A request body or query parameter
 - A configuration file editable by an operator
@@ -313,7 +330,7 @@ SafeRegexError              # Base — catch this for catch-all handling.
 
 **Pre-compiled patterns are supported.** When the pattern is a compiled
 `regex.Pattern` (e.g. cached on a hot path such as the
-N log N sort comparisons in `auto_creation_engine`), pass the compiled
+N log N sort comparisons in `channel_pipeline_engine`), pass the compiled
 object directly:
 
 ```python
@@ -333,7 +350,7 @@ library (should be none — route through `safe_regex`) must catch both
 Three layers defend against ReDoS, each at a different lifecycle stage:
 
 1. **Write-time lint at persistence (bd-eio04.7 — `backend/regex_lint.py`).**
-   Normalization-rule, auto-creation-rule, and dummy-EPG router endpoints run
+   Normalization-rule, Channel-Pipeline-rule, and dummy-EPG router endpoints run
    `lint_pattern()` before committing a pattern. The lint catches three
    shapes:
    - `REGEX_TOO_LONG` — pattern length over the cap.
@@ -344,6 +361,19 @@ Three layers defend against ReDoS, each at a different lifecycle stage:
 
    Rejects return HTTP 422 with a structured error envelope pointing back to
    this style-guide section.
+
+   **Channel Pipeline date tokens are expanded before this lint compiles
+   the pattern** (`backend/date_placeholders.py`, enhancedchannelmanager-qa43j).
+   `{date}`, `{date+3d}`, `{date:FORMAT}`, etc. are a documented runtime
+   feature (USER_GUIDE.md § "Date Expansion in Regex") that
+   `channel_pipeline_evaluator` expands before compiling a condition's
+   pattern — the write-time gate must expand the same tokens the same way
+   before compiling, or a valid, runtime-supported pattern is rejected as
+   invalid raw regex. This expansion applies only to the four Channel
+   Pipeline regex condition types (`stream_name_matches`,
+   `stream_group_matches`, `tvg_id_matches`, `channel_exists_matching`);
+   normalization's `regex` condition type has no date-expansion feature at
+   run time and is intentionally excluded.
 
 2. **Runtime timeout at call (bd-eio04.5 — `backend/safe_regex.py`).**
    Every regex evaluated against user data at serve time goes through
@@ -385,7 +415,7 @@ Three layers defend against ReDoS, each at a different lifecycle stage:
   `safe_regex.compile` (which raises `SafeRegexError` / `PatternTooLongError`)
   for consistency with the write-time lint. Using bare `re.compile` for
   syntax validation is a lint violation — see follow-up beads
-  `enhancedchannelmanager-ltjyx` (auto_creation_schema) and
+  `enhancedchannelmanager-ltjyx` (channel_pipeline_schema) and
   `enhancedchannelmanager-3u6p0` (m3u_digest routes).
 
 If an exception is needed that isn't in this list, discuss with the code
@@ -440,7 +470,7 @@ prohibited.
   - `ERROR` — operation failed; the user or upstream caller will see the
     failure.
   - `CRITICAL` — the service is unusable.
-- **Tagged log prefixes** (`[SAFE_REGEX]`, `[AUTO_CREATION]`, etc.) are
+- **Tagged log prefixes** (`[SAFE_REGEX]`, `[AUTO-CREATE]`, etc.) are
   the project's convention for filterable subsystem logs. Use a consistent
   bracketed uppercase prefix when introducing a new subsystem worth
   filtering on; document the prefix in the relevant docs/ guide.
@@ -449,6 +479,100 @@ prohibited.
 see `docs/api.md` for the contract. Routers raise `HTTPException` with
 domain-meaningful status codes (422 for validation, 404 for not-found, 409
 for conflict, 500 only for genuine internal errors).
+
+---
+
+## Shell Scripting
+
+### Rule
+
+**Quote every parameter expansion in `entrypoint.sh` (or any POSIX `sh`
+script) that flows into an `exec`'d argv.** This includes expansions built
+entirely from the script's own defaults (`${VAR:-default}`) — a default
+doesn't stop an operator from overriding the value at container-run time
+with something containing spaces, globs, or extra words.
+
+```sh
+# Good — quoted, cannot be word-split or glob-expanded by the shell
+exec gosu appuser uvicorn main:app \
+    --port "${ECM_PORT}" \
+    --limit-concurrency "${ECM_LIMIT_CONCURRENCY}"
+
+# Bad — unquoted expansion on an exec argv is subject to word-splitting
+# and pathname expansion before uvicorn ever sees it
+exec gosu appuser uvicorn main:app \
+    --port ${ECM_PORT}
+```
+
+This unquoted-expansion class has now appeared twice in
+`backend/entrypoint.sh`: the `ECM_UVICORN_LOOP` case (fixed; see below) and
+the still-open `ECM_PORT` / `ECM_LIMIT_CONCURRENCY` /
+`ECM_TIMEOUT_KEEP_ALIVE` expansions on the same exec line
+(`enhancedchannelmanager-1xoiq`). Quote a new env-derived argv token even
+when the value "looks like it will always be numeric" — the type is
+enforced by validation, not by the shape of today's default.
+
+### Whitelist env-var values that select behavior
+
+When an environment variable selects *behavior* — a mode, a flag choice,
+anything that changes what gets handed to `exec` rather than being opaque
+data — validate it against an explicit whitelist before use. `entrypoint.sh`
+already does this for `ECM_UVICORN_LOOP`:
+
+```sh
+case "${ECM_UVICORN_LOOP:-}" in
+    auto|asyncio|uvloop)
+        ;;
+    *)
+        if [ -n "${ECM_UVICORN_LOOP:-}" ]; then
+            print_warning "Invalid ECM_UVICORN_LOOP='${ECM_UVICORN_LOOP}' (allowed: auto, asyncio, uvloop) — falling back to asyncio"
+        fi
+        ECM_UVICORN_LOOP=asyncio
+        ;;
+esac
+```
+
+A `case` statement against literal alternatives is enough — no regex, no
+external validator needed. The point is that arbitrary env content never
+reaches the exec argv unfiltered, even a value that would otherwise quote
+cleanly should still be constrained to the set of values the script
+actually knows how to handle.
+
+### Fail closed with a warning, not a crash loop
+
+An invalid whitelisted value must fall back to a safe default and continue
+— never `exit 1` or let the bad value propagate into a rejection from the
+process being exec'd. `entrypoint.sh` runs under `set -e` with an `exec` at
+the bottom of the script; a container manager restarts the container on
+exit, and the same bad env var is still set on the next attempt. Treating
+an invalid value as fatal doesn't fail once — it fails forever, in a
+restart loop, until an operator notices and intervenes. Log a
+`print_warning` naming the rejected value and the fallback chosen, then
+continue on the fallback — the operator gets a diagnosable warning in the
+logs instead of a container stuck restarting.
+
+### Why this matters
+
+- **Word-splitting / glob risk.** An unquoted `$VAR` on an argv line is
+  subject to the shell's field-splitting (`IFS`) and pathname expansion
+  before the target binary ever sees it. A value containing a space
+  becomes two argv tokens; a value containing `*` can expand against
+  files in the working directory. On an `exec` line this is a path for
+  env-var content to inject extra flags into the launched process.
+- **Fail-closed vs. crash-loop.** This project's containers restart on
+  exit. A validation failure that exits non-zero, or a bad value that
+  reaches the launched process and causes it to reject its own argv,
+  doesn't degrade once — it degrades on every restart until an operator
+  intervenes. Falling back to a known-good default with a logged warning
+  keeps the service available and makes the misconfiguration visible
+  without downtime.
+
+### Reference
+
+See `backend/entrypoint.sh` for the worked example (the `ECM_UVICORN_LOOP`
+case block and its surrounding comment block) and
+`enhancedchannelmanager-1xoiq` for the open follow-up applying this rule to
+`ECM_PORT`, `ECM_LIMIT_CONCURRENCY`, and `ECM_TIMEOUT_KEEP_ALIVE`.
 
 ---
 
@@ -578,3 +702,74 @@ should run and why — lives in
 - MSW mocks API responses in `src/test/mocks/`.
 - Test setup in `src/test/setup.ts` (mocks `matchMedia`, `ResizeObserver`,
   `IntersectionObserver` — do not duplicate these per-test).
+
+### Test validity / anti-patterns
+
+*Origin: bead `enhancedchannelmanager-ulp7q` (test-validity audit). The CI
+guard `scripts/check_fake_tests.py` flags the most obvious anti-patterns
+automatically; this rubric covers the broader class.*
+
+#### The "would it bite?" bar
+
+Before committing a test, delete or invert the code under test in your head.
+If the test would still pass, it is not a test — it is a green checkbox that
+gives false confidence and hides regressions.
+
+A test must **fail if the logic it claims to verify is removed or inverted**.
+
+#### Banned / red-flag patterns
+
+| Pattern | Why it's fake | Fix |
+|---|---|---|
+| `assert True` / `expect(true).toBe(true)` | Passes regardless of code. | Assert something the code produced. If you can't yet, use `pytest.skip` / `it.skip`. |
+| `assert response is not None` / `expect(response).toBeDefined()` | Any non-crash passes. | Assert `response.status_code`, `response.json()` fields, or the return value. |
+| `assert response.status_code == 200` when the endpoint body **is** the behavior | Status-only passes even if the body is empty or wrong. | Assert the body fields that encode the business rule. |
+| `assert status_code in (200, 400, 500)` | An always-true disjunction — every HTTP response satisfies this. | Assert the specific code the code path should return. |
+| `assert result is not None` / `expect(result).toBeDefined()` when an exact value is available | Passes even when result is corrupted. | Assert the value: `assert result.count == 3`. |
+| `assert len(items) >= 1` when the seeded count is known | Passes even if the list has 100 extra ghosts. | Assert `len(items) == N` where N is what you seeded. |
+| Asserting the mock you just set | e.g. `mock.return_value = X; assert mock() == X`. The assertion tests `unittest.mock`, not your code. | Assert the downstream effect (what the code **did** with the return value). |
+| `expect(x != 422 or "error" not in body).toBe(true)` | One branch is always-true. | Assert the actual expected outcome directly. |
+| `expect(container.querySelector('.some-class')).toBeTruthy()` when the class is static boilerplate | Passes even if the feature logic is deleted. | Query for text or state that only appears when the feature works. |
+| Bare-substring match against always-present copy | `assert "Error" in text` where "Error" appears in the page title too. | Assert the specific error message the code-under-test emits. |
+
+**Deferred tests must be `skip`, not tautologies.** When a test cannot be
+implemented yet, use `@pytest.mark.skip(reason="TODO(<bead-id>): …")` or
+`it.skip('…')`. A placeholder that always passes is worse than no test — it
+blocks the eventual real test from being added (the suite is already "green").
+
+#### Good pattern
+
+Mock only the **external boundary** (HTTP client, DB session, subprocess).
+Assert the code's **own logic** — the transformation it applied, the
+validation it enforced, the error it mapped, the exact value it computed.
+
+**Python example** — `test_resets_all_stats` in
+`backend/tests/routers/test_settings.py`: seeds one row per stats table,
+POSTs the reset endpoint, then asserts every table is empty **and** the
+response `details` dict names the exact deleted count per table. Removing
+any of the seven `db.query(...).delete()` calls fails a specific row-count
+assertion. Returning the wrong count in the response fails a specific
+`data["details"]["..."] == 1` assertion.
+
+**TypeScript example** — `EditChannelModal.priority.test.tsx`: builds 120
+EPG entries where the high-priority entry is intentionally last in input
+order (so it falls outside an unsorted `slice(0, 100)` window), then
+asserts `names[0] === 'ESPN ZZZ-PREFERRED'`. Removing the sort step fails
+the first-position assertion. Removing the slice logic fails the
+length assertion.
+
+Both tests are small, deterministic, and have zero always-true assertions.
+They are the template for new tests in this repo.
+
+#### CI guard
+
+`scripts/check_fake_tests.py` runs in CI (see `.github/workflows/test.yml`)
+and fails on the two most unambiguous fake-test markers:
+
+- `assert True` in `backend/tests/` and `mcp-server/tests/`
+- `expect(true).toBe(true)` in `frontend/src/**/*.test.{ts,tsx}`
+
+If a site is a genuine intentional tautology (e.g., a third-party assertion
+helper that wraps `true`), suppress it with an inline comment on the **same
+line**: `# fake-test-ok: <reason>` (Python) or `// fake-test-ok: <reason>`
+(TypeScript). The guard skips lines containing `fake-test-ok`.

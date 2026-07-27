@@ -1,8 +1,8 @@
 """
 Cloud storage adapter framework for export distribution.
-Supports S3, Google Drive, OneDrive, and Dropbox.
+Supports S3, Google Drive, OneDrive, Dropbox, and WebDAV.
 """
-from cloud_storage.factory import get_adapter
+from cloud_storage.factory import SUPPORTED_PROVIDERS, get_adapter
 from cloud_storage.types import (
     CloudStorageAdapter,
     ConnectionTestResult,
@@ -14,4 +14,5 @@ __all__ = [
     "UploadResult",
     "ConnectionTestResult",
     "get_adapter",
+    "SUPPORTED_PROVIDERS",
 ]

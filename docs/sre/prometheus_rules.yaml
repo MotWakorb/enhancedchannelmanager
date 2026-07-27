@@ -391,7 +391,7 @@ groups:
           description: |
             session_telemetry write failure ratio has exceeded 5% for at
             least 30 minutes. Likely causes (in order of frequency):
-            SQLite WAL contention from bulk auto-creation, database file
+            SQLite WAL contention from bulk Channel Pipeline runs, database file
             locked by a long transaction, disk full on /config, or a
             migration mismatch after a botched upgrade. Search the logs
             for `[STATS_V2]` error lines:
@@ -903,7 +903,7 @@ groups:
             The M3U change monitor has not completed in over 30
             minutes (5-min cadence, 30-min staleness budget = 6
             missed runs). New / changed streams from upstream M3U
-            providers are not being detected — auto-creation rules
+            providers are not being detected — Channel Pipeline rules
             may appear stuck. Check task execution history for the
             underlying error.
           runbook_url: docs/runbooks/task_scheduler_stalled.md
@@ -935,6 +935,57 @@ groups:
             flagged. Check Settings → Tasks → Stream Probe to confirm
             the schedule and review task execution history for errors.
           runbook_url: docs/runbooks/task_scheduler_stalled.md
+
+      - alert: ECMSyncStalledTargetDrift
+        # dbas_sync (cross-instance A->B sync, epic i39wu) defaults to
+        # MANUAL in code; when an operator schedules it on a recurring
+        # cadence, the cheapest-reads convergence interval is hourly
+        # (ADR-013 S9 — config categories are cheap reads every cycle).
+        # 3h budget = 3 missed runs against that 1h basis, room for a
+        # transient B-unreachable blip without firing on every miss.
+        # Window 1h — sustained drift, not single-scrape transient.
+        #
+        # CAVEAT for the responder: ONLY a FULL success stamps
+        # ecm_task_schedule_last_success_timestamp (the task_engine stamps
+        # it on TaskResult.success). A tri-state 'partial' run — an APPLY
+        # that mixed/rolled-back — does NOT stamp it, so a SUSTAINED
+        # PARTIAL-APPLY LOOP also trips this alert even though the task is
+        # "running." That is correct: B is drifting from A whether the
+        # cycle failed outright or only half-applied. Cross-reference
+        # ecm_sync_runs_total{result="partial"} to tell the two apart.
+        #
+        # Guard: only fires once the task has succeeded at least once on
+        # this install (the fresh-install / operator-left-it-MANUAL state
+        # leaves the gauge at 0 forever — see the group-level comment).
+        expr: |
+          time() - ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"} > 10800
+          AND ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          slo: task_scheduler_health
+          service: ecm
+        annotations:
+          summary: "dbas_sync hasn't succeeded in {{ $value | humanizeDuration }} — target B drifting"
+          description: |
+            The cross-instance sync task (Dispatcharr-A -> Dispatcharr-B,
+            epic i39wu) has not completed a FULL success in over 3 hours
+            (hourly cadence basis, 3-missed-run budget). Target B is
+            drifting from A — the #1 operator risk is discovering this only
+            at failover. Severity is warning (NOT page) — ECM is a
+            self-hosted single-operator tool and a stale B is recoverable
+            by one idempotent manual re-sync.
+
+            IMPORTANT: a sustained PARTIAL-apply loop also fires this alert
+            (only a full success resets the staleness clock; a partial
+            does not). Check ecm_sync_runs_total{result="partial"} vs
+            {result="failed"} to distinguish "B unreachable / aborting"
+            from "applies but keeps half-failing." Common causes: B is
+            unreachable, the sync target's credentials were rotated/revoked
+            (check the sync_outbound journal for a freshness abort), or a
+            category keeps partial-applying. Recovery: fix B / re-validate
+            the target, then force one manual re-sync (idempotent).
+          runbook_url: docs/runbooks/sync-target-stalled-drift.md
 
   # =====================================================================
   # SLO-10: Channel Deduplication (bd-ft3hk / BD-M, v0.17.1 dedup epic)

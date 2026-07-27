@@ -6,6 +6,7 @@ Provides a central registry for all scheduled tasks with:
 - Task lookup and validation
 - Database synchronization for task configurations
 """
+import json
 import logging
 from datetime import datetime
 from typing import Optional, Type
@@ -15,6 +16,59 @@ from models import ScheduledTask, TaskSchedule
 from task_scheduler import TaskScheduler, ScheduleConfig, ScheduleType
 
 logger = logging.getLogger(__name__)
+
+
+def auto_creation_parent_enabled() -> Optional[bool]:
+    """Whether the ``auto_creation`` PARENT ``scheduled_tasks.enabled`` gate is on.
+
+    Firing auto-creation after an M3U refresh requires this parent gate AND an
+    enabled child schedule AND an enabled ``run_on_refresh`` rule (see epic
+    ``vkktd``). The M3U-refresh watermark log uses this to avoid cheerfully
+    claiming "auto-creation picks it up on its next tick" when the task is
+    actually gated OFF and will never pick it up.
+
+    Lives here (a neutral, task-system module) rather than in
+    ``tasks.channel_pipeline`` so the ADR-011 decoupling invariant — that
+    ``tasks.m3u_refresh`` never imports the auto-creation pipeline module —
+    still holds.
+
+    Returns ``True``/``False`` for the parent gate, or ``None`` when the state
+    can't be read — the annotation is advisory and must never raise into the
+    best-effort watermark-write path (vkktd.1).
+    """
+    try:
+        session = get_session()
+        try:
+            row = (
+                session.query(ScheduledTask.enabled)
+                .filter(ScheduledTask.task_id == "auto_creation")
+                .first()
+            )
+            return bool(row[0]) if row is not None else None
+        finally:
+            session.close()
+    except Exception as e:  # pragma: no cover — advisory annotation only
+        logger.debug("[TASK-REGISTRY] Failed to read auto_creation parent gate: %s", e)
+        return None
+
+
+def _strip_unset_config_keys(config: dict) -> dict:
+    """Drop None-valued keys from a task-config dict.
+
+    In every task's config surface, None marks "unset — use the code
+    default", and that state must be expressed by the key's ABSENCE
+    (merge-over-defaults), never by replaying an explicit None through
+    ``update_config``: several setters coerce an explicit None differently
+    from an absent key (e.g. stream_probe maps channel_groups=None to [],
+    which would flip "probe all" into "probe nothing" across a restart).
+
+    Shared by BOTH sides of persistence (gjb01 final-delta review): the
+    write side strips None values out of the merged snapshot (an explicit
+    None in a PATCH thereby UNSETS the stored key), and hydration strips
+    field-level nulls from previously stored snapshots (rows written by the
+    intermediate pre-omit head) before applying them.
+    """
+    return {k: v for k, v in config.items() if v is not None}
 
 
 class TaskRegistry:
@@ -130,6 +184,34 @@ class TaskRegistry:
                         instance._last_run = db_task.last_run_at
                         instance._next_run = db_task.next_run_at
 
+                        # Rehydrate the persisted task-specific config (gjb01
+                        # review blocker) through the SAME update_config path
+                        # the live PATCH uses — one apply path. update_config
+                        # implementations only touch keys present in the dict,
+                        # so a stored config missing a newer key merges over
+                        # the code default; config=None (all pre-persistence
+                        # rows) skips cleanly to pure defaults. Field-level
+                        # nulls (snapshots written by the pre-omit head) are
+                        # stripped before applying — None means unset,
+                        # expressed by absence, never replayed through a
+                        # setter (gjb01 final-delta BLOCK 2). Malformed JSON
+                        # must never break startup.
+                        if instance.persist_config and db_task.config:
+                            try:
+                                stored_config = json.loads(db_task.config)
+                                if isinstance(stored_config, dict):
+                                    stored_config = _strip_unset_config_keys(
+                                        stored_config
+                                    )
+                                if isinstance(stored_config, dict) and stored_config:
+                                    instance.update_config(stored_config)
+                            except Exception as e:
+                                logger.warning(
+                                    "[TASK-REGISTRY] Ignoring invalid stored "
+                                    "config for %s (using defaults): %s",
+                                    db_task.task_id, e,
+                                )
+
                         self._instances[db_task.task_id] = instance
                         logger.debug("[TASK-REGISTRY] Loaded task config from DB: %s", db_task.task_id)
 
@@ -139,11 +221,15 @@ class TaskRegistry:
                     else:
                         logger.warning("[TASK-REGISTRY] Task %s in DB but not registered", db_task.task_id)
 
-                # Create instances for registered tasks not in DB
+                # Create instances for registered tasks not in DB. The row
+                # is created with config=NULL — pure code defaults are
+                # expressed by ABSENCE, so the write side never reads any
+                # instance's config surface and the stored snapshot only
+                # ever accumulates explicit operator saves (gjb01
+                # final-delta invariant).
                 for task_id, task_class in self._tasks.items():
                     if task_id not in self._instances:
                         self._instances[task_id] = task_class()
-                        # Save to database with defaults
                         self._save_task_to_db(session, self._instances[task_id])
                         logger.debug("[TASK-REGISTRY] Created default config for task: %s", task_id)
 
@@ -176,19 +262,37 @@ class TaskRegistry:
                 obs_err,
             )
 
-    def sync_to_database(self, task_id: Optional[str] = None) -> None:
+    def sync_to_database(
+        self,
+        task_id: Optional[str] = None,
+        config_intent: Optional[dict] = None,
+    ) -> None:
         """
         Save task configuration(s) to database.
 
         Args:
             task_id: Specific task to sync, or None to sync all
+            config_intent: The EXPLICIT task-config intent of this save (the
+                PATCH's ``task_config`` dict), merged into the stored
+                ``ScheduledTask.config`` snapshot. Only the operator save
+                path (``update_task_config`` / the router PATCH) passes it,
+                and only for a specific ``task_id``. The live instance's
+                config surface is never read for persistence, so
+                execution-time schedule-parameter overlays structurally
+                cannot leak into the stored snapshot — the post-run sync in
+                ``task_engine`` (and every other caller) omits it, updating
+                run bookkeeping (last_run etc.) while leaving the stored
+                snapshot untouched. See ``_persist_task_config``.
         """
         try:
             session = get_session()
             try:
                 if task_id:
                     if task_id in self._instances:
-                        self._save_task_to_db(session, self._instances[task_id])
+                        self._save_task_to_db(
+                            session, self._instances[task_id],
+                            config_intent=config_intent,
+                        )
                 else:
                     for instance in self._instances.values():
                         self._save_task_to_db(session, instance)
@@ -199,10 +303,22 @@ class TaskRegistry:
         except Exception as e:
             logger.exception("[TASK-REGISTRY] Failed to sync task to database: %s", e)
 
-    def _save_task_to_db(self, session, instance: TaskScheduler) -> None:
-        """Save a single task instance to the database."""
-        import json
+    def _save_task_to_db(
+        self,
+        session,
+        instance: TaskScheduler,
+        config_intent: Optional[dict] = None,
+    ) -> None:
+        """Save a single task instance to the database.
 
+        ``config_intent`` is the explicit task-config intent of THIS save
+        (or None for bookkeeping-only saves) and gates the stored-config
+        write in BOTH branches (update and create): the live instance may
+        carry execution-time schedule-parameter overlays and is never read
+        for persistence — even a first-ever save that happens post-run
+        against a missing row creates that row with no config, so restart
+        yields clean code defaults. See ``_persist_task_config``.
+        """
         db_task = session.query(ScheduledTask).filter(
             ScheduledTask.task_id == instance.task_id
         ).first()
@@ -234,6 +350,8 @@ class TaskRegistry:
             if not has_schedules:
                 db_task.next_run_at = instance._next_run
             db_task.updated_at = datetime.utcnow()
+            if config_intent:
+                self._persist_task_config(db_task, instance, config_intent)
         else:
             # Create new
             db_task = ScheduledTask(
@@ -249,12 +367,72 @@ class TaskRegistry:
                 last_run_at=instance._last_run,
                 next_run_at=instance._next_run,
             )
+            if config_intent:
+                self._persist_task_config(db_task, instance, config_intent)
             session.add(db_task)
 
             # If the task has a non-manual default schedule, create a TaskSchedule entry
             # so users can edit it through the UI
             if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
                 self._create_default_task_schedule(session, instance)
+
+    def _persist_task_config(
+        self,
+        db_task: ScheduledTask,
+        instance: TaskScheduler,
+        explicit_config: dict,
+    ) -> None:
+        """Merge this save's EXPLICIT task-config intent into ``ScheduledTask.config``.
+
+        gjb01 review blocker: the UI save path applied ``task_config`` only to
+        the live instance — ``ScheduledTask.config`` was never written, so every
+        task's settings-surface config silently reverted to code defaults on
+        restart. ``sync_from_database`` is the read side (see the hydration
+        block there); together they make operator saves durable.
+
+        INVARIANT (gjb01 final-delta review): the stored snapshot is the
+        ACCUMULATION of explicit operator config saves — the merge of PATCHed
+        ``task_config`` keys over the previous stored snapshot — never a
+        reading of the live instance. The live singleton can carry
+        execution-time schedule-parameter overlays (``task_engine._execute_task``
+        applying ``TaskSchedule.parameters``), so its ``get_config()`` is not
+        consulted here at all: overlays structurally cannot leak into the
+        stored config regardless of PATCH shape (config PATCH, partial config
+        PATCH, or enabled/alert-only PATCH — the latter passes no intent and
+        leaves the snapshot untouched). Fresh startup rows store config=NULL
+        (pure defaults by absence). A None value in the intent UNSETS the
+        stored key (``_strip_unset_config_keys``); restart restores the
+        operator's accumulated saves and code defaults for everything else.
+
+        Tasks with ``persist_config = False`` (per-invocation/ephemeral or
+        externally-stored config surfaces) are skipped entirely. A failure to
+        merge/serialize leaves the previously stored value in place rather
+        than aborting the whole task save.
+        """
+        if not instance.persist_config:
+            return
+        try:
+            previous: dict = {}
+            if db_task.config:
+                try:
+                    loaded = json.loads(db_task.config)
+                    if isinstance(loaded, dict):
+                        previous = loaded
+                except (TypeError, ValueError):
+                    # A malformed previous snapshot must not block the
+                    # operator's save — start over from this save's intent.
+                    logger.warning(
+                        "[TASK-REGISTRY] Discarding malformed stored config "
+                        "for %s on operator save", instance.task_id,
+                    )
+            merged = _strip_unset_config_keys({**previous, **explicit_config})
+            db_task.config = json.dumps(merged) if merged else None
+        except Exception as e:
+            logger.warning(
+                "[TASK-REGISTRY] Failed to persist config intent for %s "
+                "(keeping previously stored value): %s",
+                instance.task_id, e,
+            )
 
     def _create_default_task_schedule(self, session, instance: TaskScheduler) -> None:
         """Create a default TaskSchedule entry for a task with a non-manual schedule.
@@ -373,6 +551,18 @@ class TaskRegistry:
         task_schedule = TaskSchedule(
             task_id=instance.task_id,
             name="Default Schedule",
+            # The child schedule row represents the cadence ("every 60s") and is
+            # always seeded enabled. FIRING is gated by the PARENT
+            # ``scheduled_tasks.enabled``: task_engine requires BOTH the child
+            # schedule's ``enabled`` AND the parent task's ``enabled`` to fire.
+            # For an opt-in task (``default_enabled = False`` — currently only
+            # ``auto_creation``, enhancedchannelmanager-i2xad) the PARENT row is
+            # seeded disabled by ``_save_task_to_db`` (it writes
+            # ``enabled=instance._enabled``), so the task does not fire until an
+            # operator flips the single task "Enabled" toggle in the UI. Seeding
+            # the child disabled too would break that single-action opt-in — the
+            # prominent task toggle only enables the parent, so the child would
+            # stay off and the task would read "Enabled" yet never run.
             enabled=True,
             schedule_type=task_schedule_type,
             interval_seconds=interval_seconds,
@@ -465,6 +655,18 @@ class TaskRegistry:
         if task_config is not None:
             instance.update_config(task_config)
 
+        # vkktd.3: enabling a task flips ONLY the parent scheduled_tasks.enabled
+        # gate. Firing also needs >=1 enabled CHILD task_schedules row (the
+        # engine requires BOTH), so a task whose only child schedule is disabled
+        # reads "Enabled" yet never fires (next_run=null). Reconcile that here so
+        # the operator's single "Enabled" action actually makes the task run.
+        # This MUST run AFTER the schedule-config updates above: PATCH accepts
+        # ``enabled`` + ``schedule_type`` together, and the reconcile's MANUAL
+        # guard reads ``instance.schedule_config.schedule_type`` — it has to see
+        # the FINAL intended type, not the pre-PATCH one (review Warn 1).
+        if enabled is True:
+            self._reconcile_child_schedule_on_enable(task_id, instance)
+
         # Recalculate next run if needed
         if instance._enabled and instance.schedule_config.schedule_type != ScheduleType.MANUAL:
             instance._calculate_next_run()
@@ -505,10 +707,106 @@ class TaskRegistry:
             except Exception as e:
                 logger.error("[TASK-REGISTRY] Failed to update alert config for %s: %s", task_id, e)
 
-        # Persist schedule config to database
-        self.sync_to_database(task_id)
+        # Persist schedule config to database. The PATCH's explicit
+        # task_config dict — and ONLY that dict — is the config intent that
+        # reaches the stored snapshot; an enabled/alert/bookkeeping-only
+        # PATCH (task_config None or empty) leaves the snapshot untouched.
+        # The live instance is never read for persistence, so a run's
+        # schedule-parameter overlay cannot leak (gjb01 final-delta review).
+        self.sync_to_database(
+            task_id,
+            config_intent=task_config if task_config else None,
+        )
 
         return instance.get_status_dict()
+
+    def _reconcile_child_schedule_on_enable(self, task_id: str, instance: TaskScheduler) -> None:
+        """When a task is enabled, ensure it has a firing-capable child schedule.
+
+        Enabling a task flips only the PARENT ``scheduled_tasks.enabled`` gate;
+        firing also requires >=1 enabled CHILD ``task_schedules`` row (the engine
+        needs BOTH). Without this, a task whose only child schedule is disabled
+        reads "Enabled" yet never fires with ``next_run=null`` — the exact vkktd
+        trap. This makes the single "Enabled" action actually make the task run
+        (epic vkktd, .3).
+
+        Guardrails (per resolved UX decision):
+          * MANUAL tasks are never reconciled — they are not meant to auto-fire.
+          * If any child schedule is already enabled, do nothing — never
+            override an operator's intentional per-schedule config.
+          * Exactly one child → enable it.
+          * Multiple children, none enabled → enable the most-recently-created
+            one (deterministic: newest == latest operator intent).
+          * No child schedules at all → nothing to enable (the not-registered /
+            no-schedule observability paths flag that separately).
+
+        Disabling a task deliberately does NOT touch children (inert, no data
+        loss) — this runs only on the enable path.
+        """
+        from schedule_calculator import calculate_next_run
+
+        # MANUAL tasks don't auto-fire on a cadence; nothing to reconcile.
+        if instance.schedule_config.schedule_type == ScheduleType.MANUAL:
+            return
+
+        try:
+            session = get_session()
+            try:
+                children = (
+                    session.query(TaskSchedule)
+                    .filter(TaskSchedule.task_id == task_id)
+                    .all()
+                )
+                if not children:
+                    return  # nothing to enable
+                if any(c.enabled for c in children):
+                    return  # already firing-capable; respect operator config
+
+                # None enabled → pick a deterministic child to enable.
+                if len(children) == 1:
+                    target = children[0]
+                else:
+                    target = max(
+                        children,
+                        key=lambda c: (c.created_at or datetime.min, c.id or 0),
+                    )
+
+                target.enabled = True
+                target.next_run_at = calculate_next_run(
+                    schedule_type=target.schedule_type,
+                    interval_seconds=target.interval_seconds,
+                    schedule_time=target.schedule_time,
+                    timezone=target.timezone,
+                    days_of_week=target.get_days_of_week_list(),
+                    day_of_month=target.day_of_month,
+                )
+                session.commit()
+                if target.next_run_at is None:
+                    # calculate_next_run returned None (e.g. interval_seconds<=0
+                    # or an unparseable schedule). task_engine filters
+                    # ``next_run_at IS NOT NULL``, so the child is enabled yet
+                    # still won't fire — the very "enabled but silent" state we
+                    # are killing. Surface it loudly (review Minor 2).
+                    logger.warning(
+                        "[TASK-REGISTRY] Task %s enabled and child schedule %s "
+                        "(type=%s) was reconciled ON, but its next_run computed to "
+                        "None — the task will still NOT fire; fix the schedule "
+                        "(e.g. interval_seconds must be > 0)",
+                        task_id, target.id, target.schedule_type,
+                    )
+                else:
+                    logger.info(
+                        "[TASK-REGISTRY] Task %s enabled — also enabled child schedule %s "
+                        "(had no enabled schedule) so it will fire; next_run=%s",
+                        task_id, target.id, target.next_run_at,
+                    )
+            finally:
+                session.close()
+        except Exception:  # pragma: no cover — reconcile must never break enable
+            logger.exception(
+                "[TASK-REGISTRY] Failed to reconcile child schedule on enable for %s",
+                task_id,
+            )
 
     def get_task_status(self, task_id: str) -> Optional[dict]:
         """Get status for a specific task."""

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import type { DuplicateGroup, BulkMergeItem } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
@@ -8,11 +8,26 @@ import './FindDuplicatesModal.css';
 interface FindDuplicatesModalProps {
   onClose: () => void;
   onMerged: () => void;
+  /** Checkbox-selected channel ids to scope the scan to (enhancedchannelmanager-uahp6).
+   *  Undefined or empty scans all channels (global). */
+  channelIds?: number[];
 }
 
-export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalProps) {
+export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
+  // A selection of zero channels isn't a meaningful scope — treat it the
+  // same as "no selection passed" (global scan) rather than sending an
+  // empty channel_ids that the backend would interpret as "scope to
+  // nothing." In practice the caller only opens this modal with a
+  // non-empty selection, but this keeps the modal's own contract sane
+  // independent of that caller behavior.
+  const scopedChannelIds = channelIds && channelIds.length > 0 ? channelIds : undefined;
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // GH #645: opt-in whitespace/case-insensitive grouping ("Eurosport 2" /
+  // "Eurosport2" in one group) — same canonicalization as the auto-creation
+  // fold_match_key rule flag. Flipping it re-runs the scan.
+  const [foldMatchKey, setFoldMatchKey] = useState(false);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [totalDuplicates, setTotalDuplicates] = useState(0);
 
@@ -24,13 +39,24 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
   const [merging, setMerging] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ merged: number; failed: number } | null>(null);
 
-  // Fetch duplicates on mount
+  // Merge-blind safety net (enhancedchannelmanager-uahp6): a large result set
+  // (985 groups observed in the wild) can, under a render-side failure, end
+  // up with zero group rows actually mounted in the DOM even though `groups`
+  // is non-empty. Merging in that state is sight-unseen — the operator
+  // cannot see what they're about to delete. This is a real DOM-presence
+  // check (not a data check) so it catches render bugs that a `groups.length`
+  // check would miss.
+  const groupListRef = useRef<HTMLDivElement | null>(null);
+  const [renderGuardTripped, setRenderGuardTripped] = useState(false);
+
+  // Fetch duplicates on mount and whenever the fold toggle flips.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setMergeResult(null);
 
-    api.findDuplicateChannels()
+    api.findDuplicateChannels(scopedChannelIds, foldMatchKey)
       .then(response => {
         if (cancelled) return;
         setGroups(response.groups);
@@ -54,7 +80,27 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
       });
 
     return () => { cancelled = true; };
-  }, []);
+    // Re-runs only when the fold toggle flips. scopedChannelIds is
+    // deliberately NOT a dependency: the parent only ever mounts a fresh
+    // instance of this modal on open (conditional render, not a persisted
+    // instance), so there is no "prop changed while mounted" case to react to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [foldMatchKey]);
+
+  // Merge-blind safety net: after the group list (re)renders, verify the
+  // DOM actually has a row per group. Deferred one frame so the rows have
+  // had a chance to mount before we count them.
+  useEffect(() => {
+    if (groups.length === 0) {
+      setRenderGuardTripped(false);
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      const rowCount = groupListRef.current?.querySelectorAll('.dup-group').length ?? 0;
+      setRenderGuardTripped(rowCount === 0);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [groups]);
 
   const setKeepTarget = useCallback((groupName: string, channelId: number) => {
     setKeepTargets(prev => ({ ...prev, [groupName]: channelId }));
@@ -102,16 +148,32 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
     <ModalOverlay onClose={onClose}>
       <div className="modal-container modal-lg find-duplicates-modal">
         <div className="modal-header">
-          <h2>
-            <span className="material-icons">content_copy</span>
-            Find Duplicate Channels
-          </h2>
-          <button className="modal-close-btn" onClick={onClose} title="Close">
-            <span className="material-icons">close</span>
+          <div>
+            <h2>
+              <span className="material-icons">content_copy</span>
+              Find Duplicate Channels
+            </h2>
+            <div className="modal-subtitle">
+              {scopedChannelIds
+                ? `Scanned ${scopedChannelIds.length} selected channel${scopedChannelIds.length !== 1 ? 's' : ''}`
+                : 'Scanned all channels'}
+            </div>
+          </div>
+          <button className="modal-close-btn" onClick={onClose} title="Close" aria-label="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
         <div className="modal-body">
+          {renderGuardTripped && (
+            <div className="modal-error-banner dup-render-guard-banner">
+              <span className="material-icons">warning</span>
+              Found {groups.length} duplicate group{groups.length !== 1 ? 's' : ''}, but they failed
+              to render. Merging is disabled until you can see what you're about to merge — close
+              and re-run Find Duplicates, or report this issue if it persists.
+            </div>
+          )}
+
           {error && (
             <div className="modal-error-banner">
               <span className="material-icons">error</span>
@@ -131,6 +193,24 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
             </div>
           )}
 
+          <div className="dup-fold-toggle">
+            <label className="modal-checkbox-label" title={
+              'Also group names that differ only by spacing or case '
+              + '(e.g. "Eurosport 2" and "Eurosport2"). Names are only compared this way — '
+              + 'they are never renamed. Uses the same matching as the auto-creation rule option '
+              + '"Ignore spacing & case differences when matching".'
+            }>
+              <input
+                type="checkbox"
+                checked={foldMatchKey}
+                onChange={e => setFoldMatchKey(e.target.checked)}
+                disabled={loading || merging}
+                aria-label="Ignore spacing differences"
+              />
+              <span>Ignore spacing differences</span>
+            </label>
+          </div>
+
           {loading ? (
             <div className="loading-state">
               <span className="material-icons spinning">sync</span>
@@ -149,7 +229,7 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
                 Select which channel to keep in each group.
               </div>
 
-              <div className="dup-group-list">
+              <div className="dup-group-list" ref={groupListRef}>
                 {groups.map(group => {
                   const included = includedGroups[group.normalized_name];
                   const targetId = keepTargets[group.normalized_name];
@@ -222,7 +302,8 @@ export function FindDuplicatesModal({ onClose, onMerged }: FindDuplicatesModalPr
             <button
               className="modal-btn modal-btn-primary"
               onClick={handleMerge}
-              disabled={merging || includedCount === 0}
+              disabled={merging || includedCount === 0 || renderGuardTripped}
+              title={renderGuardTripped ? 'Merge disabled — duplicate groups failed to render' : undefined}
             >
               {merging ? 'Merging...' : `Merge ${includedCount} Group${includedCount !== 1 ? 's' : ''}`}
             </button>

@@ -100,10 +100,11 @@ See [`docs/user_guide/channels-streams/stream-dedup.md`](user_guide/channels-str
 |-|-|
 | `GET /api/channel-merges/candidates` | Synchronous candidate lookup — find the best matching channel for an incoming stream name |
 | `GET /api/channel-merges` | List pending (or resolved) merge rows, paginated |
+| `GET /api/channel-merges/snapshot` | Read one coherent, bounded snapshot of the complete pending queue |
 | `POST /api/channel-merges/{id}/accept` | Accept the dedup candidate — merge the stream into the candidate channel |
 | `POST /api/channel-merges/{id}/dismiss` | Dismiss the dedup candidate — signal that a new channel should be created |
 
-All endpoints require JWT Bearer token authentication. `GET /api/channel-merges/candidates` and `GET /api/channel-merges` require `RequireAuthIfEnabled`. The `POST` mutation endpoints (`/accept`, `/dismiss`) require `RequireAdminIfEnabled`.
+All endpoints require JWT Bearer token authentication. `GET /api/channel-merges` requires `RequireAuthIfEnabled`. The candidate lookup, complete snapshot, and `POST` mutation endpoints require `RequireAdminIfEnabled`.
 
 ---
 
@@ -193,6 +194,51 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
 ```
 
 `trigger_context` is one of `drag_drop`, `add_stream`, `m3u_refresh`, `mcp_tool`. `created_at` and `resolved_at` are epoch milliseconds (UTC). Terminal-state rows (`merged`, `dismissed`) have `resolved_at` populated and `resolution_source` set to `operator`, `auto`, `bulk_m3u_hook`, or `mcp_tool`.
+
+---
+
+### `GET /api/channel-merges/snapshot`
+
+Returns one deterministic snapshot of the complete `pending` queue for Select
+all, selected Refresh, and queue-wide confirmation. The route is read-only but
+**requires admin authorization** because it exposes the complete destructive
+action target set. Optional `group_id` scopes the snapshot to pending records
+in one channel group, matching the list endpoint's group filter. Clients must
+forward the active list scope so a bulk action cannot target another group.
+
+The database record set is read by one ordered query (`created_at DESC`,
+`id DESC`). Candidate name, number, and group enrichment follows the paginated
+list serializer; unresolved candidates retain their ID and return null
+enrichment fields.
+
+**Response: `200 OK`**
+
+```json
+{
+  "merges": [
+    {
+      "id": 42,
+      "stream_name": "ESPN HD",
+      "group_id": 12,
+      "candidate_channel_id": "a1b2c3d4-e5f6-...",
+      "candidate_channel_name": "ESPN",
+      "candidate_channel_number": 101,
+      "candidate_channel_group_name": "Sports",
+      "confidence": 0.87,
+      "status": "pending",
+      "trigger_context": "m3u_refresh",
+      "created_at": 1747497600000,
+      "resolved_at": null,
+      "resolution_source": null
+    }
+  ],
+  "total": 1
+}
+```
+
+The safety ceiling is 20,000 pending records. If the queue exceeds it, ECM
+returns **`409 Conflict`** with `detail` stating the limit and that nothing was
+changed; it never returns a partial snapshot.
 
 ---
 
@@ -286,6 +332,91 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 
 ---
 
+## Event Sync Reviews
+
+The `/api/event-sync-reviews/*` family (bead ti939.3.2) is the review queue for ambiguous Event Sync matches — ambiguous-band scores and contested ties enqueue here instead of being silently skipped. Rows key on **content fingerprints** — `(rule_id, provider_id, stream_name_hash, event_key)` — never channel/stream IDs, so decisions survive Dispatcharr refreshes and re-apply on every future run. Feature guide: [`docs/event_sync.md`](event_sync.md) → "Reviewing ambiguous matches"; fingerprint semantics: `backend/services/event_sync_review.py`.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync-reviews` | Paginated list. Query: `status` (`pending` default \| `accepted` \| `rejected` \| `superseded`), `rule_id`, `page`, `page_size` (≤200). Rows carry the fingerprint columns, state-machine fields, and a parsed display-only `evidence` snapshot (both raw names, parsed titles/starts, score/band/team-verdict/time-delta, snapshot ids). `RequireAuthIfEnabled`. |
+| `POST /api/event-sync-reviews/{id}/accept` | Accept a pairing: records the durable fingerprint decision (future runs auto-attach it), supersedes sibling pending pairings for the same stream fingerprint, then best-effort attaches immediately — snapshot channel/stream ids are re-verified against live Dispatcharr (channel name must still parse to the row's `event_key`; stream name must still hash to `stream_name_hash`) and a failed verification defers the attach to the next run (`attach_deferred_reason`). Response: `{status: "accepted", attached, already_attached, attach_deferred_reason, superseded_siblings}`. Idempotent on `accepted`; `409` on `rejected`/`superseded`; `404` if missing. `RequireAdminIfEnabled`. |
+| `POST /api/event-sync-reviews/{id}/reject` | Reject a pairing: durable fingerprint suppression — future runs neither attach nor re-ask. No Dispatcharr call. Response: `{status: "rejected"}`. Idempotent on `rejected`; `409` on `accepted`/`superseded`. `RequireAdminIfEnabled`. |
+
+Audit: accepts/rejects write `journal_entries` rows (category `event_sync`, action `review_accept`/`review_reject`); an immediate attach writes the standard `merge_stream` entry with `after_value.match.attach_source = "review_queue"` (threshold attaches carry `"threshold"`), keeping queue-driven attaches distinguishable and covered by the journal-driven surgical unmerge.
+
+---
+
+## Event Sync Exclusions
+
+The `/api/event-sync-exclusions/*` family (bead ti939.3.5) is the operator "never attach this pairing" surface — a durable standing order the shared resolver (`backend/services/event_sync_resolver.py`) filters out on **every** future run and preview, before the attach band is even honored. It closes the loop a stateless recompute otherwise can't: a false-positive attach the operator manually detaches would keep re-attaching on every subsequent run. Rows key on the same **content fingerprint** as review rows — `(rule_id, provider_id, stream_name_hash, event_key)` — never channel/stream IDs, so an exclusion survives Dispatcharr refreshes and stream-ID churn. An exclusion **outranks** a prior review-queue accept for the same fingerprint. Feature guide: [`docs/event_sync.md`](event_sync.md) → "Never-attach exclusions"; fingerprint semantics: `backend/services/event_sync_review.py`.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync-exclusions` | Paginated list, newest first. Query: `rule_id` (optional filter), `page`, `page_size` (≤200, `400` if out of range). Rows carry the fingerprint columns plus a parsed display-only `evidence` snapshot. `RequireAuthIfEnabled`. |
+| `POST /api/event-sync-exclusions` | Create a standing exclusion from the fingerprint components (body shape below). **Idempotent on the fingerprint** — a repeat POST for an already-excluded pairing returns the existing row (`already_existed: true`) rather than creating a duplicate, and refreshes the stored `note` if a new one is supplied. `404` if `rule_id` doesn't reference an existing rule. `RequireAdminIfEnabled`. |
+| `DELETE /api/event-sync-exclusions/{id}` | Remove the standing order. The pairing becomes matchable again on the next run/preview — the delete itself re-attaches nothing (the idempotent run is the applier, same posture as a review-queue accept). `404` if the id doesn't exist. `RequireAdminIfEnabled`. |
+
+### `POST /api/event-sync-exclusions` — fingerprint body shape
+
+```json
+{
+  "rule_id": 12,
+  "provider_id": 7,
+  "stream_name_hash": "5f2c1a...e91a",
+  "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00",
+  "note": "Wrong venue, provider always mislabels this slot",
+  "evidence": {
+    "stream_name": "Peacock 14: Mercury vs. Aces @ 11 Jul 06:00 PM ET",
+    "master_channel_name": "Mercury vs. Aces",
+    "rule_name": "Live Events (multi-provider)",
+    "provider": "Provider B"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-|-|-|-|
+| `rule_id` | integer | Yes | The owning event_sync rule. Must reference an existing `ChannelPipelineRule` (`404` otherwise). |
+| `provider_id` | integer (≥0) | Yes | The secondary stream's M3U account id — `0` is the documented unknown-provider sentinel. |
+| `stream_name_hash` | string | Yes | SHA-256 hex of the secondary stream's LOCALS-cleaned raw name (`services.dedup_matcher.clean_name`) — copy verbatim from a review row or a preview candidate, never compute it client-side. |
+| `event_key` | string | Yes | The master side's parsed event identity: `<LOCALS-cleaned parsed title>\|<parsed start as UTC ISO-8601>`. |
+| `note` | string, ≤2000 chars | No | Free-text operator annotation ("why never"). |
+| `evidence` | object | No | Display-only snapshot (raw names etc.) for the exclusions-list UI — never identity-authoritative, never re-verified against Dispatcharr. |
+
+The four fingerprint fields are never derived from channel/stream IDs — they're supplied verbatim, exactly as they appear on a review-queue row (`GET /api/event-sync-reviews`) or a preview response's candidate context.
+
+**Response: `200 OK`** — `EventSyncExclusionRecord`:
+
+```json
+{
+  "id": 4,
+  "rule_id": 12,
+  "provider_id": 7,
+  "stream_name_hash": "5f2c1a...e91a",
+  "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00",
+  "created_at": 1752278400000,
+  "note": "Wrong venue, provider always mislabels this slot",
+  "evidence": { "stream_name": "...", "master_channel_name": "...", "rule_name": "...", "provider": "..." },
+  "already_existed": false
+}
+```
+
+`GET /api/event-sync-exclusions` wraps rows in the standard paginated envelope: `{exclusions: [EventSyncExclusionRecord, ...], total, page, page_size, total_pages}`.
+
+Audit: create/delete write `journal_entries` rows (category `event_sync`, action `exclusion_create` / `exclusion_delete`).
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/event-sync-exclusions" \
+  -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" \
+  -d '{"rule_id": 12, "provider_id": 7, "stream_name_hash": "5f2c1a...e91a", "event_key": "mercury vs. aces|2026-07-11T22:00:00+00:00"}'
+```
+
+MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `delete_event_sync_exclusion` (`mcp-server/tools/event_sync_exclusions.py`) — delete is two-step (`confirm=False` previews, `confirm=True` removes), mirroring other MCP delete tools.
+
+---
+
 ## Logos
 
 | Endpoint | Description |
@@ -328,7 +459,8 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `GET /api/m3u/accounts/{id}/profiles/{pid}/` | Get a specific profile |
 | `PATCH /api/m3u/accounts/{id}/profiles/{pid}/` | Update a profile |
 | `DELETE /api/m3u/accounts/{id}/profiles/{pid}/` | Delete a profile |
-| `PATCH /api/m3u/accounts/{id}/group-settings` | Update group settings for an account |
+| `PATCH /api/m3u/accounts/{id}/group-settings` | Update group settings for an account. Since GH #720 Part B this also performs downstream **channel-profile reconcile** for every edited group that carries a `custom_properties.channel_profile_ids` selection: the group's channels are made members of EXACTLY the selected profiles (subtractive, one bulk write per profile). Best-effort — a reconcile failure NEVER fails the PATCH. Guardrails: an absent/empty selection is a **no-op** (ECM stops managing that group's profiles and leaves memberships unchanged — never "disable everywhere"); a fully-stale selection (all selected profiles deleted) leaves channels untouched; a universe-fetch failure degrades to enable-only. Selection is **enforced globally per channel-group**: on save the selection is PROPAGATED (cascade-written) to every M3U account row carrying that channel-group so it takes effect regardless of which account it was made on. The primary write + sibling cascade are serialized under a per-effective-group lock **within the process** (single-operator assumption). When a TLS request subprocess is running it forwards exactly the lock-participating paths (this save's cascade, the single-account M3U refresh, the Channel Pipeline / Auto-Create run endpoints and their `/api/auto-creation` alias, and every background task run AND cancel) to the main process so main stays the sole writer of those paths; the forward imposes no timeout ceiling (main's request-timeout budget is authoritative, so a long task run is not cut to a false error). Direct channel-profile membership endpoints are NOT part of this forwarding (separate pre-existing concern — bead `nq3ed`). The cascade is a sequence of independent remote PATCHes (not one atomic transaction); an incomplete propagation is surfaced (named accounts) and the every-pass normalize converges non-empty divergence. **CLEAR ordering:** clearing a selection first reads a FRESH account list under the lock (if that read is unavailable, malformed, empty, or omits the account being edited the clear FAILS CLOSED with zero writes — never clears the authoritative primary on an unverified/incomplete enumeration, which could otherwise strand real siblings that resurrect the selection on the next sweep), then clears the sibling rows and the authoritative primary last — if any sibling clear fails the whole clear ABORTS before the primary is touched (prior selection preserved, no resurrection). A partial clear (some siblings cleared before one failed) reports the TRUTHFUL outcome: the 503 detail names both the cleared and the failed accounts, and the accounts that ACTUALLY changed are journaled so the operator can re-save to complete. A collapse resolves a defensive winner for legacy rows (precedence: `auto_channel_sync` ON, then a row that HAS a selection, then lowest `m3u_account_id`) and flags a residual conflict. Channels set by a Channel Pipeline `assign_channel_profile` rule are excluded until that rule is disabled/deleted (ownership handoff). **Response envelope:** a healthy/field-only save returns **200** with `ecm_profile_apply: [{status, group_id, failed_profile_ids, conflict, error, ...}]` per group (`status` ∈ `no_selection`, `no_channels`, `stale_selection`, `reconciled`, `partial_failure`, `degraded`, `error`) so the UI can warn on an incomplete apply. The two failure classes are distinct by status: a reconcile that fails AFTER the selection was safely written returns **200** with the warning in `ecm_profile_apply` (the save stuck; the sweep retries), whereas a **pre-write safety failure** — the group-settings fetch (lock key) was unavailable, or a CLEAR could not read a valid account list / aborted before the primary write — is NOT written and returns **HTTP 503** with `{detail: "…NOT saved…/…NOT fully cleared… retry"}` (naming affected accounts), so it never reads as success. Non-integer `channel_profile_ids` are rejected with **422**. |
+| `POST /api/m3u/accounts/{id}/group-auto-sync-toggle` | Guided-setup toggle of ONE group's `auto_channel_sync` (bead ti939.3.4). Admin-gated; body `{channel_group_id, auto_channel_sync, confirm: true}` — `confirm: true` is REQUIRED (400 otherwise; the toggle is an explicit operator action, never a side effect). Journaled per toggle; snapshot restore does NOT revert Dispatcharr group settings — the journal entry is the recovery breadcrumb. See `docs/event_sync.md`. |
 | `GET /api/m3u/accounts/{id}/changes` | Get change history for an account |
 | `GET /api/m3u/snapshots` | List M3U snapshots |
 | `GET /api/m3u/server-groups` | List server groups |
@@ -367,6 +499,78 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `GET /api/epg/grid` | Get EPG program grid for guide view |
 | `GET /api/epg/lcn` | Get LCN (Logical Channel Number) for a TVG-ID |
 | `POST /api/epg/lcn/batch` | Batch LCN lookup for multiple TVG-IDs |
+| `POST /api/epg/migration/preview` | Build a signed, non-mutating XMLTV/Schedules Direct migration preview |
+| `POST /api/epg/migration/apply` | Accept a signed preview for asynchronous application (`202`) |
+| `GET /api/epg/migration/apply/{batch_id}` | Poll migration progress and per-channel outcomes |
+
+### Guide migration
+
+`POST /api/epg/migration/preview` accepts
+`{"target_epg_source_id": 20}` and returns every channel classification, status
+counts, and a five-minute signed `preview_token`. Only `ready` rows may be sent
+to apply. A row is ready only when its LCN/station identifier resolves to
+exactly one target EPG row.
+
+`POST /api/epg/migration/apply` accepts the target source, preview token, and
+the exact ready-row identities returned by preview. A valid request returns
+`202 Accepted`:
+
+```json
+{
+  "batch_id": "0123456789abcdef0123456789abcdef",
+  "status": "running",
+  "total": 2,
+  "poll_url": "/api/epg/migration/apply/0123456789abcdef0123456789abcdef"
+}
+```
+
+`batch_id` is 128 random bits rendered as 32 lowercase hexadecimal characters.
+Poll the supplied URL until `status` is `completed` or `failed`. Running and
+terminal responses include `processed`, `total`, and a `result` envelope with
+the current counters (`mutated`, `updated`, `audit_failed`, `skipped`,
+`failed`) plus all per-channel results produced so far. Result statuses are
+`updated`, `updated_audit_failed`, `ambiguous_target`, `unsupported_origin`,
+`semantic_drift`, `changed_since_preview`, or `failed`.
+
+The ECM dialog polls until a terminal response while it remains open; it does
+not impose a client-side wall-clock cutoff. Closing the dialog aborts client
+polling but does not cancel the accepted server job. Transient network and
+server errors retain the known batch ID and last partial result and are
+retried. A not-found poll can indicate a server restart; the dialog preserves
+the batch ID and directs the operator to build a fresh preview and reconcile
+the affected channels in Dispatcharr.
+
+Only one migration apply may run at a time; another POST receives
+`409 Conflict`. Invalid, expired, reordered, or tampered preview identities
+also receive `409` and must be previewed again. Job polling state is
+process-local, is never pruned while running, and is retained for 30 minutes
+measured from terminal completion. Status reads also perform expiry cleanup.
+Poll access is bound to the immutable provider-kind and numeric/synthetic ID of
+the administrator who accepted the job (renaming a user does not break polling;
+the static MCP principal has its stable synthetic ID; auth-disabled mode
+intentionally treats operators as equivalent). Authorization is checked at
+acceptance and polling, not continuously during execution. Batch IDs must be
+exactly 32 lowercase hexadecimal characters. Malformed, expired, unknown, and
+foreign-owned IDs all return the same not-found response.
+
+The process-local envelope and active-job marker are lost on restart.
+Dispatcharr PATCH and ECM Journal commit are separate operations: cancellation,
+restart, an indeterminate HTTP response, or failure between PATCH and Journal
+can leave a changed channel without a corresponding Journal row. After any
+interruption, do not infer upstream state from the missing job or Journal
+alone—build a fresh preview, verify affected channels directly in Dispatcharr,
+and reconcile before retrying. Fatal polls intentionally contain only the
+fixed `Guide migration failed.` message; detailed exceptions remain server-side.
+
+Before any mutation, apply rebuilds one bounded source/target snapshot and
+requires every signed target to remain the exact sole candidate. It then
+refetches each current/target EPG row and channel immediately before PATCH.
+Dispatcharr exposes neither a source-mapping revision nor compare-and-swap for
+the channel update, so it cannot eliminate a non-migration writer changing
+mapping state after the snapshot or the channel between the final GET and
+PATCH. This accepted TOCTOU limitation is fail-closed wherever Dispatcharr
+provides a revalidation point; rerun Preview after any skipped or uncertain
+result.
 
 ## Channel Profiles
 
@@ -406,6 +610,15 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `POST /api/settings/restart-services` | Restart background services |
 | `POST /api/settings/reset-stats` | Reset all statistics |
 
+## Event Sync Team Aliases
+
+Operator team-alias dictionary for the Event Sync matcher's team-token layer (bead ti939.4.2): groups of known-equivalent team spellings (`Man Utd == Manchester United == MUFC`) that raise recall on abbreviation-heavy providers without lowering the fuzzy threshold. Stored as a JSON setting (no DB table); consulted on BOTH the team hard-reject and boost paths; strictly monotonic (an alias can never create a conflict). Aliases are corpus-gated by policy — see [`docs/event_sync.md`](event_sync.md) → "Team aliases (operator dictionary)".
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/event-sync/team-aliases` | Get the alias dictionary: `{groups: [{terms: [...], note}]}`. Empty by default. |
+| `PUT /api/event-sync/team-aliases` | Full-replace write. Validates each term against the matcher's own team normalization (≥2 terms per group, no blank/identity-free terms, a term may appear in only one group; ≤200 groups, ≤50 terms/group, ≤100 chars/term). Journals before/after under category `event_sync`. |
+
 ## Stream Stats
 
 | Endpoint | Description |
@@ -428,6 +641,7 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 | `POST /api/stream-stats/clear-all` | Clear all probe stats |
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
+| `GET /api/stream-stats/stale?days=7` | List stale streams: not probed by ECM in `days` days (or never), OR flagged `is_stale` by Dispatcharr's own M3U refresh — each tagged with which `reasons` fired |
 | `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
 
 ## Enhanced Stats
@@ -544,7 +758,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/journal/stats` | Get journal statistics |
 | `DELETE /api/journal/purge` | Purge old journal entries |
 
-`GET /api/journal` accepts `page`, `page_size` (capped at 200), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/auto-creation/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the auto-creation `bulk-update` notes above for a worked example.
+`GET /api/journal` accepts `page` (>= 1), `page_size` (1-250), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Out-of-range `page`/`page_size` values return `422` rather than being silently clamped or passed through. Each result row carries `batch_id` in the response body — bulk operations (e.g. `POST /api/channel-pipeline/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly — pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the Channel Pipeline `bulk-update` notes above for a worked example.
 
 ## Notifications
 
@@ -655,40 +869,43 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `PATCH /api/tasks/{id}/schedules/{sid}` | Update schedule |
 | `DELETE /api/tasks/{id}/schedules/{sid}` | Delete schedule |
 
-## Auto-Creation
+## Channel Pipeline
+
+> **Deprecated alias:** every endpoint below is also reachable at the old `/api/auto-creation/...` prefix. The alias forwards to the same handler and continues to work, but is hidden from the OpenAPI schema and should not be used in new integrations — use the canonical `/api/channel-pipeline/...` paths shown here.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/auto-creation/rules` | List all rules sorted by priority |
-| `GET /api/auto-creation/rules/{id}` | Get rule details |
-| `POST /api/auto-creation/rules` | Create rule |
-| `PUT /api/auto-creation/rules/{id}` | Update rule |
-| `DELETE /api/auto-creation/rules/{id}` | Delete rule |
-| `POST /api/auto-creation/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
-| `POST /api/auto-creation/rules/reorder` | Reorder rules by priority |
-| `POST /api/auto-creation/rules/{id}/toggle` | Toggle rule enabled state |
-| `POST /api/auto-creation/rules/{id}/duplicate` | Duplicate a rule |
-| `POST /api/auto-creation/rules/{id}/run` | Run a single rule (supports dry_run) |
-| `POST /api/auto-creation/run` | Run the full pipeline (execute or dry_run) |
-| `GET /api/auto-creation/executions` | Get execution history (paginated) |
-| `GET /api/auto-creation/executions/{id}` | Get execution details (optional log/entities) |
-| `POST /api/auto-creation/executions/{id}/rollback` | Rollback an execution |
-| `POST /api/auto-creation/validate` | Validate a rule definition |
-| `GET /api/auto-creation/export/yaml` | Export all rules as YAML |
-| `POST /api/auto-creation/import/yaml` | Import rules from YAML |
-| `GET /api/auto-creation/schema/conditions` | Get available condition types |
-| `GET /api/auto-creation/schema/actions` | Get available action types |
-| `GET /api/auto-creation/schema/template-variables` | Get available template variables |
-| `GET /api/auto-creation/lint-findings` | Read-only view of saved auto-creation rules that fail the current write-time linter (bd-eio04.7) |
-| `POST /api/auto-creation/rules/analyze` | Run the advisory rule analyzer over the rules currently in the DB; returns warnings only (saves are never blocked) |
-| `POST /api/auto-creation/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/auto_creation_rule_analyzer.md` |
-| `POST /api/auto-creation/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
-| `GET /api/auto-creation/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
-| `GET /api/auto-creation/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
+| `GET /api/channel-pipeline/rules` | List all rules sorted by priority |
+| `GET /api/channel-pipeline/rules/{id}` | Get rule details |
+| `POST /api/channel-pipeline/rules` | Create rule |
+| `PUT /api/channel-pipeline/rules/{id}` | Update rule |
+| `DELETE /api/channel-pipeline/rules/{id}` | Delete rule |
+| `POST /api/channel-pipeline/rules/bulk-update` | Apply the same scalar field changes to multiple rules; rejects `conditions`/`actions` (see notes below) |
+| `POST /api/channel-pipeline/rules/reorder` | Reorder rules by priority |
+| `POST /api/channel-pipeline/rules/{id}/toggle` | Toggle rule enabled state |
+| `POST /api/channel-pipeline/rules/{id}/duplicate` | Duplicate a rule |
+| `POST /api/channel-pipeline/rules/{id}/run` | Run a single rule (supports dry_run) |
+| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
+| `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
+| `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
+| `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution. With a pre-run snapshot it requires `confirm=true` (409 otherwise); once confirmed, an event_sync attach run whose journal fully covers its attaches is reverted SURGICALLY (only the run-added stream ids removed, post-run Dispatcharr churn preserved; response carries `surgical_unmerge: true`), otherwise it delegates to the full snapshot restore |
+| `POST /api/channel-pipeline/validate` | Validate a rule definition |
+| `GET /api/channel-pipeline/export/yaml` | Export all rules as YAML |
+| `POST /api/channel-pipeline/import/yaml` | Import rules from YAML |
+| `GET /api/channel-pipeline/schema/conditions` | Get available condition types |
+| `GET /api/channel-pipeline/schema/actions` | Get available action types |
+| `GET /api/channel-pipeline/schema/template-variables` | Get available template variables |
+| `GET /api/channel-pipeline/lint-findings` | Read-only view of saved Channel Pipeline rules that fail the current write-time linter (bd-eio04.7) |
+| `POST /api/channel-pipeline/rules/analyze` | Run the advisory rule analyzer over the rules currently in the DB; returns warnings only (saves are never blocked) |
+| `POST /api/channel-pipeline/rules/analyze/from-bundle` | Run the analyzer over `rules.yaml` inside an uploaded debug-bundle `tar.gz`; never touches the DB, so it is safe for support diagnosis of any user's bundle. See `docs/channel_pipeline_rule_analyzer.md` |
+| `POST /api/channel-pipeline/debug-bundle` | Start a diagnostic-bundle build; returns `{job_id, status: "running"}` immediately and dispatches a supervised background task |
+| `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll a bundle build: JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). Job is evicted on successful read; abandoned jobs pruned after 30 min |
+| `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
+| `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
 
 ---
 
-### `GET /api/auto-creation/fuzzy-preview`
+### `GET /api/channel-pipeline/fuzzy-preview`
 
 Returns scored `(stream, channel)` pairs for the given channel groups using the same backend scoring core and admission policy used by `merge_streams` rules with `loose_name_match + min_score`. Zero writes — inspection only.
 
@@ -756,13 +973,51 @@ This is the same policy the `merge_streams` rule executor applies, so the previe
 
 ```bash
 curl -X GET \
-  "http://localhost:6100/api/auto-creation/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
+  "http://localhost:6100/api/channel-pipeline/fuzzy-preview?group_ids=14&group_ids=22&min_score=0.7&allow_no_callsign=false&page=1&page_size=50" \
   -H "Authorization: Bearer TOKEN"
 ```
 
 ---
 
-`POST /api/auto-creation/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
+### `POST /api/channel-pipeline/event-sync-preview`
+
+Event Sync (epic ti939) dry-run: parses and scores every secondary-group stream against the master group's live channels using the exact resolver the attach path uses (`backend/services/event_sync_resolver.py` → `backend/services/event_sync_matcher.py`), so preview scoring and attach scoring cannot diverge. **Zero writes** — no merges, no channel mutations, and Dispatcharr group settings are never toggled. Feature guide: `docs/event_sync.md`.
+
+**Authentication:** `RequireAdminIfEnabled` (admin token required when auth is enabled).
+
+**Request body — exactly one of:**
+
+| Field | Type | Meaning |
+|-|-|-|
+| `rule_id` | integer | Preview a saved event_sync rule (`404` if missing, `400` if the rule has no `event_sync_config`). |
+| `event_sync_config` | object | Preview an inline config before saving (validated by the same `validate_event_sync_config` rail set as rule save; validation errors return `400` with teaching messages). |
+
+**Response: `200 OK`** — a pre-flight failure does NOT fail the preview; the operator must see the misconfiguration alongside the match results.
+
+| Key | Contents |
+|-|-|
+| `preflight` | `{ok, failures[]}` from the read-only group-settings check (master auto-sync ON, secondaries OFF, groups exist). |
+| `summary` | `secondary_streams`, `would_attach`, `ambiguous_skipped`, `unmatched`, `parse_failed` (the four dispositions sum to `secondary_streams` and reconcile exactly with `streams`), plus `master_channels` / `master_channels_unparsed`, plus the ti939.3.2 review-queue context: `would_attach_via_review` (subset of `would_attach` reached via a prior review accept) and `candidates_pending_review` (rendered candidate pairings currently awaiting review). |
+| `streams` | One row per secondary stream: raw name, provider, group, parsed title + start, disposition, `ambiguous_reason` (`contested_top_candidates` — the ti939.2.1 contested rail — or `top_candidate_ambiguous_band`; `null` otherwise), `attach_source` (`"threshold"` \| `"review_queue"` when the disposition is `would_attach`, else `null` — ti939.3.2), `would_attach_master` (name + current channel id, re-resolved this call), and up to 10 scored candidates (master name/id, parsed title/start, score, band, team-token verdict, time delta, machine-readable reject reason, and `review_status` — `pending`/`accepted`/`rejected`/`null` queue marker for that exact pairing, populated only when previewing a saved rule). |
+| `unmatched_streams` | Streams with no master in the time window (the master-as-ceiling visibility hedge). On promotion-enabled configs (bead ti939.4.1) each row is annotated with `would_promote`, `promote_action` (`create` \| `attach_existing`), `promote_channel_name`, and `promote_capped`. |
+| `parse_failures` | Failures grouped by `(group, reason)` with counts and sample names — a silently broken pattern is loud here. |
+| `unparsed_master_channels` | Master channel names with no complete parsed identity (they can never be attach targets). |
+| `truncated` | `true` when the fetch ceilings (2,000 streams / 2,000 channels) were hit. |
+| `promotion` | **Present ONLY when the config carries `promote_unmatched: true`** (bead ti939.4.1 — absent otherwise, and `summary` then also carries `would_promote` / `would_promote_streams`): the promotion plan `{enabled, target_group_id, would_promote, would_promote_streams, would_create, would_attach_existing, cap, capped, cap_overage, units[]}` where each unit is `{channel_name, action, event_key, dateless, existing_channel_id, streams[]}`. Computed by the SAME planner a live run executes (`services/event_sync_promote.py`), so preview equals run on unchanged data. See `docs/event_sync.md` → "Promoting unmatched events". |
+
+**Example:**
+
+```bash
+curl -X POST "http://localhost:6100/api/channel-pipeline/event-sync-preview" \
+  -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" \
+  -d '{"event_sync_config": {"master_group_id": 12, "secondary_group_ids": [34, 56]}}'
+```
+
+MCP mirror: the `preview_event_sync` tool (`mcp-server/tools/channel_pipeline.py`) wraps this endpoint for headless use.
+
+---
+
+`POST /api/channel-pipeline/rules/bulk-update` applies the same partial update to every rule in `rule_ids` in a single transaction. Send only the fields you want to change; omitted fields are left as-is per rule.
 
 **Request body:**
 
@@ -778,10 +1033,10 @@ curl -X GET \
 - `rule_ids` (required) — `1..500` distinct rule IDs. Empty list, missing list, or duplicates return `400`.
 - Scalar fields accepted (any subset): `name`, `description`, `enabled`, `priority`, `m3u_account_id`, `target_group_id`, `run_on_refresh`, `stop_on_first_match`, `sort_field`, `sort_order`, `probe_on_sort`, `sort_regex`, `stream_sort_field`, `stream_sort_order`, `quality_tie_break_order`, `quality_m3u_tie_break_enabled`, `normalization_group_ids`, `skip_struck_streams`, `orphan_action`, `match_scope_target_group`.
 - `merge_streams_remove_non_matching` (bulk-only convenience field) — when set, every `merge_streams` action on every targeted rule is rewritten with this `remove_non_matching` flag. Rules with no `merge_streams` action are unaffected.
-- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/auto-creation/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
+- **Rejected fields (`422 Unprocessable Entity`):** `conditions`, `actions`. Per-rule logic edits must go through `PUT /api/channel-pipeline/rules/{id}` so silent payload drops can't lose intent at scale (bd-gjoe5). The error message names the offending field.
 - At least one mutating field is required alongside `rule_ids`; otherwise `400 "No fields to update"`.
 - If any `rule_ids` entry doesn't exist, the entire batch aborts with `404 "Rules not found: [...]"` and no rows are written.
-- `sort_regex` is run through the auto-creation regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
+- `sort_regex` is run through the Channel Pipeline regex linter before any DB work (bd-eio04.7); a failing pattern returns `400` with the linter findings.
 
 **Response: `200 OK`**
 
@@ -815,31 +1070,7 @@ To reconstruct one batch:
 - Every journal row returned by `GET /api/journal` already includes `batch_id` in its body, so client-side grouping by `batch_id` from a broader query is also supported (pagination caveats apply on large windows).
 - The `search` parameter does an `ILIKE %term%` on `entity_name` and `description` and can complement `batch_id` (e.g., narrow a batch to rules whose name matches a substring) — the two filters compose with `AND` semantics.
 
-**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/auto-creation/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the auto-creation pipeline.
-
-## FFMPEG Builder
-
-| Endpoint | Description |
-|-|-|
-| `GET /api/ffmpeg/capabilities` | Detect system FFmpeg capabilities (codecs, formats, filters, hardware) |
-| `POST /api/ffmpeg/probe` | Probe a media source for stream info (codec, resolution, bitrate) |
-| `GET /api/ffmpeg/configs` | List all saved configurations |
-| `POST /api/ffmpeg/configs` | Create new configuration |
-| `GET /api/ffmpeg/configs/{id}` | Get specific configuration |
-| `PUT /api/ffmpeg/configs/{id}` | Update configuration |
-| `DELETE /api/ffmpeg/configs/{id}` | Delete configuration |
-| `POST /api/ffmpeg/validate` | Validate builder state, return errors/warnings |
-| `POST /api/ffmpeg/generate-command` | Generate annotated FFmpeg command from builder state |
-| `GET /api/ffmpeg/jobs` | List all transcoding jobs |
-| `POST /api/ffmpeg/jobs` | Create and queue new transcoding job |
-| `GET /api/ffmpeg/jobs/{id}` | Get job status and progress |
-| `POST /api/ffmpeg/jobs/{id}/cancel` | Cancel running job |
-| `DELETE /api/ffmpeg/jobs/{id}` | Delete job record |
-| `GET /api/ffmpeg/queue-config` | Get job queue configuration |
-| `PUT /api/ffmpeg/queue-config` | Update queue settings (max concurrent, retries) |
-| `GET /api/ffmpeg/profiles` | List saved user profiles |
-| `POST /api/ffmpeg/profiles` | Save builder state as a profile |
-| `DELETE /api/ffmpeg/profiles/{id}` | Delete saved profile |
+**Normalization interaction:** `normalization_group_ids` is an accepted scalar field, so bulk-update can reassign normalization groups across many rules in one call. The list is stored as-is (deduplicated and sorted) — IDs are **not** verified against `NormalizationRuleGroup` at write time, matching the behavior of `PUT /api/channel-pipeline/rules/{id}`. See [`docs/normalization.md`](normalization.md) for the full normalization model and how groups feed the Channel Pipeline.
 
 ## Cache
 
@@ -884,7 +1115,7 @@ To reconstruct one batch:
 | `DELETE /api/dummy-epg/profiles/{id}` | Delete dummy EPG profile |
 | `POST /api/dummy-epg/generate` | Generate dummy EPG data |
 | `POST /api/dummy-epg/preview` | Preview dummy EPG output |
-| `POST /api/dummy-epg/preview/batch` | Batch preview dummy EPG |
+| `POST /api/dummy-epg/preview/batch` | Batch preview dummy EPG (zero-write). Each result also carries `event_sync_start_valid` — true only when the Event Sync matcher would build a real start time from the captured groups (valid month, hour ≤ 23, real calendar date; never guessed) |
 | `GET /api/dummy-epg/xmltv` | Get combined XMLTV output |
 | `GET /api/dummy-epg/xmltv/{id}` | Get XMLTV output for a profile |
 | `GET /api/dummy-epg/profiles/export/yaml` | Export profiles as YAML |
@@ -911,46 +1142,101 @@ Named key → value tables used by the dummy EPG template engine's `{key|lookup:
 
 Names are unique. Each table is capped at 10 000 entries.
 
-## Export
+## Backup & Restore
+
+The Backup & Restore subsystem (v0.18.0, ADR-012) exposes two tiers of endpoints: the **DBAS artifact** path (new-format v0.18.0, full 12-category round-trip) and the **legacy ZIP/YAML** path (pre-v0.18.0, ECM-config-only). All endpoints require admin authentication unless noted.
+
+### DBAS artifact endpoints (v0.18.0+)
+
+These endpoints operate on the new-format `.zip` artifacts produced by the `dbas_backup` task. They cover the full 12-category Dispatcharr + ECM configuration.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/export/profiles` | List export profiles |
-| `POST /api/export/profiles` | Create export profile |
-| `PATCH /api/export/profiles/{id}` | Update export profile |
-| `DELETE /api/export/profiles/{id}` | Delete export profile |
-| `POST /api/export/profiles/{id}/generate` | Generate export files |
-| `GET /api/export/profiles/{id}/preview` | Preview export output |
-| `GET /api/export/profiles/{id}/download/m3u` | Download exported M3U |
-| `GET /api/export/profiles/{id}/download/xmltv` | Download exported XMLTV |
-| `GET /api/export/cloud-targets` | List cloud storage targets |
-| `POST /api/export/cloud-targets` | Create cloud storage target |
-| `PATCH /api/export/cloud-targets/{id}` | Update cloud storage target |
-| `DELETE /api/export/cloud-targets/{id}` | Delete cloud storage target |
-| `POST /api/export/cloud-targets/test` | Test cloud storage credentials |
-| `POST /api/export/cloud-targets/{id}/test` | Test a specific cloud target |
-| `GET /api/export/publish-configs` | List publish configurations |
-| `POST /api/export/publish-configs` | Create publish configuration |
-| `PATCH /api/export/publish-configs/{id}` | Update publish configuration |
-| `DELETE /api/export/publish-configs/{id}` | Delete publish configuration |
-| `POST /api/export/publish-configs/{id}/publish` | Publish to cloud target |
-| `POST /api/export/publish-configs/{id}/dry-run` | Dry-run publish |
-| `GET /api/export/publish-history` | Get publish history |
-| `DELETE /api/export/publish-history` | Clear publish history |
-| `DELETE /api/export/publish-history/{id}` | Delete publish history entry |
+| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (tri-state: `success`, `partial_failed_rolled_back`, `failed_rollback_incomplete`). |
+| `POST /api/backup/restore-dbas-saved` | Restore a saved DBAS artifact by filename (artifact must be in `/config/backups/`). Same dry-run/apply semantics as `/restore-dbas`. The saved file is not deleted. |
+| `GET /api/backup/saved` | List saved DBAS backup artifacts under `/config/backups/`. Returns filename, size, and creation time. |
+| `GET /api/backup/saved/{filename}` | Download a saved backup artifact (streamed). |
+| `DELETE /api/backup/saved/{filename}` | Delete a saved backup artifact. |
 
-## Backup
+#### Key restore parameters (`POST /api/backup/restore-dbas`)
+
+| Parameter | Type | Default | Description |
+|-|-|-|-|
+| `file` | multipart file | required | The `.zip` backup artifact (plain or encrypted). |
+| `confirm_apply` | bool | `false` | Set `true` to apply mutations. `false` (default) runs a counts-only dry-run; no changes are made. |
+| `passphrase` | string | — | Required when the artifact is encrypted (detected from the file header). **Never logged or echoed.** |
+| `selected_categories` | string (JSON array) | all categories | Comma-separated or JSON list of category keys to restore (e.g. `["m3u_accounts","channels"]`). Omit to restore all. |
+
+#### RestoreReport response shape
+
+```json
+{
+  "is_dry_run": true,
+  "outcome": null,
+  "categories": [
+    {
+      "entity_type": "m3u_account",
+      "created": 0, "updated": 0, "skipped": 0, "failed": 0,
+      "would_create": 3, "would_update": 0, "would_skip": 1,
+      "skip_details": [
+        { "reason": "already_exists_identical", "label": "My Provider", "source_export_id": 42 }
+      ],
+      "failure_details": []
+    }
+  ],
+  "logo_misses": 0,
+  "started_at": "2026-06-28T12:00:00Z",
+  "completed_at": "2026-06-28T12:00:05Z",
+  "notes": ["apply not confirmed — produced a counts-only dry-run; no mutation performed."]
+}
+```
+
+- `is_dry_run: true` → `would_*` counts are populated; `created/updated/skipped/failed` are zero.
+- `is_dry_run: false` → `created/updated/skipped/failed` counts are populated.
+- `outcome` is `null` on a dry-run (a plan has no realized outcome). On an apply: `success`, `partial_failed_rolled_back`, or `failed_rollback_incomplete`.
+- `logo_misses` is an aggregate count of logos that could not be matched or applied.
+
+#### Error responses
+
+| Status | Detail | When |
+|-|-|-|
+| 400 | `"Unsupported backup version"` | Artifact `schema_version` is newer than this ECM build supports. |
+| 400 | `"Backup integrity check failed"` | A member's SHA-256 does not match the manifest. |
+| 400 | `"Backup archive rejected"` | Decompression-bomb check failed (too many entries, too high a ratio, or excessive uncompressed size). |
+| 400 | `"Not a valid ECM backup artifact"` | The artifact is missing `manifest.json`. |
+| 400 | `"Could not decrypt artifact: wrong passphrase or corrupted artifact"` | Passphrase is wrong, or the encrypted artifact is corrupted. The same message is returned for both cases (no oracle). |
+
+### Legacy ZIP/YAML endpoints (pre-v0.18.0 compatibility)
+
+These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` only, no full Dispatcharr configuration round-trip). They remain available for compatibility and are used by the legacy restore-on-first-run wizard.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/backup/create` | Download backup zip of all configuration |
-| `POST /api/backup/restore` | Restore from uploaded backup zip |
-| `POST /api/backup/restore-initial` | Restore from backup during initial setup (no auth) |
-| `GET /api/backup/export-sections` | List available YAML export sections |
-| `POST /api/backup/export` | Export selected sections as YAML |
-| `POST /api/backup/import` | Import from YAML backup |
-| `GET /api/backup/saved` | List saved YAML backup files |
-| `DELETE /api/backup/saved/{filename}` | Delete a saved YAML backup file |
+| `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). |
+| `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. |
+| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup (no auth required). |
+| `GET /api/backup/export-sections` | List available YAML export sections. |
+| `POST /api/backup/export` | Export selected sections as a YAML file. |
+| `POST /api/backup/import` | Import from a YAML backup file. |
+| `POST /api/backup/validate` | Validate a YAML export file and return section item counts. |
+| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). |
+| `POST /api/backup/save` | Save a legacy ZIP backup to `/config/backups/`. |
+| `POST /api/backup/restore-saved` | Restore from a saved legacy ZIP backup by filename. |
+
+### Cloud destination endpoints
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). |
+| `POST /api/cloud-targets` | Create a cloud storage target. |
+| `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
+| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. |
+| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. |
+| `POST /api/cloud-targets/{id}/test` | Test connectivity to a cloud storage target. |
+
+**Supported provider types in v0.18.0:** `s3` (AWS S3, MinIO, Backblaze B2), `gdrive` (Google Drive), `webdav`. Adapters for `onedrive` and `dropbox` exist in the codebase but are deferred — a configured target of a deferred provider type produces a per-target failure on each backup run.
+
+See the [user guide](user_guide/backup-restore/configure-cloud-destinations.md) for per-provider credential fields.
 
 ## Authentication
 

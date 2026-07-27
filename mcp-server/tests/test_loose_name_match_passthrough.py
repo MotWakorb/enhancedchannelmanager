@@ -17,7 +17,7 @@ def _make_mock(return_value=None):
 
 
 def _register_and_get_mcp():
-    from tools.auto_creation import register
+    from tools.channel_pipeline import register
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("test")
@@ -44,7 +44,7 @@ class TestLooseNameMatchPassthroughCreate:
             "loose_name_match": True,
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "create_auto_creation_rule",
                 {
@@ -70,7 +70,7 @@ class TestLooseNameMatchPassthroughCreate:
             "loose_name_match": False,
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "create_auto_creation_rule",
                 {
@@ -97,7 +97,7 @@ class TestLooseNameMatchPassthroughUpdate:
             "loose_name_match": True,
         }
 
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
                 "update_auto_creation_rule",
                 {"rule_id": 9, "actions": [action]},

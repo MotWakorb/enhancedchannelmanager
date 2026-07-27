@@ -362,6 +362,8 @@ class TestRefreshVOD:
             response = await async_client.post("/api/m3u/accounts/1/refresh-vod")
 
         assert response.status_code == 200
+        assert response.json() == {"status": "refreshing"}
+        mock_client.refresh_m3u_vod.assert_called_once_with(1)
 
 
 class TestGetFilters:
@@ -377,6 +379,8 @@ class TestGetFilters:
             response = await async_client.get("/api/m3u/accounts/1/filters")
 
         assert response.status_code == 200
+        assert response.json() == [{"id": 1, "name": "Sports"}]
+        mock_client.get_m3u_filters.assert_called_once_with(1)
 
 
 class TestCreateFilter:
@@ -394,6 +398,8 @@ class TestCreateFilter:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 2, "name": "New Filter"}
+        mock_client.create_m3u_filter.assert_called_once_with(1, {"name": "New Filter"})
 
 
 class TestUpdateFilter:
@@ -411,6 +417,8 @@ class TestUpdateFilter:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 1, "name": "Updated"}
+        mock_client.update_m3u_filter.assert_called_once_with(1, 1, {"name": "Updated"})
 
 
 class TestDeleteFilter:
@@ -442,6 +450,8 @@ class TestGetProfiles:
             response = await async_client.get("/api/m3u/accounts/1/profiles/")
 
         assert response.status_code == 200
+        assert response.json() == [{"id": 1, "name": "Default"}]
+        mock_client.get_m3u_profiles.assert_called_once_with(1)
 
 
 class TestCreateProfile:
@@ -459,6 +469,8 @@ class TestCreateProfile:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 2, "name": "New Profile"}
+        mock_client.create_m3u_profile.assert_called_once_with(1, {"name": "New Profile"})
 
 
 class TestGetProfile:
@@ -474,6 +486,8 @@ class TestGetProfile:
             response = await async_client.get("/api/m3u/accounts/1/profiles/1/")
 
         assert response.status_code == 200
+        assert response.json() == {"id": 1, "name": "Default"}
+        mock_client.get_m3u_profile.assert_called_once_with(1, 1)
 
 
 class TestUpdateProfile:
@@ -491,6 +505,8 @@ class TestUpdateProfile:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 1, "name": "Updated"}
+        mock_client.update_m3u_profile.assert_called_once_with(1, 1, {"name": "Updated"})
 
 
 class TestDeleteProfile:
@@ -514,9 +530,10 @@ class TestUpdateGroupSettings:
 
     @pytest.mark.asyncio
     async def test_updates_group_settings(self, async_client):
-        """Updates M3U group settings."""
+        """Updates M3U group settings and returns the result from update_m3u_group_settings."""
         mock_client = AsyncMock()
-        mock_client.get_m3u_account.return_value = {"id": 1, "name": "IPTV", "server_groups": []}
+        mock_client.get_m3u_account.return_value = {"id": 1, "name": "IPTV", "channel_groups": []}
+        mock_client.get_channel_groups.return_value = []
         mock_client.update_m3u_group_settings.return_value = {"id": 1, "server_groups": []}
 
         with patch("routers.m3u.get_client", return_value=mock_client), \
@@ -526,6 +543,11 @@ class TestUpdateGroupSettings:
             })
 
         assert response.status_code == 200
+        # GH #720 Part B (#9): the Dispatcharr result is passed through with an
+        # additive per-group profile-apply summary (empty here — no
+        # group_settings with a selection were edited).
+        assert response.json() == {"id": 1, "server_groups": [], "ecm_profile_apply": []}
+        mock_client.update_m3u_group_settings.assert_called_once_with(1, {"auto_channel_sync": True})
 
 
 class TestGetServerGroups:
@@ -541,6 +563,8 @@ class TestGetServerGroups:
             response = await async_client.get("/api/m3u/server-groups")
 
         assert response.status_code == 200
+        assert response.json() == [{"id": 1, "name": "Sports"}]
+        mock_client.get_server_groups.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_client_error(self, async_client):
@@ -570,6 +594,8 @@ class TestCreateServerGroup:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 2, "name": "News"}
+        mock_client.create_server_group.assert_called_once_with({"name": "News"})
 
 
 class TestUpdateServerGroup:
@@ -589,6 +615,8 @@ class TestUpdateServerGroup:
             })
 
         assert response.status_code == 200
+        assert response.json() == {"id": 1, "name": "New"}
+        mock_client.update_server_group.assert_called_once_with(1, {"name": "New"})
 
 
 class TestDeleteServerGroup:

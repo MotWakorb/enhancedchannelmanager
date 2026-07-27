@@ -94,7 +94,8 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 | DBAS Import Threat Model | `docs/security/threat_model_dbas_import.md` |
 | CodeQL Configuration | `docs/security/codeql-config.md` |
 | Normalization (user + dev guide) | `docs/normalization.md` |
-| Auto-Creation Rule Analyzer | `docs/auto_creation_rule_analyzer.md` |
+| Channel Pipeline Rule Analyzer | `docs/channel_pipeline_rule_analyzer.md` |
+| Event Sync (user + dev guide) | `docs/event_sync.md` |
 | Versioning Scheme | `docs/versioning.md` |
 | API Reference | `docs/api.md` |
 | SLOs | `docs/sre/slos.md` |
@@ -106,7 +107,7 @@ Exception — governance cadence rules from ADRs (e.g., ADR-005's monthly-then-q
 
 For codebase-architecture questions (how X connects to Y, what a component's role is, where the hot path runs), the order of precedence is:
 
-1. **`docs/architecture.md`** — the hand-curated system overview + auto-creation pipeline internals + MCP + external API contract.
+1. **`docs/architecture.md`** — the hand-curated system overview + Channel Pipeline internals + MCP + external API contract.
 2. **`graphify-out/memory/*.md`** — saved Q&A from past graph traces. Each file is one question + answer. Greppable. Cheap to read.
 3. **Rebuild the graph** only if (1) and (2) don't cover it: `/graphify backend frontend docs`. Then query via `graphify query "..."` / `graphify explain "NodeName"` / `graphify path "A" "B"`.
 
@@ -132,11 +133,15 @@ docker cp <local-file> ecm-ecm-1:/app/<destination-path>
 
 **Frontend deploy:**
 ```bash
+scripts/deploy-frontend.sh          # build + clean stale assets + copy, in one step
+```
+The script bakes in the stale-asset cleanup below so it can't be skipped. Equivalent manual sequence (use `--no-build` to skip the rebuild):
+```bash
 cd frontend && npm run build
 docker exec ecm-ecm-1 sh -c 'rm -rf /app/static/assets/*'
 docker cp dist/. ecm-ecm-1:/app/static/
 ```
-Always clean `/app/static/assets/` before copying — `docker cp` only adds files, never removes stale bundles.
+Always clean `/app/static/assets/` before copying — `docker cp` only adds files, never removes stale bundles. Set `ECM_CONTAINER` to target a container other than `ecm-ecm-1`.
 
 **Backend deploy** (to `/app/`, NOT `/app/backend/`):
 ```bash
@@ -144,6 +149,38 @@ docker cp backend/main.py ecm-ecm-1:/app/main.py
 docker cp backend/routers/. ecm-ecm-1:/app/routers/
 docker restart ecm-ecm-1
 ```
+
+**Coupled backend/frontend changes:** When a frontend build depends on a new or
+changed backend route, deploy the backend first and wait for its restart to
+complete before deploying the frontend:
+
+```bash
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+ready=0
+for attempt in $(seq 1 30); do
+  if docker exec ecm-ecm-1 python -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=2)" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "ECM backend did not become ready; frontend was not deployed" >&2
+  docker logs --tail 100 ecm-ecm-1 >&2
+  exit 1
+fi
+scripts/deploy-frontend.sh
+```
+
+This order prevents the new frontend from calling an API contract that the
+running backend does not yet provide. The readiness loop is bounded to 30
+attempts with a two-second request timeout; `/api/health/ready` is public, so
+the in-container probe needs no credentials. Roll back in reverse dependency order:
+restore and deploy the previous frontend build first, then restore the previous
+backend files and restart `ecm-ecm-1`. Do not roll back the backend while the
+dependent frontend is still live.
 
 **Python packages** use `uv` (not pip): `docker exec ecm-ecm-1 uv pip install <package>`
 

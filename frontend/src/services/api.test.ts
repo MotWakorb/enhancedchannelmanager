@@ -12,9 +12,15 @@ import {
   reorderChannelStreams,
   deleteChannel,
   bulkCommit,
+  applyGuideMigration,
   getChannelMergeCandidates,
+  getPendingMergesSnapshot,
   // Compute sort
   computeSort,
+  // Stale streams (enhancedchannelmanager-n4g7g)
+  getStaleStreams,
+  // Provider-stale stream ids (enhancedchannelmanager-po78p / GH #696)
+  getStaleStreamIds,
   // Enhanced stats (v0.11.0)
   getBandwidthStats,
   getUniqueViewersSummary,
@@ -37,11 +43,14 @@ import {
   updateAlertMethod,
   // Logos (bd-nh50y debug-logging contract)
   getAllLogos,
+  // Logos sort/filter query params (bead enhancedchannelmanager-09x38.13)
+  getLogos,
   // Integration test-connection wire-format guards (bd-8zi93)
   testEmbyConnection,
   testPlexConnection,
   testJellyfinConnection,
 } from './api';
+import * as api from './api';
 import { logger } from '../utils/logger';
 
 // Start/stop the mock server for these tests
@@ -202,6 +211,32 @@ describe('API Service', () => {
       expect(requestUrl).toContain('stream_name=CNN');
       expect(requestUrl).not.toContain('group_id=');
     });
+  });
+
+  it('gets the complete pending-merges snapshot from the static snapshot route', async () => {
+    server.use(
+      http.get('/api/channel-merges/snapshot', () =>
+        HttpResponse.json({ merges: [], total: 0 }),
+      ),
+    );
+    await expect(getPendingMergesSnapshot()).resolves.toEqual({
+      merges: [],
+      total: 0,
+    });
+  });
+
+  it('scopes a pending-merges snapshot to the requested group', async () => {
+    let requestUrl = '';
+    server.use(
+      http.get('/api/channel-merges/snapshot', ({ request }) => {
+        requestUrl = request.url;
+        return HttpResponse.json({ merges: [], total: 0 });
+      }),
+    );
+
+    await getPendingMergesSnapshot({ groupId: 17 });
+
+    expect(requestUrl).toContain('group_id=17');
   });
 
   describe('addStreamToChannel', () => {
@@ -417,6 +452,297 @@ describe('API Service', () => {
           operations: [{ type: 'createChannel', tempId: -1, name: 'X' }],
         })
       ).rejects.toThrow(/dispatcharr unreachable/);
+    });
+  });
+
+  describe('applyGuideMigration (202+poll)', () => {
+    const oneReadyPreview = {
+      target_source_id: 2,
+      target_source_name: 'SD',
+      preview_token: 'signed',
+      counts: {
+        ready: 1,
+        already_target: 0,
+        unassigned: 0,
+        missing_lcn: 0,
+        missing_target: 0,
+        ambiguous_target: 0,
+        unsupported_origin: 0,
+      },
+      rows: [
+        {
+          channel_id: 7,
+          channel_name: 'A',
+          current_epg_data_id: 11,
+          current_source_id: 1,
+          current_source_name: 'XML',
+          lcn: '1',
+          target_epg_data_id: 21,
+          target_name: 'A',
+          current_tvg_id: 'a',
+          target_tvg_id: '1',
+          status: 'ready' as const,
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        'setTimeout',
+        ((fn: () => void) => {
+          fn();
+          return 0;
+        }) as unknown as typeof setTimeout
+      );
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('reports partial progress and returns the terminal result', async () => {
+      let poll = 0;
+      const result = {
+        mutated: 2,
+        updated: 1,
+        audit_failed: 0,
+        skipped: 0,
+        failed: 1,
+        results: [
+          { channel_id: 7, status: 'updated' as const },
+          { channel_id: 8, status: 'failed' as const },
+        ],
+        batch_id: '0123456789abcdef0123456789abcdef',
+      };
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json(
+            { batch_id: result.batch_id, status: 'running' },
+            { status: 202 }
+          )
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          poll += 1;
+          if (poll === 1) {
+            return HttpResponse.json({
+              batch_id: result.batch_id,
+              status: 'running',
+              processed: 1,
+              total: 2,
+              result: { ...result, results: result.results.slice(0, 1), failed: 0 },
+            });
+          }
+          return HttpResponse.json({
+            batch_id: result.batch_id,
+            status: 'completed',
+            processed: 2,
+            total: 2,
+            result,
+          });
+        })
+      );
+      const progress = vi.fn();
+      const resolved = await applyGuideMigration(
+        {
+          target_source_id: 2,
+          target_source_name: 'SD',
+          preview_token: 'signed',
+          counts: {
+            ready: 2,
+            already_target: 0,
+            unassigned: 0,
+            missing_lcn: 0,
+            missing_target: 0,
+            ambiguous_target: 0,
+            unsupported_origin: 0,
+          },
+          rows: [
+            {
+              channel_id: 7,
+              channel_name: 'A',
+              current_epg_data_id: 11,
+              current_source_id: 1,
+              current_source_name: 'XML',
+              lcn: '1',
+              target_epg_data_id: 21,
+              target_name: 'A',
+              current_tvg_id: 'a',
+              target_tvg_id: '1',
+              status: 'ready',
+            },
+            {
+              channel_id: 8,
+              channel_name: 'B',
+              current_epg_data_id: 12,
+              current_source_id: 1,
+              current_source_name: 'XML',
+              lcn: '2',
+              target_epg_data_id: 22,
+              target_name: 'B',
+              current_tvg_id: 'b',
+              target_tvg_id: '2',
+              status: 'ready',
+            },
+          ],
+        },
+        progress
+      );
+      expect(progress).toHaveBeenCalledTimes(3);
+      expect(progress.mock.calls[0][0].processed).toBe(0);
+      expect(progress.mock.calls[1][0].processed).toBe(1);
+      expect(resolved).toEqual(result);
+    });
+
+    it('continues beyond the former one-hour wall-clock cutoff', async () => {
+      const batchId = '11111111111111111111111111111111';
+      let polls = 0;
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(7_200_000);
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          polls += 1;
+          const result = {
+            mutated: 1,
+            updated: 1,
+            audit_failed: 0,
+            skipped: 0,
+            failed: 0,
+            results: [{ channel_id: 7, status: 'updated' as const }],
+            batch_id: batchId,
+          };
+          return HttpResponse.json({
+            batch_id: batchId,
+            status: polls < 3 ? 'running' : 'completed',
+            processed: polls < 3 ? 0 : 1,
+            total: 1,
+            result,
+          });
+        })
+      );
+      const result = await applyGuideMigration(oneReadyPreview);
+      expect(polls).toBe(3);
+      expect(result.updated).toBe(1);
+    });
+
+    it('surfaces terminal failure with the known batch and reconciliation guidance', async () => {
+      const batchId = '22222222222222222222222222222222';
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({
+            batch_id: batchId,
+            status: 'failed',
+            processed: 0,
+            total: 1,
+            result: {
+              mutated: 0,
+              updated: 0,
+              audit_failed: 0,
+              skipped: 0,
+              failed: 0,
+              results: [],
+              batch_id: batchId,
+            },
+            error: 'Guide migration failed.',
+          })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview)).rejects.toThrow(
+        new RegExp(`${batchId}.*fresh preview.*Dispatcharr`, 'i')
+      );
+    });
+
+    it('retains the batch and partial progress across a transient poll error', async () => {
+      const batchId = '33333333333333333333333333333333';
+      let polls = 0;
+      const progress = vi.fn();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () => {
+          polls += 1;
+          if (polls === 2) {
+            return HttpResponse.json({ detail: 'temporary outage' }, { status: 503 });
+          }
+          const completed = polls === 3;
+          return HttpResponse.json({
+            batch_id: batchId,
+            status: completed ? 'completed' : 'running',
+            processed: completed ? 1 : 0,
+            total: 1,
+            result: {
+              mutated: completed ? 1 : 0,
+              updated: completed ? 1 : 0,
+              audit_failed: 0,
+              skipped: 0,
+              failed: 0,
+              results: completed ? [{ channel_id: 7, status: 'updated' }] : [],
+              batch_id: batchId,
+            },
+          });
+        })
+      );
+      const result = await applyGuideMigration(oneReadyPreview, progress);
+      expect(result.batch_id).toBe(batchId);
+      expect(progress.mock.calls.some(([value]) => value.batch_id === batchId)).toBe(true);
+      expect(polls).toBe(3);
+    });
+
+    it('turns restart 404 into actionable guidance without losing the batch', async () => {
+      const batchId = '44444444444444444444444444444444';
+      const progress = vi.fn();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({ detail: 'Guide migration job not found.' }, { status: 404 })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview, progress)).rejects.toThrow(
+        new RegExp(`${batchId}.*restarted.*Dispatcharr`, 'i')
+      );
+      expect(progress).toHaveBeenCalledWith(
+        expect.objectContaining({ batch_id: batchId, processed: 0 })
+      );
+    });
+
+    it('surfaces a non-transient poll error with the accepted batch', async () => {
+      const batchId = '66666666666666666666666666666666';
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        ),
+        http.get('/api/epg/migration/apply/:batchId', () =>
+          HttpResponse.json({ detail: 'Permission denied' }, { status: 403 })
+        )
+      );
+      await expect(applyGuideMigration(oneReadyPreview)).rejects.toThrow(
+        new RegExp(`${batchId}.*Permission denied.*Dispatcharr`, 'i')
+      );
+    });
+
+    it('aborts accepted polling without waiting for a timer', async () => {
+      const batchId = '55555555555555555555555555555555';
+      const controller = new AbortController();
+      server.use(
+        http.post('/api/epg/migration/apply', () =>
+          HttpResponse.json({ batch_id: batchId, status: 'running' }, { status: 202 })
+        )
+      );
+      await expect(
+        applyGuideMigration(
+          oneReadyPreview,
+          () => controller.abort(),
+          controller.signal
+        )
+      ).rejects.toMatchObject({ name: 'AbortError' });
     });
   });
 
@@ -1033,6 +1359,108 @@ describe('API Service', () => {
     });
   });
 
+  describe('getStaleStreams', () => {
+    it('defaults to a 7-day threshold and returns the parsed response', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/stream-stats/stale', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({
+            streams: [
+              {
+                stream_id: 10,
+                stream_name: 'ESPN Feed',
+                last_probed: null,
+                provider_last_seen: null,
+                reasons: ['not_probed_recently'],
+                channels: [],
+              },
+            ],
+            threshold_days: 7,
+          });
+        })
+      );
+
+      const result = await getStaleStreams();
+
+      expect(requestUrl?.searchParams.get('days')).toBe('7');
+      expect(result.threshold_days).toBe(7);
+      expect(result.streams).toHaveLength(1);
+      expect(result.streams[0].reasons).toEqual(['not_probed_recently']);
+    });
+
+    it('passes a custom days threshold through as a query param', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/stream-stats/stale', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({ streams: [], threshold_days: 14 });
+        })
+      );
+
+      await getStaleStreams(14);
+
+      expect(requestUrl?.searchParams.get('days')).toBe('14');
+    });
+
+    it('handles network error', async () => {
+      server.use(
+        http.get('/api/stream-stats/stale', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(getStaleStreams()).rejects.toThrow();
+    });
+  });
+
+  describe('getStaleStreamIds', () => {
+    it('fetches without bypass_cache by default', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/streams/stale-ids', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({
+            stale_stream_ids: [1, 3],
+            last_seen: { '1': '2026-07-01T00:00:00Z', '3': null },
+            count: 2,
+          });
+        })
+      );
+
+      const result = await getStaleStreamIds();
+
+      expect(requestUrl?.searchParams.has('bypass_cache')).toBe(false);
+      expect(result.stale_stream_ids).toEqual([1, 3]);
+      expect(result.count).toBe(2);
+      expect(result.last_seen['1']).toBe('2026-07-01T00:00:00Z');
+    });
+
+    it('passes bypass_cache=true when requested', async () => {
+      let requestUrl: URL | undefined;
+      server.use(
+        http.get('/api/streams/stale-ids', ({ request }) => {
+          requestUrl = new URL(request.url);
+          return HttpResponse.json({ stale_stream_ids: [], last_seen: {}, count: 0 });
+        })
+      );
+
+      await getStaleStreamIds(true);
+
+      expect(requestUrl?.searchParams.get('bypass_cache')).toBe('true');
+    });
+
+    it('handles network error', async () => {
+      server.use(
+        http.get('/api/streams/stale-ids', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(getStaleStreamIds()).rejects.toThrow();
+    });
+  });
+
   // ===========================================================================
   // Lookup tables (v0.14.0 dummy EPG template engine)
   // ===========================================================================
@@ -1426,6 +1854,56 @@ describe('API Service', () => {
     });
   });
 
+  // Logo Manager sort/unused-filter query params (bead
+  // enhancedchannelmanager-09x38.13). Locks the wire contract getLogos()
+  // sends so LogoManagerTab's server-side sort/filter stays correct.
+  describe('getLogos sort/filter query params (bead 09x38.13)', () => {
+    it('sends sort_by/sort_order/unused_only when provided', async () => {
+      let capturedUrl: URL | null = null;
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          capturedUrl = new URL(request.url);
+          return HttpResponse.json({ results: [], count: 0, next: null, previous: null });
+        }),
+      );
+
+      await getLogos({
+        page: 2,
+        pageSize: 50,
+        search: 'espn',
+        sortBy: 'channel_count',
+        sortOrder: 'asc',
+        unusedOnly: true,
+      });
+
+      expect(capturedUrl).not.toBeNull();
+      const params = capturedUrl!.searchParams;
+      expect(params.get('page')).toBe('2');
+      expect(params.get('page_size')).toBe('50');
+      expect(params.get('search')).toBe('espn');
+      expect(params.get('sort_by')).toBe('channel_count');
+      expect(params.get('sort_order')).toBe('asc');
+      expect(params.get('unused_only')).toBe('true');
+    });
+
+    it('omits sort/filter params entirely when not requested', async () => {
+      let capturedUrl: URL | null = null;
+      server.use(
+        http.get('/api/channels/logos', ({ request }) => {
+          capturedUrl = new URL(request.url);
+          return HttpResponse.json({ results: [], count: 0, next: null, previous: null });
+        }),
+      );
+
+      await getLogos({ page: 1, pageSize: 50 });
+
+      expect(capturedUrl).not.toBeNull();
+      const params = capturedUrl!.searchParams;
+      expect(params.has('sort_by')).toBe(false);
+      expect(params.has('unused_only')).toBe(false);
+    });
+  });
+
   // Wire-format guards for the Settings → Integrations test-connection
   // endpoints (bd-8zi93). The backend Pydantic schemas pick specific field
   // names per integration:
@@ -1485,6 +1963,53 @@ describe('API Service', () => {
         base_url: 'http://jellyfin.local:8096',
         api_key: 'jellyfin-api-key',
       });
+    });
+  });
+
+  // GH #720 Part B (#9) — profile-apply summary interpretation. These pure
+  // functions drive the incomplete-apply warning on EVERY save path (primary,
+  // linked cascade, Sync Groups union), so they are unit-tested directly.
+  describe('profileApplyIncomplete / profileApplyWarningMessage', () => {
+    it('an empty or undefined summary is a clean no-op (not incomplete)', () => {
+      expect(api.profileApplyIncomplete(undefined)).toBe(false);
+      expect(api.profileApplyIncomplete([])).toBe(false);
+      expect(api.profileApplyWarningMessage([])).toBeNull();
+    });
+
+    it('a clean reconciled-only summary is not incomplete', () => {
+      const s = [{ status: 'reconciled' }, { status: 'no_selection' }];
+      expect(api.profileApplyIncomplete(s)).toBe(false);
+      expect(api.profileApplyWarningMessage(s)).toBeNull();
+    });
+
+    it.each([
+      ['partial_failure', [{ status: 'partial_failure' }], 'applying some channel profiles failed'],
+      ['degraded', [{ status: 'degraded' }], 'could not be fully enforced'],
+      ['error-with-detail', [{ status: 'error', error: 'account 22 not updated — Re-save' }], 'account 22 not updated'],
+      ['error-no-detail', [{ status: 'error' }], 'hit an error'],
+      ['stale_selection', [{ status: 'stale_selection' }], 'no longer exist'],
+      ['conflict', [{ status: 'reconciled', conflict: true }], 'conflicting profile selections'],
+      ['failed_profile_ids', [{ status: 'reconciled', failed_profile_ids: [2] }], 'applying some channel profiles failed'],
+    ])('%s is incomplete with status-specific guidance', (_label, summary, needle) => {
+      expect(api.profileApplyIncomplete(summary as never)).toBe(true);
+      expect(api.profileApplyWarningMessage(summary as never)).toContain(needle);
+    });
+
+    it('accumulated summaries (multi save path) surface the worst status; stale outranks partial', () => {
+      // Models the linked-cascade / Sync-Groups accumulation: one path partial,
+      // another stale -> the actionable (stale) guidance wins.
+      const accumulated = [
+        { status: 'partial_failure' },
+        { status: 'stale_selection' },
+      ];
+      expect(api.profileApplyWarningMessage(accumulated)).toContain('no longer exist');
+    });
+
+    it('stale/conflict guidance does NOT promise auto-retry (which cannot fix them)', () => {
+      expect(api.profileApplyWarningMessage([{ status: 'stale_selection' }]))
+        .not.toContain('retry automatically');
+      expect(api.profileApplyWarningMessage([{ status: 'reconciled', conflict: true }]))
+        .not.toContain('retry automatically');
     });
   });
 });

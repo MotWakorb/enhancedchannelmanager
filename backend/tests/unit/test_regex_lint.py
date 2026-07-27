@@ -26,6 +26,7 @@ from regex_lint import (
     lint_pattern,
     lint_pattern_advisory,
     lint_pattern_fields,
+    lint_replacement_group_refs,
     lint_substitution_pairs,
     violations_to_http_detail,
 )
@@ -425,6 +426,250 @@ class TestBulkHelpers:
         ])
         assert len(viols) == 1
         assert viols[0].field == "substitution_pairs[1].find"
+
+
+# =========================================================================
+# Date-token expansion before compile (enhancedchannelmanager-qa43j).
+#
+# {date}/{today}/{date+Nd}/{date-N}/{date:FORMAT} are a documented,
+# runtime-supported feature of channel_pipeline_evaluator — the evaluator
+# expands them BEFORE compiling a condition's regex value. Prior to this
+# fix, lint_conditions_json compiled the RAW value, so these tokens were
+# rejected as invalid regex ({...} = quantifier syntax) even though the
+# rule would have worked fine at run time. The four auto-creation regex
+# condition types must now mirror the evaluator's expansion; normalization's
+# ``regex`` type must NOT (it has no date-expansion feature at run time).
+# =========================================================================
+
+
+class TestDateTokenExpansionBeforeCompile:
+    @pytest.mark.parametrize("ctype", [
+        "stream_name_matches",
+        "stream_group_matches",
+        "tvg_id_matches",
+        "channel_exists_matching",
+    ])
+    @pytest.mark.parametrize("value", [
+        "{date}",
+        "{date+3d}",
+        "{date+2w}",
+        "{date-1}",
+        "{date:%Y-%m-%d}",
+        "ESPN-{date+3d}-HD",  # token embedded in a larger pattern
+    ])
+    def test_date_tokens_accepted_for_regex_condition_types(self, ctype, value):
+        """Every auto-creation regex condition type accepts every
+        documented date-token shape — routing matches the evaluator."""
+        viols = lint_conditions_json([{"type": ctype, "value": value}])
+        assert viols == [], f"{ctype!r}/{value!r} unexpectedly rejected: {viols}"
+
+    def test_normalization_regex_type_does_not_expand_date_tokens(self):
+        """Normalization's ``regex`` condition type has no runtime date
+        expansion — a raw {date+3d} there is genuinely invalid regex and
+        must still be rejected."""
+        viols = lint_conditions_json([{"type": "regex", "value": "{date+3d}"}])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    def test_still_rejects_genuinely_invalid_regex(self):
+        """A date token expanding successfully must not mask an
+        unrelated, genuinely broken pattern elsewhere in the value."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": "{date+3d}(unbalanced"}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    @pytest.mark.parametrize("value", ["{date+}", "{dat}", "{da}"])
+    def test_malformed_tokens_still_rejected(self, value):
+        """Malformed tokens (bad offset syntax, misspelled keyword) don't
+        match the expansion regex, so they pass through unexpanded — same
+        as at runtime — and correctly fail compile, matching the
+        evaluator's silent-never-match runtime behavior for the same
+        input (safe_regex.search returns None on a compile error)."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": value}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_COMPILE_ERROR"
+
+    def test_date_range_recurses_into_logical_operators(self):
+        """Date tokens inside AND/OR/NOT sub-conditions are expanded too —
+        the recursive walk must apply the same per-type routing at every
+        depth."""
+        viols = lint_conditions_json([
+            {
+                "type": "and",
+                "conditions": [
+                    {"type": "stream_name_matches", "value": "{date+3d}"},
+                ],
+            }
+        ])
+        assert viols == []
+
+    def test_oversize_expansion_of_large_date_range_is_rejected(self):
+        """A date range near the 90-day cap can expand past the 500-char
+        pattern-length cap. safe_regex.search enforces the SAME cap at
+        run time (returns None, never matches) — so rejecting this at
+        save time is correct, not a regression: the rule would silently
+        never fire if saved."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_matches", "value": "{date+90d}"}
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_TOO_LONG"
+
+    def test_contains_condition_types_are_not_regex_linted(self):
+        """stream_name_contains / stream_group_contains never go through
+        lint_pattern at all (they're substring compares, not regex) — a
+        date token there is a no-op either way. Documents the existing,
+        unchanged behavior so a future change to the routing table
+        notices if this assumption breaks."""
+        viols = lint_conditions_json([
+            {"type": "stream_name_contains", "value": "{date+3d}"},
+        ])
+        assert viols == []
+
+    def test_advisory_path_routes_date_tokens_identically(self):
+        """lint_conditions_json_advisory must not emit a false advisory
+        for a date token it failed to expand."""
+        viols = lint_conditions_json_advisory([
+            {"type": "stream_name_matches", "value": "{date+3d}"},
+        ])
+        assert viols == []
+
+
+# =========================================================================
+# Replacement group references (enhancedchannelmanager-2uwi3).
+# =========================================================================
+
+
+class TestReplacementGroupRefs:
+    """``$N`` references in a name-transform replacement must not exceed the
+    pattern's capture-group count. At execution time the pipeline converts
+    ``$N`` to Python ``\\N`` and the ``regex`` library raises lazily (only on
+    matching inputs) — which safe_regex swallows into a silent per-stream
+    no-op. Save-time cross-checking closes that class (bead 2uwi3)."""
+
+    # ---- the exact user-reported scenario ----
+
+    def test_out_of_range_ref_flagged_with_actionable_message(self):
+        viols = lint_replacement_group_refs(
+            r"(\w+) (\w+) (\w+)", "$2 $1 $3 $4", field="repl"
+        )
+        assert len(viols) == 1
+        v = viols[0]
+        assert v.code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert v.severity == "error"
+        assert v.field == "repl"
+        assert "references group 4 but pattern defines 3 capture groups" in v.message
+
+    def test_in_range_refs_pass(self):
+        assert lint_replacement_group_refs(r"(\w+) (\w+) (\w+)", "$2 $1 $3") == []
+
+    def test_singular_group_count_message(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$2")
+        assert len(viols) == 1
+        assert "references group 2 but pattern defines 1 capture group" in viols[0].message
+
+    def test_zero_capture_groups_message(self):
+        viols = lint_replacement_group_refs(r"^US:\s*", "$1")
+        assert len(viols) == 1
+        assert "references group 1 but pattern defines 0 capture groups" in viols[0].message
+
+    # ---- $0 / leading-zero semantics: the executor's $N→\N conversion
+    # turns these into Python OCTAL escapes (control characters), never a
+    # group reference — reject with an explanation ----
+
+    def test_dollar_zero_rejected(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$0")
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert "$0" in viols[0].message
+        assert "numbered from $1" in viols[0].message
+
+    def test_leading_zero_ref_rejected(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$01")
+        assert len(viols) == 1
+        assert "$01" in viols[0].message
+
+    # ---- non-reference dollars and edge shapes ----
+
+    def test_literal_dollar_not_flagged(self):
+        assert lint_replacement_group_refs(r"(\w+)", "price$ $1 US$") == []
+
+    def test_empty_or_none_replacement_passes(self):
+        assert lint_replacement_group_refs(r"(\w+)", "") == []
+        assert lint_replacement_group_refs(r"(\w+)", None) == []
+
+    def test_none_pattern_passes(self):
+        assert lint_replacement_group_refs(None, "$4") == []
+
+    def test_uncompilable_pattern_not_double_reported(self):
+        """Compile errors are lint_pattern's job — no group-ref finding."""
+        assert lint_replacement_group_refs("[invalid(", "$4") == []
+
+    def test_named_groups_count_toward_group_total(self):
+        assert lint_replacement_group_refs(r"(?P<x>\w+)(\d+)", "$2 $1") == []
+        viols = lint_replacement_group_refs(r"(?P<x>\w+)(\d+)", "$3")
+        assert len(viols) == 1
+        assert "pattern defines 2 capture groups" in viols[0].message
+
+    def test_non_capturing_groups_do_not_count(self):
+        viols = lint_replacement_group_refs(r"(?:\w+) (\w+)", "$2")
+        assert len(viols) == 1
+        assert "pattern defines 1 capture group" in viols[0].message
+
+    def test_repeated_bad_ref_reported_once(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$4 $4 $4")
+        assert len(viols) == 1
+
+    def test_multiple_distinct_bad_refs_each_reported(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$4 $7")
+        assert len(viols) == 2
+
+    def test_multi_digit_ref_validated_numerically(self):
+        viols = lint_replacement_group_refs(r"(\w+)", "$12")
+        assert len(viols) == 1
+        assert "references group 12" in viols[0].message
+
+    # ---- wiring through lint_actions_json (save-time 422 path) ----
+
+    def test_lint_actions_json_flags_out_of_range_ref_create_channel(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$2 $1 $3 $4",
+            }
+        ])
+        assert len(viols) == 1
+        assert viols[0].code == "REGEX_GROUP_REF_OUT_OF_RANGE"
+        assert viols[0].field == "actions[0].name_transform_replacement"
+
+    def test_lint_actions_json_flags_out_of_range_ref_create_group(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_group",
+                "name_template": "{stream_group}",
+                "name_transform_pattern": r"^(\w+)",
+                "name_transform_replacement": "$2",
+            }
+        ])
+        assert len(viols) == 1
+        assert viols[0].field == "actions[0].name_transform_replacement"
+
+    def test_lint_actions_json_valid_refs_pass(self):
+        viols = lint_actions_json([
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+)",
+                "name_transform_replacement": "$2 $1",
+            }
+        ])
+        assert viols == []
 
 
 # =========================================================================

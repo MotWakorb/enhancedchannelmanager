@@ -1,0 +1,1386 @@
+"""
+Unit tests for the channel_pipeline_schema module.
+
+Tests condition/action validation, parsing, and template expansion.
+"""
+import pytest
+
+from channel_pipeline_schema import (
+    Condition,
+    ConditionType,
+    Action,
+    ActionType,
+    TemplateVariables,
+    validate_rule,
+    parse_conditions,
+    parse_actions,
+)
+
+
+class TestConditionFromDict:
+    """Tests for Condition.from_dict()."""
+
+    def test_simple_condition(self):
+        """Parses a simple condition."""
+        data = {"type": "stream_name_contains", "value": "Sports"}
+        cond = Condition.from_dict(data)
+        assert cond.type == "stream_name_contains"
+        assert cond.value == "Sports"
+
+    def test_condition_with_case_sensitive(self):
+        """Parses condition with case_sensitive flag."""
+        data = {"type": "stream_name_matches", "value": "ESPN.*", "case_sensitive": True}
+        cond = Condition.from_dict(data)
+        assert cond.case_sensitive is True
+
+    def test_condition_with_negate(self):
+        """Parses condition with negate flag."""
+        data = {"type": "has_channel", "value": True, "negate": True}
+        cond = Condition.from_dict(data)
+        assert cond.negate is True
+
+    def test_compound_and_condition(self):
+        """Parses AND compound condition."""
+        data = {
+            "type": "and",
+            "conditions": [
+                {"type": "stream_name_contains", "value": "HD"},
+                {"type": "quality_min", "value": 720}
+            ]
+        }
+        cond = Condition.from_dict(data)
+        assert cond.type == "and"
+        assert len(cond.conditions) == 2
+        assert cond.conditions[0].type == "stream_name_contains"
+        assert cond.conditions[1].type == "quality_min"
+
+    def test_nested_compound_conditions(self):
+        """Parses nested compound conditions."""
+        data = {
+            "type": "and",
+            "conditions": [
+                {"type": "stream_name_contains", "value": "ESPN"},
+                {
+                    "type": "or",
+                    "conditions": [
+                        {"type": "quality_min", "value": 720},
+                        {"type": "stream_name_contains", "value": "HD"}
+                    ]
+                }
+            ]
+        }
+        cond = Condition.from_dict(data)
+        assert cond.type == "and"
+        assert cond.conditions[1].type == "or"
+        assert len(cond.conditions[1].conditions) == 2
+
+    def test_idempotent_from_dict(self):
+        """from_dict returns same object if already a Condition."""
+        original = Condition(type="always")
+        result = Condition.from_dict(original)
+        assert result is original
+
+
+class TestConditionToDict:
+    """Tests for Condition.to_dict()."""
+
+    def test_simple_condition_to_dict(self):
+        """Converts simple condition to dict."""
+        cond = Condition(type="stream_name_contains", value="Sports")
+        result = cond.to_dict()
+        assert result == {"type": "stream_name_contains", "value": "Sports"}
+
+    def test_condition_with_flags_to_dict(self):
+        """Converts condition with flags to dict."""
+        cond = Condition(type="stream_name_matches", value=".*HD$", case_sensitive=True, negate=True)
+        result = cond.to_dict()
+        assert result["case_sensitive"] is True
+        assert result["negate"] is True
+
+    def test_compound_condition_to_dict(self):
+        """Converts compound condition to dict."""
+        cond = Condition(
+            type="and",
+            conditions=[
+                Condition(type="has_channel", value=False),
+                Condition(type="quality_min", value=720)
+            ]
+        )
+        result = cond.to_dict()
+        assert result["type"] == "and"
+        assert len(result["conditions"]) == 2
+
+
+class TestConditionValidation:
+    """Tests for Condition.validate()."""
+
+    def test_valid_stream_name_contains(self):
+        """Validates stream_name_contains condition."""
+        cond = Condition(type="stream_name_contains", value="Sports")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_stream_name_contains_no_value(self):
+        """Rejects stream_name_contains without value."""
+        cond = Condition(type="stream_name_contains", value=None)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "requires a string" in errors[0]
+
+    def test_valid_regex_pattern(self):
+        """Validates valid regex pattern."""
+        cond = Condition(type="stream_name_matches", value="^ESPN.*HD$")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_regex_pattern(self):
+        """Rejects invalid regex pattern."""
+        cond = Condition(type="stream_name_matches", value="[invalid(")
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_valid_quality_min(self):
+        """Validates quality_min condition."""
+        cond = Condition(type="quality_min", value=720)
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_quality_min_negative(self):
+        """Rejects negative quality_min."""
+        cond = Condition(type="quality_min", value=-100)
+        errors = cond.validate()
+        assert len(errors) > 0
+
+    def test_valid_provider_is_single(self):
+        """Validates provider_is with single value."""
+        cond = Condition(type="provider_is", value=1)
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_valid_provider_is_list(self):
+        """Validates provider_is with list value."""
+        cond = Condition(type="provider_is", value=[1, 2, 3])
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_provider_is_string(self):
+        """Rejects provider_is with string value."""
+        cond = Condition(type="provider_is", value="provider1")
+        errors = cond.validate()
+        assert len(errors) > 0
+
+    def test_valid_stream_group_is(self):
+        """Validates stream_group_is with a string value."""
+        cond = Condition(type="stream_group_is", value="USA Sports")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_stream_group_is_no_value(self):
+        """Rejects stream_group_is without a value."""
+        cond = Condition(type="stream_group_is", value=None)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "requires a string" in errors[0]
+
+    def test_invalid_stream_group_is_non_string(self):
+        """Rejects stream_group_is with a non-string value."""
+        cond = Condition(type="stream_group_is", value=123)
+        errors = cond.validate()
+        assert len(errors) > 0
+
+    def test_stream_group_is_not_regex_validated(self):
+        """stream_group_is is exact-match, not regex — regex metacharacters
+        that would fail as a pattern (e.g. an unbalanced bracket) are a
+        valid literal group name and must NOT be rejected."""
+        cond = Condition(type="stream_group_is", value="USA [Sports")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_valid_and_condition(self):
+        """Validates AND with multiple sub-conditions."""
+        cond = Condition(
+            type="and",
+            conditions=[
+                Condition(type="has_channel", value=False),
+                Condition(type="quality_min", value=720)
+            ]
+        )
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_valid_and_single_condition(self):
+        """AND with single sub-condition is valid."""
+        cond = Condition(
+            type="and",
+            conditions=[Condition(type="has_channel", value=False)]
+        )
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_valid_not_condition(self):
+        """Validates NOT with single sub-condition."""
+        cond = Condition(
+            type="not",
+            conditions=[Condition(type="has_channel", value=True)]
+        )
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_invalid_not_multiple_conditions(self):
+        """Rejects NOT with multiple sub-conditions."""
+        cond = Condition(
+            type="not",
+            conditions=[
+                Condition(type="has_channel", value=True),
+                Condition(type="quality_min", value=720)
+            ]
+        )
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "exactly 1" in errors[0]
+
+    def test_unknown_condition_type(self):
+        """Rejects unknown condition type."""
+        cond = Condition(type="unknown_type", value="test")
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Unknown condition type" in errors[0]
+
+    def test_always_condition(self):
+        """Validates always condition."""
+        cond = Condition(type="always")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+    def test_never_condition(self):
+        """Validates never condition."""
+        cond = Condition(type="never")
+        errors = cond.validate()
+        assert len(errors) == 0
+
+
+class TestActionFromDict:
+    """Tests for Action.from_dict()."""
+
+    def test_simple_action(self):
+        """Parses simple action."""
+        data = {"type": "skip"}
+        action = Action.from_dict(data)
+        assert action.type == "skip"
+        assert action.params == {}
+
+    def test_action_with_params(self):
+        """Parses action with parameters."""
+        data = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "channel_number": "auto",
+            "if_exists": "skip"
+        }
+        action = Action.from_dict(data)
+        assert action.type == "create_channel"
+        assert action.params["name_template"] == "{stream_name}"
+        assert action.params["channel_number"] == "auto"
+
+    def test_idempotent_from_dict(self):
+        """from_dict returns same object if already an Action."""
+        original = Action(type="skip")
+        result = Action.from_dict(original)
+        assert result is original
+
+
+class TestActionToDict:
+    """Tests for Action.to_dict()."""
+
+    def test_simple_action_to_dict(self):
+        """Converts simple action to dict."""
+        action = Action(type="skip")
+        result = action.to_dict()
+        assert result == {"type": "skip"}
+
+    def test_action_with_params_to_dict(self):
+        """Converts action with params to dict."""
+        action = Action(
+            type="create_channel",
+            params={"name_template": "{stream_name}", "if_exists": "merge"}
+        )
+        result = action.to_dict()
+        assert result["type"] == "create_channel"
+        assert result["name_template"] == "{stream_name}"
+        assert result["if_exists"] == "merge"
+
+
+class TestActionValidation:
+    """Tests for Action.validate()."""
+
+    def test_valid_skip(self):
+        """Validates skip action."""
+        action = Action(type="skip")
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_valid_stop_processing(self):
+        """Validates stop_processing action."""
+        action = Action(type="stop_processing")
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_valid_create_channel(self):
+        """Validates create_channel action."""
+        action = Action(
+            type="create_channel",
+            params={"name_template": "{stream_name}", "if_exists": "skip"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_create_channel_if_exists(self):
+        """Rejects invalid if_exists value for create_channel."""
+        action = Action(
+            type="create_channel",
+            params={"if_exists": "invalid"}
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "if_exists" in errors[0]
+
+    def test_valid_create_group(self):
+        """Validates create_group action."""
+        action = Action(
+            type="create_group",
+            params={"name_template": "{stream_group}"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_valid_merge_streams(self):
+        """Validates merge_streams action."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "match_by": "tvg_id"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_merge_streams_target(self):
+        """Rejects invalid target for merge_streams."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "invalid"}
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+
+    def test_merge_streams_existing_channel_requires_find_by(self):
+        """Rejects existing_channel target without find_channel_by."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "existing_channel"}
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "find_channel_by" in errors[0]
+
+    def test_merge_streams_loose_name_match_defaults_false(self):
+        """bd-0emgo.1: loose_name_match defaults to False when omitted."""
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is False
+
+    def test_merge_streams_loose_name_match_accepts_bool(self):
+        """bd-0emgo.1: loose_name_match accepts an explicit boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["loose_name_match"] is True
+
+    def test_merge_streams_loose_name_match_rejects_non_bool(self):
+        """bd-0emgo.1: loose_name_match must be a boolean."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": "yes"},
+        )
+        errors = action.validate()
+        assert any("loose_name_match" in e for e in errors)
+
+    # --- bd-0emgo.3: target-channel group filter -------------------------
+
+    def test_merge_streams_target_channel_filters_absent_by_default(self):
+        """bd-0emgo.3: with no filter set the keys are NOT auto-injected.
+
+        Absent = no filter (back-compat). Unlike loose_name_match (which the
+        schema defaults to False), the group-filter lists are left absent so
+        a stored rule with no filter stays byte-identical.
+        """
+        action = Action(type="merge_streams", params={"target": "auto"})
+        errors = action.validate()
+        assert len(errors) == 0
+        assert "target_channel_not_in_group" not in action.params
+        assert "target_channel_in_group" not in action.params
+
+    def test_merge_streams_target_channel_not_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_not_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": [567, 12]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == [567, 12]
+
+    def test_merge_streams_target_channel_in_group_accepts_int_list(self):
+        """bd-0emgo.3: target_channel_in_group accepts a list of group IDs."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [42]},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_in_group"] == [42]
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_list(self):
+        """bd-0emgo.3: target_channel_not_in_group must be a list."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": 567},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_not_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_not_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": ["sports"]},
+        )
+        errors = action.validate()
+        assert any("target_channel_not_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_in_group_rejects_non_int_items(self):
+        """bd-0emgo.3: target_channel_in_group items must be integers."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_in_group": [1.5]},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_merge_streams_target_channel_empty_list_is_valid(self):
+        """bd-0emgo.3: an empty list is valid (no exclusions) and preserved."""
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "target_channel_not_in_group": []},
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+        assert action.params["target_channel_not_in_group"] == []
+
+    def test_valid_assign_logo(self):
+        """Validates assign_logo action."""
+        action = Action(
+            type="assign_logo",
+            params={"value": "from_stream"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_assign_logo_no_value(self):
+        """Rejects assign_logo without value."""
+        action = Action(type="assign_logo", params={})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "value" in errors[0]
+
+    def test_valid_log_match(self):
+        """Validates log_match action."""
+        action = Action(
+            type="log_match",
+            params={"message": "Matched stream {stream_name}"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_log_match_no_message(self):
+        """Rejects log_match without message."""
+        action = Action(type="log_match", params={})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "message" in errors[0]
+
+    def test_unknown_action_type(self):
+        """Rejects unknown action type."""
+        action = Action(type="unknown_action")
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Unknown action type" in errors[0]
+
+
+class TestTemplateVariables:
+    """Tests for TemplateVariables."""
+
+    def test_expand_simple_template(self):
+        """Expands simple template."""
+        template = "{stream_name}"
+        context = {"stream_name": "ESPN HD"}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "ESPN HD"
+
+    def test_expand_multiple_variables(self):
+        """Expands template with multiple variables."""
+        template = "{stream_name} - {quality}"
+        context = {"stream_name": "ESPN", "quality": "1080p"}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "ESPN - 1080p"
+
+    def test_expand_missing_variable(self):
+        """Handles missing variable by keeping placeholder."""
+        template = "{stream_name} ({missing})"
+        context = {"stream_name": "ESPN"}
+        result = TemplateVariables.expand_template(template, context)
+        # Missing variables are kept as placeholders
+        assert result == "ESPN ({missing})"
+
+    def test_expand_none_value(self):
+        """Handles None value in context."""
+        template = "{stream_name} - {tvg_id}"
+        context = {"stream_name": "ESPN", "tvg_id": None}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "ESPN -"
+
+    def test_expand_strips_whitespace(self):
+        """Strips leading/trailing whitespace from result."""
+        template = "  {stream_name}  "
+        context = {"stream_name": "ESPN"}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "ESPN"
+
+    def test_all_variables_list(self):
+        """Returns all available variables."""
+        variables = TemplateVariables.all_variables()
+        assert "stream_name" in variables
+        assert "stream_group" in variables
+        assert "quality" in variables
+        assert "tvg_id" in variables
+
+
+class TestValidateRule:
+    """Tests for validate_rule()."""
+
+    def test_valid_rule(self):
+        """Validates a complete valid rule."""
+        conditions = [
+            {"type": "stream_name_contains", "value": "Sports"}
+        ]
+        actions = [
+            {"type": "create_channel", "name_template": "{stream_name}"}
+        ]
+        result = validate_rule(conditions, actions)
+        assert result["valid"] is True
+        assert len(result["errors"]) == 0
+
+    def test_rule_without_conditions(self):
+        """Rejects rule without conditions."""
+        result = validate_rule([], [{"type": "skip"}])
+        assert result["valid"] is False
+        assert "at least one condition" in result["errors"][0]
+
+    def test_rule_without_actions(self):
+        """Rejects rule without actions."""
+        result = validate_rule(
+            [{"type": "always"}],
+            []
+        )
+        assert result["valid"] is False
+        assert "at least one action" in result["errors"][0]
+
+    def test_rule_with_invalid_condition(self):
+        """Reports condition errors."""
+        conditions = [
+            {"type": "stream_name_matches", "value": "[invalid("}
+        ]
+        actions = [{"type": "skip"}]
+        result = validate_rule(conditions, actions)
+        assert result["valid"] is False
+        assert "conditions[0]" in result["errors"][0]
+
+    def test_rule_with_invalid_action(self):
+        """Reports action errors."""
+        conditions = [{"type": "always"}]
+        actions = [
+            {"type": "merge_streams", "target": "invalid"}
+        ]
+        result = validate_rule(conditions, actions)
+        assert result["valid"] is False
+        assert "actions[0]" in result["errors"][0]
+
+
+class TestParseConditions:
+    """Tests for parse_conditions()."""
+
+    def test_parse_json_string(self):
+        """Parses JSON string to conditions."""
+        json_str = '[{"type": "always"}]'
+        conditions = parse_conditions(json_str)
+        assert len(conditions) == 1
+        assert conditions[0].type == "always"
+
+    def test_parse_list(self):
+        """Parses list directly."""
+        data = [{"type": "has_channel", "value": False}]
+        conditions = parse_conditions(data)
+        assert len(conditions) == 1
+        assert conditions[0].type == "has_channel"
+
+    def test_parse_invalid_json(self):
+        """Raises error for invalid JSON."""
+        with pytest.raises(ValueError):
+            parse_conditions("not valid json")
+
+
+class TestParseActions:
+    """Tests for parse_actions()."""
+
+    def test_parse_json_string(self):
+        """Parses JSON string to actions."""
+        json_str = '[{"type": "skip"}]'
+        actions = parse_actions(json_str)
+        assert len(actions) == 1
+        assert actions[0].type == "skip"
+
+    def test_parse_list(self):
+        """Parses list directly."""
+        data = [{"type": "create_channel", "name_template": "{stream_name}"}]
+        actions = parse_actions(data)
+        assert len(actions) == 1
+        assert actions[0].type == "create_channel"
+
+    def test_parse_invalid_json(self):
+        """Raises error for invalid JSON."""
+        with pytest.raises(ValueError):
+            parse_actions("not valid json")
+
+
+class TestConditionTypes:
+    """Tests for ConditionType enum."""
+
+    def test_all_condition_types_exist(self):
+        """All expected condition types exist."""
+        assert ConditionType.STREAM_NAME_MATCHES.value == "stream_name_matches"
+        assert ConditionType.STREAM_NAME_CONTAINS.value == "stream_name_contains"
+        assert ConditionType.STREAM_GROUP_MATCHES.value == "stream_group_matches"
+        assert ConditionType.STREAM_GROUP_IS.value == "stream_group_is"
+        assert ConditionType.TVG_ID_EXISTS.value == "tvg_id_exists"
+        assert ConditionType.HAS_CHANNEL.value == "has_channel"
+        assert ConditionType.QUALITY_MIN.value == "quality_min"
+        assert ConditionType.QUALITY_MAX.value == "quality_max"
+        assert ConditionType.AND.value == "and"
+        assert ConditionType.OR.value == "or"
+        assert ConditionType.NOT.value == "not"
+
+
+class TestNameTransformValidation:
+    """Tests for name_transform_pattern/name_transform_replacement validation."""
+
+    def test_valid_name_transform(self):
+        """Validates create_channel with valid name transform."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"^US:\s*",
+                "name_transform_replacement": ""
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_name_transform_regex(self):
+        """Rejects invalid regex in name_transform_pattern."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": "[invalid("
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "name_transform_pattern" in errors[0]
+
+    def test_name_transform_on_create_group(self):
+        """Validates create_group with valid name transform."""
+        action = Action(
+            type="create_group",
+            params={
+                "name_template": "{stream_group}",
+                "name_transform_pattern": r"\s+\(.*\)$",
+                "name_transform_replacement": ""
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_name_transform_pattern_not_string(self):
+        """Rejects non-string name_transform_pattern."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": 123
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "must be a string" in errors[0]
+
+    def test_name_transform_replacement_not_string(self):
+        """Rejects non-string name_transform_replacement."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": "^US:",
+                "name_transform_replacement": 123
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "name_transform_replacement" in errors[0]
+
+    def test_no_name_transform_is_valid(self):
+        """create_channel without name transform is valid."""
+        action = Action(
+            type="create_channel",
+            params={"name_template": "{stream_name}"}
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    # ---- $N group-reference cross-check (enhancedchannelmanager-2uwi3) ----
+
+    def test_replacement_group_ref_out_of_range_rejected(self):
+        """The user-reported scenario: 3 groups, replacement references $4."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$2 $1 $3 $4",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "references group 4 but pattern defines 3 capture groups" in errors[0]
+
+    def test_replacement_group_ref_out_of_range_rejected_create_group(self):
+        action = Action(
+            type="create_group",
+            params={
+                "name_template": "{stream_group}",
+                "name_transform_pattern": r"^(\w+)",
+                "name_transform_replacement": "$2",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "references group 2 but pattern defines 1 capture group" in errors[0]
+
+    def test_replacement_group_refs_in_range_valid(self):
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                "name_transform_replacement": "$3 $2 $1",
+            }
+        )
+        assert action.validate() == []
+
+    def test_replacement_dollar_zero_rejected(self):
+        """$0 converts to an octal escape (NUL), never the whole match."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": r"(\w+)",
+                "name_transform_replacement": "$0",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "$0" in errors[0]
+
+    def test_replacement_group_ref_skipped_when_pattern_invalid(self):
+        """An uncompilable pattern reports only the compile error."""
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "{stream_name}",
+                "name_transform_pattern": "[invalid(",
+                "name_transform_replacement": "$4",
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "Invalid name_transform_pattern" in errors[0]
+
+
+class TestSetVariableValidation:
+    """Tests for set_variable action validation."""
+
+    def test_valid_regex_extract(self):
+        """Validates set_variable with regex_extract mode."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "region",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": r"^(\w+):"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_valid_regex_replace(self):
+        """Validates set_variable with regex_replace mode."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "clean_name",
+                "variable_mode": "regex_replace",
+                "source_field": "stream_name",
+                "pattern": r"^US:\s*",
+                "replacement": ""
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_valid_literal(self):
+        """Validates set_variable with literal mode."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "channel_prefix",
+                "variable_mode": "literal",
+                "template": "Channel {var:region}"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_missing_variable_name(self):
+        """Rejects set_variable without variable_name."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_mode": "literal",
+                "template": "test"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "variable_name" in errors[0]
+
+    def test_invalid_variable_name(self):
+        """Rejects set_variable with invalid variable_name."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "invalid-name",
+                "variable_mode": "literal",
+                "template": "test"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "alphanumeric" in errors[0]
+
+    def test_invalid_variable_mode(self):
+        """Rejects set_variable with unknown mode."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "unknown"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "variable_mode" in errors[0]
+
+    def test_regex_extract_missing_source(self):
+        """Rejects regex_extract without source_field."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "regex_extract",
+                "pattern": ".*"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "source_field" in errors[0]
+
+    def test_regex_extract_missing_pattern(self):
+        """Rejects regex_extract without pattern."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "pattern" in errors[0]
+
+    def test_regex_extract_invalid_pattern(self):
+        """Rejects set_variable with invalid regex."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": "[invalid("
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_regex_replace_missing_replacement(self):
+        """Rejects regex_replace without replacement."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "regex_replace",
+                "source_field": "stream_name",
+                "pattern": ".*"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "replacement" in errors[0]
+
+    def test_literal_missing_template(self):
+        """Rejects literal without template."""
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "test",
+                "variable_mode": "literal"
+            }
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "template" in errors[0]
+
+
+class TestTemplateExpandWithCustomVariables:
+    """Tests for TemplateVariables.expand_template with custom variables."""
+
+    def test_expand_custom_variable(self):
+        """Expands {var:name} custom variables."""
+        template = "Channel {var:region}"
+        context = {"stream_name": "ESPN"}
+        custom = {"region": "US"}
+        result = TemplateVariables.expand_template(template, context, custom)
+        assert result == "Channel US"
+
+    def test_expand_mixed_variables(self):
+        """Expands both standard and custom variables."""
+        template = "{stream_name} - {var:suffix}"
+        context = {"stream_name": "ESPN"}
+        custom = {"suffix": "HD"}
+        result = TemplateVariables.expand_template(template, context, custom)
+        assert result == "ESPN - HD"
+
+    def test_expand_no_custom_variables(self):
+        """Works without custom variables."""
+        template = "{stream_name}"
+        context = {"stream_name": "ESPN"}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "ESPN"
+
+    def test_expand_empty_custom_variable(self):
+        """Handles empty custom variable value."""
+        template = "Channel {var:region}"
+        context = {}
+        custom = {"region": ""}
+        result = TemplateVariables.expand_template(template, context, custom)
+        assert result == "Channel"
+
+    def test_expand_missing_custom_variable_kept(self):
+        """Missing custom variables kept as placeholders."""
+        template = "Channel {var:unknown}"
+        context = {}
+        result = TemplateVariables.expand_template(template, context)
+        assert result == "Channel {var:unknown}"
+
+
+class TestSortGroupActionValidation:
+    """Tests for Action.validate() on the sort_group action
+    (enhancedchannelmanager-vy4fl)."""
+
+    def test_valid_bare_sort_group(self):
+        """Bare sort_group (no params) is valid — defaults apply."""
+        action = Action(type="sort_group")
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_defaults_applied_after_validate(self):
+        """Missing order/strip_numbers/ignore_country get their defaults
+        written back onto params (matches merge_streams's pattern of
+        normalizing params during validate())."""
+        action = Action(type="sort_group")
+        action.validate()
+        assert action.params["order"] == "asc"
+        assert action.params["strip_numbers"] is True
+        assert action.params["ignore_country"] is False
+
+    def test_valid_full_params(self):
+        action = Action(
+            type="sort_group",
+            params={
+                "order": "desc",
+                "starting_number": 100,
+                "strip_numbers": False,
+                "ignore_country": True,
+                "group_id": 7,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) == 0
+
+    def test_invalid_order(self):
+        action = Action(type="sort_group", params={"order": "sideways"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "order" in errors[0]
+
+    def test_invalid_starting_number_type(self):
+        action = Action(type="sort_group", params={"starting_number": "5"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "starting_number" in errors[0]
+
+    def test_starting_number_bool_rejected(self):
+        """bool is an int subclass — must not masquerade as a starting number."""
+        action = Action(type="sort_group", params={"starting_number": True})
+        errors = action.validate()
+        assert len(errors) > 0
+
+    def test_invalid_starting_number_below_one(self):
+        action = Action(type="sort_group", params={"starting_number": 0})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "starting_number" in errors[0]
+
+    def test_invalid_group_id_type(self):
+        action = Action(type="sort_group", params={"group_id": "7"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "group_id" in errors[0]
+
+    def test_invalid_strip_numbers_type(self):
+        action = Action(type="sort_group", params={"strip_numbers": "yes"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "strip_numbers" in errors[0]
+
+    def test_invalid_ignore_country_type(self):
+        action = Action(type="sort_group", params={"ignore_country": "no"})
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "ignore_country" in errors[0]
+
+
+class TestActionTypes:
+    """Tests for ActionType enum."""
+
+    def test_all_action_types_exist(self):
+        """All expected action types exist."""
+        assert ActionType.CREATE_CHANNEL.value == "create_channel"
+        assert ActionType.CREATE_GROUP.value == "create_group"
+        assert ActionType.MERGE_STREAMS.value == "merge_streams"
+        assert ActionType.ASSIGN_LOGO.value == "assign_logo"
+        assert ActionType.ASSIGN_TVG_ID.value == "assign_tvg_id"
+        assert ActionType.SET_VARIABLE.value == "set_variable"
+        assert ActionType.SKIP.value == "skip"
+        assert ActionType.STOP_PROCESSING.value == "stop_processing"
+        assert ActionType.SORT_GROUP.value == "sort_group"
+
+
+class TestSafeRegexMigrationWriteTimeValidation:
+    """
+    bd-ltjyx — write-time regex validation for user-supplied patterns must
+    route through ``safe_regex.compile`` instead of bare ``re.compile``.
+
+    This locks two behaviors that bare ``re.compile`` did NOT enforce:
+
+    1. Patterns longer than ``safe_regex.DEFAULT_MAX_PATTERN_LEN`` (500
+       chars) must be rejected at validation time. Bare ``re.compile``
+       would happily compile a 50,000-char pattern; ``safe_regex.compile``
+       caps it.
+    2. The error surfaced for syntactically invalid patterns must remain
+       backward-compatible — existing UI and API contracts assert the
+       string ``"Invalid regex"`` (or ``"Invalid name_transform_pattern"``)
+       appears in the validation error. ``safe_regex.SafeRegexError`` is
+       wrapped, not re-raised, so the user-facing message stays stable.
+    """
+
+    # safe_regex.DEFAULT_MAX_PATTERN_LEN is 500 — anything past that must
+    # be rejected at write time.
+    OVERSIZE_PATTERN = "a" * 600
+
+    # ----- Site 1: Condition regex types (channel_pipeline_schema.py:167) -----
+
+    def test_oversize_pattern_rejected_for_stream_name_matches(self):
+        """Oversize pattern must be rejected at validation time."""
+        cond = Condition(type="stream_name_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_channel_exists_matching(self):
+        cond = Condition(type="channel_exists_matching", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_stream_group_matches(self):
+        cond = Condition(type="stream_group_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_tvg_id_matches(self):
+        cond = Condition(type="tvg_id_matches", value=self.OVERSIZE_PATTERN)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    # ----- Site 2: set_variable pattern (channel_pipeline_schema.py:492) -----
+
+    def test_oversize_pattern_rejected_for_set_variable_regex_extract(self):
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": self.OVERSIZE_PATTERN,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    def test_oversize_pattern_rejected_for_set_variable_regex_replace(self):
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_replace",
+                "source_field": "stream_name",
+                "pattern": self.OVERSIZE_PATTERN,
+                "replacement": "",
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    # ----- Site 3: name_transform_pattern (channel_pipeline_schema.py:520) -----
+
+    def test_oversize_pattern_rejected_for_name_transform(self):
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "test",
+                "name_transform_pattern": self.OVERSIZE_PATTERN,
+            },
+        )
+        errors = action.validate()
+        assert len(errors) > 0
+        # Existing contract: error message names the field.
+        assert "name_transform_pattern" in errors[0]
+
+    # ----- Boundary check: pattern at exactly the cap is still accepted ---
+
+    def test_pattern_at_max_length_is_accepted_for_condition(self):
+        """Patterns exactly at the 500-char cap are still valid (boundary)."""
+        # Use a literal string (no metacharacters) so the only thing under
+        # test is the length cap, not regex syntax.
+        at_cap = "a" * 500
+        cond = Condition(type="stream_name_matches", value=at_cap)
+        errors = cond.validate()
+        assert errors == []
+
+    def test_pattern_at_max_length_is_accepted_for_set_variable(self):
+        at_cap = "a" * 500
+        action = Action(
+            type="set_variable",
+            params={
+                "variable_name": "v",
+                "variable_mode": "regex_extract",
+                "source_field": "stream_name",
+                "pattern": at_cap,
+            },
+        )
+        errors = action.validate()
+        assert errors == []
+
+    def test_pattern_at_max_length_is_accepted_for_name_transform(self):
+        at_cap = "a" * 500
+        action = Action(
+            type="create_channel",
+            params={
+                "name_template": "test",
+                "name_transform_pattern": at_cap,
+                "name_transform_replacement": "",
+            },
+        )
+        errors = action.validate()
+        assert errors == []
+
+
+class TestDateTokenExpansionInConditionValidate:
+    """Condition.validate() is a SECOND write-time gate (independent of
+    regex_lint.lint_conditions_json — see routers/channel_pipeline.py's
+    create/update handlers, which run both). It must expand
+    {date...}/{today...} tokens identically before compiling, or a rule
+    can clear the lint gate and still 400 here (enhancedchannelmanager-qa43j).
+    """
+
+    @pytest.mark.parametrize("ctype", [
+        "stream_name_matches",
+        "stream_group_matches",
+        "tvg_id_matches",
+        "channel_exists_matching",
+    ])
+    @pytest.mark.parametrize("value", [
+        "{date}",
+        "{date+3d}",
+        "{date+2w}",
+        "{date-1}",
+        "{date:%Y-%m-%d}",
+        "ESPN-{date+3d}-HD",
+    ])
+    def test_date_tokens_accepted(self, ctype, value):
+        cond = Condition(type=ctype, value=value)
+        errors = cond.validate()
+        assert errors == [], f"{ctype!r}/{value!r} unexpectedly rejected: {errors}"
+
+    def test_still_rejects_genuinely_invalid_regex_alongside_a_date_token(self):
+        cond = Condition(type="stream_name_matches", value="{date+3d}(unbalanced")
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+    @pytest.mark.parametrize("value", ["{date+}", "{dat}", "{da}"])
+    def test_malformed_tokens_still_rejected(self, value):
+        """Unexpandable tokens pass through unchanged (same as at run
+        time) and correctly fail compile — matching the evaluator's
+        silent-never-match behavior for the same malformed input."""
+        cond = Condition(type="stream_name_matches", value=value)
+        errors = cond.validate()
+        assert len(errors) > 0
+        assert "Invalid regex" in errors[0]
+
+
+class TestScoredFuzzyMergeStreams:
+    """enhancedchannelmanager-jnzst Component A — scored-fuzzy validation.
+
+    The new ``min_score`` lever upgrades loose_name_match to the unified
+    scoring core. The validation rules apply ONLY when min_score is present;
+    legacy loose rules (no min_score) keep validating unchanged.
+    """
+
+    def _scored(self, **overrides):
+        params = {
+            "target": "auto",
+            "loose_name_match": True,
+            "min_score": 0.7,
+            "target_channel_in_group": [42],
+        }
+        params.update(overrides)
+        return Action(type="merge_streams", params=params)
+
+    def test_valid_scored_fuzzy_rule(self):
+        errors = self._scored().validate()
+        assert errors == []
+
+    def test_legacy_loose_rule_without_min_score_still_valid(self):
+        # No min_score, no allowlist — the legacy cascade must keep working.
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True},
+        )
+        assert action.validate() == []
+
+    def test_scored_fuzzy_requires_allowlist(self):
+        errors = self._scored(target_channel_in_group=[]).validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_allowlist_when_absent(self):
+        action = Action(
+            type="merge_streams",
+            params={"target": "auto", "loose_name_match": True, "min_score": 0.8},
+        )
+        errors = action.validate()
+        assert any("target_channel_in_group" in e for e in errors)
+
+    def test_scored_fuzzy_requires_loose_name_match(self):
+        errors = self._scored(loose_name_match=False).validate()
+        assert any("loose_name_match" in e for e in errors)
+
+    def test_min_score_below_floor_rejected(self):
+        errors = self._scored(min_score=0.5).validate()
+        assert any("floor" in e for e in errors)
+
+    def test_min_score_above_one_rejected(self):
+        errors = self._scored(min_score=1.5).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_min_score_at_floor_accepted(self):
+        assert self._scored(min_score=0.6).validate() == []
+
+    def test_min_score_at_one_accepted(self):
+        assert self._scored(min_score=1.0).validate() == []
+
+    def test_min_score_bool_rejected(self):
+        errors = self._scored(min_score=True).validate()
+        assert any("min_score" in e for e in errors)
+
+    def test_allow_no_callsign_must_be_bool(self):
+        errors = self._scored(allow_no_callsign="yes").validate()
+        assert any("allow_no_callsign" in e for e in errors)
+
+    def test_allow_no_callsign_opt_in_valid(self):
+        assert self._scored(allow_no_callsign=True).validate() == []
+
+    def test_tie_break_invalid_rejected(self):
+        errors = self._scored(tie_break="random").validate()
+        assert any("tie_break" in e for e in errors)
+
+    def test_tie_break_valid(self):
+        assert self._scored(tie_break="highest_score").validate() == []
+
+    def test_max_candidates_must_be_positive_int(self):
+        assert any("max_candidates" in e for e in self._scored(max_candidates=0).validate())
+        assert any("max_candidates" in e for e in self._scored(max_candidates=True).validate())
+
+    def test_max_candidates_valid(self):
+        assert self._scored(max_candidates=5).validate() == []

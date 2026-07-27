@@ -103,6 +103,29 @@ class ECMClient:
             logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
             raise _http_error("GET", path, e) from e
 
+    async def get_text(self, path: str, timeout: float | None = None, **params) -> str:
+        """GET request expecting a non-JSON response body (e.g. ``text/csv``).
+
+        Mirrors :meth:`get` exactly except it returns ``r.text`` instead of
+        parsing JSON — for endpoints like ``/api/channels/export-csv`` that
+        return a file download (``Content-Disposition: attachment``), not a
+        JSON envelope. ``call_endpoint`` only models JSON-body endpoints, so
+        callers use this directly with a ``# contract-exempt:`` comment.
+        """
+        client = _get_client()
+        params = {k: v for k, v in params.items() if v is not None}
+        try:
+            r = await client.get(path, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r.text
+        except httpx.TimeoutException:
+            logger.error("[ECM-CLIENT] GET %s timed out after %ss", path, timeout or DEFAULT_TIMEOUT)
+            raise TimeoutError(f"GET {path} timed out after {timeout or DEFAULT_TIMEOUT}s")
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500] if e.response else ""
+            logger.error("[ECM-CLIENT] GET %s failed: %s %s — %s", path, e.response.status_code, e.response.reason_phrase, body)
+            raise _http_error("GET", path, e) from e
+
     async def post(
         self,
         path: str,
@@ -209,11 +232,20 @@ class ECMClient:
         json_data: dict | None = None,
         timeout: float | None = None,
         params: dict | None = None,
+        headers: dict | None = None,
     ) -> dict | None:
-        """DELETE request to ECM API."""
+        """DELETE request to ECM API.
+
+        ``headers`` carries optional per-call request headers — e.g. the
+        ``X-ECM-Batch-Id`` correlation id the bulk-delete tool sends so the
+        backend tags every looped delete with one journal batch_id
+        (enhancedchannelmanager-vp1rx / W3).
+        """
         client = _get_client()
         params = {k: v for k, v in (params or {}).items() if v is not None}
         extra = {"params": params} if params else {}
+        if headers:
+            extra["headers"] = headers
         try:
             r = await client.request("DELETE", path, json=json_data, timeout=timeout, **extra)
             r.raise_for_status()
@@ -236,6 +268,7 @@ class ECMClient:
         body: dict | None = None,
         query: dict | None = None,
         timeout: float | None = None,
+        headers: dict | None = None,
     ) -> dict | list | None:
         """Call a backend endpoint declared in ``_endpoint_contracts.ENDPOINTS``.
 
@@ -316,6 +349,10 @@ class ECMClient:
         if method == "PUT":
             return await self.put(formatted_path, **write_kwargs)
         if method == "DELETE":
+            # Only DELETE forwards per-call headers today (the W3 batch-id
+            # correlation for bulk_delete_channels). Other verbs ignore it.
+            if headers:
+                write_kwargs["headers"] = headers
             return await self.delete(formatted_path, **write_kwargs)
         raise ContractError(
             f"call_endpoint({ep.name!r}): unsupported method {ep.method!r}"

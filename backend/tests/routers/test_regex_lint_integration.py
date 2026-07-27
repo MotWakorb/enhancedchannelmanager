@@ -16,7 +16,7 @@ from datetime import datetime
 import pytest
 
 from models import (
-    AutoCreationRule,
+    ChannelPipelineRule,
     DummyEPGProfile,
     NormalizationRule,
     NormalizationRuleGroup,
@@ -259,6 +259,79 @@ class TestAutoCreationCreateRuleLinting:
         assert err["details"][0]["field"] == "actions[0].pattern"
 
     @pytest.mark.asyncio
+    async def test_rejects_out_of_range_group_ref_in_name_transform(self, async_client):
+        """enhancedchannelmanager-2uwi3 regression: the exact user-reported
+        scenario — a 3-group pattern with a '$2 $1 $3 $4' replacement must be
+        rejected at save with an actionable message, not saved as a rule that
+        silently no-ops per matching stream at execution time."""
+        payload = {
+            "name": "Bad group ref",
+            "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+            "actions": [
+                {
+                    "type": "create_channel",
+                    "name_template": "{stream_name}",
+                    "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                    "name_transform_replacement": "$2 $1 $3 $4",
+                }
+            ],
+        }
+        response = await async_client.post("/api/auto-creation/rules", json=payload)
+        assert response.status_code == 422
+        err = response.json()["detail"]["error"]
+        assert "references group 4 but pattern defines 3 capture groups" in err["message"]
+        assert err["details"][0]["field"] == "actions[0].name_transform_replacement"
+        assert err["details"][0]["code"] == "REGEX_GROUP_REF_OUT_OF_RANGE"
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_out_of_range_group_ref_in_name_transform(
+        self, async_client, test_session
+    ):
+        """Updating a rule with a bad $N reference is rejected the same way."""
+        create = {
+            "name": "Good rule",
+            "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+        }
+        created = await async_client.post("/api/auto-creation/rules", json=create)
+        assert created.status_code == 200
+        rule_id = created.json()["id"]
+
+        update = {
+            "actions": [
+                {
+                    "type": "create_channel",
+                    "name_template": "{stream_name}",
+                    "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                    "name_transform_replacement": "$2 $1 $3 $4",
+                }
+            ],
+        }
+        response = await async_client.put(
+            f"/api/auto-creation/rules/{rule_id}", json=update
+        )
+        assert response.status_code == 422
+        err = response.json()["detail"]["error"]
+        assert "references group 4 but pattern defines 3 capture groups" in err["message"]
+
+    @pytest.mark.asyncio
+    async def test_accepts_in_range_group_refs_in_name_transform(self, async_client):
+        payload = {
+            "name": "Good group refs",
+            "conditions": [{"type": "stream_name_contains", "value": "ESPN"}],
+            "actions": [
+                {
+                    "type": "create_channel",
+                    "name_template": "{stream_name}",
+                    "name_transform_pattern": r"(\w+) (\w+) (\w+)",
+                    "name_transform_replacement": "$3 $2 $1",
+                }
+            ],
+        }
+        response = await async_client.post("/api/auto-creation/rules", json=payload)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
     async def test_accepts_benign_rule(self, async_client):
         payload = {
             "name": "Benign",
@@ -273,7 +346,7 @@ class TestAutoCreationCreateRuleLinting:
 class TestAutoCreationUpdateRuleLinting:
     @pytest.mark.asyncio
     async def test_put_rejects_evil_pattern(self, async_client, test_session):
-        rule = AutoCreationRule(
+        rule = ChannelPipelineRule(
             name="Initial",
             conditions=json.dumps(
                 [{"type": "stream_name_contains", "value": "ESPN"}]
@@ -300,7 +373,7 @@ class TestAutoCreationBulkUpdateRuleLinting:
     async def test_bulk_update_rejects_evil_sort_regex(
         self, async_client, test_session
     ):
-        rule = AutoCreationRule(
+        rule = ChannelPipelineRule(
             name="Bulk lint target",
             conditions=json.dumps(
                 [{"type": "stream_name_contains", "value": "ESPN"}]
@@ -326,7 +399,7 @@ class TestAutoCreationBulkUpdateRuleLinting:
 
         # Defense in depth: the rule's sort_regex must not have been written.
         test_session.expire_all()
-        refreshed = test_session.query(AutoCreationRule).get(rule_id)
+        refreshed = test_session.query(ChannelPipelineRule).get(rule_id)
         assert refreshed.sort_regex is None
 
 

@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { StatsTab } from './StatsTab';
 import * as api from '../../services/api';
 import type {
@@ -162,6 +163,7 @@ beforeEach(() => {
     count: 0,
   } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
   vi.mocked(api.getStreamProfiles).mockResolvedValue([]);
+  vi.mocked(api.getAllLogos).mockResolvedValue([]);
   vi.mocked(api.getM3UAccounts).mockResolvedValue(mockM3UAccounts);
   vi.mocked(api.getSystemEvents).mockResolvedValue({
     events: [],
@@ -172,6 +174,16 @@ beforeEach(() => {
   } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
   vi.mocked(api.getBandwidthStats).mockResolvedValue(baseBandwidth);
   vi.mocked(api.getTopWatchedChannels).mockResolvedValue(baseTopWatched);
+  vi.mocked(api.getEPGGrid).mockResolvedValue([]);
+  vi.mocked(api.getEPGData).mockResolvedValue([]);
+  // ProviderStreamUsagePanel (bd-n5cwp) — always-mounted sibling of
+  // ProvidersPanel; default to an empty response so its fetch doesn't
+  // reject with an unmocked-call error in tests that don't care about it.
+  vi.mocked(api.getProviderStreamUsage).mockResolvedValue({
+    data: [],
+    meta: { total_rows: 0 },
+    pagination: null,
+  });
 });
 
 afterEach(() => {
@@ -1543,5 +1555,353 @@ describe('StatsTab — scroll-containment DOM structure (bd-tkcmu)', () => {
 
     // Sanity-check: .stats-content must not be the stats-tab root itself.
     expect(statsTab).not.toBe(statsContent);
+  });
+});
+
+// bead 09x38.15 item 9: ~10 sections stack inside .stats-content with no way
+// to jump between them but scrolling. A "Jump to section" dropdown (reusing
+// the OverflowMenu portal-dropdown idiom) lists only sections actually
+// present in the DOM and scrolls to them on click.
+describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0,
+      channels: [],
+    } as unknown as ChannelStatsResponse);
+    // No bandwidth data — the component swallows this into a `null` state
+    // (see fetchData's .catch) rather than surfacing an error, so the
+    // Bandwidth Usage summary section doesn't render.
+    vi.mocked(api.getBandwidthStats).mockRejectedValue(new Error('unavailable'));
+  });
+
+  it('always lists the always-mounted panels, but omits conditional sections with no data', async () => {
+    const user = userEvent.setup();
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /jump to section/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /jump to section/i }));
+
+    expect(screen.getByRole('menuitem', { name: /bandwidth in\/out/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /enhanced statistics/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /popularity rankings/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /watch history/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /user watch time/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /providers/i })).toBeInTheDocument();
+
+    // No active channels / events / top-watched / bandwidth summary data
+    // seeded — those sections don't render, so they must not appear either.
+    expect(screen.queryByRole('menuitem', { name: /^active channels$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /recent events/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /top watched channels/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^bandwidth usage$/i })).not.toBeInTheDocument();
+  });
+
+  it('lists Active Channels once channel-stats data is present, and clicking it scrolls to the section', async () => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: 'abc', channel_name: 'ESPN', channel_number: 1, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+    const user = userEvent.setup();
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('#stats-section-active-channels')).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole('button', { name: /jump to section/i }));
+    await user.click(screen.getByRole('menuitem', { name: /^active channels$/i }));
+
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+});
+
+// enhancedchannelmanager-2sfpt #1: a small channel logo renders beside the
+// channel number in Active Channels rows, resolved from the channel's logo_id
+// via the loaded logo map. Null/unknown logos render no <img> (no broken icon).
+describe('StatsTab — Active Channels logo (#1)', () => {
+  const CH_UUID = 'ecc0280e-af3f-47c3-b344-39f21c80b880';
+
+  it('renders the channel logo img when the channel has a resolvable logo', async () => {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CH_UUID, name: 'ESPN HD', channel_number: 5, logo_id: 42 }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getAllLogos).mockResolvedValue([
+      { id: 42, name: 'ESPN', url: 'http://logos/espn.png', cache_url: 'http://logos/cache/42', channel_count: 1, is_used: true },
+    ]);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CH_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const img = container.querySelector('img.channel-logo-mini') as HTMLImageElement | null;
+      expect(img).not.toBeNull();
+      expect(img?.src).toContain('http://logos/cache/42');
+    });
+  });
+
+  it('renders no logo img when the channel has no logo_id', async () => {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CH_UUID, name: 'ESPN HD', channel_number: 5, logo_id: null }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getAllLogos).mockResolvedValue([]);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CH_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(container.querySelector('img.channel-logo-mini')).toBeNull();
+  });
+});
+
+// enhancedchannelmanager-2sfpt #2: Recent Events show the connecting /
+// disconnecting username (resolved server-side), falling back to the client IP
+// when no username is attributed.
+describe('StatsTab — Recent Events username (#2)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0, channels: [],
+    } as unknown as ChannelStatsResponse);
+  });
+
+  it('shows the resolved username on the event line', async () => {
+    vi.mocked(api.getSystemEvents).mockResolvedValue({
+      events: [
+        { id: 1, event_type: 'client_connect', channel_name: 'ESPN', message: 'connected', ip_address: '10.0.0.5', username: 'alice' },
+      ],
+      count: 1, total: 1, offset: 0, limit: 50,
+    } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const msg = container.querySelector('.event-message');
+      expect(msg?.textContent).toContain('- alice');
+    });
+  });
+
+  it('falls back to the IP when the event has no username', async () => {
+    vi.mocked(api.getSystemEvents).mockResolvedValue({
+      events: [
+        { id: 2, event_type: 'client_disconnect', channel_name: 'ESPN', message: 'disconnected', ip_address: '203.0.113.9', username: null },
+      ],
+      count: 1, total: 1, offset: 0, limit: 50,
+    } as unknown as Awaited<ReturnType<typeof api.getSystemEvents>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      const msg = container.querySelector('.event-message');
+      expect(msg?.textContent).toContain('- 203.0.113.9');
+    });
+  });
+});
+
+// Currently Showing (EPG) row on Active Channels cards
+// (enhancedchannelmanager-hoj54): joins the active stream (keyed by UUID)
+// to its guide programs via epg_data_id → EPGData.tvg_id (preferred),
+// channel.tvg_id (fallback), or channel UUID (dummy EPG sources), and
+// renders the program airing right now.
+describe('StatsTab — Currently Showing EPG row (hoj54)', () => {
+  const CS_UUID = 'aaaabbbb-cccc-dddd-eeee-ffff00001111';
+
+  // A program window straddling "now" so the row always matches.
+  const nowMs = Date.now();
+  const startIso = new Date(nowMs - 30 * 60 * 1000).toISOString();
+  const endIso = new Date(nowMs + 30 * 60 * 1000).toISOString();
+
+  function mockActiveChannel(channelFields: Record<string, unknown>) {
+    vi.mocked(api.getChannels).mockResolvedValue({
+      results: [{ uuid: CS_UUID, name: 'ESPN HD', channel_number: 5, logo_id: null, tvg_id: null, epg_data_id: null, ...channelFields }],
+      next: null,
+      count: 1,
+    } as unknown as Awaited<ReturnType<typeof api.getChannels>>);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [{ channel_id: CS_UUID, channel_name: 'ESPN HD', channel_number: 5, state: 'streaming', client_count: 0, clients: [] }],
+    } as unknown as ChannelStatsResponse);
+  }
+
+  it('renders the current program via the epg_data_id → tvg_id hop', async () => {
+    mockActiveChannel({ epg_data_id: 10, tvg_id: 'stale.channel.tvg' });
+    vi.mocked(api.getEPGData).mockResolvedValue([
+      { id: 10, tvg_id: 'espn.us', name: 'ESPN', icon_url: null, epg_source: 1 },
+    ]);
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 1, tvg_id: 'espn.us', title: 'SportsCenter', start_time: startIso, end_time: endIso },
+      { id: 2, tvg_id: 'espn.us', title: 'Later Show', start_time: endIso, end_time: new Date(nowMs + 90 * 60 * 1000).toISOString() },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('SportsCenter');
+    });
+    expect(screen.getByTestId('channel-now-playing')).not.toHaveTextContent('Later Show');
+  });
+
+  it('falls back to channel.tvg_id when there is no epg_data_id mapping', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 3, tvg_id: 'tnt.us', title: 'Movie Night', start_time: startIso, end_time: endIso },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('Movie Night');
+    });
+  });
+
+  it('matches dummy EPG programs keyed by the channel UUID', async () => {
+    mockActiveChannel({});
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 4, tvg_id: CS_UUID, title: 'Dummy Program', start_time: startIso, end_time: endIso },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('channel-now-playing')).toHaveTextContent('Dummy Program');
+    });
+  });
+
+  it('renders no row when no program is airing right now', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    // Program already ended — nothing is currently showing.
+    vi.mocked(api.getEPGGrid).mockResolvedValue([
+      { id: 5, tvg_id: 'tnt.us', title: 'Old Program', start_time: new Date(nowMs - 120 * 60 * 1000).toISOString(), end_time: new Date(nowMs - 60 * 60 * 1000).toISOString() },
+    ] as unknown as Awaited<ReturnType<typeof api.getEPGGrid>>);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('channel-now-playing')).toBeNull();
+  });
+
+  it('renders no row when EPG guide data is unavailable', async () => {
+    mockActiveChannel({ tvg_id: 'tnt.us' });
+    vi.mocked(api.getEPGGrid).mockRejectedValue(new Error('grid down'));
+    vi.mocked(api.getEPGData).mockRejectedValue(new Error('epg down'));
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.channel-card')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('channel-now-playing')).toBeNull();
+  });
+});
+
+// bd-49obj / GH-481: Live Stats condensed provider table. With more than
+// LIVE_STATS_CONDENSED_THRESHOLD (6) providers, the tile badges are
+// replaced by a dense table so every provider stays visible instead of
+// wrapping out of view. At/below the threshold, the existing tile
+// presentation is unchanged.
+describe('StatsTab — condensed Live Stats provider table (bd-49obj)', () => {
+  function makeAccounts(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      id: i + 1,
+      name: `Provider ${i + 1}`,
+      profiles: [],
+      is_active: true,
+      max_streams: 10,
+    })) as unknown as Awaited<ReturnType<typeof api.getM3UAccounts>>;
+  }
+
+  function makeChannels(providerIds: number[]) {
+    return providerIds.map((pid, i) => ({
+      ...baseChannel,
+      channel_id: `uuid-${i}`,
+      m3u_account_id: pid,
+    }));
+  }
+
+  it('renders the tile badges (not the table) at or below the threshold', async () => {
+    const accounts = makeAccounts(6);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 6,
+      channels: makeChannels([1, 2, 3, 4, 5, 6]),
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.summary-stat').length).toBeGreaterThan(2);
+    });
+    expect(container.querySelector('[data-testid="provider-live-table-wrapper"]')).toBeNull();
+  });
+
+  it('renders every provider in a condensed table above the threshold (11 providers, GH-481 reporter count)', async () => {
+    const accounts = makeAccounts(11);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 11,
+      channels: makeChannels([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    const table = await waitFor(() => {
+      const el = container.querySelector('[data-testid="provider-live-table-wrapper"]');
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+
+    // All 11 providers present as table rows — none wrapped out of view.
+    for (let i = 1; i <= 11; i++) {
+      expect(table).toHaveTextContent(`Provider ${i}`);
+    }
+    // Tile badges for individual providers are NOT rendered in this mode
+    // (Active Channels / Connected Clients tiles still are — those aren't
+    // providers).
+    const providerTiles = Array.from(container.querySelectorAll('.summary-stat')).filter(
+      (el) => !['Active Channels', 'Connected Clients'].includes(
+        el.querySelector('.stat-label')?.textContent?.trim() ?? '',
+      ),
+    );
+    expect(providerTiles).toHaveLength(0);
+
+    // Each provider shows its current/max connection count in the table.
+    expect(table).toHaveTextContent('1/10');
+  });
+
+  it('surfaces the Unknown bucket as a table row when providers exceed the threshold', async () => {
+    const accounts = makeAccounts(7);
+    vi.mocked(api.getM3UAccounts).mockResolvedValue(accounts);
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 8,
+      channels: [
+        ...makeChannels([1, 2, 3, 4, 5, 6, 7]),
+        { ...baseChannel, channel_id: 'uuid-unattributed', m3u_account_id: null },
+      ],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    const table = await waitFor(() => {
+      const el = container.querySelector('[data-testid="provider-live-table-wrapper"]');
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+
+    expect(table).toHaveTextContent('Unknown');
+    expect(container.querySelector('.provider-live-table tr.unknown-bucket')).toBeInTheDocument();
   });
 });

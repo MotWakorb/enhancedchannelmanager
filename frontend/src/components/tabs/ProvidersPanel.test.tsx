@@ -541,6 +541,33 @@ describe('ProvidersPanel — NULL provider ("Unknown" bucket)', () => {
   });
 });
 
+describe('ProvidersPanel — local-tuner / HDHomeRun line (bd-oj02b)', () => {
+  it('labels the synthetic provider_id=-1 as "HD HomeRun", distinct from "Unknown"', async () => {
+    // Override watch-time with a row for the local-tuner sentinel (-1)
+    // alongside a genuine NULL "Unknown" row. The two must render as
+    // SEPARATE, differently-labeled rows.
+    vi.mocked(api.getProvidersWatchTime).mockResolvedValue({
+      data: [
+        { provider_id: 1, total_watch_seconds: 7200 },
+        { provider_id: -1, total_watch_seconds: 1800 },
+        { provider_id: null, total_watch_seconds: 600 },
+      ],
+      meta: { from_iso: null, to_iso: null, total_rows: 3, window: '7d' },
+      pagination: null,
+    });
+
+    render(<ProvidersPanel />);
+    await waitFor(() => {
+      const watchTimeTable = screen.getByRole('table', {
+        name: /time spent per provider.*data table/i,
+      });
+      expect(within(watchTimeTable).getByText('HD HomeRun')).toBeInTheDocument();
+      // The genuine NULL bucket still labels as "Unknown" — not relabeled.
+      expect(within(watchTimeTable).getByText(/unknown/i)).toBeInTheDocument();
+    });
+  });
+});
+
 describe('ProvidersPanel — non-admin posture', () => {
   it('shows an admin-only message and does NOT call the API when the user is non-admin', async () => {
     authHolder.user = nonAdminUser;

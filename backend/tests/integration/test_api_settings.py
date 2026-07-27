@@ -39,8 +39,20 @@ class TestUpdateSettings:
     """Tests for POST /api/settings endpoint."""
 
     @pytest.mark.asyncio
-    async def test_update_settings_validates_url(self, async_client):
-        """POST /api/settings validates URL format."""
+    async def test_update_settings_rejects_malformed_dispatcharr_url(self, async_client):
+        """POST /api/settings now SSRF-validates a CHANGED Dispatcharr URL on save.
+
+        kgz3k: the settings endpoint historically stored whatever the operator
+        provided. It now routes a changed, non-empty outbound base URL through
+        ``_sanitize_base_url`` (scheme allowlist: http/https only) before the
+        mode-aware SSRF chokepoint. ``"not-a-valid-url"`` has no http(s) scheme,
+        so it is rejected with 400 — the behavior change the prior version of
+        this test explicitly anticipated ("a future bead that adds URL
+        validation would need to change this assertion to 400 or 422").
+
+        Mutation check: if the scheme allowlist were removed, the malformed URL
+        would be stored and this would return 200, failing the test.
+        """
         response = await async_client.post(
             "/api/settings",
             json={
@@ -49,12 +61,16 @@ class TestUpdateSettings:
                 "password": "password",
             },
         )
-        # Should either reject or accept based on validation logic
-        assert response.status_code in (200, 400, 422)
+        assert response.status_code == 400
+        assert "scheme" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_update_settings_requires_url(self, async_client):
-        """POST /api/settings requires URL field."""
+        """POST /api/settings requires the url field — missing it returns 422.
+
+        Mutation check: if SettingsRequest.url were made Optional, Pydantic would
+        accept the request and the status would change to 200, failing this test.
+        """
         response = await async_client.post(
             "/api/settings",
             json={
@@ -62,8 +78,8 @@ class TestUpdateSettings:
                 "password": "password",
             },
         )
-        # Missing required field should return validation error
-        assert response.status_code in (400, 422)
+        # SettingsRequest.url has no default — Pydantic rejects the missing field
+        assert response.status_code == 422
 
 
 class TestTestConnection:
@@ -71,23 +87,37 @@ class TestTestConnection:
 
     @pytest.mark.asyncio
     async def test_test_connection_with_valid_credentials(self, async_client):
-        """POST /api/settings/test tests connection with provided credentials."""
-        with patch("routers.settings.get_client") as mock_get_client:
-            mock_client = MagicMock()
-            mock_client.test_connection = MagicMock(return_value=True)
-            mock_get_client.return_value = mock_client
+        """POST /api/settings/test returns success=True when Dispatcharr token endpoint returns 200.
 
+        The test_connection router uses httpx.AsyncClient directly (not get_client).
+        Mock at the httpx boundary so ECM's parsing of the auth response is exercised.
+        Mutation check: if the router stopped checking response.status_code == 200,
+        success would not be True and this test would fail.
+        """
+        from unittest.mock import AsyncMock
+        import httpx
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=None)
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
             response = await async_client.post(
                 "/api/settings/test",
                 json={
-                    "url": "http://localhost:5656",
+                    "url": "http://dispatcharr.example.com:5656",
                     "username": "admin",
                     "password": "password",
                 },
             )
 
-            # Should return success/failure based on test
-            assert response.status_code in (200, 400, 500)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
 
     @pytest.mark.asyncio
     async def test_test_connection_requires_credentials(self, async_client):
@@ -132,5 +162,13 @@ class TestRestartServices:
 
                     response = await async_client.post("/api/settings/restart-services")
 
-                    # Should attempt restart
-                    assert response.status_code in (200, 500)
+        # _restart_background_services catches all internal failures and always
+        # returns a structured {"success": bool, "message": str} dict — it never
+        # raises, so the endpoint deterministically returns 200. The old
+        # (200, 500) set admitted a nonexistent 500 branch and would have masked a
+        # regression that made the endpoint actually 500. Assert the 200 and the
+        # documented result shape.
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["success"], bool)
+        assert "message" in data

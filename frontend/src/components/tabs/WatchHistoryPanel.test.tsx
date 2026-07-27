@@ -92,6 +92,13 @@ describe('WatchHistoryPanel', () => {
       render(<WatchHistoryPanel />);
 
       expect(screen.getByText('Loading watch history...')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading watch history...')).not.toBeInTheDocument();
+      });
     });
 
     it('fetches data on mount with default params', async () => {

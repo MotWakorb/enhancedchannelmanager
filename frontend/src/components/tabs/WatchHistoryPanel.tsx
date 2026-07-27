@@ -93,14 +93,14 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
 
   if (loading && !data) {
     return (
-      <div className="watch-history-panel">
+      <div className="watch-history-panel" id="stats-section-watch-history">
         <div className="loading-state">Loading watch history...</div>
       </div>
     );
   }
 
   return (
-    <div className="watch-history-panel">
+    <div className="watch-history-panel" id="stats-section-watch-history">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Watch History</h3>
@@ -109,8 +109,8 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
           )}
         </div>
         <div className="header-right">
-          <button className="refresh-btn" onClick={fetchData} disabled={loading}>
-            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
+          <button className="refresh-btn" onClick={fetchData} disabled={loading} aria-label="Refresh watch history" title="Refresh watch history">
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`} aria-hidden="true">refresh</span>
           </button>
         </div>
       </div>
@@ -198,6 +198,15 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
                     key={entry.id}
                     className={`history-row ${expandedId === entry.id ? 'expanded' : ''} ${!entry.disconnected_at ? 'active' : ''}`}
                     onClick={() => toggleExpanded(entry.id)}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expandedId === entry.id}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleExpanded(entry.id);
+                      }
+                    }}
                   >
                     <td className="time-cell">
                       <span className="relative-time">{formatRelativeTime(entry.connected_at)}</span>
@@ -292,8 +301,10 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
             className="page-btn"
             onClick={handlePrevPage}
             disabled={page <= 1}
+            aria-label="Previous page"
+            title="Previous page"
           >
-            <span className="material-icons">chevron_left</span>
+            <span className="material-icons" aria-hidden="true">chevron_left</span>
           </button>
           <span className="page-info">
             Page {page} of {data.total_pages}
@@ -302,8 +313,10 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
             className="page-btn"
             onClick={handleNextPage}
             disabled={page >= data.total_pages}
+            aria-label="Next page"
+            title="Next page"
           >
-            <span className="material-icons">chevron_right</span>
+            <span className="material-icons" aria-hidden="true">chevron_right</span>
           </button>
         </div>
       )}

@@ -9,30 +9,9 @@
   overflow: auto;
 }
 
-.m3u-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1.5rem;
-}
-
-.header-title h2 {
-  margin: 0 0 0.25rem 0;
-  font-size: 1.5rem;
-  color: var(--text-primary);
-}
-
-.header-description {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-}
-
-.header-actions {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-}
+/* .m3u-header layout + .header-title/.header-description/.header-actions
+   are supplied by PageHeader.css / shared/common.css (bd-7l7wi). This tab
+   renders its header via <PageHeader className="m3u-header" .../>. */
 
 /* .btn-primary, .btn-secondary are defined in shared/common.css */
 

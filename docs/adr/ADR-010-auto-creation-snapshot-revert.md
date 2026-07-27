@@ -18,6 +18,8 @@
   - `docs/adr/ADR-008-interactive-stream-dedup.md` — Sibling ADR; partial-failure-never-silent contract and Dispatcharr-as-source-of-truth (no local FK across the process boundary) framing this ADR reuses.
   - `docs/architecture.md` — system overview (auto-creation pipeline internals); update on acceptance to reference the snapshot/restore boundary.
 
+> **Terminology note (post-decision):** the "Auto-Creation" feature this ADR governs was later renamed **Channel Pipeline** (`enhancedchannelmanager-3udrl`). This ADR is a historical decision record and is left as originally written — table names, module paths, config keys, and endpoint paths quoted below reflect the code as it existed at the time this ADR was accepted. Where current docs and code refer to the feature by name, they now say "Channel Pipeline"; the persisted identifiers this ADR references (`auto_creation_snapshots` table, `auto_creation_snapshot_days`/`auto_creation_snapshot_max` settings, etc.) remain unchanged in the codebase today.
+
 ## Context
 
 When the auto-creation pipeline runs, it can create, modify, and re-assign streams across hundreds of channels (570+ on a representative operator instance). The current **rollback** facility is narrow: it only undoes what a run **created**, and surgically un-merges streams a run **added** to pre-existing channels. It cannot restore the broader pre-run channel↔streams state.

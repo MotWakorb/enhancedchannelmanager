@@ -6,7 +6,7 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from database import get_session
@@ -31,8 +31,13 @@ class CreateNotificationRequest(BaseModel):
 
 @router.get("")
 async def get_notifications(
-    page: int = 1,
-    page_size: int = 50,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 previously produced an invalid SQL
+    # OFFSET/LIMIT instead of a clean 422. Upper bound is generous — the only
+    # real caller (NotificationCenter.tsx, and the MCP list_notifications tool)
+    # requests page_size=20; default is 50.
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(50, ge=1, le=100, description="Results per page"),
     unread_only: bool = False,
     notification_type: Optional[str] = None,
 ):

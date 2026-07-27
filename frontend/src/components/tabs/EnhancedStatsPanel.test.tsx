@@ -74,15 +74,22 @@ describe('EnhancedStatsPanel', () => {
       render(<EnhancedStatsPanel />);
 
       expect(screen.getByText('Loading enhanced statistics...')).toBeInTheDocument();
+
+      // Let the mount-time fetch settle so the resulting state updates happen
+      // inside act() (otherwise React logs an act() warning for the
+      // un-awaited fetchData() that flips loading off after this test body).
+      await waitFor(() => {
+        expect(screen.queryByText('Loading enhanced statistics...')).not.toBeInTheDocument();
+      });
     });
 
     it('fetches data on mount', async () => {
       render(<EnhancedStatsPanel />);
 
       await waitFor(() => {
-        expect(api.getUniqueViewersSummary).toHaveBeenCalledWith(7);
+        expect(api.getUniqueViewersSummary).toHaveBeenCalledWith(7, 'ip');
         expect(api.getChannelBandwidthStats).toHaveBeenCalled();
-        expect(api.getUniqueViewersByChannel).toHaveBeenCalled();
+        expect(api.getUniqueViewersByChannel).toHaveBeenCalledWith(7, 20, 'ip');
       });
     });
 
@@ -122,7 +129,7 @@ describe('EnhancedStatsPanel', () => {
       render(<EnhancedStatsPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Top Viewers by Connections')).toBeInTheDocument();
+        expect(screen.getByText(/Top Viewers by Connections/)).toBeInTheDocument();
         expect(screen.getByText('192.168.1.100')).toBeInTheDocument();
         expect(screen.getByText('192.168.1.101')).toBeInTheDocument();
         expect(screen.getByText('192.168.1.102')).toBeInTheDocument();
@@ -133,10 +140,59 @@ describe('EnhancedStatsPanel', () => {
       render(<EnhancedStatsPanel />);
 
       await waitFor(() => {
-        expect(screen.getByText('Channels by Unique Viewers')).toBeInTheDocument();
+        expect(screen.getByText(/Channels by Unique Viewers/)).toBeInTheDocument();
         expect(screen.getByText('45 viewers')).toBeInTheDocument();
         expect(screen.getByText('35 viewers')).toBeInTheDocument();
         expect(screen.getByText('25 viewers')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('viewer group-by toggle (#3/#4)', () => {
+    it('renders By IP / By User toggle buttons', async () => {
+      render(<EnhancedStatsPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Group by:')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'IP' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'User' })).toBeInTheDocument();
+      });
+    });
+
+    it('refetches viewers and by-channel with group_by=user when User clicked', async () => {
+      render(<EnhancedStatsPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'User' })).toBeInTheDocument();
+      });
+
+      vi.mocked(api.getUniqueViewersSummary).mockClear();
+      vi.mocked(api.getUniqueViewersByChannel).mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'User' }));
+
+      await waitFor(() => {
+        expect(api.getUniqueViewersSummary).toHaveBeenCalledWith(7, 'user');
+        expect(api.getUniqueViewersByChannel).toHaveBeenCalledWith(7, 20, 'user');
+      });
+    });
+
+    it('renders the resolved username, falling back to IP for unresolved viewers', async () => {
+      vi.mocked(api.getUniqueViewersSummary).mockResolvedValue({
+        ...mockUniqueViewers,
+        top_viewers: [
+          { ip_address: 'alice', username: 'alice', connection_count: 9, total_watch_seconds: 600 },
+          { ip_address: '10.0.0.9', username: null, connection_count: 2, total_watch_seconds: 120 },
+        ],
+      });
+
+      render(<EnhancedStatsPanel />);
+
+      await waitFor(() => {
+        // resolved viewer shows the username
+        expect(screen.getByText('alice')).toBeInTheDocument();
+        // unresolved viewer falls back to the IP
+        expect(screen.getByText('10.0.0.9')).toBeInTheDocument();
       });
     });
   });
@@ -353,13 +409,6 @@ describe('EnhancedStatsPanel', () => {
   });
 });
 
-describe('EnhancedStatsPanel helper functions', () => {
-  // Helper functions are tested through component rendering
-  // The component tests verify that:
-  // - formatBytes() converts bytes to human readable (1GB = "1.0 GB")
-  // - formatWatchTime() converts seconds to duration ("1h 0m")
-
-  it('helper functions are tested via component integration', () => {
-    expect(true).toBe(true);
-  });
-});
+// EnhancedStatsPanel helper functions (formatBytes, formatWatchTime) are
+// verified through the component integration tests above — no standalone unit
+// describe needed. Removing the empty describe block to keep the suite clean.

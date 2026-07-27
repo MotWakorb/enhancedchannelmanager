@@ -1,0 +1,8 @@
+{
+  "id": 65201,
+  "name": "Recorded Catch-up Stream",
+  "url": "http://provider.example/live/65201.ts",
+  "m3u_account": 7,
+  "is_catchup": true,
+  "catchup_days": 7
+}

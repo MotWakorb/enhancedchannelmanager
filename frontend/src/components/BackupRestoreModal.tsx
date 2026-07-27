@@ -1,7 +1,12 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { RestoreProgress } from './RestoreProgress';
+import { RestoreCompleteSummary } from './RestoreCompleteSummary';
+import { LogoMissBanner } from './LogoMissBanner';
+import { useRestoreProgress } from '../hooks/useRestoreProgress';
+import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
-import type { BackupValidation, BackupRestoreResult } from '../services/api';
+import type { BackupValidation, BackupRestoreResult, RestoreReport } from '../services/api';
 import { getDateLocale } from '../utils/formatting';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
@@ -18,8 +23,51 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
   const [validation, setValidation] = useState<BackupValidation | null>(null);
   const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
   const [restoreResult, setRestoreResult] = useState<BackupRestoreResult | null>(null);
+  // SEAM (bead 0i2vt.20): the DBAS Phase-2 restore-complete summary. The
+  // async restore-trigger endpoint that returns a terminal `RestoreReport`
+  // does not exist yet (same null seam as `restoreTaskId` below). When that
+  // endpoint lands, set this from its terminal report and the
+  // RestoreCompleteSummary renders the tri-state outcome + per-entity counts.
+  // Until then it stays null and the results step falls back to the legacy
+  // section-level `BackupRestoreResult` view.
+  const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Dispatcharr base URL (settings.url) — drives the logo-miss banner's
+  // "Fix in Dispatcharr" link (bead 0i2vt.19). Same source App.tsx reads for
+  // `dispatcharrUrl`. Best-effort: if settings can't be read the banner still
+  // fires, it just omits the link.
+  const [dispatcharrUrl, setDispatcharrUrl] = useState('');
+  useEffect(() => {
+    let active = true;
+    api
+      .getSettings()
+      .then((settings) => {
+        if (active) setDispatcharrUrl(settings.url ?? '');
+      })
+      .catch(() => {
+        /* non-fatal — banner omits the link when the base url is unknown */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // SEAM: the multi-stage restore-trigger endpoint / restore TaskScheduler is a
+  // LATER bead (the orchestrator .18 exists but emits no _set_progress, and no
+  // restore task is wired to task_scheduler yet). When that endpoint lands it
+  // returns a task id; set it here and the progress surface polls it live. Until
+  // then this stays null and the current synchronous restore drives an
+  // indeterminate (stage-1) progress view — the navigate-away guard still arms.
+  const [restoreTaskId, setRestoreTaskId] = useState<string | null>(null);
+  const progress = useRestoreProgress({ taskId: restoreTaskId });
+
+  // Guard against closing the tab mid-restore — the compensating rollback
+  // depends on the op completing (ADR-012: Dispatcharr has no DB transactions).
+  // Armed only while the restore step is live; released on completion/failure.
+  const isRestoring = step === 'restoring';
+  useNavigateAwayGuard(isRestoring);
 
   const handleFile = useCallback(async (selectedFile: File) => {
     if (!selectedFile.name.match(/\.ya?ml$/i)) {
@@ -98,6 +146,17 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
     if (!file || selectedSections.size === 0) return;
     setStep('restoring');
     setError(null);
+    // SEAM: when the multi-stage restore-trigger endpoint lands it will return a
+    // task id to feed the live progress poller, and a terminal RestoreReport to
+    // feed the RestoreCompleteSummary, e.g.
+    //   const { task_id } = await api.startRestoreTask(file, sections);
+    //   setRestoreTaskId(task_id);
+    //   ...poll until terminal, then:
+    //   setRestoreReport(terminalReport);  // RestoreCompleteSummary renders it
+    // The current endpoint is synchronous and returns the legacy
+    // BackupRestoreResult, so leave the poller's task id and the report null.
+    setRestoreTaskId(null);
+    setRestoreReport(null);
 
     try {
       const result = await api.restoreBackupYaml(file, Array.from(selectedSections));
@@ -117,8 +176,8 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
         <div className="modal-header">
           <h3 className="modal-title">Restore from YAML Export</h3>
           {canClose && (
-            <button className="modal-close-btn" onClick={onClose}>
-              <span className="material-icons">close</span>
+            <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+              <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
@@ -197,13 +256,43 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
           )}
 
           {step === 'restoring' && (
-            <div className="modal-loading">
-              <span className="material-icons">sync</span>
-              <p>Restoring selected sections...</p>
-            </div>
+            <RestoreProgress
+              mode="restore"
+              view={
+                // When a restore task id is wired (later bead) the polled view
+                // drives the stage indicator. Until then the restore is a single
+                // synchronous request with no per-stage signal, so render an
+                // indeterminate "running, stage 1" view.
+                restoreTaskId
+                  ? progress
+                  : {
+                      ...progress,
+                      status: 'running',
+                      isRunning: true,
+                      isError: false,
+                      isComplete: false,
+                      stageNumber: 1,
+                    }
+              }
+            />
           )}
 
-          {step === 'results' && restoreResult && (
+          {/* SEAM (bead 0i2vt.20): once the async restore endpoint returns a
+              terminal RestoreReport, the DBAS summary renders the tri-state
+              outcome + per-entity counts. Bead .19's logo-miss RED banner slots
+              into RestoreCompleteSummary's `bannerSlot` prop. Falls back to the
+              legacy section-level result view while restoreReport is null. */}
+          {step === 'results' && restoreReport && (
+            <RestoreCompleteSummary
+              report={restoreReport}
+              mode="applied"
+              bannerSlot={
+                <LogoMissBanner report={restoreReport} dispatcharrUrl={dispatcharrUrl} />
+              }
+            />
+          )}
+
+          {step === 'results' && !restoreReport && restoreResult && (
             <div className="brm-results">
               <div
                 className={`brm-results-banner ${restoreResult.success ? 'is-success' : 'is-partial'}`}
@@ -302,11 +391,11 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
 
 const SECTION_LABELS: Record<string, string> = {
   settings: 'Settings',
-  scheduled_tasks: 'Scheduled Tasks',
-  task_schedules: 'Task Schedules',
+  scheduled_tasks: 'Task Settings & Alerts',
+  task_schedules: 'Task Run Schedules',
   normalization_rule_groups: 'Normalization Rules',
   tag_groups: 'Tag Groups',
-  auto_creation_rules: 'Auto-Creation Rules',
+  auto_creation_rules: 'Channel Pipeline Rules',
   ffmpeg_profiles: 'FFmpeg Profiles',
   dummy_epg_profiles: 'Dummy EPG Profiles',
 };

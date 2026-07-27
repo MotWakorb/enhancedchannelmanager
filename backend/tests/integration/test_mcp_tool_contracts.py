@@ -348,4 +348,11 @@ def test_contract_exempt_inventory(capsys):
                 print("  " + entry)
         else:
             print("\n[bd-vtghg] no raw /api/ calls remain — every tool routes through the registry.")
-    assert True
+    # Any raw /api/ call that bypasses the registry and is NOT marked contract-exempt
+    # is a contract violation. The FAIL-mode guard above (test_all_endpoint_refs_are_defined)
+    # enforces no unknown endpoint ids; this guard enforces no un-exempted raw calls remain.
+    non_exempt = [e for e in inventory if "NOT EXEMPT" in e]
+    assert not non_exempt, (
+        f"Raw /api/ calls without contract-exempt annotation:\n  "
+        + "\n  ".join(non_exempt)
+    )

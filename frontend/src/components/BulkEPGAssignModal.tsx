@@ -36,7 +36,7 @@ interface BulkEPGAssignModalProps {
   epgAutoMatchThreshold?: number;
 }
 
-type Phase = 'analyzing' | 'review';
+type Phase = 'configure' | 'analyzing' | 'review';
 
 /** Look up EPG source name by ID */
 function getEPGSourceName(sourceId: number, epgSources: EPGSource[]): string {
@@ -85,7 +85,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   onAssign,
   epgAutoMatchThreshold = 80,
 }: BulkEPGAssignModalProps) {
-  const [phase, setPhase] = useState<Phase>('analyzing');
+  const [phase, setPhase] = useState<Phase>('configure');
   const [matchResults, setMatchResults] = useState<EPGMatchChannelResult[]>([]);
   const [conflictResolutions, setConflictResolutions] = useState<Map<number, EPGMatchEntry | null>>(new Map());
   const [autoMatchedExpanded, setAutoMatchedExpanded] = useState(true);
@@ -108,9 +108,6 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<number> | null>(null);
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const sourceDropdownRef = useRef<HTMLDivElement>(null);
-
-  // Track if we've already analyzed for this modal session
-  const hasAnalyzedRef = useRef(false);
 
   // Get available sources (exclude dummy EPG sources)
   const availableSources = useMemo(() => {
@@ -170,88 +167,76 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
     setSelectedSourceIds(new Set());
   }, []);
 
-  // Re-run analysis with current source selection
-  const handleRerunAnalysis = useCallback(() => {
-    hasAnalyzedRef.current = false;
-    setPhase('analyzing');
-    setMatchResults([]);
-    setConflictResolutions(new Map());
+  // Run matching against the currently selected EPG sources. Triggered
+  // explicitly by the operator (from the configure step, or a re-run from
+  // review) — never automatically on open. Picking sources first avoids
+  // matching the channel set against every source, which on a large guide
+  // (e.g. a full US OTA feed) is a slow, full-scan that can stall the match.
+  const runAnalysis = useCallback(async () => {
     setShowConflictReview(false);
     setCurrentConflictIndex(0);
-  }, []);
-
-  // Run matching when modal opens
-  useEffect(() => {
-    if (!isOpen) {
-      // Reset state when modal closes
-      setPhase('analyzing');
-      setMatchResults([]);
-      setConflictResolutions(new Map());
-      setAutoMatchedExpanded(true);
-      setUnmatchedExpanded(true);
-      setCurrentConflictIndex(0);
-      setShowConflictReview(false);
-      setEpgSearchFilter('');
-      setUnmatchedSelections(new Map());
-      setSearchingUnmatchedId(null);
-      setUnmatchedSearchTerm('');
-      setAutoMatchOverrides(new Map());
-      setEditingAutoMatchId(null);
-      setAutoMatchSearchTerm('');
-      setSelectedSourceIds(null); // Reset to default (all selected)
-      setSourceDropdownOpen(false);
-      hasAnalyzedRef.current = false;
-      return;
-    }
-
-    // Only run analysis once per modal open (or when re-run is triggered)
-    if (hasAnalyzedRef.current) {
-      return;
-    }
-
-    // Start analysis
+    setConflictResolutions(new Map());
+    setMatchResults([]);
     setPhase('analyzing');
-    hasAnalyzedRef.current = true;
 
-    // Run async analysis via backend API
-    const runAnalysis = async () => {
-      try {
-        logger.debug('[BulkEPGAssign] Running analysis...');
-        logger.debug('[BulkEPGAssign] Selected channels:', selectedChannels.length);
+    try {
+      logger.debug('[BulkEPGAssign] Running analysis...');
+      logger.debug('[BulkEPGAssign] Selected channels:', selectedChannels.length);
 
-        // Early exit if no channels selected
-        if (selectedChannels.length === 0) {
-          logger.debug('[BulkEPGAssign] No channels selected, skipping analysis');
-          setMatchResults([]);
-          setPhase('review');
-          return;
-        }
-
-        const response = await matchChannelsToEPG({
-          channel_ids: selectedChannels.map(ch => ch.id),
-          epg_source_ids: Array.from(effectiveSelectedSourceIds),
-        });
-
-        // Flatten all results into single array
-        const results = [...response.exact, ...response.multiple, ...response.none];
-
-        logger.debug('[BulkEPGAssign] Match results:', results);
-        logger.debug(`[BulkEPGAssign] Summary: ${response.summary.exact_count} auto, ${response.summary.multiple_count} conflicts, ${response.summary.none_count} unmatched`);
-        setMatchResults(results);
-        setPhase('review');
-      } catch (error) {
-        logger.error('[BulkEPGAssign] Analysis failed:', error);
-        // Still transition to review phase so UI doesn't hang
+      // Early exit if no channels selected
+      if (selectedChannels.length === 0) {
+        logger.debug('[BulkEPGAssign] No channels selected, skipping analysis');
         setMatchResults([]);
         setPhase('review');
+        return;
       }
-    };
 
+      const response = await matchChannelsToEPG({
+        channel_ids: selectedChannels.map(ch => ch.id),
+        epg_source_ids: Array.from(effectiveSelectedSourceIds),
+      });
+
+      // Flatten all results into single array
+      const results = [...response.exact, ...response.multiple, ...response.none];
+
+      logger.debug('[BulkEPGAssign] Match results:', results);
+      logger.debug(`[BulkEPGAssign] Summary: ${response.summary.exact_count} auto, ${response.summary.multiple_count} conflicts, ${response.summary.none_count} unmatched`);
+      setMatchResults(results);
+      setPhase('review');
+    } catch (error) {
+      logger.error('[BulkEPGAssign] Analysis failed:', error);
+      // Still transition to review phase so UI doesn't hang
+      setMatchResults([]);
+      setPhase('review');
+    }
+  }, [selectedChannels, effectiveSelectedSourceIds]);
+
+  // Re-run analysis (from the review step) with the current source selection.
+  const handleRerunAnalysis = useCallback(() => {
     runAnalysis();
-  // Note: effectiveSelectedSourceIds changes when source selection changes, but we only want to re-run
-  // when hasAnalyzedRef is reset (via handleRerunAnalysis), not on every source toggle
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, selectedChannels]);
+  }, [runAnalysis]);
+
+  // Reset all modal state when it closes, so the next open starts fresh at
+  // the configure step (sources picked, nothing matched yet).
+  useEffect(() => {
+    if (isOpen) return;
+    setPhase('configure');
+    setMatchResults([]);
+    setConflictResolutions(new Map());
+    setAutoMatchedExpanded(true);
+    setUnmatchedExpanded(true);
+    setCurrentConflictIndex(0);
+    setShowConflictReview(false);
+    setEpgSearchFilter('');
+    setUnmatchedSelections(new Map());
+    setSearchingUnmatchedId(null);
+    setUnmatchedSearchTerm('');
+    setAutoMatchOverrides(new Map());
+    setEditingAutoMatchId(null);
+    setAutoMatchSearchTerm('');
+    setSelectedSourceIds(null); // Reset to default (all selected)
+    setSourceDropdownOpen(false);
+  }, [isOpen]);
 
   // Categorize results and sort A-Z by channel name
   // Uses confidence threshold to determine auto-matching
@@ -513,13 +498,14 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
       <div className="modal-container modal-xxl bulk-epg-modal">
         <div className="modal-header">
           <h2>Bulk EPG Assignment</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
-        {/* EPG Source Filter */}
-        {availableSources.length > 0 && (
+        {/* EPG Source Filter (review step only — the configure step has its
+            own source picker; here it drives a re-analyze). */}
+        {phase !== 'configure' && availableSources.length > 0 && (
           <div className="bulk-epg-source-filter">
             <span className="source-filter-label">EPG Sources:</span>
             <div className="source-filter-dropdown" ref={sourceDropdownRef}>
@@ -597,7 +583,61 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
         )}
 
         <div className="modal-body bulk-epg-body">
-          {phase === 'analyzing' ? (
+          {phase === 'configure' ? (
+            <div className="bulk-epg-configure">
+              <p className="bulk-epg-configure-intro">
+                Choose which EPG source{availableSources.length !== 1 ? 's' : ''} to match{' '}
+                {selectedChannels.length} channel{selectedChannels.length !== 1 ? 's' : ''} against,
+                then start matching.
+              </p>
+              {availableSources.length === 0 ? (
+                <div className="modal-warning-banner">
+                  <span className="material-icons">warning</span>
+                  <p>No EPG sources available. Load EPG sources in the EPG Manager tab first.</p>
+                </div>
+              ) : (
+                <div className="bulk-epg-configure-sources">
+                  <div className="source-filter-actions">
+                    <button
+                      type="button"
+                      className="source-filter-action"
+                      onClick={handleSelectAllSources}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="source-filter-action"
+                      onClick={handleClearAllSources}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="source-filter-options">
+                    {availableSources.map(source => {
+                      const epgCount = epgData.filter(e => e.epg_source === source.id).length;
+                      return (
+                        <div
+                          key={source.id}
+                          className={`source-filter-option ${effectiveSelectedSourceIds.has(source.id) ? 'selected' : ''}`}
+                        >
+                          <label className="source-option-label">
+                            <input
+                              type="checkbox"
+                              checked={effectiveSelectedSourceIds.has(source.id)}
+                              onChange={() => handleToggleSource(source.id)}
+                            />
+                            <span className="source-option-name">{source.name}</span>
+                            <span className="source-option-count">({epgCount})</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : phase === 'analyzing' ? (
             <div className="modal-loading bulk-epg-analyzing">
               <span className="material-icons modal-spinning-ccw">sync</span>
               <div className="analyzing-text">
@@ -778,16 +818,18 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
                                 className="edit-match-btn"
                                 onClick={() => handleOpenAutoMatchEdit(result)}
                                 title="Change EPG assignment"
+                                aria-label="Change EPG assignment"
                               >
-                                <span className="material-icons">edit</span>
+                                <span className="material-icons" aria-hidden="true">edit</span>
                               </button>
                               {hasOverride && (
                                 <button
                                   className="reset-match-btn"
                                   onClick={() => handleResetAutoMatchOverride(result.channel_id)}
                                   title="Reset to original match"
+                                  aria-label="Reset to original match"
                                 >
-                                  <span className="material-icons">undo</span>
+                                  <span className="material-icons" aria-hidden="true">undo</span>
                                 </button>
                               )}
                             </div>
@@ -884,13 +926,30 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
         </div>
 
         <div className="modal-footer">
-          <button
-            className="modal-btn modal-btn-primary"
-            onClick={handleAssign}
-            disabled={phase === 'analyzing' || assignmentCount === 0}
-          >
-            Assign {assignmentCount} Channel{assignmentCount !== 1 ? 's' : ''}
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>
+            Cancel
           </button>
+          {phase === 'configure' ? (
+            <button
+              className="modal-btn modal-btn-primary"
+              onClick={runAnalysis}
+              disabled={
+                effectiveSelectedSourceIds.size === 0 ||
+                selectedChannels.length === 0
+              }
+            >
+              <span className="material-icons">search</span>
+              Match {selectedChannels.length} Channel{selectedChannels.length !== 1 ? 's' : ''}
+            </button>
+          ) : (
+            <button
+              className="modal-btn modal-btn-primary"
+              onClick={handleAssign}
+              disabled={phase === 'analyzing' || assignmentCount === 0}
+            >
+              Assign {assignmentCount} Channel{assignmentCount !== 1 ? 's' : ''}
+            </button>
+          )}
         </div>
       </div>
     </ModalOverlay>
@@ -986,8 +1045,8 @@ const ConflictCard = memo(function ConflictCard({ result, epgSources, allEpgData
           onChange={e => onSearchChange(e.target.value)}
         />
         {searchFilter && (
-          <button className="clear-search" onClick={() => onSearchChange('')}>
-            <span className="material-icons">close</span>
+          <button className="clear-search" onClick={() => onSearchChange('')} aria-label="Clear search" title="Clear search">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         )}
       </div>
@@ -1082,7 +1141,9 @@ interface EPGSearchCardProps {
 
 const MAX_SEARCH_RESULTS = 50;
 
-const EPGSearchCard = memo(function EPGSearchCard({
+// Exported for unit testing of the source-priority sort-before-slice behavior
+// (bead enhancedchannelmanager-s5vyz). Not used elsewhere in the app.
+export const EPGSearchCard = memo(function EPGSearchCard({
   channelName,
   normalizedName,
   detectedCountry,
@@ -1099,15 +1160,28 @@ const EPGSearchCard = memo(function EPGSearchCard({
     return matchesEPGEntrySearch(epgDataToMatchEntry(epg), searchWords);
   }, []);
 
+  // Source priority lookup (higher = more preferred) so the operator's
+  // preferred sources surface first in search results.
+  const sourcePriority = useMemo(
+    () => new Map(epgSources.map(s => [s.id, s.priority ?? 0])),
+    [epgSources],
+  );
+
   const searchResults = useMemo(() => {
     if (!searchTerm.trim()) return [];
     const searchWords = searchTerm.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     if (searchWords.length === 0) return [];
 
     const results = epgData.filter(epg => matchesSearch(epg, searchWords));
+    // Order by source priority DESC before slicing. Array.sort is stable, so
+    // same-source entries keep their relevance order. The sort MUST precede the
+    // slice — sorting after would truncate higher-priority entries out of view.
+    results.sort(
+      (a, b) => (sourcePriority.get(b.epg_source) ?? 0) - (sourcePriority.get(a.epg_source) ?? 0),
+    );
     // Limit results for performance
     return results.slice(0, MAX_SEARCH_RESULTS);
-  }, [epgData, searchTerm, matchesSearch]);
+  }, [epgData, searchTerm, matchesSearch, sourcePriority]);
 
   const hasMoreResults = useMemo(() => {
     if (!searchTerm.trim()) return false;
@@ -1127,8 +1201,8 @@ const EPGSearchCard = memo(function EPGSearchCard({
             <span className="country-badge">{detectedCountry.toUpperCase()}</span>
           )}
         </div>
-        <button className="close-btn" onClick={onClose} title="Close">
-          <span className="material-icons">close</span>
+        <button className="close-btn" onClick={onClose} title="Close" aria-label="Close EPG search">
+          <span className="material-icons" aria-hidden="true">close</span>
         </button>
       </div>
       <div className="epg-search-card-search">
@@ -1141,8 +1215,8 @@ const EPGSearchCard = memo(function EPGSearchCard({
           autoFocus
         />
         {searchTerm && (
-          <button className="clear-search" onClick={() => onSearchChange('')}>
-            <span className="material-icons">close</span>
+          <button className="clear-search" onClick={() => onSearchChange('')} aria-label="Clear search" title="Clear search">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         )}
       </div>

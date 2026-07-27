@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict
 
+from config import get_settings, save_settings
 from dispatcharr_client import get_client
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
@@ -40,7 +41,7 @@ async def get_streams_grouped(
     This replaces both the per-group count probes (one
     ``GET /api/channels/streams/?page_size=1`` per group) and the per-group
     paged pulls with a SINGLE paginated ``get_streams(m3u_account=...)`` loop —
-    mirroring the proven pattern in ``auto_creation_engine._fetch_streams``.
+    mirroring the proven pattern in ``channel_pipeline_engine._fetch_streams``.
 
     Dispatcharr returns ``channel_group`` as a numeric ID; we resolve it to a
     name via ``group_lookup`` (built from ``get_channel_groups()``).
@@ -236,6 +237,54 @@ async def capture_m3u_changes(
     except Exception as e:
         logger.error("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, e)
         return None
+
+
+def _advance_refresh_watermark() -> None:
+    """ADR-011 (bd-ka7j9): mark that an M3U refresh just completed successfully.
+
+    Replaces the old hard chain that invoked auto-creation as a side-effect of
+    the refresh task. The interval-scheduled ``ChannelPipelineTask`` reads this
+    watermark FRESH on each tick and auto-fires when it is newer than the
+    consumed watermark — so the two subsystems are decoupled and a single
+    failed M3U account no longer suppresses auto-creation for the whole batch.
+
+    Per Q1 the watermark advances on EVERY successful refresh (NOT change-gated)
+    to preserve today's "runs after every refresh" behavior. We do NOT reuse
+    ``M3USnapshot.snapshot_time`` (only written on detected changes — unsuitable
+    as a "refresh happened" marker). Best-effort: a settings write failure is
+    logged but never fails the refresh task.
+    """
+    try:
+        settings = get_settings()
+        settings.last_m3u_refresh_completed_at = datetime.utcnow().isoformat()
+        save_settings(settings)
+        # Don't claim auto-creation "will pick it up" when the task is gated OFF
+        # — the parent scheduled_tasks.enabled gate must be on for the interval
+        # tick to ever consume this watermark (epic vkktd). Annotate so the log
+        # doesn't mislead when matching is silently unable to run (vkktd.1).
+        from task_registry import auto_creation_parent_enabled
+        parent_enabled = auto_creation_parent_enabled()
+        if parent_enabled is False:
+            logger.info(
+                "[M3U] Advanced refresh watermark to %s (auto_creation task is "
+                "currently DISABLED — it will NOT pick this up; enable the task to "
+                "run matching on refresh)",
+                settings.last_m3u_refresh_completed_at,
+            )
+        elif parent_enabled is True:
+            logger.info(
+                "[M3U] Advanced refresh watermark to %s (auto-creation will pick it up on its next tick)",
+                settings.last_m3u_refresh_completed_at,
+            )
+        else:
+            # Unknown gate state — stay neutral rather than claim it will be
+            # picked up (review Minor 3).
+            logger.info(
+                "[M3U] Advanced refresh watermark to %s",
+                settings.last_m3u_refresh_completed_at,
+            )
+    except Exception as e:  # pragma: no cover — watermark write is best-effort
+        logger.warning("[M3U] Failed to advance refresh watermark: %s", e)
 
 
 @register_task
@@ -469,6 +518,12 @@ class M3URefreshTask(TaskScheduler):
                 )
 
             if failed_count > 0:
+                # ADR-011 (bd-ka7j9): a partial success still completed >=1
+                # refresh — advance the watermark so auto-creation picks it up.
+                # Decoupling means a single failed account no longer suppresses
+                # auto-creation for the rest of the batch (the GH #473 coupling).
+                if success_count > 0:
+                    _advance_refresh_watermark()
                 return TaskResult(
                     success=success_count > 0,
                     message=f"Refreshed {success_count} M3U accounts, {failed_count} failed",
@@ -480,21 +535,11 @@ class M3URefreshTask(TaskScheduler):
                     details={"refreshed": refreshed, "errors": errors},
                 )
 
-            # Run auto-creation rules if any have run_on_refresh=True
-            try:
-                from tasks.auto_creation import run_auto_creation_after_refresh
-                refreshed_account_ids = [a["id"] for a in accounts_to_refresh]
-                auto_result = await run_auto_creation_after_refresh(
-                    m3u_account_ids=refreshed_account_ids,
-                    triggered_by="m3u_refresh"
-                )
-                if auto_result.get("channels_created", 0) > 0:
-                    logger.info(
-                        "[%s] Auto-creation: %s channels created",
-                        self.task_id, auto_result.get("channels_created", 0)
-                    )
-            except Exception as e:
-                logger.warning("[%s] Auto-creation after refresh failed: %s", self.task_id, e)
+            # ADR-011 (bd-ka7j9): the hard chain to auto-creation is gone. A
+            # successful refresh advances the refresh watermark; the
+            # interval-scheduled ChannelPipelineTask reads it FRESH on its next
+            # tick and decides for itself whether to auto-fire.
+            _advance_refresh_watermark()
 
             return TaskResult(
                 success=True,

@@ -9,7 +9,7 @@ Compares three variants on a 1000-stream fixture sorted N log N times:
    compile cost.
 3. Migration (compiled) — pre-compile via ``safe_regex.compile`` once,
    pass compiled pattern into the key function. This is what
-   auto_creation_engine._run_rules now does.
+   channel_pipeline_engine._run_rules now does.
 
 The grooming SLA is <10% total sort-time overhead vs. baseline for the
 compiled variant. The raw-string variant is expected to be slower (that's
@@ -39,7 +39,7 @@ if str(_backend) not in sys.path:
     sys.path.insert(0, str(_backend))
 
 import safe_regex
-from auto_creation_evaluator import StreamContext
+from channel_pipeline_evaluator import StreamContext
 
 
 _PATTERN = r"Race (\d+)"

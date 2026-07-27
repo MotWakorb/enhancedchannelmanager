@@ -2,24 +2,33 @@
 
 **Bead:** bd-qmuij (informs bd-gb5r5.3 — DBAS import engine); §8–§9 addenda + checklist 18–26: `enhancedchannelmanager-0i2vt.3` (Phase 0, v0.18.0 DBAS absorption)
 **Author:** Security Engineer persona (Claude)
-**Date:** 2026-04-20 · **Addenda A & B added:** 2026-05-12
-**Status:** Draft — pending PO review of assumptions (§6) + Addendum A residual-risk decision (§8.4)
-**Related:** bd-ppe28 (closed, OWASP hardening), ADR-002 (restore transaction model, pending), ADR-004 (DBAS instance trust — referenced), epic `enhancedchannelmanager-0i2vt` + "ADR-008" (DBAS absorption — content in the epic bead; **no `docs/adr/ADR-008-*.md` file present as of 2026-05-12** — see note at end of §7), beads `0i2vt.4` (Fernet credential models) / `0i2vt.5` (SSRF wizard) / `0i2vt.7` (ZIP builder) / `0i2vt.8` (cloud upload)
+**Date:** 2026-04-20 · **Addenda A & B added:** 2026-05-12 · **Re-pointed at ADR-012, lifted to Accepted, Addendum C added:** 2026-06-17 · **Addendum D (cross-instance live sync) added:** 2026-06-19
+**Status:** Accepted — assumptions (§6) and the Addendum A residual (§8.4) resolved by PO; cross-instance scope corrected to ADR-012 D11; passphrase encryption covered by Addendum C (ADR-012 D12); v0.18.1 cross-instance live sync covered by Addendum D ([ADR-013](../adr/ADR-013-cross-instance-live-sync.md), epic `i39wu`)
+**Related:** bd-ppe28 (closed, OWASP hardening), ADR-002 (restore transaction model, pending), ADR-004 (DBAS instance trust — referenced), [ADR-012](../adr/ADR-012-dbas-absorption-approach.md) (DBAS absorption — source of truth), epic `enhancedchannelmanager-0i2vt` (DBAS absorption), beads `0i2vt.4` (Fernet credential models) / `0i2vt.5` (SSRF wizard) / `0i2vt.7` (ZIP builder) / `0i2vt.8` (cloud upload) / `u81kh` + `0zrse` (whole-artifact passphrase encryption — Addendum C) / `l1p4p` + `tsfv0` (users importer + Dispatcharr user-API spike — §3.6 P2 / §6 A3)
 
 ---
 
 ## 1. Scope & System Overview
 
-The DBAS (Database Archive / Backup & Sync) import endpoint accepts an uploaded `.zip` archive and restores a prior ECM + Dispatcharr configuration into the running instance. bd-gb5r5.3 ports the legacy `importService.ts` from DBAS to Python. The archive contains heterogeneous payloads — ECM `journal.db` + settings, uploaded logos/TLS material, M3U credentials, API tokens, user accounts, and a **plugins** payload whose execution semantics are **not yet determined in ECM** (see Assumptions §6). The restore path is ordered: M3U → EPG → profiles → groups → stream profiles → logos → channels → user agents → settings → plugins → DVR → comskip → users → refresh triggers, with name-based conflict resolution and ID remapping.
+The DBAS (Database Archive / Backup & Sync) import endpoint accepts an uploaded `.zip` archive and restores a prior ECM + Dispatcharr configuration into the running instance. bd-gb5r5.3 ports the legacy `importService.ts` from DBAS to Python. The archive contains heterogeneous payloads — ECM `journal.db` + settings, uploaded logos/TLS material, M3U credentials, API tokens, and user accounts. The restore path is ordered: M3U → EPG → profiles → groups → stream profiles → logos → channels → user agents → settings → DVR → comskip → users → refresh triggers, with name-based conflict resolution and ID remapping.
 
-This threat model covers the **Python import engine** ECM will build. The current `backend/routers/backup.py` ZIP restore (`/api/backup/restore`) is a smaller-scope precursor and is referenced as the inherited baseline — its protections (admin-only, manifest, basic path-traversal guard) are **table stakes**; DBAS extends them to cover categories that baseline does not (users, plugins, M3U creds). ECM has no current `plugin*` code in `backend/` (verified by `grep -ri plugin backend/` → 0 hits), so every plugin-related threat below is specified against a spec, not a live implementation.
+> **Plugins EXCLUDED from v0.18.0 (ADR-012 D10).** The original DBAS restore path included a
+> **plugins** payload whose execution semantics were never determined in ECM (`grep -ri plugin
+> backend/` → 0 hits). ADR-012 D10 (PO, 2026-06-16) **excludes the plugins category from v0.18.0
+> backup/restore entirely** — it sidesteps the unresolved RCE-on-restore question and unblocks the
+> rest of the bulk importer (`0i2vt.13` drops the plugins category). Consequently, every
+> plugin-conditional threat in this model (S4, T4, D4, P3) is **moot / deferred for v0.18.0** and
+> retained only as a forward-looking record for the release that revisits plugin semantics. The
+> former plugin step is removed from the restore order above.
+
+This threat model covers the **Python import engine** ECM will build. The current `backend/routers/backup.py` ZIP restore (`/api/backup/restore`) is a smaller-scope precursor and is referenced as the inherited baseline — its protections (admin-only, manifest, basic path-traversal guard) are **table stakes**; DBAS extends them to cover categories that baseline does not (users, M3U creds). ECM has no current `plugin*` code in `backend/` (verified by `grep -ri plugin backend/` → 0 hits); rather than specify the plugin threat against an undetermined spec, ADR-012 D10 **excludes plugins from v0.18.0** — so the plugin-related rows below (S4, T4, D4, P3) are retained as deferred records, not v0.18.0 acceptance criteria.
 
 Attack surfaces modeled:
 
 1. **ZIP upload** — HTTP multipart path: authz, size, origin claim.
 2. **ZIP extraction** — archive parsing: Zip Slip, symlinks, bombs, entry count.
 3. **User-table restore** — risk of attacker-supplied admin account.
-4. **Plugin restore** — RCE iff plugins are executable (see §6).
+4. **Plugin restore** — RCE iff plugins are executable. **EXCLUDED from v0.18.0 per ADR-012 D10** — surface retained for traceability only; the conditional rows below are moot/deferred.
 5. **M3U / API-token restore** — credential handling + log redaction.
 6. **Endpoint authz** — admin-only gating, per-category opt-in, current-user preservation.
 7. **Audit logging** — who restored what, when, with what counts.
@@ -30,21 +39,42 @@ Attack surfaces modeled:
 
 ```
 [Admin browser] --TLS--> [FastAPI /api/dbas/import] --> tempdir extract
+                                                   \--> [optional] passphrase decrypt (Addendum C)
                                                    \--> manifest verify (SHA-256)
                                                    \--> per-category restore:
                                                         - ECM DB (SQLAlchemy txn)
                                                         - settings.json (atomic write)
-                                                        - plugins/  (??? — see §6)
                                                         - Dispatcharr API (HTTP, separate trust boundary)
                                                    \--> journal.log_entry per category
                                                    \--> tempdir cleanup (finally)
 ```
 
+(`plugins/` is **not** restored in v0.18.0 — ADR-012 D10; the former plugin step is removed.)
+
 Trust boundaries crossed:
 - **Browser → ECM** (authenticated admin)
 - **ECM → filesystem** (tempdir, then `/config/`)
 - **ECM → SQLite** (`journal.db`)
-- **ECM → Dispatcharr** (separate service; per ADR-004 treated as admin-configured & trusted; DBAS sync to a third-party target is out-of-scope until ADR-004 closes)
+- **ECM → Dispatcharr** (separate service; per ADR-004 treated as admin-configured & trusted)
+
+**Archive provenance — trusted operator input, always-on safety guards (ADR-012 D11).** The
+restored archive is treated as **trusted operator input** — the same trust ECM extends to an
+operator typing configuration directly into the UI. This is the correct posture for a self-hosted,
+single-operator LAN tool: full untrusted-archive provenance/signature checking (archive signing,
+a trust store, supply-chain attestation) is **deliberately out of scope** — it is overkill for this
+deployment model, and that is the **decided posture**, not an unresolved gap. **Trusted does not
+mean unvalidated, however:** a set of always-on safety validations applies to *every* archive
+**regardless of source** — including the cross-instance migration case (back up instance A, restore
+onto instance B), which ADR-012 D11 puts squarely **IN scope** for v0.18.0:
+- **SSRF denylist on every restored URL** (M3U/EPG/XC hosts) — see §3.6 P4 + Addendum B; the
+  validator does not trust a URL just because it arrived in an operator's archive.
+- **Schema / `schema_version` validation** before any file is materialised (ADR-012 D1; checklist 7).
+- **Never restore a foreign admin that locks out the current operator** — current-operator
+  preservation keyed off the **auth subject** (not username/id, which a cross-instance archive
+  remaps), and conservative privilege-flag restore — see §3.6 P2.
+
+The earlier framing of this model (cross-instance restore *out of scope*; see the superseded §6 A2)
+predates ADR-012 D11 and is corrected here and in §6 A2.
 
 ---
 
@@ -60,7 +90,7 @@ Severity is relative to *DBAS import endpoint*, not the whole product.
 | S1 | ZIP upload | Unauthenticated actor uploads an archive | Global auth middleware (`docs/auth_middleware.md`) + `RequireAdminIfEnabled` DI on endpoint | existing | High |
 | S2 | ZIP extraction | Archive claims to be ECM-native but is crafted by attacker | Manifest header check (`ecm_backup.json` present, `version` field, magic-bytes check on DBs) + **SHA-256 content manifest** verified before any file is materialised | to-build | High |
 | S3 | User-table restore | Imported users table asserts attacker email = admin | Only admins can trigger; require **per-category opt-in checkbox** for `users` category; current admin row preserved (§3.6 P2) | to-build | High |
-| S4 | Plugin restore | Archive ships plugin claiming provenance from a trusted author | SHA-256 per-plugin entry in manifest; if plugins are code, plugin payload must match signed/allowlisted set (PO decision, §6) | to-build / PO | Crit (conditional) |
+| S4 | Plugin restore | Archive ships plugin claiming provenance from a trusted author | SHA-256 per-plugin entry in manifest; if plugins are code, plugin payload must match signed/allowlisted set | **moot / deferred (ADR-012 D10 — plugins excluded from v0.18.0)** | Crit (conditional) |
 | S5 | M3U/API-token restore | Archive plants M3U source pointing to attacker host | Admin is the one importing — they already control sources; URL scheme validation (from bd-ppe28.3) re-applied at restore time rather than trusted from archive | to-build (reuse ppe28.3) | Med |
 | S6 | Endpoint authz | Session fixation / cookie theft before invoke | Out of scope — covered by auth subsystem; noted for traceability | existing | Low |
 | S7 | Audit logging | Journal entry spoofed by crafted payload | Journal rows written server-side post-decision with auth-subject + request ID; archive content cannot dictate log fields | to-build | Med |
@@ -73,7 +103,7 @@ Severity is relative to *DBAS import endpoint*, not the whole product.
 | T2 | ZIP extraction | Zip Slip — entry names `../../../app/main.py` | Reject any entry whose `pathlib.PurePosixPath` normalised form is absolute, contains `..`, or whose `resolve()` leaves the destination tempdir. **All extraction targets tempdir, not `/config/`** | to-build (baseline has a weaker check in `backup.py` §162-167) | High |
 | T2b | ZIP extraction | Symlink entry escapes tempdir | Reject any zip entry whose `external_attr >> 16` indicates `stat.S_IFLNK`; `ZipFile.extract()` in CPython does not follow symlinks but we must refuse to **create** them | to-build | High |
 | T3 | User-table restore | Tampered hash in `users.password_hash` overwrites admin row | DB restore runs inside a SQLAlchemy transaction; on failure, rollback; current-admin-row preservation rule blocks overwrite even on success (§3.6 P2) | to-build | High |
-| T4 | Plugin restore | Plugin file content mutated vs. manifest | SHA-256 verification per manifest entry rejects any file whose content hash does not match | to-build | Crit (conditional) |
+| T4 | Plugin restore | Plugin file content mutated vs. manifest | SHA-256 verification per manifest entry rejects any file whose content hash does not match | **moot / deferred (ADR-012 D10 — plugins excluded from v0.18.0)** | Crit (conditional) |
 | T5 | M3U/API-token restore | Secret field altered to attacker-controlled value | Admin trust — they chose the archive. Mitigation via manifest hash (T4 mechanism) | to-build | Med |
 | T6 | Endpoint authz | Path parameter tampering bypasses category gate | Accept only a whitelist of category keys (reuse `RESTORABLE_SECTIONS`-style registry); reject unknown keys with 400 | to-build | Med |
 | T7 | Audit logging | Post-hoc tampering of `journal.db` entries | Out of scope at this layer; journal tamper-evidence is a separate bead. Note for PO | accepted-risk | Low |
@@ -110,7 +140,7 @@ Severity is relative to *DBAS import endpoint*, not the whole product.
 | D2 | ZIP extraction | Zip bomb — small archive, gigabytes uncompressed | **Compression-ratio cap** (propose: max 100× per entry, max 1 GB cumulative uncompressed); **entry-count cap** (propose: 10,000 entries); enforce by iterating `zf.infolist()` pre-extraction | to-build | High |
 | D2b | ZIP extraction | Deep nested paths / pathological names cause path-resolver stalls | Cap path depth (e.g., 32 segments) and name length (255 bytes) | to-build | Med |
 | D3 | User-table restore | Restore of massive user table blocks the request worker | Background task with WebSocket progress (per ADR-003 pending); synchronous fallback protected by a hard row-count cap | to-build | Med |
-| D4 | Plugin restore | Infinite-loop plugin executed during restore | Plugins NOT executed during restore — only written to disk, activation gated (see §6). If plugins execute at import, bound with wall-clock + memory limits | to-build | Crit (conditional) |
+| D4 | Plugin restore | Infinite-loop plugin executed during restore | Plugins NOT executed during restore — only written to disk, activation gated. If plugins execute at import, bound with wall-clock + memory limits | **moot / deferred (ADR-012 D10 — plugins excluded from v0.18.0)** | Crit (conditional) |
 | D5 | M3U/API-token restore | Restore triggers N synchronous Dispatcharr API calls | Reuse existing async `dispatcharr_client`; per-item timeout (already in client). Batch size cap (propose 500) | to-build | Med |
 | D6 | Endpoint authz | Admin endpoint DoS via cred-stuffing at login | Out of scope for this endpoint — auth router rate-limiting owns this | existing (verify) | Low |
 | D7 | Audit logging | High-volume category restore produces one journal row per item → journal.db bloat | Aggregate to **one journal row per category** with count, not per-item; batched log entry pattern | to-build | Med |
@@ -120,14 +150,14 @@ Severity is relative to *DBAS import endpoint*, not the whole product.
 | # | Surface | Threat | Mitigation | Status | Sev |
 |---|---------|--------|------------|--------|-----|
 | P1 | ZIP upload | Non-admin triggers restore via CSRF against an authenticated admin | `RequireAdminIfEnabled` + existing auth middleware (GET-safe; restore is POST). CSRF mitigation relies on token-bearer auth (not cookies) — verify in DBAS router | existing (verify) | High |
-| P2 | User-table restore | **Crown-jewel threat:** archive grants attacker admin | (a) category `users` is **opt-in** with a distinct checkbox in the UI + request body flag `include_users: true`; (b) **current authenticated admin row is never overwritten or deleted** — identified by `id` of the requesting user from JWT/session; (c) password hashes imported as-is (no downgrade to plaintext); (d) audit row with list of usernames added | to-build | **Crit** |
-| P3 | Plugin restore | Plugin runs at import as root/app user, escaping to shell | (a) category `plugins` is **opt-in** with explicit warning UI; (b) if plugins are code: sandboxing required (subinterpreter / subprocess / container) OR reject plugin category until ADR lands; (c) if plugins are config only: validate against schema and skip execution semantics | to-build / PO | **Crit** (conditional) |
+| P2 | User-table restore | **Crown-jewel threat:** archive grants attacker admin / privilege-escalation via crafted user rows | (a) category `users` is **opt-in** with a distinct checkbox in the UI + request body flag `include_users: true`; (b) **current authenticated admin row is never overwritten, deleted, disabled, or demoted** — identified by **auth subject** of the requesting user (NOT username/`id`, which a cross-instance archive remaps); (c) **no password is transported** — Dispatcharr's user API exposes `password` only as a write-only plaintext field (no pre-computed-hash API; source hash never retrievable — spike `tsfv0` vs 0.26.0), so each restored user is **created with no usable password + force-reset**; ECM never fabricates, derives, or rehashes a password; (d) **the real escalation surface is the WRITABLE privilege flags** `is_superuser` / `is_staff` / `user_level` — restore them **conservatively** (default non-privileged; never trust the archive's superuser bit for an account the operator did not already control); (e) audit row with list of usernames only — never passwords/hashes | to-build | **Crit** |
+| P3 | Plugin restore | Plugin runs at import as root/app user, escaping to shell | (a) category `plugins` is **opt-in** with explicit warning UI; (b) if plugins are code: sandboxing required (subinterpreter / subprocess / container) OR reject plugin category until ADR lands; (c) if plugins are config only: validate against schema and skip execution semantics | **moot / deferred (ADR-012 D10 — plugins excluded from v0.18.0; the RCE surface is removed by exclusion)** | **Crit** (conditional) |
 | P4 | M3U/API-token restore | Restored M3U source URL triggers SSRF at first refresh | ppe28.3 URL-scheme validation applied at **restore time**, not just at input time | to-build (reuse ppe28.3) | Med |
 | P5 | Endpoint authz | DBAS endpoint inadvertently exempted via `AUTH_EXEMPT_PATHS` | Automated test asserts DBAS paths are NOT in `AUTH_EXEMPT_PATHS` | to-build | High |
 | P6 | ZIP extraction | Symlink → `/app/main.py` overwrites running code | Symlink refusal (T2b) + extraction targets tempdir only; files move to `/config/` only after validation, never to `/app/` | to-build | Crit |
 | P7 | Audit logging | Restore succeeds silently, attacker hides traces by later restore | Journal entries for DBAS import are marked `user_initiated=True`; frontend exposes a filter for `category='dbas_import'`; retention policy tracked in a separate bead (note for PO) | to-build | Med |
 
-**Cell count:** 6 dimensions × 7 surfaces nominal = 42; table has 50 rows (some dimensions list sub-threats T2b, D2b, P2-subpoints). All 42 canonical cells covered, with extra rows where a single surface warranted split threats.
+**Cell count:** 6 dimensions × 7 surfaces nominal = 42; table has 50 rows (some dimensions list sub-threats T2b, D2b, P2-subpoints). All 42 canonical cells covered, with extra rows where a single surface warranted split threats. **Note:** the four plugin-restore rows (S4, T4, D4, P3) are **moot / deferred for v0.18.0** (ADR-012 D10 — plugins excluded); they remain in the table for traceability and to seed the release that revisits plugin semantics.
 
 ---
 
@@ -136,18 +166,19 @@ Severity is relative to *DBAS import endpoint*, not the whole product.
 The DBAS import engine implementation (bd-gb5r5.3) must satisfy **all** of the following, each mapped to a STRIDE cell:
 
 1. **Admin-only endpoint gating** — DBAS import routes use `RequireAdminIfEnabled` DI; DBAS paths absent from `AUTH_EXEMPT_PATHS`; test asserts both. *(S1, P1, P5)*
-2. **Per-category opt-in flag** — `users` and `plugins` categories require distinct boolean flags in the request body; default false; frontend checkbox ships with warning copy. *(S3, P2, P3)*
-3. **Current admin preservation** — the requesting admin's `users` row is **never** overwritten, deleted, disabled, or demoted; identified by auth subject; test covers the case where the archive contains a colliding username. *(P2)*
+2. **Per-category opt-in flag** — the `users` category requires a distinct boolean flag in the request body; default false; frontend checkbox ships with warning copy. *(S3, P2)* *(The `plugins` category is excluded from v0.18.0 per ADR-012 D10, so no plugin opt-in flag ships in v0.18.0.)*
+3. **Current admin preservation** — the requesting admin's `users` row is **never** overwritten, deleted, disabled, or demoted; identified by **auth subject** (not username/`id`, which a cross-instance archive remaps); test covers the case where the archive contains a colliding username. *(P2)*
+   - **No password transported, conservative privilege flags** — every restored user is created **with no usable password + force-reset** (Dispatcharr exposes `password` write-only plaintext; no hash crosses the boundary — spike `tsfv0`); the WRITABLE `is_superuser`/`is_staff`/`user_level` flags are restored **conservatively** (default non-privileged; never trust the archive's superuser bit for an account the operator did not already control). Tests: colliding-username-does-not-touch-operator, archive-superuser-bit-not-trusted, no-password-set, force-reset-flagged. *(P2)*
 4. **Zip Slip hardening** — reject any entry whose normalised path is absolute, contains `..`, or whose `resolve()` escapes the tempdir; reject symlink entries (`S_IFLNK`); reject paths >32 segments or >255 bytes. *(T2, T2b, D2b, P6)*
 5. **Zip bomb / DoS caps** — enforce pre-extraction: max upload 256 MB, max entries 10,000, max cumulative uncompressed 1 GB, max per-entry ratio 100×. Values are PO-tunable via settings. *(D1, D2)*
 6. **Streaming upload** — do not call `await file.read()`; stream to a `NamedTemporaryFile` via `shutil.copyfileobj`; enforce upload cap during stream. *(D1)*
 7. **SHA-256 manifest** — `ecm_backup.json` includes `{files: [{path, sha256, size}]}`; verify all three before any file is materialised outside tempdir; reject mismatch with 400. *(S2, T4)*
 8. **Tempdir isolation & cleanup** — all extraction lands in a per-request `tempfile.TemporaryDirectory`; move to `/config/` only after full validation; cleanup guaranteed by context manager (`try/finally` double-safety). Dry-run guaranteed side-effect free. *(T2, P6, plus bead AC)*
-9. **Secrets-in-logs denylist** — `_redact()` helper applied to all log lines and dry-run previews; denylist covers `password`, `password_hash`, `token`, `api_key`, `smtp_password`, M3U `username`/`password`, plus any field ending `_secret` / `_token`. Unit test enforces. *(I2, I5, I7)*
+9. **Secrets-in-logs denylist** — `_redact()` helper applied to all log lines and dry-run previews; denylist covers `password`, `password_hash`, `token`, `api_key`, `smtp_password`, M3U `username`/`password`, plus any field ending `_secret` / `_token`. `password_hash` is in the denylist on the **export side** too (`_REDACT_KEYS` — see Addendum A / checklist 18): a password hash sitting in an unencrypted backup artifact is an **offline-cracking target**, so it is redacted (or carried only under whole-artifact passphrase encryption, Addendum C), never shipped in cleartext. Unit test enforces. *(I2, I5, I7)*
 10. **URL scheme re-validation on restore** — reuse bd-ppe28.3 validator for any restored URL field (M3U source, EPG source, XC host). *(S5, P4)*
 11. **Per-category audit logging** — one `journal.log_entry` per category with `category='dbas_import'`, `action_type=category_name`, counts, and (for `users`) list of usernames added — **never** passwords / hashes / secrets. Log includes request ID. *(R1-R5, R7, D7, P7)*
 12. **Error sanitisation** — HTTPException `detail` strings never echo file paths, stack traces, or unique-constraint values; full detail goes to server log via `logger.exception`. *(I1, I3)*
-13. **Plugin execution gate** — plugins are written to disk but NOT executed during restore. Activation requires a separate explicit admin action (tracked in a future bead once §6 resolves). *(D4, P3)*
+13. **Plugin execution gate — N/A for v0.18.0.** Plugins are **excluded from v0.18.0** backup/restore (ADR-012 D10): the category is not imported at all, so there is no plugin payload to write, gate, or execute. This item is retained as the forward-looking acceptance criterion for the release that revisits plugin semantics: if/when plugins are restored, they must be written to disk but NOT executed during restore, with activation behind a separate explicit admin action. *(D4, P3 — both moot/deferred for v0.18.0)*
 14. **Transaction model** — all DB restore per category runs inside a SQLAlchemy transaction with rollback on exception; see ADR-002 for cross-category atomicity. *(T3)*
 15. **Dispatcharr-call bounding** — Dispatcharr restore batches capped at 500 items, each call uses existing per-request timeout. *(D5)*
 16. **CSRF posture** — DBAS endpoint must not rely on cookie-only auth; require `Authorization: Bearer` token. Test asserts. *(P1)*
@@ -155,7 +186,7 @@ The DBAS import engine implementation (bd-gb5r5.3) must satisfy **all** of the f
 
 ### 4.1 Addendum checklist items (v0.18.0 DBAS absorption — Addenda A & B)
 
-The v0.18.0 epic (`enhancedchannelmanager-0i2vt`, ADR-008) adds an **export/backup** path
+The v0.18.0 epic (`enhancedchannelmanager-0i2vt`, ADR-012) adds an **export/backup** path
 and **outbound cloud destinations** that did not exist when items 1–17 were written. The
 following items extend the checklist; they are acceptance criteria for the Phase-0 work
 (`0i2vt.1`, `0i2vt.2`, `0i2vt.3`) and the Phase-1 work (`0i2vt.4`, `0i2vt.5`, `0i2vt.7`,
@@ -177,13 +208,13 @@ following items extend the checklist; they are acceptance criteria for the Phase
 19. **Encrypted-rather-than-redacted carve-out (Addendum A)** — where a backup is intended to
     be **restorable with credentials intact** (cross-instance migration), credential fields MAY
     be carried in ciphertext instead of redacted, but ONLY via the existing Fernet primitive
-    (`backend/cloud_storage/crypto.py`, per ADR-008 D3) and ONLY for the `SyncTarget`/`CloudTarget`
+    (`backend/cloud_storage/crypto.py`, per ADR-012 D3) and ONLY for the `SyncTarget`/`CloudTarget`
     credential columns defined in `0i2vt.4`. The Fernet key is **never** placed in the ZIP. A
     backup taken on instance A and restored on instance B without the key MUST surface the
     credential fields as unreadable (decryption-failure → field treated as absent, restore
     continues with a WARN), never as plaintext and never as a hard crash. Test: restore a
     backup whose `CloudTarget.token_ciphertext` was encrypted under a different key → token field
-    absent, restore proceeds. *(A3 — Addendum A; ties into ADR-008 D3)*
+    absent, restore proceeds. *(A3 — Addendum A; ties into ADR-012 D3)*
 20. **Manifest covers redacted state (Addendum A)** — the ZIP `manifest` / `schema_version`
     block records SHA-256 over the **post-redaction** bytes (the bytes actually written), so
     integrity verification on restore validates what is present, not a pre-redaction phantom.
@@ -196,7 +227,7 @@ following items extend the checklist; they are acceptance criteria for the Phase
     connection is opened. The validator is the single chokepoint; no adapter (`s3_adapter.py`,
     `onedrive_adapter.py`, `dropbox_adapter.py`, `gdrive_adapter.py`, WebDAV) may issue a raw
     `httpx`/`requests` call that bypasses it. This is the Phase-1 deliverable in `0i2vt.5`/`0i2vt.8`;
-    this checklist item is the contract. *(B1, B2, B4, B6 — Addendum B; ADR-008 D4)*
+    this checklist item is the contract. *(B1, B2, B4, B6 — Addendum B; ADR-012 D4)*
 22. **Always-on denylist regardless of LAN-friendly choice (Addendum B)** — even when the
     first-run wizard (`0i2vt.5`) chose LAN-friendly mode, the validator ALWAYS rejects, with
     no opt-out: link-local `169.254.0.0/16` (incl. IMDS `169.254.169.254/32`), CGNAT
@@ -206,7 +237,7 @@ following items extend the checklist; they are acceptance criteria for the Phase
     and allowed in LAN-friendly mode; everything in the always-on list is rejected in **both**.
     Test corpus: each denied range + an IPv4-mapped-IPv6 representation of the IMDS address + a
     `gopher://`/`file://`/`ftp://` scheme → all rejected in both modes. *(B2, B6 — Addendum B;
-    ADR-008 D4)*
+    ADR-012 D4)*
 23. **DNS-rebinding mitigation: resolve-then-connect-by-IP (Addendum B)** — the validator
     resolves the destination hostname **once**, validates the returned address(es) against the
     denylist (and, if any A/AAAA record is denied, rejects the whole request — no "use the allowed
@@ -214,20 +245,20 @@ following items extend the checklist; they are acceptance criteria for the Phase
     only as SNI and `Host:` header. The window between validation and connect must not contain a
     second, unvalidated DNS lookup. Test: a hostname that returns two A records (one public, one
     `169.254.169.254`) → rejected; a hostname whose resolution is mocked to change between
-    validation and connect → connection still goes to the validated IP. *(B3 — Addendum B; ADR-008 D4)*
+    validation and connect → connection still goes to the validated IP. *(B3 — Addendum B; ADR-012 D4)*
 24. **Redirect re-validation (Addendum B)** — 3xx responses are NOT auto-followed to a new host
     without re-running the full denylist + resolve-by-IP check on the redirect target; a redirect
     to a previously-unvalidated host is either blocked outright or only followed after a fresh
     validation pass. Cross-scheme downgrades (`https://` → `http://`) on redirect are rejected.
     Test: server replies `302` to `http://169.254.169.254/latest/meta-data/` → request fails, no
-    connection to the IMDS host. *(B3, B6 — Addendum B; ADR-008 D4)*
+    connection to the IMDS host. *(B3, B6 — Addendum B; ADR-012 D4)*
 25. **TLS-verify default + audited insecure flag (Addendum B)** — outbound requests use
     `verify=True` by default. A per-`CloudTarget`/`SyncTarget` `insecure=true` escape hatch MAY
     exist (self-signed WebDAV/MinIO are real deployments) but every outbound request made with
     `insecure=true` writes a `journal.log_entry` audit row (`category='backup_outbound'`,
     target id, host, `tls_verified=false`) — not just once at config time, on **every** request.
     Test: configure an `insecure=true` target, trigger a backup upload, assert an audit row with
-    `tls_verified=false` exists for that request. *(B1, B5 — Addendum B; ADR-008 D4)*
+    `tls_verified=false` exists for that request. *(B1, B5 — Addendum B; ADR-012 D4)*
 26. **Outbound-credential freshness binding (Addendum B / cross-ref `0i2vt.4`)** — a scheduled
     backup/sync op that fires after the target's credentials were rotated or revoked MUST NOT use
     the stale token: the `CloudTarget`/`SyncTarget` model carries `credential_version` and
@@ -235,6 +266,52 @@ following items extend the checklist; they are acceptance criteria for the Phase
     re-checks it at execution time, aborting (WARN + audit row) if it changed or if
     `token_revoked_at` is set. (This is Security Mandatory #5; the schema lands in `0i2vt.4`, the
     enforcement in `0i2vt.6`/`0i2vt.8`.) *(B5 — Addendum B)*
+
+### 4.2 Addendum checklist items (whole-artifact passphrase encryption — Addendum C)
+
+These extend the checklist for the opt-in whole-artifact passphrase-encryption path (ADR-012 D12,
+bead `u81kh`, crypto design from spike `0zrse`). They are acceptance criteria for the `.7` ZIP-builder
+encrypt stage and the Phase-2 decrypt-at-ingest gate. See Addendum C (§10) for the threat table.
+
+27. **Opt-in, redact-by-default preserved (Addendum C)** — passphrase encryption is **opt-in**; the
+    default backup remains redact-by-default (ADR-012 D1). Credentials are carried in the artifact
+    **only** via an explicit operator "include credentials for migration" choice that **requires** a
+    passphrase. There is no switch that ships unredacted credentials without a passphrase. *(C1, C2)*
+28. **REDACT-THEN-ENCRYPT is structural (Addendum C)** — redaction runs **inside** the build path and
+    cannot be skipped; `include_credentials` only re-injects the approved credential set before
+    encryption. There is no "encrypt instead of redact, skipping redaction" code path. Test: a backup
+    with `include_credentials=false` + a passphrase still contains no plaintext credentials after
+    decryption. *(C2, C3)*
+29. **KDF + AEAD construction (Addendum C, per spike `0zrse`)** — scrypt KDF with **N ≥ 2¹⁵** (floor),
+    r=8, p=1; per-artifact random salt; KDF params + salt live in a **cleartext authenticated header**.
+    Chunked streaming AEAD (ChaCha20-Poly1305 **or** AES-256-GCM); per-chunk nonce (random base XOR
+    counter); each chunk's **AAD binds the header + chunk-index + is_final flag** so no chunk can be
+    swapped, reordered, or the stream truncated. Min **12-char** passphrase, API-enforced. *(C3, C4)*
+30. **Cleartext header with `format_version` separate from `schema_version` (Addendum C)** — the
+    header carries `magic`, `format_version` (the *encryption-envelope* version, **distinct from** the
+    backup `schema_version`), KDF params, salt, AEAD id, and chunk size, all authenticated. This lets a
+    version check (`0i2vt.17`) read the envelope/schema metadata **before decrypting** and refuse an
+    unsupported version without needing the passphrase. *(C4)*
+31. **New primitive, parallel to Fernet — D3/D12 reconciliation (Addendum C)** — passphrase encryption
+    is a **new crypto primitive** (`backend/cloud_storage/crypto.py`'s Fernet is static-key,
+    whole-in-RAM, non-streaming and is **not** reused for this path). **ADR-012 D3 governs at-rest
+    credential columns** (Fernet); **D12 governs the opt-in whole-artifact path** (this primitive).
+    The two coexist; D12 *partially* supersedes D3 only for the whole-artifact path. *(C3)*
+32. **Off-event-loop streaming (Addendum C)** — KDF and encrypt/decrypt run **off the event loop** and
+    **stream to temp files** (not whole-artifact-in-RAM). The `.7` builder's in-memory `BytesIO`
+    assembly becomes tempfile-streaming (needed for D8 regardless). *(C3)*
+33. **No wrong-passphrase oracle — STRUCTURAL, not wall-clock (Addendum C)** — a wrong passphrase and a
+    corrupted artifact MUST fail with an **identical exception** and release **zero plaintext** on any
+    failure; never emit a verified prefix before the whole-artifact authentication completes. This is a
+    **structural** property (identical exception + zero-plaintext-on-failure), **not** a timing
+    guarantee: spike `0zrse` **demonstrated** a ~15 ms size-dependent timing residual (wrong passphrase
+    fails at chunk 0; corrupt-last-chunk fails at chunk N), which is **ACCEPTED** for an offline
+    artifact (see Addendum C residual). Do **not** write a wall-clock/stopwatch equivalence test (flaky
+    and misleading); test the structural property instead. *(C5)*
+34. **Lost passphrase = unrecoverable, hard-gate UX (Addendum C)** — a lost passphrase makes the
+    artifact **permanently unrecoverable** (no recovery, no backdoor). The UI must surface this as a
+    **hard gate** — an `acknowledge_unrecoverable` checkbox the operator must tick, not a tooltip —
+    before an encrypted backup is produced. *(C6)*
 
 ---
 
@@ -262,8 +339,11 @@ Proposed test module layout once the engine lands:
   - `test_rejects_unknown_version` — manifest claims v999 → 400.
 - `test_dbas_import_users.py`
   - `test_users_category_requires_opt_in` — import with `users` content but `include_users=False` → users untouched.
-  - `test_current_admin_preserved` — archive contains same username as requester → requester row intact.
+  - `test_current_admin_preserved` — archive contains same username as requester (preservation keyed off **auth subject**) → requester row intact.
   - `test_current_admin_not_demoted` — archive marks requester as non-admin → rejected or ignored.
+  - `test_no_password_transported` — restored user is created with **no usable password** + force-reset flag; archive password/hash fields are never applied.
+  - `test_archive_superuser_bit_not_trusted` — archive marks a non-operator account `is_superuser=True` → restored conservatively as non-privileged.
+  - `test_users_category_fails_closed_if_hash_field_appears` — startup capability check fails the `users` category closed if a `password_hash` write field appears on the Dispatcharr schema.
 - `test_dbas_import_secrets.py`
   - `test_no_secret_in_logs` — restore an archive containing an M3U password; grep `caplog` for plaintext → must be absent.
   - `test_dryrun_redacts_settings` — dry-run preview of settings.json masks `password`, `smtp_password`.
@@ -278,32 +358,69 @@ Proposed test module layout once the engine lands:
   - `test_dryrun_is_side_effect_free` — DB unchanged, `/config/` unchanged after dry-run.
 - `test_dbas_import_url_validation.py`
   - `test_rejects_file_scheme_m3u_url` — reuse ppe28.3 suite; archive with `file://` URL → rejected.
-- `test_dbas_import_plugins.py` (gated on §6 resolution)
+- `test_dbas_import_plugins.py` — **DEFERRED for v0.18.0** (plugins excluded, ADR-012 D10). Retained for the release that revisits plugins:
   - `test_plugins_not_executed_on_import` — stub plugin with side-effect (write marker file); restore; marker file absent.
+- `test_dbas_passphrase_encryption.py` (Addendum C — opt-in passphrase path)
+  - `test_redact_then_encrypt_no_plaintext` — `include_credentials=false` + passphrase; decrypt; no plaintext credential present (redaction not skipped inside encrypt).
+  - `test_wrong_passphrase_and_corrupt_artifact_identical_exception` — wrong passphrase and a corrupted artifact raise the **same** exception type/message; **no** plaintext is released on either failure. (Structural, not wall-clock — no stopwatch assertion.)
+  - `test_header_version_check_before_decrypt` — an unsupported `format_version` is rejected reading the **cleartext header**, without a passphrase.
+  - `test_chunk_reorder_or_truncate_rejected` — swapping/reordering chunks or truncating the stream fails AEAD/AAD verification (no partial plaintext).
+  - `test_min_passphrase_length_enforced` — an 11-char passphrase is rejected at the API boundary.
+  - `test_lost_passphrase_unrecoverable_ack_required` — producing an encrypted backup requires the `acknowledge_unrecoverable` flag.
 
 ---
 
-## 6. Assumptions (PO Decisions Needed)
+## 6. Assumptions (resolved)
 
-The items below materially change the threat model and must be resolved before the bd-gb5r5.3 engine is considered design-complete.
+The items below originally gated design-completeness. All are now **resolved** (the resolutions are
+why this model is lifted from Draft to Accepted). Each is kept with its resolution recorded inline.
 
-**A1 — Plugins: code or config?**
-`grep -ri plugin backend/` returns zero matches in the ECM backend as of 2026-04-20. The DBAS legacy `importService.ts` has a plugin restore step, but whether the ported ECM equivalent will treat plugins as **executable Python** (RCE risk = critical) or **declarative config** (risk = medium, similar to settings) is **not determinable from the codebase**. This model assumes the conservative case (executable) and gates plugin activation behind a separate admin action. **PO decision required** — see threats S4, T4, D4, P3.
+**A1 — Plugins: code or config? → RESOLVED: excluded from v0.18.0 (ADR-012 D10).**
+`grep -ri plugin backend/` returns zero matches in the ECM backend, and whether a Dispatcharr
+"plugin" is **executable Python** (RCE risk = critical) or **declarative config** remains
+undetermined. Rather than gate the rest of the restore on that unknown, **ADR-012 D10 (PO,
+2026-06-16) excludes the plugins category from v0.18.0 backup/restore entirely.** The RCE-on-restore
+question is sidestepped, not answered; it is revisited in the release that understands plugin
+semantics. Threats S4, T4, D4, P3 are therefore **moot / deferred for v0.18.0**.
 
-**A2 — Dispatcharr trust boundary on restore target**
-Per ADR-004 (referenced, pending), DBAS sync to a *different* Dispatcharr instance raises trust questions. This threat model covers **restore to the admin-configured local Dispatcharr** (trusted, per bd-ppe28 conclusion). Cross-instance restore (e.g., restoring a prod archive to a staging Dispatcharr) is **out of scope** until ADR-004 closes. **PO confirmation required** that v0.17.0 DBAS import is same-instance only.
+**A2 — Cross-instance restore → RESOLVED: IN scope, trusted-input + always-on guards (ADR-012 D11).**
+This previously asserted cross-instance restore was **out of scope** (same-instance only). **ADR-012
+D11 (PO, 2026-06-16) puts cross-instance restore squarely IN scope for v0.18.0** — it is the epic's
+headline value (back up instance A, restore onto instance B for migration / DR). The corrected
+posture (see §2): the archive is **trusted operator input** — *no archive signing/provenance/trust
+store* (deliberately overkill for a self-hosted single-operator LAN tool; this is the **decided
+posture**, not a gap) — but **always-on safety validations apply regardless of source**: SSRF
+denylist on every restored URL (§3.6 P4, Addendum B), `schema_version` validation (D1, checklist 7),
+and current-operator preservation by **auth subject** so a foreign admin row can never lock out the
+operator running the restore (§3.6 P2). ADR-004 is no longer the gating dependency it was framed as.
 
-**A3 — Users table schema & password hashing algorithm parity**
-Assumes the source archive was produced by a compatible ECM version whose `users.password_hash` uses the same algorithm (argon2 / bcrypt / whatever ECM uses today). Cross-version password-hash migration is out of scope. If mismatched, restore must **reject the users category with a clear error**, not attempt rehash. **PO to confirm** version-compatibility policy.
+**A3 — Password-hash algorithm parity → RESOLVED: NON-ISSUE; no hash is ever transported (spike `tsfv0`).**
+The earlier framing assumed the archive carried a `users.password_hash` whose algorithm had to match
+the target, with "reject the users category on mismatch" as the control. **Spike `tsfv0` (live vs
+Dispatcharr 0.26.0) makes this moot:** Dispatcharr's user API exposes `password` only as a
+**write-only plaintext field** — there is **no pre-computed-hash API**, and the source hash is
+**never retrievable** (GET never returns it). ECM's own auth uses **bcrypt**; Dispatcharr/Django uses
+**pbkdf2_sha256** — the two are not interchangeable in either direction, but that no longer matters
+because **no hash ever crosses the restore boundary.** The users importer therefore **never transports
+a hash**: every restored Dispatcharr user is **created with no usable password + force-reset**, and ECM
+**never fabricates, derives, or rehashes** a password. Hash-algorithm parity is a **non-issue** for
+restore; the importer does not even parse an incoming hash field. (See §3.6 P2 clause (c). The real
+crown-jewel surface is the writable privilege flags — clause (d) — not hash integrity.) A startup
+capability check should fail the users category **closed** if a `password_hash` write field ever
+appears on the Dispatcharr schema.
 
-**A4 — Upload size / entry-count caps**
-Proposed: 256 MB upload, 10,000 entries, 1 GB cumulative, 100× ratio. These are defensible defaults but should be tunable via `settings.json` and sized to realistic ECM deployments. **PO to ratify** the ceiling for typical install sizes.
+**A4 — Upload size / entry-count caps → RESOLVED (ratified defaults).**
+256 MB upload, 10,000 entries, 1 GB cumulative, 100× per-entry ratio, tunable via `settings.json`.
+Accepted as defensible defaults for typical ECM deployments. (Checklist 5.)
 
-**A5 — Journal retention / tamper-evidence**
-The model notes that `journal.db` itself is not tamper-evident (T7, P7). Adding tamper-evidence (hash-chained entries, external sink) is a **separate epic** and out of scope for bd-gb5r5.3. **PO to confirm** this is acceptable risk for v0.17.0.
+**A5 — Journal retention / tamper-evidence → RESOLVED (accepted residual).**
+`journal.db` is not tamper-evident (T7, P7). Hash-chained / external-sink tamper-evidence is a
+**separate epic**, out of scope here; this is **accepted risk** for v0.18.0.
 
-**A6 — CSRF posture**
-Assumes auth is bearer-token only (not cookie-based). If cookie-based sessions are added later, DBAS import needs double-submit CSRF or `SameSite=Strict`. **PO to confirm** auth architecture for v0.17.0 before DBAS lands.
+**A6 — CSRF posture → RESOLVED.**
+Auth is bearer-token only (not cookie-based); DBAS import requires `Authorization: Bearer` (checklist
+16). If cookie-based sessions are ever added, DBAS import will need double-submit CSRF or
+`SameSite=Strict` — tracked as a follow-on at that time.
 
 ---
 
@@ -314,19 +431,21 @@ Assumes auth is bearer-token only (not cookie-based). If cookie-based sessions a
 - bd-ppe28, bd-ppe28.1, bd-ppe28.3 (closed) — OWASP URL-scheme hardening; reused for M3U/EPG URLs at restore.
 - ADR-002 (pending) — DBAS restore transaction model & downtime contract.
 - ADR-003 (pending) — WebSocket long-running job pattern; DBAS import will run as a background job with progress events.
-- ADR-004 (pending) — DBAS instance-trust posture (same-instance vs. cross-instance).
+- ADR-004 (`docs/adr/ADR-004-release-cut-promotion-discipline.md`) — release-cut discipline; DBAS instance-trust posture is now resolved by **ADR-012 D11** (cross-instance IN scope; trusted-input + always-on guards), not deferred to ADR-004.
+- [ADR-012](../adr/ADR-012-dbas-absorption-approach.md) — **source-of-truth ADR for DBAS absorption** (the D1–D12 decision table). The §3 STRIDE controls and Addenda A/B/C below are the security contract for the `0i2vt` child beads (`0i2vt.5`, `0i2vt.7`, `0i2vt.8`, `l1p4p`, `u81kh`, etc.); ADR-012 does not restate them — this document is authoritative for the controls.
 - bd-gb5r5.3 — DBAS import engine; hardening checklist in §4 will be appended to that bead's acceptance criteria.
 
-> **Note on bead lineage (2026-05-12).** The 42-bead plan `bd-gb5r5` referenced above was
-> retired 2026-04-21 and superseded by epic `enhancedchannelmanager-0i2vt` ("v0.18.0 DBAS
-> absorption: Backup + Restore") with `docs/adr/ADR-008-dbas-absorption-approach.md` as its
-> source of truth. **As of 2026-05-12 `docs/adr/ADR-008-dbas-absorption-approach.md` is not
-> present in the repo** — the ADR-008 content lives only in the epic bead's description (nine
-> PO decisions D1–D9). This is a missing-doc note for the PO: either land ADR-008 or accept
-> that the epic bead is the canonical record. The Addenda below cite "ADR-008 D4" etc. against
-> that bead's decision list, not against a file. The §1–§7 body still reads against `bd-gb5r5.3`
-> because that body has not been re-baselined; the **Addenda A & B (below) and checklist items
-> 18–26 are the v0.18.0-current layer** and take precedence where they overlap.
+> **Note on bead lineage.** The 42-bead plan `bd-gb5r5` referenced in the §1–§7 body was retired
+> 2026-04-21 and superseded by epic `enhancedchannelmanager-0i2vt` ("v0.18.0 DBAS absorption:
+> Backup + Restore"). The source of truth for that epic is **ADR-012**
+> (`docs/adr/ADR-012-dbas-absorption-approach.md`, Accepted). ADR-012's own preamble records the
+> ADR number-history (the earlier phantom DBAS filename and the later number collision); that history
+> is **not** duplicated here. All decision references in this document — D1–D12 — point at ADR-012's
+> decision table. The
+> §1–§7 body still uses `bd-gb5r5.3` for the import-engine bead id (not re-baselined), but its
+> *decisions* are governed by ADR-012; the Addenda (A export-redaction, B outbound/SSRF, C
+> passphrase encryption) and checklist items 18–26 are the v0.18.0-current layer and take precedence
+> where they overlap.
 
 ---
 
@@ -349,21 +468,26 @@ redacts credential-class keys before they enter the backup ZIP — `REDACTED = "
 sentinel, `_scrub_journal_db_to_temp()` rewrites credential keys inside `journal.db`,
 `_gather_settings()` returns a redacted `settings.json`. **Addendum A requires the v0.18.0
 13-category ZIP builder to extend that same redaction to the categories the legacy path does not
-yet touch** (M3U/EPG/XC creds per-category, plugin config secrets, cloud-target tokens, etc.),
-using the *same shared denylist* — not a second, divergent one.
+yet touch** (M3U/EPG/XC creds per-category, cloud-target tokens, user `password_hash`, etc.),
+using the *same shared denylist* — not a second, divergent one. (Plugin config secrets are kept in
+the denylist superset for defence-in-depth / forward-compatibility even though the **plugins category
+itself is excluded from v0.18.0 export/restore per ADR-012 D10** — redacting a key that is not
+exported is harmless and avoids a gap if plugins return.)
 
 **Trust boundary:** the export artifact crosses **ECM → operator's hands → (optionally) cloud
-storage**. Once it leaves the container it is outside every ECM control. Treat it as if it will
-be stored unencrypted on a third party's disk, because it often will be (Dropbox, an S3 bucket,
-a USB stick).
+storage**. Once it leaves the container it is outside every ECM control. Treat the **default
+(redacted)** artifact as if it will be stored unencrypted on a third party's disk, because it often
+will be (Dropbox, an S3 bucket, a USB stick). The **opt-in passphrase-encrypted** artifact
+(Addendum C / ADR-012 D12) is the only form that carries *unredacted* credentials off-host, and it
+is protected solely by the operator's passphrase — see §10 for that path's controls and residuals.
 
 ### 8.2 STRIDE rows — Export Artifact
 
 | # | Surface | STRIDE | Threat | Attack scenario | Mitigation | Status | Sev |
 |---|---------|--------|--------|-----------------|------------|--------|-----|
 | A1 | ZIP build | Information Disclosure | Backup ZIP ships plaintext credentials from any of the 13 categories | Operator downloads a routine backup; the ZIP contains M3U `username`/`password`, EPG/XC creds, core-settings SMTP password, user `password_hash`, cloud-target tokens. Operator emails it to support, drops it in a shared Dropbox, or it's swept up by an automated backup-of-the-backup. All those secrets are now exfiltrated. | Shared `_REDACT_KEYS`-style denylist (the *same* set `backend/routers/backup.py` uses for the legacy path) applied per-category before bytes enter the ZIP: every matched key → `REDACTED` sentinel **or** Fernet ciphertext (A3). `journal.db` scrubbed via the existing `_scrub_journal_db_to_temp()` pattern. Unit test asserts no known plaintext secret appears anywhere in the ZIP. | to-build (`0i2vt.7`) | **High** |
-| A2 | ZIP build / dry-run | Information Disclosure | Backup *preview* or progress log echoes secret values | The Phase-1 backup runs as an HTTP-polled task (ADR-008 D5); a verbose progress line or a "what will be included" preview lists raw category rows including secret fields. | Reuse the §3.4/I2 rule: preview/log lines enumerate **metadata only** (category, count, sizes), and any per-row preview runs through the shared `_redact()` helper. No secret value ever reaches a log line or a progress event. | to-build (`0i2vt.7`) | High |
-| A3 | ZIP build | Information Disclosure (mitigated form) | A *restorable* backup needs creds intact, so redaction would break cross-instance migration → temptation to ship plaintext | Operator wants to migrate Dispatcharr config A→B *including* M3U passwords so they don't have to re-enter 40 sources. Redaction defeats that, so someone "just for migration" turns redaction off. | Carry credential fields as **Fernet ciphertext** (ADR-008 D3 primitive, `backend/cloud_storage/crypto.py`), restricted to the `SyncTarget`/`CloudTarget` credential columns from `0i2vt.4`. The Fernet **key is never in the ZIP**. Restore on an instance lacking the key → field unreadable → treated as absent, restore continues with WARN (never plaintext, never crash). No global "disable redaction" switch exists. | to-build (`0i2vt.4` + `0i2vt.7`) | Med |
+| A2 | ZIP build / dry-run | Information Disclosure | Backup *preview* or progress log echoes secret values | The Phase-1 backup runs as an HTTP-polled task (ADR-012 D5); a verbose progress line or a "what will be included" preview lists raw category rows including secret fields. | Reuse the §3.4/I2 rule: preview/log lines enumerate **metadata only** (category, count, sizes), and any per-row preview runs through the shared `_redact()` helper. No secret value ever reaches a log line or a progress event. | to-build (`0i2vt.7`) | High |
+| A3 | ZIP build | Information Disclosure (mitigated form) | A *restorable* backup needs creds intact, so redaction would break cross-instance migration → temptation to ship plaintext | Operator wants to migrate Dispatcharr config A→B *including* M3U passwords so they don't have to re-enter 40 sources. Redaction defeats that, so someone "just for migration" turns redaction off. | Carry credential fields as **Fernet ciphertext** (ADR-012 D3 primitive, `backend/cloud_storage/crypto.py`), restricted to the `SyncTarget`/`CloudTarget` credential columns from `0i2vt.4`. The Fernet **key is never in the ZIP**. Restore on an instance lacking the key → field unreadable → treated as absent, restore continues with WARN (never plaintext, never crash). No global "disable redaction" switch exists. | to-build (`0i2vt.4` + `0i2vt.7`) | Med |
 | A4 | ZIP build | Tampering / Spoofing | Manifest SHA-256 covers pre-redaction bytes, so a tampered redacted file passes verification | Attacker who can write into the ZIP after redaction but before manifest finalisation swaps a redacted `settings.json` for one with a malicious SMTP relay; if the manifest was computed over the *original* bytes, the swap goes undetected on restore. | Manifest SHA-256 is computed over the **exact bytes written into the ZIP** (post-redaction, post-encryption), as the last step before sealing the archive. Restore verifies what is present. (Reuses the §3.3/T4 manifest-hash mechanism, just pinned to the redacted content.) | to-build (`0i2vt.7`) | Med |
 | A5 | ZIP build | Repudiation | No record that a backup was taken / who took it / whether it was redacted | An operator (or a compromised admin session) silently exfiltrates config via a backup; no trail. | `journal.log_entry` per backup: `category='backup'`, `user_id`, request ID, timestamp, category counts, artifact SHA-256, and a `redaction_mode` field (`redacted` vs `encrypted`). Mirrors §3.3/R1. | to-build (`0i2vt.7`) | Med |
 
@@ -377,22 +501,22 @@ a USB stick).
 
 ### 8.4 Residual risk (Addendum A)
 
-- **Residual: artifact handling after egress — Medium, accepted-pending-PO.** Once the ZIP leaves the container ECM has zero control. Even fully redacted, the artifact still reveals the *shape* of a deployment (channel names, source URLs minus creds, user list). Mitigations reduce a credential breach to a topology disclosure; they cannot make the artifact safe to publish. **PO decision:** is "redacted backup may be stored anywhere; encrypted backup needs the key kept separate" an acceptable posture for v0.18.0, or does the PO want an *optional* whole-artifact passphrase (age/Fernet over the entire ZIP) as a follow-on bead? Recommendation: ship redacted-by-default for v0.18.0, file whole-artifact encryption as a v0.18.x candidate.
+- **Residual: artifact handling after egress — Medium, accepted (PO-resolved).** Once the ZIP leaves the container ECM has zero control. Even fully redacted, the artifact still reveals the *shape* of a deployment (channel names, source URLs minus creds, user list). Mitigations reduce a credential breach to a topology disclosure; they cannot make the artifact safe to publish. **PO decision (2026-06-16, ADR-012 D12):** "redacted backup may be stored anywhere; encrypted backup needs the passphrase kept separate" **is** the accepted posture — and the PO went further than the original "v0.18.x candidate" recommendation, deciding to **ship an optional whole-artifact passphrase encryption path in v0.18.0** (opt-in; redact-by-default stays the default). That path is specified in **Addendum C (§10)**. The topology-disclosure residual of a *redacted* artifact remains accepted (it is inherent to producing a portable backup at all).
 - **Residual: redaction-denylist completeness — Low.** A credential-class key not in the denylist ships in plaintext. Mitigated by the shared-list discipline (one place to audit) and the unit test that fails if a known secret leaks; but a *novel* category added without a denylist review is the failure mode. Action: the "add a Dispatcharr category" checklist must include "add its secret keys to `_REDACT_KEYS`".
-- **Residual: Fernet key compromise — Low (for v0.18.0 scope).** If both the encrypted artifact and the Fernet key leak, the carve-out creds are exposed. Out of scope to fix here (no KMS for MVP, ADR-008 D3); the key-bootstrap integrity check (`0i2vt.2`, mode 0600 + ownership) is the compensating control.
+- **Residual: Fernet key compromise — Low (for v0.18.0 scope).** If both the encrypted artifact and the Fernet key leak, the carve-out creds are exposed. Out of scope to fix here (no KMS for MVP, ADR-012 D3); the key-bootstrap integrity check (`0i2vt.2`, mode 0600 + ownership) is the compensating control.
 
 ---
 
 ## 9. Addendum B — Outbound Destinations & SSRF (v0.18.0 cloud upload + v0.18.1 sync)
 
-**Added:** 2026-05-12 · **Bead:** `enhancedchannelmanager-0i2vt.3` (Phase 0) · **Feeds:** `0i2vt.4` (SyncTarget/CloudTarget models), `0i2vt.5` (first-run SSRF wizard + always-on denylist + DNS-rebinding mitigations), `0i2vt.8` (cloud upload wiring) · **Source:** ADR-008 D4 + "Security Mandatory #2, #3, #5"
+**Added:** 2026-05-12 · **Bead:** `enhancedchannelmanager-0i2vt.3` (Phase 0) · **Feeds:** `0i2vt.4` (SyncTarget/CloudTarget models), `0i2vt.5` (first-run SSRF wizard + always-on denylist + DNS-rebinding mitigations), `0i2vt.8` (cloud upload wiring) · **Source:** ADR-012 D4 + "Security Mandatory #2, #3, #5"
 
 ### 9.1 Scope
 
 v0.18.0 adds **operator-configurable outbound destinations**:
 
 - **CloudTarget** — S3 (incl. S3-compatible: MinIO, Wasabi, B2 — *operator supplies the endpoint URL*), WebDAV (*operator supplies the base URL*), OneDrive, Dropbox, Google Drive. Adapters already scaffolded in `backend/cloud_storage/` (`s3_adapter.py`, `onedrive_adapter.py`, `dropbox_adapter.py`, `gdrive_adapter.py`, `factory.py`).
-- **SyncTarget** — a second Dispatcharr instance's URL (reserved for v0.18.1 sync; schema lands in v0.18.0 per ADR-008).
+- **SyncTarget** — a second Dispatcharr instance's URL (reserved for v0.18.1 sync; schema lands in v0.18.0 per ADR-012).
 
 **The threat:** an authenticated admin (or an attacker who has compromised an admin session)
 can point ECM at an arbitrary URL — and ECM, running *inside the operator's network*, will make
@@ -405,7 +529,7 @@ deliberately makes outbound requests to **destinations the operator typed in**, 
 *endpoint URLs* (not just API tokens) for S3-compatible and WebDAV. Every one of those URLs is
 attacker-influenceable and must be validated.
 
-ADR-008 D4 resolves the policy: a **first-run wizard** lets the operator pick *LAN-friendly*
+ADR-012 D4 resolves the policy: a **first-run wizard** lets the operator pick *LAN-friendly*
 (RFC1918 + loopback allowed — the default, because plenty of operators back up to a NAS on
 `192.168.x.x`) vs *public-only* (private ranges blocked). **Regardless of that choice**, an
 always-on denylist blocks metadata/link-local/CGNAT/etc., and DNS-rebinding mitigations are
@@ -431,7 +555,7 @@ untrusted *and* treat the act of connecting as a capability that must be gated.
 
 1. **One SSRF chokepoint.** A single ECM-owned validated HTTP client (or pre-resolve+IP-pin shim for SDKs that won't cooperate). CI grep forbids raw outbound calls in the adapters. (Checklist 21, 24; §9.4 item 1.)
 2. **Always-on denylist, unconditional.** Metadata/link-local/CGNAT/IPv6-special/non-http(s) rejected in *both* wizard modes; no settings key, no allowlist can re-enable them. (Checklist 22; §9.4 item 2.)
-3. **LAN-friendly is the only knob.** The wizard toggles RFC1918 + `127.0.0.0/8` only; default LAN-friendly per ADR-008 D4. (Checklist 22; §9.4 item 2.)
+3. **LAN-friendly is the only knob.** The wizard toggles RFC1918 + `127.0.0.0/8` only; default LAN-friendly per ADR-012 D4. (Checklist 22; §9.4 item 2.)
 4. **Resolve-then-connect-by-IP.** Resolve once, validate all records, connect by validated IP with hostname as SNI/`Host:`. Closes DNS-rebinding TOCTOU. (Checklist 23; §9.4 item 3.)
 5. **Redirect re-validation + no scheme downgrade.** 3xx to a new host re-runs the full check; `https→http` rejected. (Checklist 24; §9.4 item 4.)
 6. **TLS verify on; insecure flag is audited per request.** `verify=True` default; `insecure=true` → audit row every time. (Checklist 25; §9.4 item 6.)
@@ -472,7 +596,7 @@ DNS-rebinding coverage that `zbt74` does not.)
    outbound request with it logs a `journal.log_entry` (`category='backup_outbound'`, target id,
    host, `tls_verified=false`).
 7. **First-run wizard.** Appears on first run; records the LAN-friendly vs public-only choice;
-   default = LAN-friendly (ADR-008 D4). The choice is re-editable in settings, but editing it can
+   default = LAN-friendly (ADR-012 D4). The choice is re-editable in settings, but editing it can
    only move the *RFC1918/loopback band* — it can never touch the always-on denylist (item 2).
 8. **Regression corpus (mandatory, ships with `0i2vt.5`).** Covers, at minimum: each always-on
    denied range (v4 and v6); `::ffff:169.254.169.254` and other IPv4-mapped representations of
@@ -506,3 +630,184 @@ DNS-rebinding coverage that `zbt74` does not.)
   connection open for a long time; the validated IP is fixed for that connection (good), but if
   the connection drops and the client retries, the retry must re-run validation, not reuse a
   cached hostname. **Action for `0i2vt.8`:** retries go back through the validator.
+
+---
+
+## 10. Addendum C — Whole-Artifact Passphrase Encryption (v0.18.0 opt-in cred-carrying backup)
+
+**Added:** 2026-06-17 · **Bead:** `enhancedchannelmanager-u81kh` (Phase 1, build-last/deferrable) ·
+**Crypto design:** spike `enhancedchannelmanager-0zrse` (closed — engineer + security + code-reviewer,
+live-demo'd vs `cryptography` 49.0.0) · **Source:** ADR-012 D12 · **Feeds:** `0i2vt.7` (ZIP-builder
+encrypt stage) + the Phase-2 decrypt-at-ingest gate.
+
+### 10.1 Scope and posture
+
+ADR-012 D12 (PO, 2026-06-16) ships an **optional, opt-in whole-artifact passphrase encryption** path
+so that **credentials can travel with a cross-instance migration** (pairs with D11) instead of being
+re-entered on the target. **Redact-by-default (D1) remains the default**; passphrase encryption is for
+operators who explicitly want secrets included.
+
+**The load-bearing security fact.** Passphrase mode enables cred-carrying migration only by wrapping an
+**unredacted** artifact. That moves **every credential** from *"never present in the artifact"*
+(redact-by-default) to *"present, protected solely by the operator's passphrase."* This is a
+deliberate, PO-accepted trade — but it is exactly why the construction below (KDF strength, AEAD, no
+plaintext on failure) and the UX gates (min passphrase, unrecoverable acknowledgement) are mandatory,
+not nice-to-haves. The default path does **not** make this trade; only the explicit
+"include credentials for migration" opt-in (which **requires** a passphrase) does.
+
+**New primitive — D3/D12 reconciliation.** This is a **new crypto primitive**, intentionally
+**parallel to** the existing Fernet primitive in `backend/cloud_storage/crypto.py` (which is
+static-key, whole-artifact-in-RAM, and cannot stream). Per ADR-012's own D3 note, **D12 partially
+supersedes D3**: **D3 still governs at-rest credential columns** (the `SyncTarget`/`CloudTarget`
+Fernet-encrypted fields, Addendum A row A3); **D12 governs this opt-in whole-artifact path**. The two
+coexist. `crypto.py` is **not** reused here.
+
+**Trust boundary added:** **ECM → encrypted artifact → operator's hands / cloud → ECM (decrypt on
+restore).** The ciphertext crosses the same untrusted egress boundary as a redacted artifact
+(Addendum A), but unlike the redacted artifact it **contains live credentials** — so the encryption
+must be the only thing standing between the artifact and full credential disclosure.
+
+### 10.2 Construction (from spike `0zrse` — build-ready)
+
+> **Implementation status (2026-06-19): BUILT (`u81kh`).** The construction below is
+> implemented in `backend/dbas/artifact_crypto.py` (the new primitive: scrypt + chunked
+> ChaCha20-Poly1305, authenticated cleartext header, structural no-oracle), wired at exactly the
+> two seams — the encrypt stage in `routers.backup.build_backup_artifact` (opt-in `passphrase` +
+> `include_credentials` + `acknowledge_unrecoverable`) and the decrypt-at-ingest gate in
+> `tasks.dbas_restore.DbasRestoreTask._decrypt_gate`. Dep choice settled at build start:
+> **`cryptography`-only** (0 new deps), per PO. The passphrase never touches a log line or the
+> journal audit row (task-parameter redactor in `task_engine`). Encrypted backups are **manual-run
+> only** (a passphrase is never persisted to the schedule store). The C1–C6 rows below read
+> "to-build" historically; all are now built under `u81kh` except the **operator-facing
+> `acknowledge_unrecoverable` checkbox UX (C6)**, whose *gate* is API-mandatory today (the build
+> refuses without the ack) and whose *checkbox* lands with the DBAS backup/restore UI wiring.
+> Tests: `backend/tests/dbas/test_artifact_crypto.py` (primitive),
+> `backend/tests/routers/test_dbas_passphrase_encryption.py` (both seams),
+> `backend/tests/unit/test_task_engine_param_redaction.py` (passphrase log/journal scrub).
+
+- **KDF:** **scrypt**, **N ≥ 2¹⁵** (floor), r=8, p=1; **per-artifact random salt**. KDF parameters and
+  salt are stored in a **cleartext, authenticated header** (so a future ECM — or the `0i2vt.17`
+  version check — can read them before attempting decryption).
+- **Cleartext authenticated header:** `magic`, **`format_version`** (the *encryption-envelope* version),
+  KDF params, salt, AEAD id, chunk size. **`format_version` is SEPARATE from the backup
+  `schema_version`** so that ECM `.17`-style version checks can validate the envelope **pre-decrypt**
+  and refuse an unsupported version without a passphrase. The header is covered by the AEAD's AAD
+  (below), so it cannot be tampered with undetected.
+- **AEAD:** **chunked streaming** AEAD — **ChaCha20-Poly1305 or AES-256-GCM**. **Per-chunk nonce**
+  (random base XOR a counter). Each chunk's **AAD binds the header + the chunk index + the `is_final`
+  flag**, which makes chunk **swap, reorder, and stream truncation** detectable (any such manipulation
+  fails authentication).
+- **REDACT-THEN-ENCRYPT, enforced structurally:** redaction runs **inside** the build path and is not
+  skippable; the `include_credentials` opt-in only **re-injects the approved credential set** before
+  encryption. There is no "skip redaction and encrypt instead" branch.
+- **Off-event-loop, streaming:** KDF and encrypt/decrypt run **off the event loop** and **stream to
+  temp files** (the `.7` builder's in-memory `BytesIO` assembly becomes tempfile-streaming — required
+  for the D8 logo-streaming memory model regardless).
+- **Phase-2 decrypt is a single ingest gate, not an 11-bead fan-out:** decrypt happens **once** at
+  restore ingest, before the per-category importers run; `.10`–`.15` need **zero** crypto changes.
+- **Passphrase policy:** **minimum 12 characters**, enforced at the API boundary.
+
+### 10.3 STRIDE rows — Passphrase Encryption
+
+| # | Surface | STRIDE | Threat | Attack scenario | Mitigation | Status | Sev |
+|---|---------|--------|--------|-----------------|------------|--------|-----|
+| C1 | Encrypted artifact | Information Disclosure | The opt-in path ships an **unredacted** artifact, so a weak/brute-forceable passphrase exposes every credential | Operator picks "include credentials" with a 4-char passphrase; artifact lands in Dropbox; offline brute-force of a low-entropy passphrase recovers all M3U/EPG/SMTP/cloud creds. | Strong KDF (**scrypt N ≥ 2¹⁵**) raises per-guess cost; **min 12-char passphrase** (API-enforced, checklist 29); redact-by-default stays default so this surface only exists when the operator opted in. | to-build (`u81kh`/`0i2vt.7`) | **High** |
+| C2 | Build path | Information Disclosure / Tampering | "Encrypt instead of redact" path skips redaction, or a non-passphrase switch ships unredacted creds | A code path lets `include_credentials=true` write unredacted creds without a passphrase, or disables redaction "to make migration work." | **REDACT-THEN-ENCRYPT is structural** (checklist 28): redaction is inside the build path, not skippable; `include_credentials` only re-injects approved creds, and **only** with a passphrase set. No "disable redaction" switch (consistent with Addendum A). Test: `include_credentials=false` + passphrase → decrypt → no plaintext cred. | to-build (`0i2vt.7`) | High |
+| C3 | KDF / AEAD construction | Tampering / Spoofing | Weak KDF, missing AEAD, or chunk swap/reorder/truncate yields forged or partial plaintext | Attacker truncates the ciphertext to drop a "force-reset" record, or reorders chunks, or the construction uses an unauthenticated cipher so a flipped bit silently alters a restored value. | **scrypt N ≥ 2¹⁵** KDF; **AEAD** (ChaCha20-Poly1305 / AES-256-GCM) per chunk; **per-chunk nonce**; **AAD binds header + chunk-index + is_final** → swap/reorder/truncation all fail authentication (checklist 29). New primitive parallel to Fernet, off-event-loop, streaming (checklist 31–32). | to-build (`u81kh`) | **High** |
+| C4 | Cleartext header | Tampering / DoS | Header tampered, or version confusion forces a wrong/failed decode | Attacker edits the cleartext KDF params (e.g., lowers N) to weaken the derived key, or sets a `format_version` the target mishandles. | Header is **authenticated** (covered by AEAD AAD) → param tampering fails decryption. **`format_version` is separate from `schema_version`** and is checked **pre-decrypt** (checklist 30), so an unsupported envelope is refused cleanly (user-facing "unsupported version"; full detail server-side) rather than crashing or mis-decoding. | to-build (`u81kh`/`0i2vt.17`) | Med |
+| C5 | Decrypt path | Information Disclosure (oracle) | A wrong-passphrase vs corrupted-artifact distinction, or an early plaintext release, leaks an oracle | Attacker probes whether a guessed passphrase is "closer" by observing different errors, partial output, or a verified-prefix before full authentication. | **No wrong-passphrase oracle — STRUCTURAL** (checklist 33): wrong passphrase and corrupt artifact raise an **identical exception** and release **zero plaintext** on any failure; never emit a verified prefix before whole-artifact auth completes. **Accepted residual:** spike `0zrse` demonstrated a ~15 ms size-dependent **timing** residual (wrong pass fails at chunk 0; corrupt-last-chunk fails at chunk N) — **accepted** for an offline artifact (see §10.4). Do **not** assert wall-clock equivalence in tests. | to-build (`u81kh`) | Med |
+| C6 | Operator UX | Repudiation / availability | Operator forgets the passphrase → artifact is **permanently unrecoverable** | Operator encrypts a migration backup, loses the passphrase, and later cannot restore — total data-availability loss for that artifact, with no ECM-side recovery. | **Accepted risk** — there is intentionally no recovery/backdoor (a backdoor would defeat C1/C5). Compensating control: a **hard-gate UX warning** (checklist 34) — an explicit `acknowledge_unrecoverable` checkbox the operator must tick (not a tooltip) before an encrypted backup is produced. | to-build (`u81kh`) | Med |
+
+### 10.4 Mitigations summary (Addendum C)
+
+1. **Opt-in; redact-by-default preserved.** Encryption is opt-in; the default backup stays redacted
+   (D1). Credentials are carried only via the explicit "include credentials for migration" choice,
+   which **requires** a passphrase. (Checklist 27.)
+2. **REDACT-THEN-ENCRYPT, structural.** Redaction is inside the build path and cannot be skipped;
+   `include_credentials` only re-injects approved creds. (Checklist 28.)
+3. **Strong, parameterised KDF + authenticated streaming AEAD.** scrypt N ≥ 2¹⁵ + per-chunk AEAD with
+   AAD binding header/index/final → no swap/reorder/truncation; min 12-char passphrase. (Checklist 29.)
+4. **Cleartext authenticated header, `format_version` separate from `schema_version`.** Version checks
+   run pre-decrypt; the header is tamper-evident. (Checklist 30.)
+5. **New primitive parallel to Fernet; D3/D12 reconciled.** D3 → at-rest cred columns (Fernet);
+   D12 → opt-in whole-artifact path (this primitive). (Checklist 31.)
+6. **Off-event-loop streaming.** KDF + encrypt/decrypt stream to temp files off the loop. (Checklist 32.)
+7. **No wrong-passphrase oracle — structural, not wall-clock.** Identical exception + zero plaintext on
+   failure; the demonstrated ~15 ms timing residual is an accepted offline residual. (Checklist 33.)
+8. **Lost-passphrase hard-gate UX.** `acknowledge_unrecoverable` checkbox; no recovery path.
+   (Checklist 34.)
+
+### 10.5 Residual risk (Addendum C)
+
+- **Residual: size-dependent timing oracle (~15 ms) — Low, accepted.** Spike `0zrse` **demonstrated**
+  that a wrong passphrase fails at the *first* chunk while a corrupted *last* chunk fails after
+  streaming the whole artifact, producing a measurable, size-dependent timing difference. The no-oracle
+  property is therefore specified as **structural** (identical exception + zero-plaintext-on-failure +
+  never release a verified prefix), **not** as wall-clock equivalence. For an **offline** artifact the
+  attacker already possesses (no online query channel, no rate-limit to defeat), this timing channel
+  yields negligible advantage over offline brute force, which the KDF already gates. **Accepted** for
+  v0.18.0; the alternative ("fail at end" to flatten timing) is available if a future use makes the
+  artifact's decryption an online oracle. Do not paper over it with a flaky stopwatch test.
+- **Residual: unredacted creds protected solely by the passphrase — Medium, accepted (opt-in only).**
+  By design, the opt-in cred-carrying artifact stakes every credential on the operator's passphrase
+  (§10.1). Mitigated by the strong KDF, the 12-char minimum, and the fact that the default path never
+  makes this trade. A weak (but ≥12-char) passphrase remains the operator's risk. No KMS / escrow for
+  the MVP (consistent with D3's no-KMS posture).
+- **Residual: lost passphrase = unrecoverable — Low/accepted (availability, not confidentiality).**
+  Intentional: no recovery/backdoor. Bounded by the hard-gate acknowledgement (C6). This is an
+  availability trade the operator explicitly accepts per artifact.
+- **Residual: build-time dependency choice deferred.** Spike `0zrse` left one open build-kickoff
+  decision — implement framing within `cryptography` (hand-rolled chunk framing, zero new deps, more
+  maintenance) **vs.** add a vetted streaming AEAD library (PyNaCl `secretstream` / `age` — security's
+  preference, removes framing risk, adds a dependency + supply-chain review). **Not a threat-model
+  decision; settle at `u81kh` build start.** Either choice must still satisfy the construction in §10.2.
+
+---
+
+## 11. Addendum D — Cross-Instance Live Sync (v0.18.1 one-way A→B config replication)
+
+**Added:** 2026-06-19 · **Epic:** `enhancedchannelmanager-i39wu` · **Architecture:** [ADR-013](../adr/ADR-013-cross-instance-live-sync.md) · **Crypto/feasibility design:** spike `enhancedchannelmanager-xp6mp` (closed — architect + engineer + security + DBA + SRE; reuse-seam demonstrated). **This addendum GATES build** the same way Addendum C gated `u81kh`: no sync build bead opens until §11 is reviewed and the D2/D3/D7 hard lines are PO-ratified (they are — see ADR-013 S2/S3).
+
+### 11.1 Scope and posture
+
+ADR-013 ships **one-way** A→B continuous config replication: ECM-A reads its configuration and **writes** it into a remote Dispatcharr-B on a schedule, so B converges to A. This is the first ECM surface that makes **continuous, unattended, outbound WRITES into a second live instance**. It is *not* symmetric to DBAS restore: DBAS restore is the operator pulling an archive *onto themselves*; sync is **ECM-A reaching out and writing into B**, so the blast radius is a *remote* instance and the actor for B's safety is A's outbound code, not B's admin. That asymmetry drives every row below.
+
+**The load-bearing posture facts (PO-ratified, ADR-013):**
+- **One-way only** (S2). Bidirectional is a separate epic with its own inbound-write trust boundary on A.
+- **Redact-by-default / topology only** (S3/S7). The sync payload carries **no** secrets — same shared `_REDACT_KEYS` denylist as the backup ZIP. Secret *migration* stays the `u81kh` encrypted-artifact path, not a continuous live channel.
+- **Users never sync** (S3). Continuous one-way push of the `users` category would repeatedly overwrite B's privilege flags / lock out B's operator.
+
+The hard primitives already exist and were designed for this: `backend/security/ssrf.py` names "a second Dispatcharr instance" in its own docstring; the `SyncTarget` model's credential-freshness columns + same-txn version-bump listeners are byte-for-byte the `CloudStorageTarget` contract; Addendum B §9 already wrote the SSRF + credential-freshness contract anticipating v0.18.1. **The risk is concentrated in what enters the payload (D2/D3) and the direction (D7) — both design decisions, not missing tech.**
+
+### 11.2 STRIDE rows — Cross-Instance Live Sync
+
+| # | Surface | STRIDE | Threat | Mitigation | Status | Sev |
+|---|---------|--------|--------|------------|--------|-----|
+| **D1** | `SyncTarget.base_url` | Spoofing / EoP | An operator-typed `base_url` points the recurring, unattended sync at IMDS / an internal host / loopback — a scheduled internal scanner / credential thief / proxy. | `ssrf.py` `validate_outbound_url()` on **every** request (initial connect, each pagination page, each write, each retry, each redirect), at **execute time** not config-save time (DNS-rebinding); resolve-then-connect-by-IP; reject-whole-request if any A/AAAA is denied; `https→http` downgrade refusal. **The CI grep that forbids raw `httpx`/`requests` in `cloud_storage/` adapters MUST extend to the sync module** (`test_ssrf_chokepoint_guard.py` currently scans only `cloud_storage/` — without the extension, SSRF is unenforced for the new path). | to-build (reuse `0i2vt.5`; guard-extension = AC on `1t3al`) | **High** |
+| **D2** | Sync payload | Information Disclosure | Replicating "config" naively streams live M3U/EPG/XC/SMTP/cloud secrets to B on a schedule — worse than the one-shot artifact (no operator/passphrase in the loop per fire; a wrong/typo'd `base_url` leaks every credential, silently, every cycle). | **Redact-by-default** via the shared `_REDACT_KEYS` deep redactor before serialize — topology only, **no plaintext-cred path in v0.18.1** (PO-ratified, ADR-013 S3/S7). Cred-carrying continuous sync is **not shipped**; secret migration stays the `u81kh` passphrase-artifact path. Test: assemble a sync payload from source state with a known M3U/SMTP/cloud secret; assert none appears in the serialized bytes (reuse Addendum A `A1`). | to-build | **High** |
+| **D3** | `users` category | Elevation of Privilege | Continuous one-way push of `users` repeatedly overwrites B's `is_superuser`/`is_staff`/`user_level` from A — an operator-lockout / privilege-escalation primitive under automation. `password_hash` is non-transportable anyway (spike `tsfv0`: Dispatcharr exposes `password` write-only). | **`users` is a permanent, code-enforced never-sync exclusion** (S3) — a single shared never-sync constant imported by the payload assembler AND its test, treated like the always-on SSRF denylist (unconditional, no settings key). Test asserts the `users` category is never assembled into a sync payload. | to-build (enforced exclusion) | **High** |
+| **D4** | Category registry | Tampering | An unknown or secret-bearing category is synced. | Category **allowlist** (topology only; the S3 set); reject unknown keys; secret fields stripped pre-serialize via the shared denylist (D2). | to-build | Med |
+| **D5** | Stale credential | Tampering / Repudiation | A scheduled sync fires after B's token was rotated/revoked and writes with the stale token. | `credential_version` + `token_revoked_at` (schema present, listeners present) → capture `credential_version` at enqueue (task-config JSON, no new column), re-read FRESH + `token_revoked_at` hard-stop at execute, **abort + WARN + `journal.log_entry`** (`category='sync_outbound'`, `aborted=stale_credential`) on change/revoke. The version bump is gated on `credentials` being dirty, so a rename/`enabled` toggle does not invalidate a live schedule (verified `export_models.py`). Mirrors `dbas_backup` `_check_credential_freshness` verbatim. | to-build (schema exists) | Med |
+| **D6** | TLS | Tampering | `insecure=true` MITM on the continuous channel. | `verify=True` default; `insecure=true` writes a `journal.log_entry` audit row (`tls_verified=false`) **on every cycle** (not once at config time); **forbidden-by-construction if the payload is ever non-redacted** (moot while redact-by-default holds — topology has no creds to expose; the coupling is stated so a future cred-carrying toggle cannot silently combine with `insecure`). | to-build | Med |
+| **D7** | Direction | Integrity / EoP | Bidirectional opens an **inbound-write boundary on A** (a remote instance becomes an authenticated writer into A) + last-write-wins/loop amplification. | **One-way A→B only** for v0.18.1 (ADR-013 S2, PO-ratified). Bidirectional is gated on a separate ADR + an inbound-authn design for A. | design-decision (one-way set) | **High** (if bidir) |
+| **D8** | Partial failure | Integrity / Availability | Sync dies mid-replication → B in a half-written state surfaced as success. | **Idempotency is the recovery mechanism** (ADR-013 S8): upsert-by-stable-identity, so a partial/failed run is re-run to convergence next cycle. Reuse the `RollbackLedger` + the tri-state `RestoreOutcome` (never SUCCESS on mixed state); a `partial` run does not advance the freshness gauge (so the staleness alert fires on sustained partial drift). No partial state is reported as success. | to-build (reuse) | Med |
+| **D9** | Audit | Repudiation | No trail of what A pushed to B, when, with what result. | `journal.log_entry` per sync run: target id, categories, counts, `redaction_mode`, result, request id (mirror Addendum A `A5`). Per-cycle `insecure` audit row (D6). | to-build | Med |
+| **D10** | Trigger | DoS | A change-driven trigger storms B (every edit → a sync). | **Scheduled-interval default** over change-driven for v1 (ADR-013 S6); the `ALREADY_RUNNING` overlap guard prevents a run overlapping itself; change-driven (if ever added) requires debounce/coalesce + rate-cap. | to-build | Low |
+
+### 11.3 Mitigations summary (Addendum D)
+
+1. **One-way only.** A is system-of-record; bidirectional is a separate epic with a separate threat model. (D7 / ADR-013 S2.)
+2. **Redact-by-default, no secrets on the wire.** Shared `_REDACT_KEYS` denylist strips all secret fields before serialize; cred-carrying continuous sync is not shipped. (D2 / S7.)
+3. **Users never sync — enforced, not scoped.** A shared never-sync constant + a test that the payload assembler refuses the `users` category and the credential columns. (D3 / S3.)
+4. **SSRF on every request, execute-time, and the CI guard extends to the sync module.** Without the guard extension the chokepoint is theatre for the new path. (D1.)
+5. **Credential-freshness at fire time.** Capture-at-enqueue / re-check-at-execute / abort+audit; mirrors the shipped CloudStorageTarget contract. (D5.)
+6. **TLS verify default; per-cycle insecure audit; insecure forbidden if payload ever carries creds.** (D6.)
+7. **Idempotency is recovery.** Upsert-by-stable-identity + reuse the rollback ledger + tri-state outcome; retry converges, no new saga machinery. (D8 / S8.)
+8. **No new crypto.** Under redact-by-default the payload is topology-only, so TLS is the complete in-transit control — ADR-012 D3's "no new crypto surface" holds for the redacted sync path. (D2/D6.)
+
+### 11.4 Residual risk (Addendum D)
+
+- **Residual: topology disclosure to B — Low, accepted.** Even redacted, the sync payload reveals the deployment shape (channel names, source URLs minus creds). Inherent to replicating config at all; B is an operator-trusted destination. Same accepted residual as the redacted backup artifact (Addendum A §8.4).
+- **Residual: credential re-entry friction on B — accepted (availability, not confidentiality).** Redact-by-default means the operator re-enters M3U/EPG passwords on B after first sync. The deliberate trade for not streaming live secrets continuously; secret migration remains the `u81kh` artifact path.
+- **Residual: no live-B integration coverage at build time — tracked.** The build + unit/contract tests run against mocks/fakes; the live A→B round-trip + the live half of the test harness are gated on a reachable second Dispatcharr (bead `46pkq`). Flagged, not silently skipped.
+- **Residual: `insecure=true` on a recurring channel — Low, accepted with per-cycle audit.** A one-shot insecure upload is one auditable event; a recurring insecure sync ships topology over unverified TLS every interval — bounded by the per-cycle audit row (D6) so the operator sees recurring exposure, and forbidden the moment the payload is non-redacted.

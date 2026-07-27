@@ -171,15 +171,17 @@ class TestIpMismatch:
         assert [u.user_name for u in on_server] == ["dan"]
 
     async def test_ip_match_proceeds_to_cache_call(self):
-        """When the session IP matches the Plex server IP, the cache is called."""
+        """When the session IP matches the Plex server IP, the cache is called.
+        With no matching sessions (cache returns []), result is None."""
         cache_mock = AsyncMock(return_value=[])
         with patch.object(plex_resolver, "get_settings", return_value=_enabled_settings()), \
              patch.object(plex_resolver, "get_cached_plex_sessions", cache_mock):
-            await plex_resolver.resolve_plex_user(
+            result = await plex_resolver.resolve_plex_user(
                 ecm_session_ip="192.168.1.20",
                 ecm_stream_name="ESPN",
             )
         cache_mock.assert_awaited_once()
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -9,11 +9,14 @@ Background service that manages and executes scheduled tasks:
 - Provides error handling and retry logic
 """
 import asyncio
+import contextlib
 import logging
 from datetime import datetime
 from typing import Optional
 
+import journal
 from database import get_session
+from log_throttle import should_log
 from models import TaskExecution
 from task_registry import get_registry
 from task_scheduler import TaskResult
@@ -21,9 +24,196 @@ from journal import log_entry
 
 logger = logging.getLogger(__name__)
 
+
+@contextlib.contextmanager
+def _scheduler_mutation_source_scope(triggered_by: str):
+    """Stamp ``mutation_source="scheduler"`` for the duration of a scheduled run.
+
+    W3-follow-up A (enhancedchannelmanager-t44t2): a scheduled/background task
+    carries NO HTTP request, so the actor-source middleware (``main.py``) never
+    fires and every ``journal.log_entry`` it makes would land with
+    ``mutation_source=NULL``. This is the single execution chokepoint
+    (``TaskEngine._execute_task`` runs EVERY task through here), so setting the
+    journal contextvar once around the run attributes all journal calls inside
+    it to ``"scheduler"`` without instrumenting each ``tasks/*`` job.
+
+    Scope is limited to ``triggered_by == "scheduled"``. Manual/API runs reach
+    the engine from an HTTP request whose middleware already stamped ``"ui"`` /
+    ``"mcp_ai"`` — overriding that with ``"scheduler"`` would mislabel the audit
+    row — so for those this is a no-op and the existing value is left intact.
+
+    Explicit-vs-contextvar precedence is owned by
+    ``journal._resolve_mutation_source``: an explicit ``mutation_source=`` passed
+    at a call site (e.g. the auto-creation pipeline's ``"auto_creation"`` calls)
+    always wins over this contextvar, so an auto-creation run TRIGGERED by the
+    scheduler still journals its channel mutations as ``"auto_creation"`` while
+    the surrounding task start/complete rows become ``"scheduler"``.
+
+    The token is reset in ``finally`` (even on exception) so the actor never
+    leaks past this job into a sibling async task.
+    """
+    if triggered_by != "scheduled":
+        yield
+        return
+
+    token = journal.set_mutation_source(journal.MUTATION_SOURCE_SCHEDULER)
+    try:
+        yield
+    finally:
+        journal.reset_mutation_source(token)
+
+# Task-parameter keys whose VALUE is a secret and must never be logged or written
+# to the journal audit row (which itself is included in backups). A manual
+# encrypted DBAS backup/restore (ADR-012 D12 / u81kh) passes an operator
+# ``passphrase`` as an ad-hoc parameter; without this scrub it would land in
+# cleartext in journal.db. Matched case-insensitively; additive.
+_SECRET_PARAM_KEYS = frozenset({
+    "passphrase", "password", "passwd", "token", "secret", "api_key",
+    "access_token", "refresh_token", "client_secret", "private_key",
+})
+_REDACTED_PARAM = "***REDACTED***"
+
+
+def _redact_task_parameters(parameters):
+    """Return a shallow copy of a task-parameters dict with secret VALUES masked.
+
+    Used for the journal audit ``after_value`` so a secret param (e.g. an
+    encrypted-backup passphrase) never enters the journal row in clear text. The
+    UNREDACTED dict still flows to ``update_config`` — only the journaled view is
+    masked.
+
+    NOTE: do NOT use this for ``logger`` calls. Logging sites use
+    :func:`_param_keys` (keys only, no values) instead — a static taint analyser
+    (CodeQL ``py/clear-text-logging-sensitive-data``) cannot see through this
+    value-level sanitiser and would flag the passphrase as reaching the log sink.
+    Logging only the key names removes the tainted values from the sink entirely.
+    """
+    if not isinstance(parameters, dict):
+        return parameters
+    return {
+        k: (_REDACTED_PARAM if isinstance(k, str) and k.lower() in _SECRET_PARAM_KEYS
+            and v not in (None, "") else v)
+        for k, v in parameters.items()
+    }
+
+
+def _param_keys(parameters):
+    """Return the sorted KEY names of a task-parameters dict — never the values.
+
+    Logging the parameter NAMES (e.g. ``['artifact_path', 'passphrase']``) tells
+    an operator which parameters a run used without ever putting a secret VALUE
+    in a log line, which keeps the generic engine log sites free of the
+    ``clear-text-logging-sensitive-data`` taint sink regardless of which task is
+    run or which params it carries.
+    """
+    if parameters is None:
+        # Falsy — never reaches a log site (all callers guard `if parameters:`),
+        # and preserving None keeps the logged shape honest where it could.
+        return None
+    if not isinstance(parameters, dict):
+        # NEVER return the raw object: a non-dict value could itself be (or
+        # contain) a secret, and passing it through verbatim keeps the
+        # clear-text-logging taint path alive (CodeQL alerts #1770/#1771).
+        # A type-name placeholder tells the operator what shape arrived
+        # without ever putting the value in a log line.
+        return f"<non-dict:{type(parameters).__name__}>"
+    return sorted(parameters.keys())
+
 # Configuration
 DEFAULT_CHECK_INTERVAL = 60  # Check for due tasks every 60 seconds
 MAX_CONCURRENT_TASKS = 3  # Maximum tasks running simultaneously
+
+
+def _abandon_orphaned_auto_creation_executions(session=None) -> int:
+    """bd-exo4j crash-sentinel: reconcile ChannelPipelineExecution rows orphaned
+    by a hard restart, and trip the circuit breaker if any were found.
+
+    A kernel OOM-kill is a SIGKILL — no Python ``finally`` runs — so an
+    in-flight auto-creation run leaves its ``ChannelPipelineExecution`` row at
+    ``status='running'`` forever. ``task_engine`` already reconciles stale
+    ``TaskExecution`` rows (``_cleanup_stale_executions``) but NOT
+    ``ChannelPipelineExecution``; this closes that gap.
+
+    Idempotent: only ``status='running'`` rows are touched (``WHERE`` filter),
+    so ``completed`` / ``failed`` / ``capped`` rows are left alone and a second
+    boot finds nothing to do. The abandoned status is the DISTINCT value
+    ``'abandoned'`` (NOT ``'failed'`` — an OOM crash is operationally different
+    from a rule that errored and we want the UI/alerts to say so).
+
+    When at least one row is abandoned we set the PERSISTED circuit-breaker
+    flag (``auto_creation_run_on_refresh_disabled=True``) so the post-refresh
+    auto-fire chain stays disabled across the restart until the operator
+    deliberately clears it. NEVER auto-resets.
+
+    MUST run before the task scheduler arms — it is called from
+    ``TaskEngine.start()`` ahead of the scheduler loop creation.
+
+    Args:
+        session: optional SQLAlchemy session (tests inject the in-memory one).
+            When None, a fresh session is opened and closed here.
+
+    Returns:
+        Count of rows transitioned 'running' -> 'abandoned'.
+    """
+    from models import ChannelPipelineExecution
+
+    owns_session = session is None
+    if owns_session:
+        session = get_session()
+    try:
+        abandoned_count = session.query(ChannelPipelineExecution).filter(
+            ChannelPipelineExecution.status == "running"
+        ).update({
+            "status": "abandoned",
+            "completed_at": datetime.utcnow(),
+            "error_message": (
+                "Abandoned: run was interrupted by a system restart "
+                "(likely an out-of-memory kill). See GH #473."
+            ),
+        }, synchronize_session=False)
+        session.commit()
+
+        if abandoned_count > 0:
+            logger.warning(
+                "[TASK-ENGINE] Abandoned %s orphaned auto-creation execution(s) "
+                "left 'running' by a hard restart — tripping the run-on-refresh "
+                "circuit breaker (bd-exo4j / GH #473)",
+                abandoned_count,
+            )
+            _trip_run_on_refresh_circuit_breaker()
+
+        return abandoned_count
+    except Exception as e:
+        logger.exception(
+            "[TASK-ENGINE] Failed to reconcile orphaned auto-creation executions: %s", e
+        )
+        return 0
+    finally:
+        if owns_session:
+            session.close()
+
+
+def _trip_run_on_refresh_circuit_breaker() -> None:
+    """Persist the run-on-refresh breaker flag (bd-exo4j).
+
+    Persisted in settings.json so it survives the restart that motivated the
+    breaker. Idempotent — re-tripping an already-tripped breaker is a no-op
+    write. Best-effort: a settings failure is logged but never aborts startup.
+    """
+    try:
+        from config import get_settings, save_settings
+        settings = get_settings()
+        if getattr(settings, "auto_creation_run_on_refresh_disabled", False):
+            return
+        settings.auto_creation_run_on_refresh_disabled = True
+        save_settings(settings)
+        logger.warning(
+            "[TASK-ENGINE] Run-on-refresh circuit breaker TRIPPED — auto-creation "
+            "will NOT auto-fire after M3U refresh until an operator clears it via "
+            "POST /api/auto-creation/reset-circuit-breaker."
+        )
+    except Exception as e:  # pragma: no cover — best-effort, must not block boot
+        logger.warning("[TASK-ENGINE] Failed to trip run-on-refresh circuit breaker: %s", e)
 
 
 def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
@@ -146,8 +336,14 @@ class TaskEngine:
         logger.info("[TASK-ENGINE] Starting task execution engine")
         self._running = True
 
-        # Cleanup any stale "running" executions from previous runs
+        # Cleanup any stale "running" executions from previous runs. Runs
+        # BEFORE the scheduler loop arms (below) so a doomed auto-creation run
+        # cannot be re-fired before reconciliation.
         self._cleanup_stale_executions()
+        # bd-exo4j (GH #473): reconcile orphaned ChannelPipelineExecution rows the
+        # OOM SIGKILL left 'running', and trip the run-on-refresh breaker if
+        # any were found. MUST be before the scheduler loop starts.
+        _abandon_orphaned_auto_creation_executions()
 
         # Initialize registry from database
         registry = get_registry()
@@ -443,6 +639,21 @@ class TaskEngine:
 
                     instance = registry.get_task_instance(task_id)
                     if not instance:
+                        # A child schedule is due but NO task instance is
+                        # registered in the engine — this schedule can NEVER
+                        # run. It is a real misconfiguration (an orphaned
+                        # ``task_schedules`` row, or a task removed from the
+                        # registry while its schedule survived), not a transient
+                        # skip, so surface it at WARNING. Throttled per task_id
+                        # so a permanently-orphaned schedule cannot spam every
+                        # ~60s tick (vkktd.1).
+                        if should_log("task_not_registered:%s" % task_id):
+                            logger.warning(
+                                "[TASK-ENGINE] Schedule for %s is due but no task "
+                                "instance is registered — it can NEVER run "
+                                "(orphaned task_schedules row / unregistered task)",
+                                task_id,
+                            )
                         continue
 
                     # Check if the parent task is enabled
@@ -450,6 +661,19 @@ class TaskEngine:
                         ScheduledTask.task_id == task_id
                     ).first()
                     if parent_task and not parent_task.enabled:
+                        # The child schedule is enabled and due, but the PARENT
+                        # ``scheduled_tasks.enabled`` gate is off — firing needs
+                        # BOTH (see epic vkktd). This was otherwise a silent
+                        # ``continue`` every tick: the exact trap that made a
+                        # gated-off auto_creation task invisible in the logs.
+                        # Throttled DEBUG (once per task per window) names the
+                        # cause without per-tick spam (vkktd.1).
+                        if should_log("parent_disabled:%s" % task_id):
+                            logger.debug(
+                                "[TASK-ENGINE] Child schedule for %s is due but the "
+                                "parent task is disabled — not firing (enable the "
+                                "task to run)", task_id,
+                            )
                         continue
 
                     # Found a due schedule - run the task
@@ -504,7 +728,8 @@ class TaskEngine:
             schedule_parameters = first_schedule.get_parameters()
             schedule_id = first_schedule.id
             if schedule_parameters:
-                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id, schedule_parameters)
+                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id,
+                            _param_keys(schedule_parameters))
 
         # Execute the task with parameters
         result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
@@ -614,12 +839,26 @@ class TaskEngine:
             logger.exception("[%s] Failed to create execution record: %s", task_id, e)
             execution_id = None
 
+        # Attribute every journal row made by this run to "scheduler" when the
+        # run was triggered by the scheduler (no HTTP request, so the actor-source
+        # middleware never fired). No-op for manual/API runs — see
+        # _scheduler_mutation_source_scope. Explicit call-site sources (e.g. the
+        # auto-creation pipeline's "auto_creation") still win via
+        # journal._resolve_mutation_source. Reset in the active-task ``finally``
+        # below so the actor never leaks into a sibling async task.
+        _scheduler_source_token = (
+            journal.set_mutation_source(journal.MUTATION_SOURCE_SCHEDULER)
+            if triggered_by == "scheduled"
+            else None
+        )
+
         try:
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
                 try:
                     instance.update_config(parameters)
-                    logger.info("[%s] Applied schedule parameters: %s", task_id, parameters)
+                    logger.info("[%s] Applied schedule parameters: %s", task_id,
+                                _param_keys(parameters))
                 except Exception as e:
                     logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
 
@@ -674,7 +913,8 @@ class TaskEngine:
                 entity_name=instance.task_name,
                 description=f"Started {instance.task_name} ({triggered_by})",
                 entity_id=execution_id,
-                after_value={"task_id": task_id, "triggered_by": triggered_by, "parameters": parameters},
+                after_value={"task_id": task_id, "triggered_by": triggered_by,
+                             "parameters": _redact_task_parameters(parameters)},
                 user_initiated=(triggered_by == "manual"),
             )
 
@@ -808,8 +1048,18 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
-                # Send notification - warning if partial failure, success if all ok
-                if result.failed_count > 0:
+                # Send notification - warning if partial failure, success if all ok.
+                # y3m6o.1 review (Finding 2): a task that already emitted ONE
+                # coherent completion notification (e.g. a channel-pipeline run
+                # that was BOTH capped and had failed actions) sets
+                # suppress_completion_notification so we do NOT emit a second,
+                # competing warning here. Journal + gauge above still ran.
+                if result.suppress_completion_notification:
+                    logger.debug(
+                        "[%s] Completion notification suppressed by task "
+                        "(single coherent notification already emitted)", task_id,
+                    )
+                elif result.failed_count > 0:
                     # Partial success - some items failed
                     if task_id == "stream_probe":
                         warn_msg = (
@@ -927,6 +1177,8 @@ class TaskEngine:
             )
 
         finally:
+            if _scheduler_source_token is not None:
+                journal.reset_mutation_source(_scheduler_source_token)
             async with self._lock:
                 self._active_tasks.discard(task_id)
 
@@ -943,7 +1195,8 @@ class TaskEngine:
             TaskResult or None if task not found
         """
         if parameters:
-            logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id, parameters)
+            logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id,
+                        _param_keys(parameters))
             return await self._execute_task(task_id, triggered_by="manual", parameters=parameters)
 
         if schedule_id:
@@ -959,7 +1212,8 @@ class TaskEngine:
                     ).first()
                     if schedule:
                         parameters = schedule.get_parameters()
-                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id, parameters)
+                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id,
+                                    _param_keys(parameters))
                 finally:
                     session.close()
             except Exception as e:

@@ -9,6 +9,14 @@ interface ModalOverlayProps {
   'aria-modal'?: boolean | 'true' | 'false';
   'aria-labelledby'?: string;
   'data-testid'?: string;
+  /**
+   * Optional backdrop click handler. The overlay intentionally does NOT close on
+   * backdrop click by default (see the component note); callers that explicitly
+   * want a backdrop click to do something (e.g. accept a default + dismiss)
+   * opt in by passing this. The dialog content should stopPropagation so only
+   * true backdrop clicks fire it.
+   */
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 /**

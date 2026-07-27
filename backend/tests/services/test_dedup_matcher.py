@@ -361,8 +361,15 @@ class TestEdgeCases:
 
 
 class TestPerformanceMicrobench:
-    """Documented per-call latency. Not a hard gate — informational."""
+    """Documented per-call latency. Not a hard gate — informational.
 
+    Marked ``slow`` so the wall-clock microbenchmark is excluded from the
+    default CI gate (``pytest -m "not slow"``), where host contention could
+    false-fail the 5ms soft cap. It still runs on an explicit
+    ``pytest -m slow`` / full-suite invocation, preserving the latency check.
+    """
+
+    @pytest.mark.slow
     def test_find_candidate_under_5ms_per_call_for_500_candidates(self):
         candidates = [
             (f"uuid-{i:04d}", f"Channel Name Number {i}") for i in range(500)

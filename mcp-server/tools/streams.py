@@ -381,6 +381,113 @@ def register(mcp: FastMCP):
             return f"Error getting struck-out streams: {e}"
 
     @mcp.tool()
+    async def get_stale_streams(days: int = 7) -> str:
+        """List streams flagged stale by either of two independent signals.
+
+        - not_probed_recently: ECM hasn't ffprobed the stream in `days` days,
+          or never has. It may still be listed and playable — just unchecked.
+          Run probe_streams to refresh.
+        - provider_stale: Dispatcharr's own M3U refresh no longer re-matched
+          this stream in the source playlist. The provider may have removed
+          it; Dispatcharr will delete it automatically after its own grace
+          period. Independent of `days`.
+
+        Distinct from get_struck_out_streams (consecutive probe *failures*):
+        a stale stream may be passing every probe it gets.
+
+        This is the HEAVIER of the two stale-stream reports: it re-derives
+        both signals (including a fresh ffprobe-age comparison) and returns
+        channel associations for each stream. For just the cheap
+        Dispatcharr-``is_stale`` id set (no probe-age signal, no channel
+        joins), use get_stale_stream_ids instead.
+
+        Args:
+            days: Age threshold in days (default 7) for the not_probed_recently
+                signal only. Does not affect provider_stale.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_stale"], query={"days": days})
+
+            streams = result.get("streams", []) if isinstance(result, dict) else result
+            threshold_days = result.get("threshold_days", days) if isinstance(result, dict) else days
+
+            if not streams:
+                return f"No stale streams (probe threshold: {threshold_days} days)."
+
+            lines = [f"Stale streams ({len(streams)}, probe threshold: {threshold_days}+ days):"]
+            for s in streams[:30]:
+                name = s.get("stream_name") or "Unknown"
+                sid = s.get("stream_id", s.get("id", "?"))
+                reasons = s.get("reasons", [])
+                reason_bits = []
+                if "not_probed_recently" in reasons:
+                    reason_bits.append(f"last probed: {s.get('last_probed') or 'never'}")
+                if "provider_stale" in reasons:
+                    reason_bits.append(f"provider last saw it: {s.get('provider_last_seen') or 'unknown'}")
+                reason_info = ", ".join(reason_bits) if reason_bits else "stale"
+
+                channels = s.get("channels", [])
+                if channels:
+                    ch_info = ", ".join(
+                        f"{c.get('name', '?')} (ch_id={c.get('id', '?')})"
+                        for c in channels
+                    )
+                    lines.append(f"  {name} (id={sid}) — {reason_info} — in: {ch_info}")
+                else:
+                    lines.append(f"  {name} (id={sid}) — {reason_info} — not assigned to any channel")
+
+            if len(streams) > 30:
+                lines.append(f"  ... and {len(streams) - 30} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_stale_streams failed: %s", e)
+            return f"Error getting stale streams: {e}"
+
+    @mcp.tool()
+    async def get_stale_stream_ids(bypass_cache: bool = False) -> str:
+        """List the Dispatcharr stream IDs currently flagged ``is_stale``.
+
+        Dispatcharr flags a stream stale when its own M3U refresh no longer
+        re-matches it in the source playlist. This is the CHEAP signal only
+        — a single paged scan of Dispatcharr's ``is_stale`` flag, cached for
+        a short TTL, with no ffprobe-age check and no channel-association
+        joins. For the heavier report (both staleness signals, channel
+        associations, and a configurable probe-age threshold), use
+        get_stale_streams instead.
+
+        Args:
+            bypass_cache: Force a fresh scan instead of using the cached
+                result (default False — the cache TTL is short, so this is
+                rarely needed).
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["streams_stale_ids"], query={"bypass_cache": bypass_cache},
+            )
+
+            stale_ids = result.get("stale_stream_ids", []) if isinstance(result, dict) else []
+            last_seen = result.get("last_seen", {}) if isinstance(result, dict) else {}
+            count = result.get("count", len(stale_ids)) if isinstance(result, dict) else len(stale_ids)
+
+            if not stale_ids:
+                return "No stale stream IDs (Dispatcharr is_stale flag)."
+
+            lines = [f"Stale stream IDs ({count}):"]
+            for sid in stale_ids[:50]:
+                seen = last_seen.get(str(sid), last_seen.get(sid))
+                lines.append(f"  id={sid} — last seen: {seen or 'unknown'}")
+            if count > 50:
+                lines.append(f"  ... and {count - 50} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_stale_stream_ids failed: %s", e)
+            return f"Error getting stale stream ids: {e}"
+
+    @mcp.tool()
     async def cleanup_struck_out_streams(delete_empty_channels: bool = False) -> str:
         """Remove all struck-out streams from their channels in one operation.
 
@@ -574,6 +681,112 @@ def register(mcp: FastMCP):
         except Exception as e:
             logger.error("[MCP] get_probe_results failed: %s", e)
             return f"Error getting probe results: {e}"
+
+    @mcp.tool()
+    async def get_probe_history() -> str:
+        """Get the history of the last several completed probe runs (bd-rv5w1).
+
+        Each entry has a timestamp, total streams probed, success/failed
+        counts, and status — useful for spotting a probe that's been failing
+        repeatedly or one that never completes.
+        """
+        try:
+            client = get_ecm_client()
+            history = await client.call_endpoint(ENDPOINTS["stream_stats_probe_history"])
+
+            if not history:
+                return "No probe run history available."
+
+            lines = [f"Probe run history ({len(history)} run(s), most recent first):"]
+            for run in history:
+                ts = run.get("timestamp", "?")
+                total = run.get("total", 0)
+                success = run.get("success_count", 0)
+                failed = run.get("failed_count", 0)
+                status = run.get("status", "?")
+                lines.append(f"  {ts}: {status} — {success}/{total} succeeded, {failed} failed")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_probe_history failed: %s", e)
+            return f"Error getting probe history: {e}"
+
+    @mcp.tool()
+    async def reset_probe_state(confirm: bool = False) -> str:
+        """Force-reset the probe state if it appears stuck (bd-rv5w1).
+
+        DIAGNOSTIC RECOVERY ACTION: clears the server-side prober's
+        in-progress/paused flags so a NEW probe can start, WITHOUT waiting
+        for or cancelling whatever probe loop may still be running in the
+        background. Only use this when a probe genuinely appears stuck (e.g.
+        get_probe_progress has shown in_progress=true with no forward
+        movement for an extended period) — resetting a probe that IS still
+        actively running can let a second probe start concurrently and
+        interleave results with the first.
+
+        CONFIRM GATING: the first call (confirm=False, the default) fetches
+        current probe progress and returns a preview — it resets NOTHING.
+        Re-invoke with confirm=True to actually force the reset.
+
+        Args:
+            confirm: Set True on the second call to perform the reset.
+        """
+        try:
+            client = get_ecm_client()
+            if not confirm:
+                progress = await client.call_endpoint(ENDPOINTS["stream_stats_probe_progress"])
+                in_progress = progress.get("in_progress") if isinstance(progress, dict) else None
+                status = progress.get("status", "?") if isinstance(progress, dict) else "?"
+                status_line = "IN PROGRESS" if in_progress else "not in progress"
+                return (
+                    f"Probe is currently {status_line} (status={status}). "
+                    "Force-resetting will clear the probe state, which can cause a "
+                    "still-running probe thread to interleave with a subsequent probe. "
+                    "Re-invoke with confirm=True to proceed."
+                )
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_probe_reset"])
+            msg = result.get("message", "") if isinstance(result, dict) else ""
+            return f"Probe state reset. {msg}".rstrip()
+        except Exception as e:
+            logger.error("[MCP] reset_probe_state failed: %s", e)
+            return f"Error resetting probe state: {e}"
+
+    @mcp.tool()
+    async def dismiss_probe_failures(stream_ids: list[int]) -> str:
+        """Dismiss probe failures for the given streams (bd-rv5w1).
+
+        Marks the streams as 'dismissed' so they stop appearing in failed-
+        stream lists (e.g. get_struck_out_streams). The dismissal is cleared
+        automatically the next time a stream is re-probed.
+
+        Args:
+            stream_ids: Stream IDs whose probe failures to dismiss.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["stream_stats_dismiss"], body={"stream_ids": stream_ids}
+            )
+            dismissed = result.get("dismissed", 0) if isinstance(result, dict) else 0
+            return f"Dismissed probe failures for {dismissed} stream(s)."
+        except Exception as e:
+            logger.error("[MCP] dismiss_probe_failures failed: %s", e)
+            return f"Error dismissing probe failures: {e}"
+
+    @mcp.tool()
+    async def list_dismissed_probe_failures() -> str:
+        """List stream IDs whose probe failures are currently dismissed (bd-rv5w1)."""
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["stream_stats_dismissed"])
+            ids = result.get("dismissed_stream_ids", []) if isinstance(result, dict) else []
+
+            if not ids:
+                return "No dismissed probe failures."
+
+            return f"Dismissed probe failures ({len(ids)}): {', '.join(str(i) for i in ids)}"
+        except Exception as e:
+            logger.error("[MCP] list_dismissed_probe_failures failed: %s", e)
+            return f"Error listing dismissed probe failures: {e}"
 
     @mcp.tool()
     async def get_streams_for_channel(channel_id: int) -> str:

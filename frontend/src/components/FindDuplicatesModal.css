@@ -2,13 +2,19 @@
  * FindDuplicatesModal.css - Component-specific styles only
  *
  * Shared classes used from ModalBase.css:
- *   modal-container, modal-lg, modal-header, modal-body, modal-footer,
- *   modal-close-btn, modal-btn, modal-btn-primary, modal-btn-secondary,
- *   modal-form-group, modal-checkbox-label, modal-error-banner
+ *   modal-container, modal-lg, modal-header, modal-subtitle, modal-body,
+ *   modal-footer, modal-close-btn, modal-btn, modal-btn-primary,
+ *   modal-btn-secondary, modal-form-group, modal-checkbox-label,
+ *   modal-error-banner
  *
  * Shared classes used from common.css:
  *   loading-state, spinning, empty-state
  */
+
+/* Merge-blind safety net banner (enhancedchannelmanager-uahp6) */
+.dup-render-guard-banner {
+  margin-bottom: 0.75rem;
+}
 
 /* Summary bar */
 .dup-summary {
@@ -64,6 +70,14 @@
   border-radius: 6px;
   overflow: hidden;
   transition: opacity 0.15s ease;
+  /* enhancedchannelmanager-uahp6: virtualize group rows so large result sets
+     (985 groups observed in the wild) paint incrementally instead of laying
+     out every row up front — matches the ChannelsPane.css:1585
+     .channel-wrapper pattern. contain-intrinsic-size is sized to a typical
+     2-channel group (header + 2 channel rows); groups with more channels
+     reflow to their real height once scrolled into view. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 6.5rem;
 }
 
 .dup-group.is-excluded {
@@ -185,4 +199,10 @@
 
 .find-duplicates-modal .modal-header h2 .material-icons {
   font-size: 1.25rem;
+}
+
+/* Ignore-spacing fold toggle (GH #645) — sits above the scan states so it
+   stays reachable when the exact scan finds nothing. */
+.dup-fold-toggle {
+  margin-bottom: 0.75rem;
 }

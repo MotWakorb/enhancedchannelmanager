@@ -1,4 +1,4 @@
-"""Tests for the AutoCreationSnapshot retention prune in ``CleanupTask``
+"""Tests for the ChannelPipelineSnapshot retention prune in ``CleanupTask``
 (ADR-010 §D7 / bead ``enhancedchannelmanager-uc51o.3``).
 
 A per-run snapshot of ~570 channels serializes to roughly 50 KB–3 MB and is
@@ -26,7 +26,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from models import AutoCreationExecution, AutoCreationSnapshot, Base
+from models import ChannelPipelineExecution, ChannelPipelineSnapshot, Base
 from tasks.cleanup import CleanupTask
 
 
@@ -58,7 +58,7 @@ def _settings(days: int = 30, max_count: int = 50):
 def _make_snapshot(session, *, age_days: float, channels=None) -> int:
     """Create an execution + snapshot aged ``age_days`` days; return snapshot id."""
     ts = datetime.utcnow() - timedelta(days=age_days)
-    execution = AutoCreationExecution(
+    execution = ChannelPipelineExecution(
         mode="execute",
         triggered_by="manual",
         started_at=ts,
@@ -66,7 +66,7 @@ def _make_snapshot(session, *, age_days: float, channels=None) -> int:
     )
     session.add(execution)
     session.commit()
-    snapshot = AutoCreationSnapshot(
+    snapshot = ChannelPipelineSnapshot(
         execution_id=execution.id,
         snapshot_time=ts,
         channel_count=len(channels or []),
@@ -81,7 +81,7 @@ def _count_snapshots(engine) -> int:
     SessionLocal = sessionmaker(bind=engine)
     s = SessionLocal()
     try:
-        return s.query(AutoCreationSnapshot).count()
+        return s.query(ChannelPipelineSnapshot).count()
     finally:
         s.close()
 
@@ -90,7 +90,7 @@ def _surviving_ids(engine) -> set:
     SessionLocal = sessionmaker(bind=engine)
     s = SessionLocal()
     try:
-        return {row.id for row in s.query(AutoCreationSnapshot.id).all()}
+        return {row.id for row in s.query(ChannelPipelineSnapshot.id).all()}
     finally:
         s.close()
 

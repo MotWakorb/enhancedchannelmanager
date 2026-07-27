@@ -262,11 +262,61 @@ check_tls_config
 #   sockets under sustained load.
 # Values chosen to keep healthcheck comfortably inside the 10s HEALTHCHECK
 # budget and can be overridden via env vars without rebuilding.
+#
+# Event loop (bead wadu3, follow-up to GH #546):
+# --loop pins the stdlib asyncio event loop. Without it, uvicorn's "auto"
+#   policy selects uvloop 0.22.1, which has open upstream issues on exactly
+#   this stack: MagicStack/uvloop#645 (responses leaking to the WRONG
+#   request under load — data exposure; fix merged upstream but unreleased)
+#   and MagicStack/uvloop#706 (segfault in FastAPI-in-container, still
+#   open). Set ECM_UVICORN_LOOP=uvloop to opt back in without rebuilding.
 cd /app
 ECM_LIMIT_CONCURRENCY=${ECM_LIMIT_CONCURRENCY:-100}
 ECM_TIMEOUT_KEEP_ALIVE=${ECM_TIMEOUT_KEEP_ALIVE:-30}
+# Numeric guard (bead enhancedchannelmanager-1xoiq; docs/style_guide.md
+# "Shell Scripting"): these values land on the exec argv below, so
+# arbitrary env content must never pass through — digits only. Like the
+# ECM_UVICORN_LOOP whitelist, an invalid value fails CLOSED to the default
+# with a warning instead of exiting: set -e + exec would turn uvicorn's
+# argv rejection into a container restart loop with the same bad env var
+# still set on every attempt.
+case "${ECM_PORT}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_PORT='${ECM_PORT}' (must be numeric) — falling back to 6100"
+        ECM_PORT=6100
+        ;;
+esac
+case "${ECM_LIMIT_CONCURRENCY}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_LIMIT_CONCURRENCY='${ECM_LIMIT_CONCURRENCY}' (must be numeric) — falling back to 100"
+        ECM_LIMIT_CONCURRENCY=100
+        ;;
+esac
+case "${ECM_TIMEOUT_KEEP_ALIVE}" in
+    *[!0-9]*|'')
+        print_warning "Invalid ECM_TIMEOUT_KEEP_ALIVE='${ECM_TIMEOUT_KEEP_ALIVE}' (must be numeric) — falling back to 30"
+        ECM_TIMEOUT_KEEP_ALIVE=30
+        ;;
+esac
+# Whitelist mirror of tls/https_server.py resolve_loop_choice(): the value
+# lands in the uvicorn argv, so arbitrary env content must never pass
+# through (quoted expansion below prevents field-splitting a crafted value
+# into extra uvicorn flags), and an invalid value must fail CLOSED — fall
+# back to asyncio with a warning — instead of crash-looping the container
+# (set -e + exec would turn uvicorn's rejection into a restart loop).
+case "${ECM_UVICORN_LOOP:-}" in
+    auto|asyncio|uvloop)
+        ;;
+    *)
+        if [ -n "${ECM_UVICORN_LOOP:-}" ]; then
+            print_warning "Invalid ECM_UVICORN_LOOP='${ECM_UVICORN_LOOP}' (allowed: auto, asyncio, uvloop) — falling back to asyncio"
+        fi
+        ECM_UVICORN_LOOP=asyncio
+        ;;
+esac
 exec gosu appuser uvicorn main:app \
     --host 0.0.0.0 \
-    --port ${ECM_PORT} \
-    --limit-concurrency ${ECM_LIMIT_CONCURRENCY} \
-    --timeout-keep-alive ${ECM_TIMEOUT_KEEP_ALIVE}
+    --port "${ECM_PORT}" \
+    --loop "${ECM_UVICORN_LOOP}" \
+    --limit-concurrency "${ECM_LIMIT_CONCURRENCY}" \
+    --timeout-keep-alive "${ECM_TIMEOUT_KEEP_ALIVE}"

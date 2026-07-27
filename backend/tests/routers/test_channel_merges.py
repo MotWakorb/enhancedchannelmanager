@@ -106,6 +106,19 @@ def _make_journal(
     return entry
 
 
+def _mock_dispatcharr_channels_client(channels: list[dict]) -> AsyncMock:
+    """Return an AsyncMock Dispatcharr client whose ``get_channels`` returns
+    ``channels`` in the ``{"results": [...]}`` envelope shape.
+
+    Used by the list-endpoint tests to control the candidate-name
+    resolution batch call (bead enhancedchannelmanager-09x38.14) added to
+    ``GET /api/channel-merges``.
+    """
+    mock_client = AsyncMock()
+    mock_client.get_channels.return_value = {"results": channels}
+    return mock_client
+
+
 def _metric_value(status: str) -> float:
     """Read the current value of ``ecm_dedup_merge_requests_total{status=...}``.
 
@@ -148,7 +161,9 @@ class TestListPendingMerges:
         _make_pending(test_session, stream_name="TBS", status="dismissed",
                       resolved_at=1_700_000_020_000, resolution_source="operator")
 
-        response = await async_client.get("/api/channel-merges")
+        mock_client = _mock_dispatcharr_channels_client([])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges")
 
         assert response.status_code == 200
         data = response.json()
@@ -164,7 +179,9 @@ class TestListPendingMerges:
         _make_pending(test_session, stream_name="TNT", status="merged",
                       resolved_at=1_700_000_010_000, resolution_source="operator")
 
-        response = await async_client.get("/api/channel-merges?status=merged")
+        mock_client = _mock_dispatcharr_channels_client([])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges?status=merged")
 
         assert response.status_code == 200
         data = response.json()
@@ -178,7 +195,9 @@ class TestListPendingMerges:
         _make_pending(test_session, stream_name="TBS", status="dismissed",
                       resolved_at=1_700_000_020_000, resolution_source="operator")
 
-        response = await async_client.get("/api/channel-merges?status=dismissed")
+        mock_client = _mock_dispatcharr_channels_client([])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges?status=dismissed")
 
         assert response.status_code == 200
         data = response.json()
@@ -199,7 +218,9 @@ class TestListPendingMerges:
         _make_pending(test_session, stream_name="ESPN HD", group_id=5)
         _make_pending(test_session, stream_name="TNT", group_id=7)
 
-        response = await async_client.get("/api/channel-merges?group_id=5")
+        mock_client = _mock_dispatcharr_channels_client([])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges?group_id=5")
 
         assert response.status_code == 200
         data = response.json()
@@ -219,26 +240,28 @@ class TestListPendingMerges:
                 created_at=1_700_000_000_000 + i,
             )
 
-        # Page 1 of 3
-        response = await async_client.get(
-            "/api/channel-merges?page=1&page_size=3"
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 7
-        assert data["page"] == 1
-        assert data["page_size"] == 3
-        assert data["total_pages"] == 3
-        assert len(data["merges"]) == 3
-        # DESC ordering — newest first.
-        assert data["merges"][0]["stream_name"] == "stream-6"
+        mock_client = _mock_dispatcharr_channels_client([])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            # Page 1 of 3
+            response = await async_client.get(
+                "/api/channel-merges?page=1&page_size=3"
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 7
+            assert data["page"] == 1
+            assert data["page_size"] == 3
+            assert data["total_pages"] == 3
+            assert len(data["merges"]) == 3
+            # DESC ordering — newest first.
+            assert data["merges"][0]["stream_name"] == "stream-6"
 
-        # Page 3 — only 1 row left.
-        response = await async_client.get(
-            "/api/channel-merges?page=3&page_size=3"
-        )
-        assert response.status_code == 200
-        assert len(response.json()["merges"]) == 1
+            # Page 3 — only 1 row left.
+            response = await async_client.get(
+                "/api/channel-merges?page=3&page_size=3"
+            )
+            assert response.status_code == 200
+            assert len(response.json()["merges"]) == 1
 
     @pytest.mark.asyncio
     async def test_invalid_pagination_returns_400(self, async_client, test_session):
@@ -251,6 +274,280 @@ class TestListPendingMerges:
 
         r3 = await async_client.get("/api/channel-merges?page_size=999")
         assert r3.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET /api/channel-merges — candidate channel name resolution
+# (bead enhancedchannelmanager-09x38.14)
+# ---------------------------------------------------------------------------
+class TestListPendingMergesCandidateNameResolution:
+    """Tests for the candidate-channel enrichment fields on the list endpoint.
+
+    Covers: candidate present (name/number/group populated), candidate
+    deleted since queuing (fields None, still 200), Dispatcharr fetch
+    failure (degrades gracefully instead of 500), and the batch-resolution
+    efficiency contract (exactly one Dispatcharr call per list-page
+    request, not one per row).
+    """
+
+    @pytest.mark.asyncio
+    async def test_candidate_present_includes_name_number_group(
+        self, async_client, test_session
+    ):
+        """A resolvable candidate populates name/number/group fields."""
+        _make_pending(
+            test_session,
+            stream_name="ESPN HD",
+            candidate_channel_id="501",
+        )
+        mock_client = _mock_dispatcharr_channels_client([
+            {
+                "id": 501,
+                "name": "ESPN HD",
+                "channel_number": 101.0,
+                "channel_group_name": "Sports",
+            },
+        ])
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges")
+
+        assert response.status_code == 200
+        row = response.json()["merges"][0]
+        assert row["candidate_channel_id"] == "501"
+        assert row["candidate_channel_name"] == "ESPN HD"
+        assert row["candidate_channel_number"] == 101.0
+        assert row["candidate_channel_group_name"] == "Sports"
+        mock_client.get_channels.assert_called_once()
+
+
+class TestPendingMergesSnapshot:
+    """GH #642 coherent, admin-gated read snapshot."""
+
+    @pytest.mark.asyncio
+    async def test_pending_only_deterministic_order_and_full_serialization(
+        self, async_client, test_session
+    ):
+        older = _make_pending(
+            test_session, stream_name="Older", candidate_channel_id="501",
+            created_at=100,
+        )
+        newer = _make_pending(
+            test_session, stream_name="Newer", candidate_channel_id="999",
+            created_at=200,
+        )
+        _make_pending(test_session, stream_name="Done", status="merged", created_at=300)
+        mock_client = _mock_dispatcharr_channels_client([
+            {
+                "id": 501, "name": "Resolved", "channel_number": 7.0,
+                "channel_group_name": "Sports",
+            }
+        ])
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges/snapshot")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert [row["id"] for row in data["merges"]] == [newer.id, older.id]
+        assert data["merges"][0]["candidate_channel_name"] is None
+        assert data["merges"][1]["candidate_channel_name"] == "Resolved"
+        assert data["merges"][1]["candidate_channel_number"] == 7.0
+        assert data["merges"][1]["candidate_channel_group_name"] == "Sports"
+        assert data["merges"][1]["trigger_context"] == "m3u_refresh"
+
+    @pytest.mark.asyncio
+    async def test_optional_group_filter_scopes_complete_snapshot(
+        self, async_client, test_session
+    ):
+        in_scope = _make_pending(
+            test_session, stream_name="Sports", group_id=7, created_at=100,
+        )
+        _make_pending(
+            test_session, stream_name="News", group_id=8, created_at=200,
+        )
+
+        response = await async_client.get(
+            "/api/channel-merges/snapshot", params={"group_id": 7},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert [row["id"] for row in response.json()["merges"]] == [in_scope.id]
+
+    @pytest.mark.asyncio
+    async def test_group_filter_is_applied_before_snapshot_safety_cap(
+        self, async_client, test_session
+    ):
+        target = _make_pending(
+            test_session, stream_name="Target", group_id=7, created_at=100,
+        )
+        _make_pending(
+            test_session, stream_name="Other 1", group_id=8, created_at=300,
+        )
+        _make_pending(
+            test_session, stream_name="Other 2", group_id=8, created_at=200,
+        )
+        _make_pending(
+            test_session, stream_name="Resolved", group_id=7,
+            status="merged", created_at=400,
+        )
+
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 1):
+            response = await async_client.get(
+                "/api/channel-merges/snapshot", params={"group_id": 7},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert [row["id"] for row in response.json()["merges"]] == [target.id]
+
+    @pytest.mark.asyncio
+    async def test_safety_cap_fails_closed(self, async_client, test_session):
+        _make_pending(test_session, stream_name="One")
+        _make_pending(test_session, stream_name="Two")
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 1):
+            response = await async_client.get("/api/channel-merges/snapshot")
+        assert response.status_code == 409
+        assert "safety limit of 1" in response.json()["detail"]
+        assert "Nothing was changed" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_exact_cap_is_returned_and_created_at_ties_use_id_desc(
+        self, async_client, test_session
+    ):
+        first = _make_pending(test_session, stream_name="First", created_at=100)
+        second = _make_pending(test_session, stream_name="Second", created_at=100)
+        with patch("routers.channel_merges.MAX_SNAPSHOT_ROWS", 2):
+            response = await async_client.get("/api/channel-merges/snapshot")
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert [row["id"] for row in response.json()["merges"]] == [
+            second.id,
+            first.id,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_forbidden(self, async_client):
+        from fastapi import HTTPException, status
+        from main import app
+        from auth import RequireAdminIfEnabled as admin_dependency
+
+        async def reject_non_admin() -> None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        app.dependency_overrides[admin_dependency.dependency] = reject_non_admin
+        try:
+            response = await async_client.get("/api/channel-merges/snapshot")
+        finally:
+            app.dependency_overrides.pop(admin_dependency.dependency, None)
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_candidate_deleted_since_queuing_returns_null_fields(
+        self, async_client, test_session
+    ):
+        """A candidate_channel_id absent from the Dispatcharr channel set
+        (deleted since queuing) yields null enrichment fields, not a 500 —
+        the frontend renders an explicit "no longer exists" fallback using
+        the still-present ``candidate_channel_id``.
+        """
+        _make_pending(
+            test_session,
+            stream_name="ESPN HD",
+            candidate_channel_id="999",
+        )
+        # Dispatcharr's live channel set no longer contains id=999.
+        mock_client = _mock_dispatcharr_channels_client([
+            {"id": 501, "name": "Other Channel", "channel_number": 1.0,
+             "channel_group_name": "Sports"},
+        ])
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges")
+
+        assert response.status_code == 200
+        row = response.json()["merges"][0]
+        assert row["candidate_channel_id"] == "999"
+        assert row["candidate_channel_name"] is None
+        assert row["candidate_channel_number"] is None
+        assert row["candidate_channel_group_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_dispatcharr_fetch_failure_degrades_gracefully(
+        self, async_client, test_session
+    ):
+        """A Dispatcharr outage during name resolution must not 500 the
+        whole pending-merges queue view — it degrades to unresolved
+        candidates (same shape as the deleted-candidate case)."""
+        _make_pending(
+            test_session,
+            stream_name="ESPN HD",
+            candidate_channel_id="501",
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = Exception("Dispatcharr unreachable")
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges")
+
+        assert response.status_code == 200
+        row = response.json()["merges"][0]
+        assert row["candidate_channel_id"] == "501"
+        assert row["candidate_channel_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_empty_queue_does_not_call_dispatcharr(
+        self, async_client, test_session
+    ):
+        """An empty result set skips the Dispatcharr batch call entirely —
+        there is nothing to resolve, so no network round-trip is made."""
+        mock_client = AsyncMock()
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges")
+
+        assert response.status_code == 200
+        assert response.json()["merges"] == []
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_resolution_makes_one_call_regardless_of_row_count(
+        self, async_client, test_session
+    ):
+        """N pending-merges rows (including duplicate candidate ids) resolve
+        via exactly ONE Dispatcharr ``get_channels`` call — proving the
+        join does not explode into an N+1 pattern as queue depth grows."""
+        for i in range(5):
+            _make_pending(
+                test_session,
+                stream_name=f"stream-{i}",
+                # Two distinct candidate ids shared across 5 rows.
+                candidate_channel_id="501" if i % 2 == 0 else "502",
+                created_at=1_700_000_000_000 + i,
+            )
+        mock_client = _mock_dispatcharr_channels_client([
+            {"id": 501, "name": "ESPN HD", "channel_number": 101.0,
+             "channel_group_name": "Sports"},
+            {"id": 502, "name": "CNN HD", "channel_number": 102.0,
+             "channel_group_name": "News"},
+        ])
+
+        with patch("routers.channel_merges.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channel-merges?page_size=50")
+
+        assert response.status_code == 200
+        rows = response.json()["merges"]
+        assert len(rows) == 5
+        names = {r["candidate_channel_name"] for r in rows}
+        assert names == {"ESPN HD", "CNN HD"}
+        # The efficiency contract: exactly one Dispatcharr call for the
+        # whole page, no matter how many rows or distinct candidates.
+        mock_client.get_channels.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

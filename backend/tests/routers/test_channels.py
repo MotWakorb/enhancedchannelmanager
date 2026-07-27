@@ -56,6 +56,53 @@ class TestGetChannels:
 
         assert response.status_code == 500
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead 1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get("/api/channels", params={"page": page})
+
+        assert response.status_code == 422
+        # The upstream client must never be invoked with invalid pagination.
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 10001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 10000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_pagination_still_works(self, async_client):
+        """A valid page/page_size (including the frontend's large page_size=5000)
+        passes through unchanged."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels", params={"page": 1, "page_size": 5000}
+            )
+
+        assert response.status_code == 200
+        mock_client.get_channels.assert_called_once_with(
+            page=1, page_size=5000, search=None, channel_group=None,
+        )
+
 
 class TestCreateChannel:
     """Tests for POST /api/channels."""
@@ -719,6 +766,55 @@ class TestGetLogos:
         assert response.status_code == 200
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422_not_500(self, async_client, page):
+        """page < 1 is rejected by validation (422), never passed upstream to
+        become a 500 (bead enhancedchannelmanager-g4z2h, systemic sibling of
+        1a5mf)."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": page}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 10001])
+    async def test_invalid_page_size_returns_422_not_500(self, async_client, page_size):
+        """page_size out of [1, 10000] is rejected by validation (422)."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page_size": page_size}
+            )
+
+        assert response.status_code == 422
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_pagination_still_works(self, async_client):
+        """A valid page/page_size (including the frontend's large
+        page_size=10000, getAllLogos()) passes through unchanged."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": 1, "page_size": 10000}
+            )
+
+        assert response.status_code == 200
+        mock_client.get_logos.assert_called_once_with(
+            page=1, page_size=10000, search=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_emits_per_request_info_diagnostic(self, async_client, caplog):
         """Emits the bd-nh50y operator-grepable INFO line per request.
 
@@ -728,22 +824,34 @@ class TestGetLogos:
         is the line operators grep when triaging "logos not loading" reports
         — it lets us correlate the backend response to the frontend log
         sequence emitted by getAllLogos() in services/api.ts.
+
+        A non-empty ``search`` now routes through the local aggregate-and-
+        filter path (bead 09x38.13): Dispatcharr's LogoViewSet.get_queryset
+        never reads a ``search`` param — only ``name``/``used``/``ids``
+        (confirmed by reading apps/channels/api_views.py in the live
+        dispatcharr container). The previous version of this test mocked
+        ``get_logos`` to return already-filtered results, which papered
+        over the fact that upstream ``search`` was actually a no-op — it
+        never exercised real filtering. This version uses a raw, unfiltered
+        fixture and asserts the ECM-side filter narrows it for real.
         """
         import logging
         mock_client = AsyncMock()
-        mock_client.get_logos.return_value = {
-            "results": [{"id": 1, "name": "ESPN"}, {"id": 2, "name": "FOX"}],
-            "count": 2,
-            "next": None,
-        }
+        mock_client.get_all_logos_raw.return_value = [
+            {"id": 1, "name": "ESPN", "channel_count": 1},
+            {"id": 2, "name": "FOX", "channel_count": 1},
+        ]
 
         with patch("routers.channels.get_client", return_value=mock_client):
             with caplog.at_level(logging.INFO, logger="routers.channels"):
                 response = await async_client.get(
-                    "/api/channels/logos?page=3&page_size=250&search=ESPN",
+                    "/api/channels/logos?page=1&page_size=250&search=ESPN",
                 )
 
         assert response.status_code == 200
+        data = response.json()
+        assert [l["name"] for l in data["results"]] == ["ESPN"]
+        mock_client.get_logos.assert_not_called()
         info_lines = [
             r.getMessage() for r in caplog.records
             if r.levelno == logging.INFO and "[CHANNELS-LOGO]" in r.getMessage()
@@ -752,14 +860,194 @@ class TestGetLogos:
         line = info_lines[0]
         # Required fields — operators grep for these
         assert "GET /logos" in line
-        assert "page=3" in line
+        assert "page=1" in line
         assert "page_size=250" in line
         assert "search=ESPN" in line
-        assert "returned 2 logos" in line
+        assert "returned 1 logos" in line
         assert "next=false" in line
         # Elapsed-ms field is present and formatted as a number followed by "ms"
         import re
         assert re.search(r"in \d+\.\dms", line), f"Missing elapsed-ms field in: {line}"
+
+
+class TestGetLogosSortAndFilter:
+    """Tests for GET /api/channels/logos sort_by / sort_order / unused_only
+    (bead enhancedchannelmanager-09x38.13).
+
+    Dispatcharr's LogoViewSet has no ordering support at all (confirmed by
+    reading apps/channels/api_views.py in the live dispatcharr container:
+    get_queryset() always ends with ``.order_by('name')``, and the only
+    REST_FRAMEWORK filter backend configured is DjangoFilterBackend with no
+    filterset_fields declared on the view — there is no ``ordering`` param
+    to forward). So whenever sort_by, unused_only, or search is requested,
+    ECM fetches the complete logo list from Dispatcharr in one call via the
+    ``no_pagination=true`` escape hatch Dispatcharr's LogoPagination already
+    supports, then sorts/filters/paginates locally in Python before
+    returning the same paginated envelope shape. Requests using none of
+    these three params keep taking the original zero-overhead passthrough
+    path (locked by test_uses_passthrough_when_no_sort_filter_or_search).
+    """
+
+    @staticmethod
+    def _raw_logos():
+        return [
+            {"id": 1, "name": "ESPN", "channel_count": 3},
+            {"id": 2, "name": "abc Sports", "channel_count": 0},
+            {"id": 3, "name": "Zed TV", "channel_count": 1},
+            {"id": 4, "name": "Fox News", "channel_count": 0},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_name_ascending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": "name", "sort_order": "asc"},
+            )
+
+        assert response.status_code == 200
+        names = [l["name"] for l in response.json()["results"]]
+        assert names == ["abc Sports", "ESPN", "Fox News", "Zed TV"]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_name_descending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": "name", "sort_order": "desc"},
+            )
+
+        assert response.status_code == 200
+        names = [l["name"] for l in response.json()["results"]]
+        assert names == ["Zed TV", "Fox News", "ESPN", "abc Sports"]
+
+    @pytest.mark.asyncio
+    async def test_sort_by_channel_count_ascending_surfaces_unused_first(self, async_client):
+        """The live-verification scenario: sorting used-by count ascending
+        must surface unused (channel_count=0) logos first."""
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "channel_count", "sort_order": "asc"},
+            )
+
+        assert response.status_code == 200
+        counts = [l["channel_count"] for l in response.json()["results"]]
+        assert counts == sorted(counts)
+        assert counts[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_sort_by_channel_count_descending(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "channel_count", "sort_order": "desc"},
+            )
+
+        assert response.status_code == 200
+        counts = [l["channel_count"] for l in response.json()["results"]]
+        assert counts == sorted(counts, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_unused_only_filters_to_zero_channel_count(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"unused_only": "true"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 2
+        assert all(l["channel_count"] == 0 for l in data["results"])
+
+    @pytest.mark.asyncio
+    async def test_unused_only_composes_with_search(self, async_client):
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"unused_only": "true", "search": "fox"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["results"][0]["name"] == "Fox News"
+
+    @pytest.mark.asyncio
+    async def test_sort_and_filter_paginate_correctly(self, async_client):
+        """Pagination is computed AFTER sort/filter, over the full dataset —
+        not per-Dispatcharr-page — so results/count/next are truthful."""
+        mock_client = AsyncMock()
+        mock_client.get_all_logos_raw.return_value = self._raw_logos()
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "name", "sort_order": "asc", "page": 2, "page_size": 2},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 4
+        assert [l["name"] for l in data["results"]] == ["Fox News", "Zed TV"]
+        assert data["next"] is None
+        assert data["previous"] is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_by", ["bogus", "url", ""])
+    async def test_invalid_sort_by_returns_422(self, async_client, sort_by):
+        mock_client = AsyncMock()
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"sort_by": sort_by},
+            )
+        assert response.status_code == 422
+        mock_client.get_all_logos_raw.assert_not_called()
+        mock_client.get_logos.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_sort_order_returns_422(self, async_client):
+        mock_client = AsyncMock()
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos",
+                params={"sort_by": "name", "sort_order": "sideways"},
+            )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_uses_passthrough_when_no_sort_filter_or_search(self, async_client):
+        """Locks backward compatibility: existing callers (LogoModal picker,
+        AutoSyncSettingsModal, GuideTab, getAllLogos()) that never pass
+        sort_by/unused_only/search must keep hitting the cheap single-page
+        Dispatcharr passthrough, not the full-dataset aggregate path."""
+        mock_client = AsyncMock()
+        mock_client.get_logos.return_value = {"results": [], "count": 0, "next": None}
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.get(
+                "/api/channels/logos", params={"page": 2, "page_size": 50},
+            )
+
+        assert response.status_code == 200
+        mock_client.get_logos.assert_called_once_with(page=2, page_size=50, search=None)
+        mock_client.get_all_logos_raw.assert_not_called()
 
 
 class TestGetLogo:
@@ -2116,7 +2404,7 @@ class TestBulkMergeChannelsStaleSourceIds:
 # ---------------------------------------------------------------------------
 # Admin gating (bd-um30y) — destructive / bulk operator-level channel
 # endpoints carry RequireAdminIfEnabled, matching the bd-757hc gate on
-# auto_creation.py and backup.py's create_backup / restore_backup.
+# channel_pipeline.py and backup.py's create_backup / restore_backup.
 #
 # SECURITY FINDING: POST /api/channels/clear-auto-created (and its
 # destructive/bulk siblings) were only authenticated via the global
@@ -2128,7 +2416,7 @@ class TestBulkMergeChannelsStaleSourceIds:
 # bulk-commit, assign-numbers, import-csv). These tests prove the gate is
 # now in place.
 #
-# Pattern mirrors test_auto_creation.py::TestAutoCreationAdminGating: the
+# Pattern mirrors test_channel_pipeline.py::TestAutoCreationAdminGating: the
 # default `async_client` fixture runs with auth DISABLED (so
 # RequireAdminIfEnabled is a no-op → returns None, and the existing
 # happy-path tests above already prove behavior is unchanged when auth is
@@ -2180,7 +2468,7 @@ _GATED_CHANNEL_ENDPOINTS = [
 class TestChannelsAdminGating:
     """Destructive / bulk channel endpoints require admin when auth is enabled;
     read endpoints and routine single-resource mutations stay reachable.
-    Mirrors test_auto_creation.py::TestAutoCreationAdminGating."""
+    Mirrors test_channel_pipeline.py::TestAutoCreationAdminGating."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("path, method, kwargs", _GATED_CHANNEL_ENDPOINTS)
@@ -2369,3 +2657,276 @@ class TestChannelsAdminGating:
         # so the reject override must not turn them into 403s.
         assert list_resp.status_code == 200
         assert dup_resp.status_code != 403
+
+
+class TestFindDuplicateChannelsScope:
+    """Tests for POST /api/channels/find-duplicates optional channel_ids scope
+    (enhancedchannelmanager-uahp6). Two normalized-name duplicate pairs are
+    seeded in every test: 'ESPN' (ids 1, 2) and 'Fox Sports' (ids 3, 4, one
+    lowercased to prove case-insensitive grouping still works)."""
+
+    @staticmethod
+    def _single_page(results):
+        return {"results": results, "count": len(results), "next": None}
+
+    @staticmethod
+    def _channel(cid, name):
+        return {
+            "id": cid,
+            "name": name,
+            "channel_number": cid,
+            "streams": [],
+            "channel_group_id": None,
+            "channel_group_name": "",
+        }
+
+    def _seeded_channels(self):
+        return [
+            self._channel(1, "ESPN"),
+            self._channel(2, "ESPN"),
+            self._channel(3, "Fox Sports"),
+            self._channel(4, "fox sports"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_absent_body_scans_globally(self, async_client):
+        """No JSON body at all -> global scan, both duplicate pairs found."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post("/api/channels/find-duplicates")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 2
+        assert data["total_duplicate_channels"] == 4
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"])) for g in data["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_null_channel_ids_field_scans_globally(self, async_client):
+        """{"channel_ids": null} is equivalent to an absent body -> global."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": None}
+            )
+
+        assert response.status_code == 200
+        assert response.json()["total_groups"] == 2
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_finds_duplicate_pair_within_given_ids(self, async_client):
+        """Scoping to [1, 2, 3] (both ESPN dupes + one lone Fox Sports) finds
+        exactly the ESPN pair — the lone Fox Sports channel has no partner
+        inside the requested scope."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2, 3]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert data["total_duplicate_channels"] == 2
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_excludes_out_of_scope_duplicate_partner(self, async_client):
+        """Scoping to [1, 3] (one member of each dup pair, but not both)
+        must find ZERO groups — the fix's core guarantee that the scan only
+        considers the selected ids, not their unselected duplicates."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 3]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 0
+        assert data["groups"] == []
+
+    @pytest.mark.asyncio
+    async def test_empty_channel_ids_list_returns_empty_result_without_fetching(self, async_client):
+        """An explicit empty list is a valid scope of 'nothing' — it must
+        NOT fall back to a global scan (that would silently ignore the
+        caller's scoping intent), and should short-circuit before ever
+        calling Dispatcharr."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": []}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 0
+        assert data["groups"] == []
+        mock_client.get_channels.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_stops_paginating_once_all_ids_found(self, async_client):
+        """Scoped scan finds its (single-page) targets and does not fetch
+        a second page it doesn't need, even though one exists."""
+        mock_client = AsyncMock()
+
+        async def _side_effect(page=1, page_size=500, search=None):
+            if page == 1:
+                return {
+                    "results": [self._channel(1, "ESPN"), self._channel(2, "ESPN")],
+                    "count": 4,
+                    "next": "page-2",
+                }
+            return {
+                "results": [self._channel(3, "Fox Sports"), self._channel(4, "fox sports")],
+                "count": 4,
+                "next": None,
+            }
+
+        mock_client.get_channels.side_effect = _side_effect
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2]}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert mock_client.get_channels.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_scoped_scan_logs_scope_with_counts(self, async_client, caplog):
+        """The scoped log line names both the found count and the requested
+        selection count, distinct from the global log line's wording."""
+        import logging
+
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             caplog.at_level(logging.INFO, logger="routers.channels"):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"channel_ids": [1, 2, 3]}
+            )
+
+        assert response.status_code == 200
+        assert any(
+            "scanning 3 channels (scoped to 3 selected)" in record.message
+            for record in caplog.records
+        )
+
+
+class TestFindDuplicatesFoldMatchKey:
+    """GH #645 / bead enhancedchannelmanager-0vao3: opt-in whitespace/case
+    folding for POST /api/channels/find-duplicates.
+
+    ``fold_match_key: true`` groups channels by the shared canonicalized key
+    (casefold + strip ALL whitespace via ``match_fold.fold_match_key``) so
+    the Find Duplicates surface matches what an opted-in auto-creation rule
+    would merge. Default (absent/false) preserves the current grouping.
+    """
+
+    @staticmethod
+    def _single_page(results):
+        return {"results": results, "count": len(results), "next": None}
+
+    @staticmethod
+    def _channel(cid, name):
+        return {
+            "id": cid,
+            "name": name,
+            "channel_number": cid,
+            "streams": [],
+            "channel_group_id": None,
+            "channel_group_name": "",
+        }
+
+    def _seeded_channels(self):
+        # The exact four spellings from the GH #645 report.
+        return [
+            self._channel(1, "eurosport 2"),
+            self._channel(2, "Eurosport 2"),
+            self._channel(3, "Eurosport2"),
+            self._channel(4, "eurosport2"),
+            # Must never group with the above, fold or no fold.
+            self._channel(5, "Eurosport 3"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_default_grouping_unchanged_without_flag(self, async_client):
+        """No fold flag -> case-insensitive exact grouping only: two pairs."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post("/api/channels/find-duplicates")
+
+        assert response.status_code == 200
+        data = response.json()
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"])) for g in data["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_fold_groups_whitespace_variants_together(self, async_client):
+        """fold_match_key: true -> all four spellings form ONE group; the
+        'Eurosport 3' near-miss stays out."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"fold_match_key": True}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 2, 3, 4]
+        # Visible names are untouched — the fold is a comparison key only.
+        names = {c["name"] for c in data["groups"][0]["channels"]}
+        assert names == {"eurosport 2", "Eurosport 2", "Eurosport2", "eurosport2"}
+
+    @pytest.mark.asyncio
+    async def test_fold_false_explicit_matches_default(self, async_client):
+        """An explicit fold_match_key: false behaves exactly like the default."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates", json={"fold_match_key": False}
+            )
+
+        assert response.status_code == 200
+        found_ids = {tuple(sorted(c["id"] for c in g["channels"]))
+                     for g in response.json()["groups"]}
+        assert found_ids == {(1, 2), (3, 4)}
+
+    @pytest.mark.asyncio
+    async def test_fold_composes_with_channel_ids_scope(self, async_client):
+        """Fold + scope: only in-scope channels are grouped."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = self._single_page(self._seeded_channels())
+
+        with patch("routers.channels.get_client", return_value=mock_client):
+            response = await async_client.post(
+                "/api/channels/find-duplicates",
+                json={"fold_match_key": True, "channel_ids": [1, 3, 5]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_groups"] == 1
+        assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 3]

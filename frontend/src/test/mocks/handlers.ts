@@ -129,14 +129,16 @@ export function createMockNotification(overrides: Partial<MockNotification> = {}
   }
 }
 
-export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRule> = {}): MockAutoCreationRule {
+export function createMockChannelPipelineRule(overrides: Partial<MockChannelPipelineRule> = {}): MockChannelPipelineRule {
   const id = overrides.id ?? nextId()
   return {
     id,
     name: overrides.name ?? `Test Rule ${id}`,
-    description: overrides.description ?? 'A test auto-creation rule',
+    description: overrides.description ?? 'A test channel pipeline rule',
     enabled: overrides.enabled ?? true,
     priority: overrides.priority ?? id,
+    active_from: overrides.active_from ?? null,
+    active_until: overrides.active_until ?? null,
     conditions: overrides.conditions ?? [{ type: 'stream_name_contains', value: 'test' }],
     actions: overrides.actions ?? [{ type: 'create_channel', name_template: '{stream_name}' }],
     m3u_account_id: overrides.m3u_account_id ?? null,
@@ -158,10 +160,11 @@ export function createMockAutoCreationRule(overrides: Partial<MockAutoCreationRu
     match_count: overrides.match_count ?? 0,
     created_at: overrides.created_at ?? new Date().toISOString(),
     updated_at: overrides.updated_at ?? new Date().toISOString(),
+    event_sync_config: overrides.event_sync_config ?? null,
   }
 }
 
-export function createMockAutoCreationExecution(overrides: Partial<MockAutoCreationExecution> = {}): MockAutoCreationExecution {
+export function createMockChannelPipelineExecution(overrides: Partial<MockChannelPipelineExecution> = {}): MockChannelPipelineExecution {
   const id = overrides.id ?? nextId()
   return {
     id,
@@ -186,6 +189,10 @@ export function createMockAutoCreationExecution(overrides: Partial<MockAutoCreat
     rolled_back_by: overrides.rolled_back_by ?? undefined,
     error: overrides.error ?? undefined,
     has_snapshot: overrides.has_snapshot ?? false,
+    has_non_reversible_profile_changes: overrides.has_non_reversible_profile_changes ?? false,
+    warnings: overrides.warnings ?? undefined,
+    is_event_sync: overrides.is_event_sync ?? false,
+    event_sync_summary: overrides.event_sync_summary ?? undefined,
   }
 }
 
@@ -299,12 +306,14 @@ interface MockPopularityScore {
   created_at: string
 }
 
-interface MockAutoCreationRule {
+interface MockChannelPipelineRule {
   id: number
   name: string
   description: string | null
   enabled: boolean
   priority: number
+  active_from?: string | null
+  active_until?: string | null
   conditions: object[]
   actions: object[]
   m3u_account_id: number | null
@@ -326,16 +335,17 @@ interface MockAutoCreationRule {
   match_count: number
   created_at: string
   updated_at: string
+  event_sync_config?: object | null
 }
 
-interface MockAutoCreationExecution {
+interface MockChannelPipelineExecution {
   id: number
   mode: 'execute' | 'dry_run'
   triggered_by: 'manual' | 'scheduled' | 'm3u_refresh'
   started_at: string
   completed_at: string | null
   duration_seconds: number | null
-  status: 'running' | 'completed' | 'failed' | 'rolled_back'
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'rolled_back' | 'capped' | 'abandoned'
   streams_evaluated: number
   streams_matched: number
   channels_created: number
@@ -350,8 +360,46 @@ interface MockAutoCreationExecution {
   rolled_back_at?: string
   rolled_back_by?: string
   error?: string
-  /** ADR-010 §D6 — true when a pre-run AutoCreationSnapshot row exists. */
+  /** ADR-010 §D6 — true when a pre-run ChannelPipelineSnapshot row exists. */
   has_snapshot?: boolean
+  /** y3m6o.1 review Finding 3 — run mutated channel-profile membership non-reversibly. */
+  has_non_reversible_profile_changes?: boolean
+  /**
+   * Heterogeneous run warnings persisted in the execution `warnings` column:
+   * disabled-normalization-group (enhancedchannelmanager-e8p1h) AND
+   * non_reversible-profile-change (y3m6o.1 review Blocker 3) share the column.
+   */
+  warnings?: (
+    | {
+        type?: 'disabled_normalization_group'
+        rule_id: number
+        rule_name: string
+        disabled_groups: { id: number; name: string | null; missing: boolean }[]
+      }
+    | {
+        type: 'non_reversible_profile_changes'
+        count: number
+        channel_ids: number[]
+        message: string
+      }
+  )[]
+  /** enhancedchannelmanager-7wuhd — pure-event_sync run flag. */
+  is_event_sync?: boolean
+  /** enhancedchannelmanager-7wuhd — structured per-rule event_sync counters. */
+  event_sync_summary?: {
+    rule_id: number | null
+    rule_name?: string | null
+    secondary_streams: number
+    attached: number
+    already_attached: number
+    ambiguous_skipped: number
+    unmatched: number
+    parse_failed: number
+    attach_errors: number
+    review_enqueued?: number
+    capped?: boolean
+    cap_overage?: number
+  }[]
 }
 
 export function createMockPopularityScore(overrides: Partial<MockPopularityScore> = {}): MockPopularityScore {
@@ -387,8 +435,10 @@ interface MockDataStore {
   alertMethods: MockAlertMethod[]
   notifications: MockNotification[]
   popularityScores: MockPopularityScore[]
-  autoCreationRules: MockAutoCreationRule[]
-  autoCreationExecutions: MockAutoCreationExecution[]
+  channelPipelineRules: MockChannelPipelineRule[]
+  channelPipelineExecutions: MockChannelPipelineExecution[]
+  /** Circuit-breaker state (bd-fqur1). Default: not tripped. */
+  circuitBreaker: { disabled: boolean; reason: 'abandoned_run' | null }
   settings: object
 }
 
@@ -400,12 +450,14 @@ export const mockDataStore: MockDataStore = {
   alertMethods: [],
   notifications: [],
   popularityScores: [],
-  autoCreationRules: [],
-  autoCreationExecutions: [],
+  channelPipelineRules: [],
+  channelPipelineExecutions: [],
+  circuitBreaker: { disabled: false, reason: null },
   settings: {
     configured: true,
     url: 'http://dispatcharr.test',
     theme: 'dark',
+    ssrf_outbound_mode: 'lan_friendly',
     auto_rename_channel_number: false,
     show_stream_urls: true,
     hide_ungrouped_streams: true,
@@ -449,8 +501,9 @@ export function resetMockDataStore(): void {
   mockDataStore.alertMethods = []
   mockDataStore.notifications = []
   mockDataStore.popularityScores = []
-  mockDataStore.autoCreationRules = []
-  mockDataStore.autoCreationExecutions = []
+  mockDataStore.channelPipelineRules = []
+  mockDataStore.channelPipelineExecutions = []
+  mockDataStore.circuitBreaker = { disabled: false, reason: null }
   resetIdCounter()
 }
 
@@ -459,6 +512,29 @@ export function resetMockDataStore(): void {
 // =============================================================================
 
 export const handlers = [
+  // -------------------------------------------------------------------------
+  // Auth (no-auth mode — tests run with require_auth=false so no user is needed)
+  // -------------------------------------------------------------------------
+
+  http.get(`${API_BASE}/auth/status`, () => {
+    return HttpResponse.json({
+      require_auth: false,
+      setup_complete: true,
+      dispatcharr_enabled: false,
+    })
+  }),
+
+  http.get(`${API_BASE}/auth/me`, () => {
+    // Return 401 — unauthenticated in no-auth mode tests
+    return HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })
+  }),
+
+  // ── Normalization (required by RuleBuilder, which is lazy-loaded in ChannelPipelineTab) ──
+
+  http.get(`${API_BASE}/normalization/rules`, () => {
+    return HttpResponse.json({ groups: [] })
+  }),
+
   // -------------------------------------------------------------------------
   // Health & Settings
   // -------------------------------------------------------------------------
@@ -513,12 +589,31 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/providers`, () => {
-    // Auto-creation condition UI fetches provider list for dropdowns.
+    // Channel Pipeline condition UI fetches provider list for dropdowns.
     const providers: MockProvider[] = [
       { id: 1, name: 'Test Provider 1' },
       { id: 2, name: 'Test Provider 2' },
     ]
     return HttpResponse.json(providers)
+  }),
+
+  http.get(`${API_BASE}/providers/group-settings`, () => {
+    // Event Sync editor fetches live auto-sync status per group (ti939.1.5).
+    // Empty by default; tests stub richer settings via server.use().
+    return HttpResponse.json({})
+  }),
+
+  http.get(`${API_BASE}/providers/group-settings/by-provider`, () => {
+    // Event Sync provider-scoped group picker fetches (provider, group)
+    // junction rows (bead 38dzi). Empty by default; tests stub rows via
+    // server.use().
+    return HttpResponse.json([])
+  }),
+
+  http.get(`${API_BASE}/dummy-epg/profiles`, () => {
+    // Event Sync editor's dummy EPG profile picker (ti939.3.3).
+    // Empty by default; tests stub profiles via server.use().
+    return HttpResponse.json([])
   }),
 
   http.get(`${API_BASE}/channels/:id`, ({ params }) => {
@@ -867,23 +962,23 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Rules
+  // Channel Pipeline Rules
   // -------------------------------------------------------------------------
 
-  http.get(`${API_BASE}/auto-creation/rules`, () => {
-    return HttpResponse.json({ rules: mockDataStore.autoCreationRules })
+  http.get(`${API_BASE}/channel-pipeline/rules`, () => {
+    return HttpResponse.json({ rules: mockDataStore.channelPipelineRules })
   }),
 
-  http.post(`${API_BASE}/auto-creation/rules`, async ({ request }) => {
+  http.post(`${API_BASE}/channel-pipeline/rules`, async ({ request }) => {
     const data = await request.json() as object
-    const newRule = createMockAutoCreationRule(data as Partial<MockAutoCreationRule>)
-    mockDataStore.autoCreationRules.push(newRule)
+    const newRule = createMockChannelPipelineRule(data as Partial<MockChannelPipelineRule>)
+    mockDataStore.channelPipelineRules.push(newRule)
     return HttpResponse.json(newRule, { status: 201 })
   }),
 
-  http.get(`${API_BASE}/auto-creation/rules/:id`, ({ params }) => {
+  http.get(`${API_BASE}/channel-pipeline/rules/:id`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
     if (!rule) {
       return HttpResponse.json(
         { detail: 'Rule not found' },
@@ -893,40 +988,40 @@ export const handlers = [
     return HttpResponse.json(rule)
   }),
 
-  http.put(`${API_BASE}/auto-creation/rules/:id`, async ({ params, request }) => {
+  http.put(`${API_BASE}/channel-pipeline/rules/:id`, async ({ params, request }) => {
     const id = parseInt(params.id as string)
     const updates = await request.json() as object
-    const index = mockDataStore.autoCreationRules.findIndex(r => r.id === id)
+    const index = mockDataStore.channelPipelineRules.findIndex(r => r.id === id)
     if (index === -1) {
       return HttpResponse.json(
         { detail: 'Rule not found' },
         { status: 404 }
       )
     }
-    mockDataStore.autoCreationRules[index] = {
-      ...mockDataStore.autoCreationRules[index],
+    mockDataStore.channelPipelineRules[index] = {
+      ...mockDataStore.channelPipelineRules[index],
       ...updates,
       updated_at: new Date().toISOString(),
     }
-    return HttpResponse.json(mockDataStore.autoCreationRules[index])
+    return HttpResponse.json(mockDataStore.channelPipelineRules[index])
   }),
 
-  http.delete(`${API_BASE}/auto-creation/rules/:id`, ({ params }) => {
+  http.delete(`${API_BASE}/channel-pipeline/rules/:id`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const index = mockDataStore.autoCreationRules.findIndex(r => r.id === id)
+    const index = mockDataStore.channelPipelineRules.findIndex(r => r.id === id)
     if (index === -1) {
       return HttpResponse.json(
         { detail: 'Rule not found' },
         { status: 404 }
       )
     }
-    mockDataStore.autoCreationRules.splice(index, 1)
+    mockDataStore.channelPipelineRules.splice(index, 1)
     return HttpResponse.json({ status: 'deleted' })
   }),
 
-  http.post(`${API_BASE}/auto-creation/rules/:id/toggle`, ({ params }) => {
+  http.post(`${API_BASE}/channel-pipeline/rules/:id/toggle`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
     if (!rule) {
       return HttpResponse.json({ detail: 'Rule not found' }, { status: 404 })
     }
@@ -935,26 +1030,26 @@ export const handlers = [
     return HttpResponse.json(rule)
   }),
 
-  http.post(`${API_BASE}/auto-creation/rules/:id/duplicate`, ({ params }) => {
+  http.post(`${API_BASE}/channel-pipeline/rules/:id/duplicate`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const rule = mockDataStore.autoCreationRules.find(r => r.id === id)
+    const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
     if (!rule) {
       return HttpResponse.json({ detail: 'Rule not found' }, { status: 404 })
     }
-    const newRule = createMockAutoCreationRule({
+    const newRule = createMockChannelPipelineRule({
       ...rule,
       id: undefined,
       name: `${rule.name} (Copy)`,
     })
-    mockDataStore.autoCreationRules.push(newRule)
+    mockDataStore.channelPipelineRules.push(newRule)
     return HttpResponse.json(newRule, { status: 201 })
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Validation & Schema
+  // Channel Pipeline Validation & Schema
   // -------------------------------------------------------------------------
 
-  http.post(`${API_BASE}/auto-creation/validate`, async ({ request }) => {
+  http.post(`${API_BASE}/channel-pipeline/validate`, async ({ request }) => {
     const data = await request.json() as { conditions: object[]; actions: object[] }
     const errors: string[] = []
     if (!data.conditions || data.conditions.length === 0) {
@@ -969,7 +1064,17 @@ export const handlers = [
     })
   }),
 
-  http.get(`${API_BASE}/auto-creation/schema/conditions`, () => {
+  // Advisory rule analyzer for an UNSAVED rule body (bd-m1s38.2). Returns a
+  // clean (no-findings) result by default; specs override with server.use(...)
+  // to assert chip rendering. Advisory only — never gates a save.
+  http.post(`${API_BASE}/channel-pipeline/rules/analyze-body`, async () => {
+    return HttpResponse.json({
+      rules: [{ rule_id: null, rule_name: '', findings: [] }],
+      summary: { error: 0, warning: 0, info: 0 },
+    })
+  }),
+
+  http.get(`${API_BASE}/channel-pipeline/schema/conditions`, () => {
     return HttpResponse.json({
       conditions: [
         { type: 'stream_name_contains', label: 'Stream Name Contains', description: 'Match streams whose name contains a substring', category: 'stream', value_type: 'string', supports_negate: true, supports_case_sensitive: true },
@@ -984,7 +1089,7 @@ export const handlers = [
     })
   }),
 
-  http.get(`${API_BASE}/auto-creation/schema/actions`, () => {
+  http.get(`${API_BASE}/channel-pipeline/schema/actions`, () => {
     return HttpResponse.json({
       actions: [
         { type: 'create_channel', label: 'Create Channel', description: 'Create a new channel from the stream', category: 'creation', params: [{ name: 'name_template', label: 'Name Template', type: 'template', required: true, placeholder: '{stream_name}' }] },
@@ -996,7 +1101,7 @@ export const handlers = [
     })
   }),
 
-  http.get(`${API_BASE}/auto-creation/schema/template-variables`, () => {
+  http.get(`${API_BASE}/channel-pipeline/schema/template-variables`, () => {
     return HttpResponse.json({
       variables: [
         { name: '{stream_name}', description: 'The original stream name', example: 'ESPN HD' },
@@ -1011,15 +1116,15 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Auto-Creation Executions
+  // Channel Pipeline Executions
   // -------------------------------------------------------------------------
 
-  http.get(`${API_BASE}/auto-creation/executions`, ({ request }) => {
+  http.get(`${API_BASE}/channel-pipeline/executions`, ({ request }) => {
     const url = new URL(request.url)
     const limit = parseInt(url.searchParams.get('limit') ?? '20')
     const offset = parseInt(url.searchParams.get('offset') ?? '0')
     const statusFilter = url.searchParams.get('status')
-    let filtered = mockDataStore.autoCreationExecutions
+    let filtered = mockDataStore.channelPipelineExecutions
     if (statusFilter) {
       filtered = filtered.filter(e => e.status === statusFilter)
     }
@@ -1030,9 +1135,9 @@ export const handlers = [
     })
   }),
 
-  http.get(`${API_BASE}/auto-creation/executions/:id`, ({ params }) => {
+  http.get(`${API_BASE}/channel-pipeline/executions/:id`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    const execution = mockDataStore.channelPipelineExecutions.find(e => e.id === id)
     if (!execution) {
       return HttpResponse.json(
         { detail: 'Execution not found' },
@@ -1042,14 +1147,14 @@ export const handlers = [
     return HttpResponse.json(execution)
   }),
 
-  http.post(`${API_BASE}/auto-creation/run`, async ({ request }) => {
+  http.post(`${API_BASE}/channel-pipeline/run`, async ({ request }) => {
     // bd-enfsy: 202 + poll background-task pattern. We mirror the backend by
     // creating an execution with status='completed' immediately (so the
     // poller's first GET sees a terminal status — the fastest possible
     // poll path) and returning 202 + execution_id.
     const data = await request.json() as { dry_run?: boolean; rule_ids?: number[] }
     const dryRun = data.dry_run ?? false
-    const execution = createMockAutoCreationExecution({
+    const execution = createMockChannelPipelineExecution({
       mode: dryRun ? 'dry_run' : 'execute',
       triggered_by: 'manual',
       status: 'completed',
@@ -1058,23 +1163,23 @@ export const handlers = [
       streams_evaluated: 100,
     })
     // Always store so the GET /executions/{id} poll target can find it.
-    mockDataStore.autoCreationExecutions.unshift(execution)
+    mockDataStore.channelPipelineExecutions.unshift(execution)
     return HttpResponse.json(
       {
         execution_id: execution.id,
         status: 'running',
-        message: 'Pipeline started; poll /api/auto-creation/executions/{id} for status',
+        message: 'Pipeline started; poll /api/channel-pipeline/executions/{id} for status',
       },
       { status: 202 }
     )
   }),
 
-  http.post(`${API_BASE}/auto-creation/rules/:ruleId/run`, async ({ params, request }) => {
+  http.post(`${API_BASE}/channel-pipeline/rules/:ruleId/run`, async ({ params, request }) => {
     // bd-enfsy: 202 + poll for the per-rule run too.
     const ruleId = parseInt(params.ruleId as string)
     const url = new URL(request.url)
     const dryRun = url.searchParams.get('dry_run') === 'true'
-    const execution = createMockAutoCreationExecution({
+    const execution = createMockChannelPipelineExecution({
       mode: dryRun ? 'dry_run' : 'execute',
       triggered_by: 'manual',
       status: 'completed',
@@ -1082,21 +1187,21 @@ export const handlers = [
       streams_matched: 1,
       streams_evaluated: 5,
     })
-    mockDataStore.autoCreationExecutions.unshift(execution)
+    mockDataStore.channelPipelineExecutions.unshift(execution)
     return HttpResponse.json(
       {
         execution_id: execution.id,
         status: 'running',
         rule_id: ruleId,
-        message: 'Rule run started; poll /api/auto-creation/executions/{id} for status',
+        message: 'Rule run started; poll /api/channel-pipeline/executions/{id} for status',
       },
       { status: 202 }
     )
   }),
 
-  http.post(`${API_BASE}/auto-creation/executions/:id/rollback`, ({ params }) => {
+  http.post(`${API_BASE}/channel-pipeline/executions/:id/rollback`, ({ params }) => {
     const id = parseInt(params.id as string)
-    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    const execution = mockDataStore.channelPipelineExecutions.find(e => e.id === id)
     if (!execution) {
       return HttpResponse.json(
         { detail: 'Execution not found' },
@@ -1135,7 +1240,7 @@ export const handlers = [
 
   // Snapshot-restore endpoint (ADR-010 §D8, uc51o.7).
   // Returns removed_channels / restored_channels counts + failed_channels list.
-  http.post(`${API_BASE}/auto-creation/executions/:id/restore-snapshot`, ({ params, request }) => {
+  http.post(`${API_BASE}/channel-pipeline/executions/:id/restore-snapshot`, ({ params, request }) => {
     const id = parseInt(params.id as string)
     const url = new URL(request.url)
     const confirm = url.searchParams.get('confirm') === 'true'
@@ -1147,7 +1252,7 @@ export const handlers = [
       )
     }
 
-    const execution = mockDataStore.autoCreationExecutions.find(e => e.id === id)
+    const execution = mockDataStore.channelPipelineExecutions.find(e => e.id === id)
     if (!execution) {
       return HttpResponse.json(
         { detail: 'Execution not found' },
@@ -1183,17 +1288,29 @@ export const handlers = [
     })
   }),
 
-  http.get(`${API_BASE}/auto-creation/export/yaml`, () => {
-    // exportAutoCreationRulesYAML uses fetchText, so return plain text
+  // ── Circuit breaker (bd-fqur1) ──
+
+  http.get(`${API_BASE}/channel-pipeline/circuit-breaker`, () => {
+    return HttpResponse.json(mockDataStore.circuitBreaker)
+  }),
+
+  http.post(`${API_BASE}/channel-pipeline/reset-circuit-breaker`, () => {
+    const was_disabled = mockDataStore.circuitBreaker.disabled
+    mockDataStore.circuitBreaker = { disabled: false, reason: null }
+    return HttpResponse.json({ success: true, was_disabled, disabled: false })
+  }),
+
+  http.get(`${API_BASE}/channel-pipeline/export/yaml`, () => {
+    // exportChannelPipelineRulesYAML uses fetchText, so return plain text
     return new HttpResponse('rules:\n  - name: Test Rule\n    enabled: true\n', {
       headers: { 'Content-Type': 'text/plain' },
     })
   }),
 
-  http.post(`${API_BASE}/auto-creation/import/yaml`, async () => {
+  http.post(`${API_BASE}/channel-pipeline/import/yaml`, async () => {
     // Simulate importing 1 rule
-    const newRule = createMockAutoCreationRule({ name: 'Imported Rule' })
-    mockDataStore.autoCreationRules.push(newRule)
+    const newRule = createMockChannelPipelineRule({ name: 'Imported Rule' })
+    mockDataStore.channelPipelineRules.push(newRule)
     return HttpResponse.json({
       success: true,
       imported: [{ name: 'Imported Rule', action: 'created' }],
@@ -1228,7 +1345,7 @@ export const handlers = [
       exported_at: '2026-01-01T00:00:00+00:00',
       sections: [
         { key: 'settings', label: 'Settings', item_count: 10, available: true },
-        { key: 'scheduled_tasks', label: 'Scheduled Tasks', item_count: 3, available: true },
+        { key: 'scheduled_tasks', label: 'Task Settings & Alerts', item_count: 3, available: true },
         { key: 'tag_groups', label: 'Tag Groups', item_count: 2, available: true },
         { key: 'ffmpeg_profiles', label: 'FFmpeg Profiles', item_count: 0, available: false },
       ],

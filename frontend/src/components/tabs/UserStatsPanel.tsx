@@ -273,7 +273,7 @@ export function UserStatsPanel() {
   // Auth still resolving — stay quiet until we know the posture.
   if (authLoading) {
     return (
-      <div className="user-stats-panel">
+      <div className="user-stats-panel" id="stats-section-user-watch-time">
         <h3 className="section-title">User Watch Time</h3>
         <div className="loading-state">Loading…</div>
       </div>
@@ -283,7 +283,7 @@ export function UserStatsPanel() {
   // Known non-admin: short-circuit before any API call.
   if (knownNonAdmin || adminOnly) {
     return (
-      <div className="user-stats-panel">
+      <div className="user-stats-panel" id="stats-section-user-watch-time">
         <h3 className="section-title">User Watch Time</h3>
         <div className="admin-only-state" role="note">
           User watch-time statistics require admin access.
@@ -293,7 +293,7 @@ export function UserStatsPanel() {
   }
 
   return (
-    <div className="user-stats-panel">
+    <div className="user-stats-panel" id="stats-section-user-watch-time">
       <div className="panel-header">
         <h3 className="section-title">User Watch Time</h3>
         <div className="panel-controls">

@@ -276,6 +276,118 @@ def _wal_checkpoint_truncate(engine) -> None:
         )
 
 
+# --- Mid-run periodic PASSIVE checkpoint (bd-xjlxj / GH #473) --------------
+# DECISION (code-verified, see bead xjlxj): the bead's primary approach
+# assumed the ~10s stats poller (BandwidthTracker) holds a pinned read
+# transaction across the poll interval, starving the passive auto-checkpoint.
+# Reading the poll path disproves that premise — every session in
+# ``bandwidth_tracker._collect_stats`` / ``_process_channel_snapshot`` / the
+# ``_update_*`` helpers is opened with ``get_session()``, used SYNCHRONOUSLY
+# (no ``await`` between open and ``close()``), and closed in a ``finally``.
+# The ``asyncio.sleep(poll_interval)`` happens in ``_poll_loop`` with NO
+# session held. There is no long read txn to shorten.
+#
+# The real residual WAL-growth vector on a busy install is FREQUENT
+# OVERLAPPING short readers (poll every 10s + HTTP requests + scheduled
+# tasks): a PASSIVE auto-checkpoint backs off whenever any reader is mid-WAL-
+# frame, so during sustained activity the WAL can drift up toward
+# ``journal_size_limit`` and the boot-only TRUNCATE is the only full reset.
+#
+# This is the bead's documented FALLBACK: a count-based periodic PASSIVE
+# checkpoint that gives the checkpointer extra, deliberate attempts to reclaim
+# mid-run. PASSIVE — NEVER TRUNCATE — is deliberate: TRUNCATE takes an
+# exclusive WAL lock and contends with concurrent readers ('database is
+# locked' / write stalls). PASSIVE never blocks readers or writers; it
+# reclaims what it can and reports what it couldn't via ``(busy, log,
+# checkpointed)``.
+#
+# Default cadence: every 30 poll cycles. At the default 10s poll interval that
+# is ~5 minutes — frequent enough to bound WAL growth between the boot
+# truncate windows, infrequent enough to add negligible overhead (one PASSIVE
+# checkpoint per 5 min is cheap and contention-free).
+WAL_PASSIVE_CHECKPOINT_EVERY_N_POLLS = 30
+
+
+def _wal_checkpoint_passive(engine) -> None:
+    """Run ``PRAGMA wal_checkpoint(PASSIVE)`` against the journal DB.
+
+    PASSIVE (not TRUNCATE) deliberately: it never takes the exclusive WAL
+    lock, so it cannot stall concurrent readers/writers — it merges whatever
+    WAL frames it can into the main file and leaves the rest. This is the
+    hot-path-safe complement to the boot-time ``_wal_checkpoint_truncate``:
+    called periodically mid-run it gives the checkpointer extra attempts to
+    reclaim WAL pages that a transient reader prevented the automatic
+    per-commit PASSIVE checkpoint from reclaiming.
+
+    The PRAGMA returns ``(busy, log, checkpointed)``:
+
+    * ``busy``  — 1 if a reader/writer prevented a full checkpoint (expected
+      occasionally on a busy install; PASSIVE simply backs off, harmless).
+    * ``log``   — total frames in the WAL.
+    * ``checkpointed`` — frames merged into the main DB this call.
+
+    Logged at INFO so operators have visible evidence the periodic checkpoint
+    fires and can correlate WAL size against ``busy``/``checkpointed``.
+    Failure (lock, disk full, read-only fs) is non-fatal: log a WARN and
+    continue — the per-commit auto-checkpoint and the boot truncate remain.
+    """
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)")).fetchone()
+            conn.commit()
+        busy = row[0] if row else 0
+        log_frames = row[1] if row else 0
+        checkpointed = row[2] if row else 0
+        logger.info(
+            "[DATABASE] Periodic WAL checkpoint (PASSIVE): busy=%s log=%s checkpointed=%s",
+            busy,
+            log_frames,
+            checkpointed,
+        )
+    except Exception as e:
+        logger.warning(
+            "[DATABASE] Periodic WAL checkpoint (PASSIVE) failed (non-fatal): %s", e
+        )
+
+
+def maybe_periodic_wal_checkpoint(
+    poll_count: int,
+    every_n_polls: int = WAL_PASSIVE_CHECKPOINT_EVERY_N_POLLS,
+    engine=None,
+) -> bool:
+    """Fire a PASSIVE WAL checkpoint on a count-based trigger.
+
+    Called from the BandwidthTracker poll loop (the natural ~10s heartbeat).
+    Returns ``True`` when a checkpoint was attempted this call, ``False``
+    otherwise — the return value is what the unit test asserts against (the
+    trigger is count-based, NOT file-size-based, so the test is deterministic
+    and not flaky on WAL byte counts).
+
+    The trigger fires when ``poll_count`` is a positive multiple of
+    ``every_n_polls``. ``poll_count`` is the tracker's monotonically-
+    increasing cycle counter; ``poll_count == 0`` never fires (the boot
+    truncate already ran).
+
+    ``every_n_polls <= 0`` disables the periodic checkpoint entirely (returns
+    ``False`` without touching the DB) — an operator escape hatch.
+
+    The engine is resolved lazily from the module-level ``_engine`` when not
+    supplied; if the DB is not yet initialized this is a no-op (the tracker
+    can outlive a DB reset during shutdown).
+    """
+    if every_n_polls <= 0:
+        return False
+    if poll_count <= 0 or poll_count % every_n_polls != 0:
+        return False
+
+    eng = engine if engine is not None else _engine
+    if eng is None:
+        return False
+
+    _wal_checkpoint_passive(eng)
+    return True
+
+
 def _integrity_check(engine) -> None:
     """Run ``PRAGMA quick_check`` against the journal DB and loud-fail on damage.
 
@@ -722,8 +834,8 @@ def init_db() -> None:
         _integrity_check(_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, AutoCreationRule, AutoCreationExecution, AutoCreationConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
-        from export_models import PlaylistProfile, CloudStorageTarget, PublishConfiguration, PublishHistory  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, ChannelPipelineRule, ChannelPipelineExecution, ChannelPipelineConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
+        from export_models import CloudStorageTarget  # noqa: F401
 
         # Apply Alembic migrations first so schema tracking is authoritative
         # (see ``docs/database_migrations.md``). For legacy installs we stamp
@@ -938,6 +1050,17 @@ def _run_migrations(engine) -> None:
 
             # Flip cleanup task MANUAL -> CRON Sunday 02:00 UTC for existing operators (v0.17.0 - bd-ifmr5)
             _migrate_cleanup_task_manual_to_cron(conn)
+
+            # Flip auto_creation task MANUAL -> INTERVAL 60s for existing operators (ADR-011 - bd-ka7j9)
+            _migrate_auto_creation_task_manual_to_interval(conn)
+
+            # Disable the auto_creation TASK ONCE on upgrade — scheduled
+            # auto-creation is now opt-in (incident enhancedchannelmanager-i2xad).
+            # Runs AFTER the flip above: the flip's interval/60s child-schedule
+            # shape is kept (harmless), this corrective disables the parent task
+            # so the end-state after all migrations settle is DISABLED — no window
+            # where the task is enabled+interval.
+            _migrate_disable_auto_creation_schedule(conn)
 
             # Heal task_schedules rows with NULL next_run_at (v0.17.0 - bd-1weac / bd-p5b8i)
             _heal_task_schedules_null_next_run_at(conn)
@@ -1448,7 +1571,15 @@ def _populate_builtin_tags(conn) -> None:
     builtin_groups = {
         "Quality Tags": {
             "description": "Video quality indicators (HD, 4K, etc.)",
-            "tags": ["HD", "FHD", "UHD", "4K", "SD", "1080P", "1080I", "720P", "480P", "HEVC", "H264", "H265"]
+            "tags": [
+                "HD", "FHD", "UHD", "4K", "8K", "SD",
+                "1080P", "1080I", "720P", "480P",
+                # UHD resolution suffixes (bead lecyo): providers label 4K/8K
+                # streams by pixel height ("2160P" = 4K, "4320P" = 8K) or,
+                # loosely, by width ("3840P" = 4K)
+                "2160P", "3840P", "4320P",
+                "HEVC", "H264", "H265"
+            ]
         },
         "Country Tags": {
             "description": "Country codes and abbreviations",
@@ -2650,6 +2781,174 @@ def _migrate_cleanup_task_manual_to_cron(conn) -> None:
         conn.commit()
 
 
+def _migrate_auto_creation_task_manual_to_interval(conn) -> None:
+    """Flip the auto_creation task MANUAL -> INTERVAL 60s for existing operators
+    (ADR-011, bd-ka7j9).
+
+    ADR-011 decoupled M3U refresh from auto-creation: auto-creation is no longer
+    hard-chained as a side-effect of the refresh task. Instead the
+    ``ChannelPipelineTask`` self-fires on an INTERVAL schedule (~60s) and a top-of-run
+    guard runs the post-refresh pipeline only when a new refresh watermark is
+    available. The constructor default flipped MANUAL -> INTERVAL (60s), but
+    existing installs already have a persisted ``scheduled_tasks`` row with
+    ``schedule_type='manual'`` that ``TaskRegistry.sync_from_database`` faithfully
+    rehydrates — so the new behavior would never reach upgraders without this
+    one-time migration. Mirrors ``_migrate_cleanup_task_manual_to_cron`` (bd-ifmr5),
+    including the "why not Alembic" reasoning (the bd-5w6jz fast-path would
+    silently skip a data-only Alembic migration).
+
+    We set ``interval_seconds=60`` alongside the type so ``sync_from_database`` /
+    ``_create_default_task_schedule`` materialize a ``task_schedules`` row with a
+    non-NULL ``next_run_at`` (``calculate_next_run`` returns None for
+    interval_seconds <= 0 — the bd-1weac silent-skip trap). ``next_run_at`` is
+    reset to NULL on the ``scheduled_tasks`` row so the registry recomputes it.
+
+    Idempotency: the ``schedule_type='manual'`` predicate is the gate — an
+    operator already on INTERVAL, a fresh install (no row yet), and a
+    previously-migrated install all match zero rows. Operator caveat (CHANGELOG):
+    an operator who deliberately set MANUAL via the UI will be flipped to
+    INTERVAL once; auto-creation only actually runs when a run_on_refresh rule
+    exists and a refresh has occurred, so the practical effect for an operator
+    with no run_on_refresh rules is nil.
+
+    Reconciliation with the opt-in model (enhancedchannelmanager-i2xad): this
+    flip changes the schedule TYPE only and never sets ``enabled``. The
+    corrective ``_migrate_disable_auto_creation_schedule`` runs immediately after
+    it in ``_run_migrations`` and disables the PARENT task, so the settled
+    end-state on an upgrading instance is an interval/60s child schedule with the
+    task DISABLED. There is no window where the task is enabled+interval (both
+    run before the task engine arms).
+    """
+    from sqlalchemy import text
+
+    result = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    ))
+    if not result.fetchone():
+        logger.debug(
+            "[DATABASE] scheduled_tasks table doesn't exist yet, skipping "
+            "auto_creation MANUAL->INTERVAL migration"
+        )
+        return
+
+    update = conn.execute(text(
+        "UPDATE scheduled_tasks "
+        "SET schedule_type='interval', interval_seconds=60, next_run_at=NULL "
+        "WHERE task_id='auto_creation' AND schedule_type='manual'"
+    ))
+    if update.rowcount > 0:
+        logger.info(
+            "[DATABASE] Flipped auto_creation task schedule MANUAL -> INTERVAL 60s "
+            "for %d existing operator(s) (ADR-011, bd-ka7j9)",
+            update.rowcount,
+        )
+        conn.commit()
+
+
+def _migrate_disable_auto_creation_schedule(conn) -> None:
+    """Disable the auto_creation TASK ONCE on upgrade (incident i2xad).
+
+    ADR-011 Phase 2 (bd-ka7j9) shipped auto-creation as a self-firing ~60s
+    INTERVAL task seeded ENABLED, plus ``_migrate_auto_creation_task_manual_to_interval``
+    (above) which flips an existing install's persisted ``scheduled_tasks`` row
+    ``manual -> interval`` and leaves it ENABLED. The net effect on upgrade was
+    that auto-creation began firing autonomously on every instance — the
+    production incident this migration corrects (enhancedchannelmanager-i2xad).
+
+    PO decision: scheduled auto-creation is now OPT-IN (disabled by default), and
+    already-flipped-and-enabled instances are auto-corrected on upgrade by
+    disabling auto-creation once. The PO has ACCEPTED that this also disables it
+    for an operator who *deliberately* enabled it — we cannot reliably
+    distinguish a deliberate enable from the migration-driven enable, so the
+    disable is unconditional. Operators re-opt-in via the UI, which persists
+    (this one-time migration does not re-run — see the marker).
+
+    WHAT IS DISABLED — the PARENT task row only (``scheduled_tasks.enabled=0``),
+    NOT the child ``task_schedules`` cadence row. task_engine gates firing on
+    BOTH the child schedule's ``enabled`` AND the parent task's ``enabled``, so
+    disabling the parent alone fully stops autonomous firing. We deliberately
+    LEAVE the child schedule enabled so that opt-in is a single operator action:
+    the prominent "Enabled" task toggle (UI list + editor → ``PATCH /api/tasks/{id}``)
+    flips the parent, and with the child already enabled the task then fires on
+    its 60s cadence. Disabling the child too would make that toggle a no-op
+    trap — the task would read "Enabled" yet never run (the child stays off and
+    the engine's child-``enabled`` filter excludes it).
+
+    Why ``_run_migrations`` and not Alembic: the bd-5w6jz smart-bootstrap
+    fast-path stamps ``alembic_version`` forward to head when the live schema
+    already covers the model shape. A *data-only* Alembic migration adds no
+    schema, so on every already-flipped install (the exact population we must
+    fix) the fast-path would stamp past it WITHOUT running its DML — silently
+    skipping the correction. ``_run_migrations`` runs unconditionally every
+    startup, which is what this fix needs. This is the same reasoning recorded
+    for the sibling flip migration and in ADR-011 §D2.
+
+    One-time gate: because ``_run_migrations`` runs on EVERY startup, an
+    unconditional disable would re-stomp an operator who later re-enabled
+    auto-creation (breaking opt-in). A persisted marker row in
+    ``ecm_oneshot_migrations`` makes the disable run exactly once, reproducing
+    Alembic's once-only semantics in the ``_run_migrations`` path. The marker
+    table is deliberately NOT a SQLAlchemy model: it is internal migration
+    bookkeeping, never read by the app, and kept out of ``Base.metadata`` so the
+    Alembic drift test / autogenerate ignore it. (A future engineer running
+    ``alembic revision --autogenerate`` against a live DB will see a spurious
+    ``drop_table('ecm_oneshot_migrations')`` suggestion — hand-review removes it,
+    per ``docs/database_migrations.md``.)
+
+    Idempotency / safety: the marker short-circuits every call after the first;
+    the disable is a WHERE-gated UPDATE (no-op when no auto_creation row exists
+    or it is already disabled); a missing ``scheduled_tasks`` table is tolerated
+    by deferring (no marker written) so a fresh install applies it once the table
+    exists. Touches ONLY ``task_id='auto_creation'`` — no other task is affected.
+    """
+    from datetime import datetime
+    from sqlalchemy import text
+
+    marker = "disable_auto_creation_schedule_i2xad"
+
+    # One-time marker table (DB-native gate). Created idempotently every call.
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS ecm_oneshot_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    ))
+    already_applied = conn.execute(text(
+        "SELECT 1 FROM ecm_oneshot_migrations WHERE name=:n"
+    ), {"n": marker}).fetchone()
+    if already_applied:
+        # One-time gate satisfied — never re-disable an operator's opt-in.
+        return
+
+    st_exists = conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'"
+    )).fetchone() is not None
+    if not st_exists:
+        # Defer (do NOT write the marker) so a later startup, after the table
+        # has been created, still applies the correction exactly once.
+        logger.debug(
+            "[DATABASE] scheduled_tasks table absent — deferring auto_creation "
+            "disable corrective (i2xad)"
+        )
+        return
+
+    # Disable the PARENT task only (the master opt-in switch). Leave the child
+    # task_schedules cadence row enabled so the single task toggle re-fires it.
+    result = conn.execute(text(
+        "UPDATE scheduled_tasks SET enabled=0 WHERE task_id='auto_creation'"
+    ))
+    conn.execute(text(
+        "INSERT INTO ecm_oneshot_migrations (name, applied_at) VALUES (:n, :t)"
+    ), {"n": marker, "t": datetime.utcnow().isoformat()})
+    conn.commit()
+
+    if result.rowcount and result.rowcount > 0:
+        logger.info(
+            "[DATABASE] Disabled auto_creation task (%d row(s)) on upgrade "
+            "— scheduled auto-creation is now opt-in "
+            "(enhancedchannelmanager-i2xad)",
+            result.rowcount,
+        )
+
+
 def _heal_orphaned_normalization_group_refs(conn) -> None:
     """Strip dangling normalization-group ids from auto_creation_rules (GH #465 / bd-miut3).
 
@@ -2709,7 +3008,7 @@ def _heal_orphaned_normalization_group_refs(conn) -> None:
         if len(kept) == len(ids):
             continue  # no orphans in this row
 
-        # Mirror AutoCreationRule.set_normalization_group_ids: sorted/de-duped,
+        # Mirror ChannelPipelineRule.set_normalization_group_ids: sorted/de-duped,
         # NULL when empty so "no normalization" stays a single canonical shape.
         new_value = json.dumps(sorted(set(kept))) if kept else None
         conn.execute(text(

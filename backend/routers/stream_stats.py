@@ -6,10 +6,11 @@ Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_
 
 from config import get_settings
 from database import get_session
@@ -215,6 +216,147 @@ async def remove_struck_out_streams(request: RemoveStruckOutRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/stale")
+async def get_stale_streams(days: int = 7):
+    """Get streams that are stale by either of two independent signals:
+
+    - **not_probed_recently**: ECM hasn't ffprobed the stream in `days` days,
+      or never has. The stream may still be listed and playable — we just
+      haven't re-checked it.
+    - **provider_stale**: Dispatcharr's own M3U refresh no longer re-matched
+      this stream in the source playlist (its `is_stale` flag), meaning the
+      provider may have removed it entirely. Independent of `days` — this is
+      Dispatcharr's own grace-period bookkeeping, not ours.
+
+    A `StreamStats` row whose `stream_id` no longer exists in Dispatcharr's
+    current stream inventory at all (deleted upstream, probe history never
+    cleaned up) is NOT surfaced under `not_probed_recently` — there is
+    nothing left to (re-)probe, so it isn't an actionable stale stream. This
+    matters in practice: on this deployment, `StreamStats` had ~4857 rows
+    against ~2620 live Dispatcharr streams, so without this cross-check the
+    majority of "stale" results would be dead references.
+
+    Distinct from struck-out (consecutive probe *failures*): a stale stream
+    may be passing every probe it gets, or may never have been probed at all.
+    """
+    logger.debug("[STREAM-STATS] GET /api/stream-stats/stale?days=%s", days)
+    from models import StreamStats
+
+    if days <= 0:
+        raise HTTPException(status_code=400, detail="days must be positive")
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    session = get_session()
+    try:
+        probe_stale = session.query(StreamStats).filter(
+            or_(StreamStats.last_probed.is_(None), StreamStats.last_probed < cutoff)
+        ).all()
+        probe_stale_by_id = {s.stream_id: s for s in probe_stale}
+
+        client = get_client()
+        start = time.time()
+
+        provider_stale_by_id: dict[int, dict] = {}
+        provider_stream_ids: set[int] = set()
+        fetched = 0
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=1000)
+            page_streams = result.get("results", [])
+            fetched += len(page_streams)
+            for s in page_streams:
+                provider_stream_ids.add(s["id"])
+                if s.get("is_stale"):
+                    provider_stale_by_id[s["id"]] = s
+            if fetched >= result.get("count", 0) or not page_streams:
+                break
+            page += 1
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[STREAM-STATS] Scanned %s provider streams (%s provider-stale) in %.1fms",
+            fetched, len(provider_stale_by_id), elapsed_ms,
+        )
+
+        # Drop StreamStats rows whose stream_id Dispatcharr no longer has any
+        # record of at all — orphaned probe history for a long-deleted stream,
+        # not an actionable "go re-probe this" candidate. See docstring.
+        orphaned = set(probe_stale_by_id) - provider_stream_ids
+        if orphaned:
+            logger.debug(
+                "[STREAM-STATS] Excluding %s orphaned StreamStats row(s) with no matching provider stream",
+                len(orphaned),
+            )
+            probe_stale_by_id = {
+                sid: stats for sid, stats in probe_stale_by_id.items() if sid not in orphaned
+            }
+
+        all_ids = set(probe_stale_by_id) | set(provider_stale_by_id)
+        if not all_ids:
+            return {"streams": [], "threshold_days": days}
+
+        start = time.time()
+        all_channels = []
+        page = 1
+        while True:
+            result = await client.get_channels(page=page, page_size=100)
+            page_channels = result.get("results", [])
+            all_channels.extend(page_channels)
+            if len(all_channels) >= result.get("count", 0) or not page_channels:
+                break
+            page += 1
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug("[STREAM-STATS] Fetched %s channels for stale lookup in %.1fms", len(all_channels), elapsed_ms)
+
+        # Iterate each channel's own (small) streams list once, checking against
+        # all_ids via set membership, rather than iterating all_ids per channel.
+        # /stale surfaces far more results at scale than /struck-out (e.g. 1690
+        # on this deployment), so the O(channels * |all_ids|) shape hits harder
+        # here — inverted to O(channels * |ch_streams|) with O(1) lookups.
+        stream_channels: dict[int, list[dict]] = {sid: [] for sid in all_ids}
+        for ch in all_channels:
+            ch_streams = set(ch.get("streams", []))
+            for sid in ch_streams & all_ids:
+                stream_channels[sid].append({
+                    "id": ch["id"],
+                    "name": ch.get("name", "Unknown"),
+                })
+
+        result = []
+        for sid in all_ids:
+            reasons = []
+            if sid in probe_stale_by_id:
+                d = probe_stale_by_id[sid].to_dict()
+                reasons.append("not_probed_recently")
+            else:
+                # Provider-stale only: no StreamStats row exists for this stream
+                # (e.g. it was probed and then cleared, or never probed at all).
+                # Keep the response shape consistent with the to_dict() branch
+                # above so API consumers can rely on `last_probed` always being
+                # present (never absent — null when unknown).
+                d = {"stream_id": sid, "stream_name": None, "last_probed": None}
+
+            if sid in provider_stale_by_id:
+                reasons.append("provider_stale")
+                provider = provider_stale_by_id[sid]
+                d["provider_last_seen"] = provider.get("last_seen")
+                if not d.get("stream_name"):
+                    d["stream_name"] = provider.get("name")
+            else:
+                d["provider_last_seen"] = None
+
+            d["reasons"] = reasons
+            d["channels"] = stream_channels.get(sid, [])
+            result.append(d)
+
+        return {"streams": result, "threshold_days": days}
+    except Exception as e:
+        logger.exception("[STREAM-STATS] Failed to get stale streams: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    finally:
+        session.close()
+
+
 @router.post("/compute-sort", response_model=ComputeSortResponse)
 async def compute_sort(request: ComputeSortRequest):
     """Compute sort orders for streams without applying them.
@@ -229,7 +371,7 @@ async def compute_sort(request: ComputeSortRequest):
     settings = get_settings()
 
     # Determine sort priority based on mode
-    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"}
+    valid_criteria = {"resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"}
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}
@@ -267,9 +409,11 @@ async def compute_sort(request: ComputeSortRequest):
     # m3u_priority-only gate so custom_streams gets its data too — bead ap1ud / GH #244).
     stream_m3u_map = {}
     custom_stream_ids: set[int] = set()
+    catchup_stream_ids: set[int] = set()
     needs_m3u = "m3u_priority" in sort_priority
     needs_custom = "custom_streams" in sort_priority
-    if needs_m3u or needs_custom:
+    needs_catchup = "catchup" in sort_priority
+    if needs_m3u or needs_custom or needs_catchup:
         try:
             client = get_client()
             start_fetch = time.time()
@@ -286,15 +430,18 @@ async def compute_sort(request: ComputeSortRequest):
                     stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
                 if needs_custom and s.get("is_custom"):
                     custom_stream_ids.add(int(stream_id))
+                if needs_catchup and s.get("is_catchup"):
+                    catchup_stream_ids.add(int(stream_id))
         except Exception as e:
             logger.warning("[STREAM-STATS-SORT] Failed to fetch stream data for sort: %s", e)
 
     # Sort each channel
     results = []
     for ch in request.channels:
-        # M3U priority does not require probe stats; respect priorities even if stats are missing.
+        # Direct metadata-only sorts do not require probe stats; respect them
+        # even when the preferred stream has not been probed yet.
         deprioritize_failed = settings.deprioritize_failed_streams
-        if request.mode == "m3u_priority":
+        if request.mode in {"m3u_priority", "catchup"}:
             deprioritize_failed = False
 
         sorted_ids = smart_sort_streams(
@@ -310,6 +457,7 @@ async def compute_sort(request: ComputeSortRequest):
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
             custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
         )
         changed = sorted_ids != ch.stream_ids
         results.append(ChannelSortResult(
@@ -524,6 +672,33 @@ async def cancel_probe():
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
     return prober.cancel_probe()
+
+
+@router.post("/probe/pause")
+async def pause_probe():
+    """Pause an in-progress probe operation.
+
+    The StreamProber's probe loops (sequential and parallel) already honor
+    ``_probe_paused`` internally (bd-vdrku: this endpoint was the missing
+    HTTP wiring for pre-existing, already-integrated prober pause support).
+    """
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/pause")
+    prober = ensure_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.pause_probe()
+
+
+@router.post("/probe/resume")
+async def resume_probe():
+    """Resume a paused probe operation."""
+    logger.debug("[STREAM-STATS-PROBE] POST /api/stream-stats/probe/resume")
+    prober = ensure_prober()
+    if not prober:
+        raise HTTPException(status_code=503, detail="Stream prober not available")
+
+    return prober.resume_probe()
 
 
 @router.post("/probe/reset")

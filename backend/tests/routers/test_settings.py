@@ -8,8 +8,12 @@ Tests: GET /api/settings, POST /api/settings, POST /api/settings/test,
 Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(),
        httpx, smtplib, aiohttp.
 """
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.conftest import closing_create_task_mock
 
 
 def _mock_settings(**overrides):
@@ -32,6 +36,12 @@ def _mock_settings(**overrides):
         "timezone_preference": "both",
         "show_stream_urls": False,
         "hide_auto_sync_groups": True,
+        # GH #591 / bd-dgs64: opt-in override for the frontend-only guard that
+        # locks a channel group's auto-sync controls when another M3U account
+        # already auto-syncs the same (global) Dispatcharr channel_group ID.
+        # Real bool (not a MagicMock auto-attr) so the admin-field gate tests
+        # compare real values. Default False preserves today's locked behavior.
+        "allow_multi_provider_auto_sync": False,
         "hide_ungrouped_streams": True,
         "hide_epg_urls": True,
         "hide_m3u_urls": True,
@@ -84,6 +94,11 @@ def _mock_settings(**overrides):
         "auto_creation_excluded_terms": [],
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
+        # GH #473 safety-valve caps (skg35). Explicit ints (not MagicMock
+        # auto-attrs) so the admin-field gate compares real values and existing
+        # admin-field tests don't trip on an incidental "change".
+        "max_auto_created_channels_per_run": 500,
+        "max_auto_creation_log_entries": 500,
         "mcp_api_key": "",
         # Internal one-time-heal marker (GH #484); real bool so the POST handler,
         # which preserves it into the rebuilt settings model, gets a valid value.
@@ -107,6 +122,10 @@ def _mock_settings(**overrides):
         # bd-mlcla: soft IP-ranking trusted networks (ranking only, never a
         # gate). Empty default so existing tests ignore it.
         "trusted_media_networks": [],
+        # nngkg (bead 0i2vt.5 seam): DBAS outbound SSRF policy mode. Default
+        # LAN-friendly so existing tests ignore it; the security endpoint +
+        # preserve-on-save suites below exercise both modes.
+        "ssrf_outbound_mode": "lan_friendly",
     }
     defaults.update(overrides)
     mock = MagicMock()
@@ -148,6 +167,48 @@ class TestGetSettings:
 
         assert response.status_code == 200
         assert response.json()["date_format"] == "dmy"
+
+    @pytest.mark.asyncio
+    async def test_exposes_auto_creation_caps(self, async_client):
+        """skg35: GET surfaces both GH #473 safety-valve caps so the UI can
+        show + edit them (previously settings.json-only, undiscoverable)."""
+        mock = _mock_settings(
+            max_auto_created_channels_per_run=750,
+            max_auto_creation_log_entries=300,
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["max_auto_created_channels_per_run"] == 750
+        assert data["max_auto_creation_log_entries"] == 300
+
+    @pytest.mark.asyncio
+    async def test_exposes_allow_multi_provider_auto_sync(self, async_client):
+        """bd-dgs64 (GH #591): GET surfaces the multi-provider auto-sync override."""
+        mock = _mock_settings(allow_multi_provider_auto_sync=True)
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["allow_multi_provider_auto_sync"] is True
+
+    @pytest.mark.asyncio
+    async def test_defaults_allow_multi_provider_auto_sync_false(self, async_client):
+        """bd-dgs64: default is False — preserves today's single-owner lock."""
+        mock = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["allow_multi_provider_auto_sync"] is False
 
 
 class TestUpdateSettings:
@@ -196,6 +257,81 @@ class TestUpdateSettings:
         assert saved.date_format == "iso"
 
     @pytest.mark.asyncio
+    async def test_persists_allow_multi_provider_auto_sync(self, async_client):
+        """bd-dgs64 (GH #591): POST threads the override into saved settings."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": True,
+            })
+
+        assert response.status_code == 200
+        saved = mock_save.call_args[0][0]
+        assert saved.allow_multi_provider_auto_sync is True
+
+    @pytest.mark.asyncio
+    async def test_logs_and_journals_allow_multi_provider_auto_sync_change(self, async_client):
+        """bd-dgs64 (GH #591): a value change logs a line and writes a
+        before/after journal entry — mirrors the group-settings PATCH journal
+        convention in routers/m3u.py (no other settings.py field journals
+        today, so this introduces the "settings" journal category)."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("routers.settings.journal.log_entry") as mock_journal:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": True,
+            })
+
+        assert response.status_code == 200
+        mock_journal.assert_called_once()
+        call_kwargs = mock_journal.call_args.kwargs
+        assert call_kwargs["category"] == "settings"
+        assert call_kwargs["action_type"] == "update"
+        assert call_kwargs["before_value"] == {"allow_multi_provider_auto_sync": False}
+        assert call_kwargs["after_value"] == {"allow_multi_provider_auto_sync": True}
+
+    @pytest.mark.asyncio
+    async def test_no_journal_entry_when_allow_multi_provider_auto_sync_unchanged(self, async_client):
+        """No journal noise when the field is echoed back unchanged (the
+        common case — every settings save round-trips this field)."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("routers.settings.journal.log_entry") as mock_journal:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                "allow_multi_provider_auto_sync": False,
+            })
+
+        assert response.status_code == 200
+        mock_journal.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_requires_password_when_changing_url(self, async_client):
         """Returns 400 when changing URL without providing password."""
         current = _mock_settings(url="http://old-server:8000")
@@ -214,12 +350,19 @@ class TestUpdateSettings:
         """Switching auth_method to api_key with a fresh key saves without crashing."""
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True here makes connection_changed True,
+        # which now schedules a background-service rebuild via
+        # asyncio.create_task(). Patch create_task out with the project's
+        # standard fire-and-forget test helper (see tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -369,12 +512,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -398,12 +548,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -429,12 +586,19 @@ class TestUpdateSettings:
         def capture_save(new_settings):
             captured["dispatcharr_api_key"] = new_settings.dispatcharr_api_key
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings", side_effect=capture_save), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             response = await async_client.post("/api/settings", json={
                 "url": current.url,
@@ -457,12 +621,19 @@ class TestUpdateSettings:
         import logging
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             with caplog.at_level(logging.WARNING, logger="routers.settings"):
                 response = await async_client.post("/api/settings", json={
@@ -492,12 +663,19 @@ class TestUpdateSettings:
         import logging
         current = _mock_settings(auth_method="password")
 
+        # bd-snryv: mode_changed=True (password -> api_key) makes
+        # connection_changed True, which now schedules a background-service
+        # rebuild via asyncio.create_task() — patch it out with the project's
+        # standard fire-and-forget test helper (tests/conftest.py) so the
+        # rebuild's own real Dispatcharr/BandwidthTracker/StreamProber calls
+        # never run in this unrelated unit test.
         with patch("routers.settings.get_settings", return_value=current), \
              patch("routers.settings.save_settings"), \
              patch("routers.settings.clear_settings_cache"), \
              patch("routers.settings.reset_client"), \
              patch("routers.settings.get_prober", return_value=None), \
-             patch("routers.settings.get_cache") as mock_cache:
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("asyncio.create_task", new=closing_create_task_mock()):
             mock_cache.return_value = MagicMock()
             with caplog.at_level(logging.WARNING, logger="routers.settings"):
                 response = await async_client.post("/api/settings", json={
@@ -530,6 +708,295 @@ class TestUpdateSettings:
         data = response.json()
         assert data["dispatcharr_api_key_configured"] is True
         assert data["api_key_configured"] is True
+
+
+class TestUpdateSettingsRebuildsBackgroundServices:
+    """bd-snryv: POST /api/settings must rebuild the standing BandwidthTracker
+    / StreamProber (and reconnect the prober-dependent task instances) when a
+    Dispatcharr connection-relevant field changes — not just swap the
+    get_client() singleton via reset_client(). Otherwise the background
+    tracker/prober keep talking to the OLD (stale-credential) client forever,
+    until an operator separately discovers and hits restart-services or the
+    container restarts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_when_password_changes_alone(self, async_client):
+        """A password rotation with url/username/mode unchanged is NOT
+        caught by ``auth_changed`` — it must still trigger a rebuild."""
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+        new_prober_instance = MagicMock()
+        new_prober_instance.start = AsyncMock()
+        mock_task_instance = MagicMock()
+        mock_registry = MagicMock()
+        mock_registry.get_task_instance.return_value = mock_task_instance
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober, \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("task_registry.get_registry", return_value=mock_registry):
+            MockTracker.return_value = AsyncMock()
+            MockProber.return_value = new_prober_instance
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "password",
+                "username": current.username,
+                "password": "new-secret",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_old_tracker.stop.assert_called_once()
+        mock_old_prober.stop.assert_called_once()
+        mock_set_tracker.assert_called_once()
+        mock_set_prober.assert_called_once_with(new_prober_instance)
+        assert mock_task_instance.set_prober.call_count == 3
+        mock_task_instance.set_prober.assert_called_with(new_prober_instance)
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_when_api_key_changes_alone(self, async_client):
+        """Rotating the API key in api_key mode (url/mode unchanged) is NOT
+        caught by ``auth_changed`` — it must still trigger a rebuild."""
+        current = _mock_settings(
+            auth_method="api_key", dispatcharr_api_key="old-key", api_key="old-key",
+        )
+
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+        new_prober_instance = MagicMock()
+        new_prober_instance.start = AsyncMock()
+        mock_task_instance = MagicMock()
+        mock_registry = MagicMock()
+        mock_registry.get_task_instance.return_value = mock_task_instance
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober, \
+             patch("routers.settings.get_cache") as mock_cache, \
+             patch("task_registry.get_registry", return_value=mock_registry):
+            MockTracker.return_value = AsyncMock()
+            MockProber.return_value = new_prober_instance
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "api_key",
+                "username": current.username,
+                "dispatcharr_api_key": "new-key",
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_set_tracker.assert_called_once()
+        mock_set_prober.assert_called_once_with(new_prober_instance)
+        assert mock_task_instance.set_prober.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_rebuild_failure_does_not_break_the_save(self, async_client, caplog):
+        """If the background-service rebuild raises, the settings save must
+        still succeed (200, status=saved) — the rebuild failure is logged,
+        not surfaced as a 500."""
+        import logging
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch(
+                 "routers.settings._restart_background_services",
+                 side_effect=RuntimeError("boom"),
+             ), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.WARNING, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "password",
+                    "username": current.username,
+                    "password": "new-secret",
+                })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        assert any(
+            "Failed to rebuild background services" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_rebuild_when_no_connection_field_changes(self, async_client):
+        """Toggling an unrelated preference (e.g. auto_reorder_after_probe)
+        must NOT tear down and restart the tracker/prober — that would be an
+        unnecessary restart storm on every minor settings tweak."""
+        current = _mock_settings(auth_method="password", password="unchanged-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings._restart_background_services") as mock_rebuild, \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "auth_method": "password",
+                "username": current.username,
+                "auto_reorder_after_probe": True,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        mock_rebuild.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rebuild_is_fire_and_forget_does_not_block_response(self, async_client):
+        """bd-snryv: the rebuild does a real paginated Dispatcharr fetch
+        (BandwidthTracker._initialize_channel_maps()) plus an ffprobe
+        availability check — it must be scheduled via asyncio.create_task(),
+        not awaited inline, so a slow/unreachable Dispatcharr host during a
+        credential rotation can't hang the settings-save HTTP response.
+
+        bd-z6trk: this used to mock ``_restart_background_services`` with a
+        fixed ``asyncio.sleep(0.3)`` and assert the response returned in
+        ``<0.2s`` wall-clock. That flaked on busy CI runners (observed on run
+        29630277919: the response itself took 0.424s — fire-and-forget was
+        working, the "Rebuilt background services" log landed ~300ms AFTER
+        the response, but the request just took longer than the hard-coded
+        budget on a loaded shared runner). Any wall-clock threshold flakes
+        under load, so this version has none: the mocked rebuild is gated on
+        an ``asyncio.Event`` the test controls instead of a timed sleep. The
+        gate stays closed for the whole POST, so if the rebuild were awaited
+        inline the response could never arrive — the response arriving at
+        all, under a generous ``wait_for`` timeout, is the proof, and it
+        holds regardless of runner speed. Releasing the gate afterward and
+        waiting on a second Event both lets the detached task run to
+        completion inside the mocks (matching the old sleep's intent) and
+        confirms the rebuild actually executes.
+        """
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        release_rebuild = asyncio.Event()
+        rebuild_finished = asyncio.Event()
+
+        async def gated_rebuild(settings):
+            await release_rebuild.wait()
+            rebuild_finished.set()
+            return {"success": True, "message": "restarted"}
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings._restart_background_services", side_effect=gated_rebuild), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+
+            try:
+                response = await asyncio.wait_for(
+                    async_client.post("/api/settings", json={
+                        "url": current.url,
+                        "auth_method": "password",
+                        "username": current.username,
+                        "password": "new-secret",
+                    }),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                pytest.fail(
+                    "settings save never returned while the rebuild was "
+                    "gated — rebuild is being awaited inline instead of "
+                    "fire-and-forget"
+                )
+
+            # The response arrived while the gate is still closed — proof
+            # the rebuild wasn't awaited inline.
+            assert not rebuild_finished.is_set()
+
+            # Release the gate and let the detached task run to completion
+            # inside the mocks before they're torn down on exit — this also
+            # verifies the rebuild actually runs.
+            release_rebuild.set()
+            await asyncio.wait_for(rebuild_finished.wait(), timeout=5)
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_rebuild_reported_failure_logs_warning_not_info(self, async_client, caplog):
+        """bd-snryv: ``_restart_background_services()`` catches its own
+        construction/start failures internally and RETURNS
+        ``{"success": False, ...}`` instead of raising. Before this fix the
+        fire-and-forget wrapper logged that dict unconditionally at INFO
+        ("Rebuilt background services..."), so a failed rebuild read as
+        routine success in the logs. Assert the WARNING branch fires
+        instead when ``success`` is False, and the (misleading) INFO success
+        line does not."""
+        import logging
+        current = _mock_settings(auth_method="password", password="old-secret")
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings"), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch(
+                 "routers.settings._restart_background_services",
+                 return_value={"success": False, "message": "Failed to restart services"},
+             ), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            with caplog.at_level(logging.INFO, logger="routers.settings"):
+                response = await async_client.post("/api/settings", json={
+                    "url": current.url,
+                    "auth_method": "password",
+                    "username": current.username,
+                    "password": "new-secret",
+                })
+                # Let the fire-and-forget rebuild task run to completion
+                # before the mocks above are torn down.
+                await asyncio.sleep(0)
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["status"] == "saved"
+        warning_records = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING
+            and "did not succeed" in r.getMessage()
+        ]
+        assert len(warning_records) == 1, (
+            f"Expected one WARNING for the failed rebuild; got: {caplog.records}"
+        )
+        assert not any(
+            "Rebuilt background services" in r.getMessage() and r.levelno == logging.INFO
+            for r in caplog.records
+        ), "Failed rebuild was logged as a routine INFO success"
 
 
 class TestTestConnection:
@@ -805,6 +1272,69 @@ class TestRestartServices:
         assert response.json()["success"] is False
 
     @pytest.mark.asyncio
+    async def test_clears_tracker_and_prober_singletons_when_not_configured(self, async_client):
+        """bd-snryv: StreamProber.stop() only flips a cancellation flag — a
+        later probe entry point resets it back to False — so the
+        just-stopped tracker/prober objects stay truthy and reusable.
+        Without explicitly clearing the singletons on this early-return
+        path, a caller like channel_pipeline_engine's
+        ``prober = get_prober(); if not prober: skip`` guard would pass and
+        proceed against a client for settings that are no longer configured.
+        """
+        mock = _mock_settings()
+        mock.is_configured.return_value = False
+        mock_old_tracker = AsyncMock()
+        mock_old_prober = AsyncMock()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.get_tracker", return_value=mock_old_tracker), \
+             patch("routers.settings.get_prober", return_value=mock_old_prober), \
+             patch("routers.settings.set_tracker") as mock_set_tracker, \
+             patch("routers.settings.set_prober") as mock_set_prober:
+            response = await async_client.post("/api/settings/restart-services")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+        mock_old_tracker.stop.assert_called_once()
+        mock_old_prober.stop.assert_called_once()
+        mock_set_tracker.assert_called_once_with(None)
+        mock_set_prober.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_restart_resets_channel_pipeline_engine_singleton(self, async_client):
+        """bd-snryv: ChannelPipelineEngine has the identical stale-client bug as
+        BandwidthTracker/StreamProber — it captures ``self.client`` once and
+        never re-fetches get_client(). The rebuild must clear the engine
+        singleton so the next ``_ensure_engine()`` call in
+        routers/channel_pipeline.py naturally rebuilds it against the fresh
+        client, instead of an auto-creation rule run hitting Dispatcharr with
+        stale credentials indefinitely after a rotation."""
+        mock = _mock_settings()
+        mock.is_configured.return_value = True
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings.get_tracker", return_value=None), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_client", return_value=AsyncMock()), \
+             patch("routers.settings.BandwidthTracker") as MockTracker, \
+             patch("routers.settings.StreamProber") as MockProber, \
+             patch("routers.settings.set_tracker"), \
+             patch("routers.settings.set_prober"), \
+             patch("routers.settings.create_notification_internal"), \
+             patch("routers.settings.update_notification_internal"), \
+             patch("routers.settings.delete_notifications_by_source_internal"), \
+             patch("channel_pipeline_engine.reset_channel_pipeline_engine") as mock_reset_engine:
+            MockTracker.return_value = AsyncMock()
+            new_prober = MagicMock()
+            new_prober.start = AsyncMock()
+            MockProber.return_value = new_prober
+            response = await async_client.post("/api/settings/restart-services")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        mock_reset_engine.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_restarts_services(self, async_client):
         """Restarts tracker and prober when configured."""
         mock = _mock_settings()
@@ -840,13 +1370,72 @@ class TestResetStats:
     """Tests for POST /api/settings/reset-stats."""
 
     @pytest.mark.asyncio
-    async def test_resets_all_stats(self, async_client):
-        """Clears all stats tables."""
+    async def test_resets_all_stats(self, async_client, test_session):
+        """Clears all 7 stats tables and reports the deleted count.
+
+        Mutation guard: if any of the 7 db.query(...).delete() lines were removed, the
+        corresponding table would still contain rows after the request — the per-table
+        count assertion would fail, AND the total cleared count would be wrong.
+        """
+        from models import (
+            HiddenChannelGroup,
+            ChannelWatchStats,
+            ChannelBandwidth,
+            StreamStats,
+            ChannelPopularityScore,
+            SessionTelemetry,
+            UniqueClientConnection,
+        )
+        from datetime import datetime, date
+
+        # Seed one row per stats table so we can verify all 7 deletes actually fire.
+        test_session.add(HiddenChannelGroup(group_id=1, group_name="Group A"))
+        test_session.add(ChannelWatchStats(channel_id="ch-1", channel_name="ESPN", watch_count=5))
+        test_session.add(ChannelBandwidth(
+            channel_id="ch-1", channel_name="ESPN",
+            date=date.today(),
+        ))
+        test_session.add(StreamStats(stream_id=1, stream_name="ESPN HD"))
+        test_session.add(ChannelPopularityScore(
+            channel_id="ch-1", channel_name="ESPN",
+            score=75.0, rank=1, trend="stable", trend_percent=0.0,
+            calculated_at=datetime.utcnow(),
+        ))
+        test_session.add(UniqueClientConnection(
+            ip_address="10.0.0.1", channel_id="ch-1", channel_name="ESPN",
+            date=date.today(),
+            connected_at=datetime.utcnow(),
+        ))
+        test_session.add(SessionTelemetry(
+            session_id="sess-1", observed_at=1000000,
+            channel_id="ch-1", bytes_delta=0, buffer_event_count=0, poll_interval_ms=10000,
+        ))
+        test_session.commit()
+
         response = await async_client.post("/api/settings/reset-stats")
 
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
+
+        # All 7 tables must be empty after the reset.
+        assert test_session.query(HiddenChannelGroup).count() == 0
+        assert test_session.query(ChannelWatchStats).count() == 0
+        assert test_session.query(ChannelBandwidth).count() == 0
+        assert test_session.query(StreamStats).count() == 0
+        assert test_session.query(ChannelPopularityScore).count() == 0
+        assert test_session.query(UniqueClientConnection).count() == 0
+        assert test_session.query(SessionTelemetry).count() == 0
+
+        # Response details must account for all deleted rows.
+        assert data["details"]["hidden_groups"] == 1
+        assert data["details"]["watch_stats"] == 1
+        assert data["details"]["bandwidth_records"] == 1
+        assert data["details"]["stream_stats"] == 1
+        assert data["details"]["popularity_scores"] == 1
+        assert data["details"]["client_connections"] == 1
+        assert data["details"]["session_telemetry"] == 1
+        assert "Cleared 7 records" in data["message"]
 
 
 class TestMCPApiKeyGenerate:
@@ -1428,3 +2017,626 @@ class TestMCPStatusHostResolution:
         assert response.status_code == 200
         assert response.json()["reachable"] is True
         assert captured["url"] == "http://localhost:6101/health"
+
+
+class TestSecuritySettings:
+    """Tests for the DBAS outbound-policy mode (nngkg).
+
+    The ``ssrf_outbound_mode`` field is the persistence seam consumed by
+    ``security/ssrf.py``. The frontend "first-run wizard" + Settings > Security
+    section read/write it through:
+      * GET /api/settings  (exposes the current mode)
+      * PATCH /api/settings/security  (dedicated, preserve-everything write)
+    A full POST /api/settings must NOT silently reset the mode (latent bug:
+    SettingsRequest never accepted it, so it defaulted on every save).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_exposes_ssrf_outbound_mode(self, async_client):
+        """GET surfaces the persisted outbound mode for the Settings UI."""
+        mock = _mock_settings(ssrf_outbound_mode="public_only")
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["ssrf_outbound_mode"] == "public_only"
+
+    @pytest.mark.asyncio
+    async def test_get_defaults_lan_friendly(self, async_client):
+        """The default mode (LAN-friendly) is surfaced when unset."""
+        mock = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=mock), \
+             patch("routers.settings._has_discord_alert_method", return_value=False):
+            response = await async_client.get("/api/settings")
+
+        assert response.json()["ssrf_outbound_mode"] == "lan_friendly"
+
+    @pytest.mark.asyncio
+    async def test_full_post_preserves_ssrf_outbound_mode(self, async_client):
+        """A partial POST /api/settings must NOT reset the outbound mode.
+
+        Reproduction: SettingsRequest doesn't accept ssrf_outbound_mode, so a
+        normal settings save would rebuild DispatcharrSettings(...) with the
+        field defaulting to "lan_friendly" — silently reverting an operator who
+        had chosen public-only.
+        """
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["mode"] = new_settings.ssrf_outbound_mode
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"), \
+             patch("routers.settings.reset_client"), \
+             patch("routers.settings.get_prober", return_value=None), \
+             patch("routers.settings.get_cache") as mock_cache:
+            mock_cache.return_value = MagicMock()
+            response = await async_client.post("/api/settings", json={
+                "url": current.url,
+                "username": current.username,
+                "telemetry_client_errors_enabled": False,
+            })
+
+        assert response.status_code == 200, response.json()
+        assert captured["mode"] == "public_only", (
+            "Partial POST reset ssrf_outbound_mode — operator choice not preserved"
+        )
+
+    @pytest.mark.asyncio
+    async def test_patch_security_updates_mode(self, async_client):
+        """PATCH /api/settings/security sets the mode and preserves everything else."""
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly", mcp_api_key="keep-me")
+        captured = {}
+
+        def capture_save(new_settings):
+            captured["settings"] = new_settings
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings", side_effect=capture_save), \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.patch(
+                "/api/settings/security",
+                json={"ssrf_outbound_mode": "public_only"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json()["ssrf_outbound_mode"] == "public_only"
+        # The same settings object is mutated + saved — other fields untouched.
+        assert captured["settings"].ssrf_outbound_mode == "public_only"
+        assert captured["settings"].mcp_api_key == "keep-me"
+
+    @pytest.mark.asyncio
+    async def test_patch_security_rejects_unknown_mode(self, async_client):
+        """An unrecognised mode is a 400 — the field is a closed enum."""
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("routers.settings.save_settings") as mock_save, \
+             patch("routers.settings.clear_settings_cache"):
+            response = await async_client.patch(
+                "/api/settings/security",
+                json={"ssrf_outbound_mode": "wide_open"},
+            )
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+
+def _full_payload(mock):
+    """Build a POST /api/settings body that mirrors a ``_mock_settings`` mock.
+
+    Sending the stored values back means the field-level admin gate (kgz3k)
+    sees NO admin-field change — so a test can flip exactly one field and
+    assert only that field's behaviour. Maps the mock attributes the handler
+    reads back into the SettingsRequest field names.
+    """
+    return {
+        "url": mock.url,
+        "auth_method": mock.auth_method,
+        "username": mock.username,
+        "theme": mock.theme,
+        "date_format": mock.date_format,
+        "user_timezone": mock.user_timezone,
+        "timezone_preference": mock.timezone_preference,
+        "emby_enabled": mock.emby_enabled,
+        "emby_base_url": mock.emby_base_url,
+        "plex_enabled": mock.plex_enabled,
+        "plex_base_url": mock.plex_base_url,
+        "jellyfin_enabled": mock.jellyfin_enabled,
+        "jellyfin_base_url": mock.jellyfin_base_url,
+        "discord_webhook_url": mock.discord_webhook_url,
+        "telegram_bot_token": mock.telegram_bot_token,
+        "telegram_chat_id": mock.telegram_chat_id,
+        "smtp_host": mock.smtp_host,
+        "smtp_port": mock.smtp_port,
+        "smtp_user": mock.smtp_user,
+        "smtp_from_email": mock.smtp_from_email,
+        "smtp_from_name": mock.smtp_from_name,
+        "smtp_use_tls": mock.smtp_use_tls,
+        "smtp_use_ssl": mock.smtp_use_ssl,
+        # skg35: echo the stored caps so the admin-field gate sees NO change
+        # unless a test deliberately flips them.
+        "max_auto_created_channels_per_run": mock.max_auto_created_channels_per_run,
+        "max_auto_creation_log_entries": mock.max_auto_creation_log_entries,
+        # bd-dgs64 (GH #591): echo the stored value so the admin-field gate
+        # sees NO change unless a test deliberately flips it.
+        "allow_multi_provider_auto_sync": mock.allow_multi_provider_auto_sync,
+    }
+
+
+def _save_mocks():
+    """The standard patch set so a POST /api/settings reaches save without IO."""
+    return (
+        patch("routers.settings.save_settings"),
+        patch("routers.settings.clear_settings_cache"),
+        patch("routers.settings.reset_client"),
+        patch("routers.settings.get_prober", return_value=None),
+        patch("routers.settings.get_cache", return_value=MagicMock()),
+    )
+
+
+class TestSettingsAdminFieldGate:
+    """kgz3k (A): field-level admin gate on POST /api/settings.
+
+    A non-admin (auth enabled) — INCLUDING the MCP service principal — may
+    change only per-user preferences; any attempt to change an admin-only
+    field (outbound URLs, secrets, notification credentials, connection) is
+    rejected 403. An admin may change them. These tests use the real
+    ``non_admin_client`` / ``admin_client`` fixtures so the gate actually bites.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_change_only_prefs(self, non_admin_client):
+        """Non-admin changing ONLY theme/date_format/timezone -> 200."""
+        current = _mock_settings(theme="dark", date_format="auto", user_timezone="UTC")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload.update({"theme": "light", "date_format": "iso", "user_timezone": "America/Chicago"})
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.theme == "light"
+        assert saved.date_format == "iso"
+        assert saved.user_timezone == "America/Chicago"
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_dispatcharr_url_rejected(self, non_admin_client):
+        """Non-admin changing the Dispatcharr URL (admin-only) -> 403, no save."""
+        current = _mock_settings(url="http://dispatcharr:8000")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://evil.example.com:9999"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_emby_base_url_rejected(self, non_admin_client):
+        """Non-admin changing an outbound media-server base URL -> 403."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://emby.lan:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_base_url"] = "http://169.254.169.254"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_supplying_secret_rejected(self, non_admin_client):
+        """Non-admin supplying a non-empty integration secret -> 403."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_api_key"] = "stolen-or-injected-key"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_discord_webhook_rejected(self, non_admin_client):
+        """Non-admin changing the Discord webhook (POST-SSRF sink) -> 403."""
+        current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/abc")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = "https://discord.com/api/webhooks/2/xyz"
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_channel_cap_rejected(self, non_admin_client):
+        """skg35: non-admin raising the auto-creation channel cap -> 403, no save.
+
+        The cap is the GH #473 runaway-creation OOM safety valve; lowering or
+        disabling it is an admin-only action, so it joins the admin-only field
+        partition. A non-admin supplying a different value is rejected.
+        """
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 5000
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_disabling_channel_cap_rejected(self, non_admin_client):
+        """skg35: non-admin DISABLING the cap (0) is the dangerous case -> 403."""
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 0
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_log_entries_cap_rejected(self, non_admin_client):
+        """skg35: the sibling log-entries cap is admin-only too -> 403."""
+        current = _mock_settings(max_auto_creation_log_entries=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_creation_log_entries"] = 2000
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_channel_cap_and_persists(self, admin_client):
+        """skg35: an admin CAN raise the cap and the new value reaches save."""
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 5000
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.max_auto_created_channels_per_run == 5000
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_multi_provider_auto_sync_rejected(self, non_admin_client):
+        """bd-dgs64 (GH #591): non-admin flipping the override -> 403, no save.
+
+        Enabling it removes the frontend guard that prevents auto-syncing the
+        same (global) Dispatcharr channel group from two M3U providers at once
+        — an install-wide duplicate-channel risk, so it joins the admin-only
+        field partition alongside the auto-creation safety caps.
+        """
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["allow_multi_provider_auto_sync"] = True
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_multi_provider_auto_sync_and_persists(self, admin_client):
+        """bd-dgs64: an admin CAN enable the override and it reaches save."""
+        current = _mock_settings(allow_multi_provider_auto_sync=False)
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["allow_multi_provider_auto_sync"] = True
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.allow_multi_provider_auto_sync is True
+
+    @pytest.mark.asyncio
+    async def test_admin_can_change_admin_field(self, admin_client):
+        """Positive control: an admin (auth enabled) CAN change an admin field."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://emby.lan:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            # Change to another resolvable-or-unresolvable LAN host (allowed in
+            # lan_friendly + unresolvable-on-save is permitted).
+            payload["emby_base_url"] = "http://emby2.lan:8096"
+            response = await admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        mock_save.assert_called_once()
+
+
+class TestSettingsMcpKeyGate:
+    """kgz3k (A): the MCP service principal is treated as NON-admin for the
+    settings admin-field gate, even though it carries is_admin=True elsewhere.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_changing_admin_field_rejected(self, async_client):
+        """MCP-key-only caller changing an admin field -> 403, no save.
+
+        Exercises the real auth path: auth enabled at the dependency layer +
+        a static MCP key presented as the Bearer token. ``get_current_user``
+        returns the MCP service principal, and ``_resolve_settings_admin``
+        must classify it as non-admin for this endpoint.
+        """
+        from config import DispatcharrSettings
+
+        current = _mock_settings(url="http://dispatcharr:8000")
+        runtime_settings = DispatcharrSettings(
+            url="http://dispatcharr:8000", username="u", password="p",
+            mcp_api_key="mcp-secret-key",
+        )
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("auth.dependencies.get_settings", return_value=runtime_settings), \
+             patch("routers.settings.get_auth_settings") as auth_mock, \
+             s1 as mock_save, s2, s3, s4, s5:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            payload = _full_payload(current)
+            payload["url"] = "http://evil.example.com:9999"
+            response = await async_client.post(
+                "/api/settings",
+                json=payload,
+                headers={"Authorization": "Bearer mcp-secret-key"},
+            )
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_changing_channel_cap_rejected(self, async_client):
+        """skg35: MCP-key-only caller cannot disable/raise the auto-creation cap.
+
+        The MCP key is a channel-management automation credential, not an
+        operator identity. Letting it disable the GH #473 OOM safety valve would
+        re-arm the runaway-creation crash, so it must be classified non-admin
+        for this field (same posture as the connection/secret fields).
+        """
+        from config import DispatcharrSettings
+
+        current = _mock_settings(max_auto_created_channels_per_run=500)
+        runtime_settings = DispatcharrSettings(
+            url="http://dispatcharr:8000", username="u", password="p",
+            mcp_api_key="mcp-secret-key",
+        )
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("auth.dependencies.get_settings", return_value=runtime_settings), \
+             patch("routers.settings.get_auth_settings") as auth_mock, \
+             s1 as mock_save, s2, s3, s4, s5:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            payload = _full_payload(current)
+            payload["max_auto_created_channels_per_run"] = 0
+            response = await async_client.post(
+                "/api/settings",
+                json=payload,
+                headers={"Authorization": "Bearer mcp-secret-key"},
+            )
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+
+class TestSettingsSsrfOnSave:
+    """kgz3k (B): every CHANGED, non-empty outbound base URL is SSRF-validated
+    on save. Loopback/metadata/RFC1918-in-public-only -> 400; valid -> 200;
+    empty -> allowed (disables integration).
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("field,enable_field", [
+        ("emby_base_url", "emby_enabled"),
+        ("plex_base_url", "plex_enabled"),
+        ("jellyfin_base_url", "jellyfin_enabled"),
+        ("url", None),
+    ])
+    async def test_metadata_host_rejected_for_each_url_field(self, async_client, field, enable_field):
+        """Saving http://169.254.169.254 into any base URL field -> 400."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload[field] = "http://169.254.169.254"
+            if enable_field:
+                payload[enable_field] = True
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        assert "169.254" in response.json()["detail"] or "denied" in response.json()["detail"].lower()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_loopback_host_rejected(self, async_client):
+        """Saving a loopback base URL -> 400."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://127.0.0.1:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_allowed_in_lan_friendly(self, async_client):
+        """A private LAN base URL saves under lan_friendly (the default)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://192.168.1.50:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Path-stripped, scheme+netloc only.
+        assert saved.emby_base_url == "http://192.168.1.50:8096"
+
+    @pytest.mark.asyncio
+    async def test_rfc1918_rejected_in_public_only(self, async_client):
+        """The same private LAN base URL is rejected under public_only."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = "http://192.168.1.50:8096"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_rejected(self, async_client):
+        """A file:// base URL -> 400 (scheme allowlist)."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["plex_enabled"] = True
+            payload["plex_base_url"] = "file:///etc/passwd"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_base_url_allowed_disables_integration(self, async_client):
+        """Clearing a base URL (empty) is allowed — operator disabling it."""
+        current = _mock_settings(emby_enabled=True, emby_base_url="http://192.168.1.50:8096")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = False
+            payload["emby_base_url"] = ""
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.emby_base_url == ""
+
+    @pytest.mark.asyncio
+    async def test_runtime_caller_never_hits_blocked_host(self, async_client):
+        """After a rejected save, no outbound request is issued to the host.
+
+        Wraps the SSRF resolver so we can assert the blocked host is never
+        connected to: the save is rejected before any media-server client is
+        constructed, so the runtime poller keeps the OLD (unset) base URL and
+        never GETs the attacker host.
+        """
+        import respx
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with respx.mock(assert_all_called=False, assert_all_mocked=False) as respx_mock:
+            metadata_route = respx_mock.get("http://169.254.169.254/Sessions")
+            with patch("routers.settings.get_settings", return_value=current), \
+                 s1 as mock_save, s2, s3, s4, s5:
+                payload = _full_payload(current)
+                payload["emby_enabled"] = True
+                payload["emby_base_url"] = "http://169.254.169.254"
+                response = await async_client.post("/api/settings", json=payload)
+
+            assert response.status_code == 400
+            mock_save.assert_not_called()
+            # The metadata endpoint was NEVER called — the save was rejected
+            # before any media-server client could be constructed.
+            assert not metadata_route.called
+            assert len(respx_mock.calls) == 0
+
+
+class TestSettingsDiscordWebhookOnSave:
+    """kgz3k (C): discord_webhook_url is validated against the Discord host
+    allowlist on save (POST-SSRF sink). Path is preserved (NOT _sanitize_base_url).
+    """
+
+    @pytest.mark.asyncio
+    async def test_valid_discord_webhook_saves(self, async_client):
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        url = "https://discord.com/api/webhooks/123456/abcdefg"
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = url
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Path is PRESERVED (webhooks need it).
+        assert saved.discord_webhook_url == url
+
+    @pytest.mark.asyncio
+    async def test_non_discord_host_rejected(self, async_client):
+        """A non-Discord webhook host -> 400 (POST-SSRF block)."""
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = "https://evil.example.com/api/webhooks/1/x"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_discord_webhook_allowed(self, async_client):
+        """Clearing the webhook (empty) is allowed — disables Discord."""
+        current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/old")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["discord_webhook_url"] = ""
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.discord_webhook_url == ""

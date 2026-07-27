@@ -43,8 +43,8 @@
 ## Common causes
 
 ### Database contention
-- Signals: `path` labels concentrated on write-heavy routes (`/api/channels`, `/api/auto-creation-rules`); readiness `database` sub-check latency also climbing.
-- Mitigation: pause bulk operations (auto-creation, digest), identify the long transaction via logs.
+- Signals: `path` labels concentrated on write-heavy routes (`/api/channels`, `/api/channel-pipeline/rules`); readiness `database` sub-check latency also climbing.
+- Mitigation: pause bulk operations (the Channel Pipeline, digest), identify the long transaction via logs.
 
 ### Dispatcharr upstream slow
 - Signals: readiness `dispatcharr` sub-check latency alert also firing; slow routes are ones that proxy Dispatcharr (streams, EPG).

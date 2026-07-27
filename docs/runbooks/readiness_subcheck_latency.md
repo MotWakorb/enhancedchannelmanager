@@ -22,7 +22,7 @@ If the related production SLO alert (`ECMReadinessDown`, `ECMHTTPLatencyHighP95`
 
 ### database check slow (>50ms)
 - Expected shape: sub-check is a cheap `PRAGMA` read, should be <5ms on warm disk.
-- Likely cause: file lock contention from a long-running write (bulk auto-creation, digest). Check for `[TASKS]` log lines indicating a running job.
+- Likely cause: file lock contention from a long-running write (bulk Channel Pipeline runs, digest). Check for `[TASKS]` log lines indicating a running job.
 - Check disk: `docker exec ecm-ecm-1 df -h /config` and `iostat 1 5` on the host.
 
 ### dispatcharr check slow (>500ms)

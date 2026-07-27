@@ -164,6 +164,24 @@ class TestGetM3UChanges:
         data = response.json()
         assert data["results"][0]["count"] == 5  # Earlier date first
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce an invalid SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get("/api/m3u/changes", params={"page": page})
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 201])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 200] is rejected by validation (422)."""
+        response = await async_client.get(
+            "/api/m3u/changes", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
+
 
 class TestGetM3UChangesSummary:
     """Tests for GET /api/m3u/changes/summary."""
@@ -195,7 +213,16 @@ class TestGetM3UChangesSummary:
             response = await async_client.get("/api/m3u/changes/summary", params={"hours": 48})
 
         assert response.status_code == 200
+        # u8qr6.5: assert the hours=48 param actually reaches the `since` arg the
+        # detector receives (since = utcnow - timedelta(hours=hours)). The old
+        # assert_called_once() would still pass if hours were silently ignored
+        # and the 24h default used. get_change_summary(since, m3u_account_id) is
+        # positional.
         mock_detector.get_change_summary.assert_called_once()
+        since_arg, account_arg = mock_detector.get_change_summary.call_args.args
+        delta_hours = (datetime.utcnow() - since_arg).total_seconds() / 3600
+        assert 47.9 < delta_hours < 48.1, f"since is {delta_hours:.2f}h ago, expected ~48h"
+        assert account_arg is None
 
     @pytest.mark.asyncio
     async def test_passes_account_filter(self, async_client):
@@ -209,6 +236,13 @@ class TestGetM3UChangesSummary:
             })
 
         assert response.status_code == 200
+        # u8qr6.5: assert the account filter actually reaches the detector call.
+        # The old test inspected nothing about the mock, so a router that dropped
+        # the m3u_account_id argument would still pass. get_change_summary is
+        # called positionally as (since, m3u_account_id).
+        mock_detector.get_change_summary.assert_called_once()
+        _since, account_arg = mock_detector.get_change_summary.call_args.args
+        assert account_arg == 1
 
 
 class TestGetM3UAccountChanges:
@@ -249,6 +283,26 @@ class TestGetM3UAccountChanges:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page", [0, -1])
+    async def test_invalid_page_returns_422(self, async_client, page):
+        """page < 1 is rejected by validation (422), not passed through to
+        produce an invalid SQL OFFSET (bead enhancedchannelmanager-g4z2h,
+        systemic sibling of 1a5mf)."""
+        response = await async_client.get(
+            "/api/m3u/accounts/1/changes", params={"page": page}
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("page_size", [0, -5, 201])
+    async def test_invalid_page_size_returns_422(self, async_client, page_size):
+        """page_size out of [1, 200] is rejected by validation (422)."""
+        response = await async_client.get(
+            "/api/m3u/accounts/1/changes", params={"page_size": page_size}
+        )
+        assert response.status_code == 422
 
 
 class TestGetM3USnapshots:
@@ -477,6 +531,50 @@ class TestUpdateDigestSettings:
         assert response.status_code == 200
         data = response.json()
         assert data["email_recipients"] == ["user@example.com", "admin@test.org"]
+
+    @pytest.mark.asyncio
+    async def test_persists_account_ids(self, async_client, test_session):
+        """PUT with account_ids persists and round-trips via GET (GH #496)."""
+        _create_digest_settings(test_session)
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "account_ids": [1, 3, 7],
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == [1, 3, 7]
+
+        get_response = await async_client.get("/api/m3u/digest/settings")
+        assert get_response.json()["account_ids"] == [1, 3, 7]
+
+    @pytest.mark.asyncio
+    async def test_empty_account_ids_clears_selection(self, async_client, test_session):
+        """PUT with an empty account_ids list clears back to 'all accounts'."""
+        _create_digest_settings(test_session, account_ids=json.dumps([1, 2]))
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "account_ids": [],
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_omitted_account_ids_leaves_existing_selection_unchanged(self, async_client, test_session):
+        """Omitting account_ids from the PUT body (None, not []) must not
+        clobber a previously-saved selection — matches the Optional[...] =
+        None / `is not None` guard pattern used by every other field here."""
+        _create_digest_settings(test_session, account_ids=json.dumps([5]))
+
+        with patch("routers.m3u_digest.journal"):
+            response = await async_client.put("/api/m3u/digest/settings", json={
+                "frequency": "hourly",
+            })
+
+        assert response.status_code == 200
+        assert response.json()["account_ids"] == [5]
 
 
 class TestSendTestDigest:

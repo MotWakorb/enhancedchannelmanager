@@ -4,12 +4,13 @@ Streams & providers router — stream listing and provider endpoints.
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 Enriched with server-side normalization in v0.15.0.
 """
+import asyncio
 import logging
 import time
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from cache import get_cache
@@ -32,6 +33,15 @@ router = APIRouter(tags=["Streams"])
 # opt-in (include_assignment) calls cheap without serving badly stale linkage.
 ASSIGNMENT_INDEX_CACHE_KEY = "stream_channel_assignment_index"
 ASSIGNMENT_INDEX_TTL_SECONDS = 45
+
+# Cache key + TTL for the provider-stale stream id set (bead
+# enhancedchannelmanager-po78p / GH #696). Dispatcharr flags a stream
+# `is_stale` when its own M3U refresh no longer re-matches it in the source
+# playlist; this endpoint pages through client.get_streams() to collect that
+# set cheaply for the Channels/Streams pane decorations. A 300s TTL keeps
+# repeated pane loads/refreshes from re-scanning every stream on each render.
+PROVIDER_STALE_IDS_CACHE_KEY = "provider_stale_stream_ids"
+PROVIDER_STALE_IDS_TTL_SECONDS = 300
 
 
 class StreamSortOrder(str, Enum):
@@ -124,8 +134,13 @@ def _apply_assignment(streams: list[dict], index: dict[int, list[int]]) -> None:
 
 @router.get("/api/streams")
 async def get_streams(
-    page: int = 1,
-    page_size: int = 100,
+    # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
+    # of 1a5mf): page<1 / page_size<1 were passed straight to the upstream
+    # Dispatcharr client, which raised and surfaced as a 500. Upper bound is
+    # generous — App.tsx legitimately requests page_size=500 (searchStreams,
+    # loadStreamGroup).
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(100, ge=1, le=1000, description="Results per page"),
     search: Optional[str] = None,
     channel_group_name: Optional[str] = None,
     m3u_account: Optional[int] = None,
@@ -309,6 +324,66 @@ async def get_streams_by_ids(request: BulkStreamIdsRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/api/streams/stale-ids")
+async def get_stale_stream_ids(bypass_cache: bool = False):
+    """Return the set of Dispatcharr stream IDs currently flagged ``is_stale``.
+
+    Dispatcharr flags a stream stale (+ ``last_seen``) when its own M3U
+    refresh no longer re-matches it in the source playlist. This endpoint
+    pages through ``client.get_streams()`` (same paged-scan shape as
+    ``stream_stats.get_stale_streams``, see
+    backend/routers/stream_stats.py:263-274) and returns just the stale id
+    set + last-seen timestamps, cheaply enough for the Channels/Streams pane
+    to decorate rows without an N+1 against Dispatcharr. Cached for
+    PROVIDER_STALE_IDS_TTL_SECONDS; pass ``bypass_cache=True`` to force a
+    fresh scan.
+    """
+    logger.debug("[STREAMS] GET /api/streams/stale-ids bypass_cache=%s", bypass_cache)
+    cache = get_cache()
+
+    if not bypass_cache:
+        cached = cache.get(PROVIDER_STALE_IDS_CACHE_KEY, ttl=PROVIDER_STALE_IDS_TTL_SECONDS)
+        if cached is not None:
+            logger.debug("[STREAMS] Cache HIT for stale-ids (%d stale)", cached.get("count", 0))
+            return cached
+
+    client = get_client()
+    try:
+        start = time.time()
+        stale_ids: list[int] = []
+        last_seen: dict[int, Optional[str]] = {}
+        fetched = 0
+        page = 1
+        while True:
+            result = await client.get_streams(page=page, page_size=1000)
+            page_streams = result.get("results", [])
+            fetched += len(page_streams)
+            for s in page_streams:
+                if s.get("is_stale"):
+                    sid = s["id"]
+                    stale_ids.append(sid)
+                    last_seen[sid] = s.get("last_seen")
+            if fetched >= result.get("count", 0) or not page_streams:
+                break
+            page += 1
+        elapsed_ms = (time.time() - start) * 1000
+        logger.debug(
+            "[STREAMS] Scanned %d provider streams (%d stale) in %.1fms",
+            fetched, len(stale_ids), elapsed_ms,
+        )
+
+        response = {
+            "stale_stream_ids": stale_ids,
+            "last_seen": last_seen,
+            "count": len(stale_ids),
+        }
+        cache.set(PROVIDER_STALE_IDS_CACHE_KEY, response)
+        return response
+    except Exception as e:
+        logger.exception("[STREAMS] Failed to fetch stale stream ids: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("/api/providers", tags=["Providers"])
 async def get_providers():
     """List M3U accounts (legacy endpoint)."""
@@ -324,6 +399,68 @@ async def get_providers():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/api/providers/catchup-status", tags=["Providers"])
+async def get_provider_catchup_status():
+    """Per-M3U-account catch-up availability for the M3U manager badge (bead 4dpiz).
+
+    For each provider we ask Dispatcharr for a single catch-up stream
+    (``is_catchup=true``, ``page_size=1``) and read the paginated ``count``:
+    ``count > 0`` means the provider has at least one catch-up stream. The one
+    returned row's ``catchup_days`` is sampled as the provider's catch-up depth
+    — Dispatcharr sets catch-up depth per-provider (verified provider-uniform on
+    live data), and its streams endpoint does NOT honour an ``ordering`` param,
+    so a guaranteed maximum would require an O(catch-up-streams) scan we
+    deliberately avoid.
+
+    ``is_catchup`` is ``db_index=True`` upstream, so each probe is a cheap
+    indexed count query — O(providers) total, run concurrently. Best-effort per
+    account: a probe failure degrades that account to ``has_catchup=false``
+    (logged), never 500s the whole M3U manager.
+
+    Returns ``{ "<account_id>": {"has_catchup": bool, "catchup_days": int|null} }``.
+    """
+    logger.debug("[STREAMS] GET /api/providers/catchup-status")
+    client = get_client()
+    try:
+        accounts = await client.get_m3u_accounts()
+    except Exception as e:
+        logger.warning("[STREAMS] catchup-status: could not list M3U accounts: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def _probe(account: dict):
+        account_id = account.get("id")
+        try:
+            page = await client.get_streams(
+                m3u_account=account_id, is_catchup=True, page_size=1
+            )
+            count = page.get("count") or 0
+            results = page.get("results") or []
+            days = results[0].get("catchup_days") if results else None
+            return account_id, {
+                "has_catchup": count > 0,
+                "catchup_days": days if count > 0 else None,
+            }
+        except Exception as e:
+            logger.warning(
+                "[STREAMS] catchup-status: probe failed for account %s: %s",
+                account_id, e,
+            )
+            return account_id, {"has_catchup": False, "catchup_days": None}
+
+    start = time.time()
+    probes = await asyncio.gather(*(_probe(a) for a in accounts))
+    elapsed_ms = (time.time() - start) * 1000
+    logger.debug(
+        "[STREAMS] Probed catch-up status for %d providers in %.1fms",
+        len(probes), elapsed_ms,
+    )
+    return {
+        str(account_id): status
+        for account_id, status in probes
+        if account_id is not None
+    }
+
+
 @router.get("/api/providers/group-settings", tags=["Providers"])
 async def get_all_provider_group_settings():
     """Get group settings from all M3U providers, mapped by channel_group_id."""
@@ -336,4 +473,35 @@ async def get_all_provider_group_settings():
         logger.debug("[STREAMS] Fetched provider group settings in %.1fms", elapsed_ms)
         return result
     except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/api/providers/group-settings/by-provider", tags=["Providers"])
+async def get_provider_group_settings_by_provider():
+    """Per-(provider, group) group settings, NON-collapsed (bead 38dzi).
+
+    Unlike ``/api/providers/group-settings`` (one row per channel-group id,
+    collapsed preferring auto_channel_sync ON), this returns ONE row per
+    (m3u_account, channel_group) junction — so the UI can offer provider-scoped
+    Event Sync group selection (Provider A's "MLB PPV" vs Provider B's
+    "MLB PPV", which share one channel-group id). The group NAME is not
+    included; the caller joins on ``channel_group_id`` against the channel
+    groups it already loads.
+    """
+    logger.debug("[STREAMS] GET /api/providers/group-settings/by-provider")
+    client = get_client()
+    try:
+        by_pair = await client.get_m3u_group_settings_by_provider()
+        return [
+            {
+                "m3u_account_id": setting.get("m3u_account_id"),
+                "m3u_account_name": setting.get("m3u_account_name"),
+                "channel_group_id": setting.get("channel_group"),
+                "auto_channel_sync": bool(setting.get("auto_channel_sync")),
+                "enabled": bool(setting.get("enabled")),
+                "stream_count": setting.get("stream_count"),
+            }
+            for setting in by_pair.values()
+        ]
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")

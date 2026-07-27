@@ -8,6 +8,7 @@ import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useModal } from '../hooks/useModal';
 import { logger } from '../utils/logger';
+import { PageHeader } from './PageHeader';
 import './DummyEPGManagerSection.css';
 import './ModalBase.css';
 
@@ -254,11 +255,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
   if (loading) {
     return (
       <div className="dep-manager-section">
-        <div className="dep-manager-header">
-          <div className="header-title">
-            <h2>ECM Dummy EPG Profiles</h2>
-          </div>
-        </div>
+        <PageHeader className="dep-manager-header" title="Dummy EPG Profiles" />
         <div className="dep-loading">
           <span className="material-icons spinning">sync</span>
           Loading profiles...
@@ -269,60 +266,59 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
 
   return (
     <div className="dep-manager-section">
-      <div className="dep-manager-header">
-        <div className="header-title">
-          <h2>ECM Dummy EPG Profiles</h2>
-          <p className="header-description">
-            Generate EPG data from channel/stream names using regex patterns and substitution rules. Copy the XMLTV URL to add as a source in Dispatcharr.
-          </p>
-        </div>
-        <div className="header-actions">
-          {profiles.length > 0 && (
-            <>
-              <button className="btn-secondary" onClick={handleCopyXmltvUrl} title="Copy combined XMLTV URL">
-                <span className="material-icons">content_copy</span>
-                XMLTV URL
+      <PageHeader
+        className="dep-manager-header"
+        title="Dummy EPG Profiles"
+        description="Generate EPG data from channel/stream names using regex patterns and substitution rules. Copy the XMLTV URL to add as a source in Dispatcharr."
+        actions={(
+          <>
+            {profiles.length > 0 && (
+              <>
+                <button className="btn-secondary" onClick={handleCopyXmltvUrl} title="Copy combined XMLTV URL">
+                  <span className="material-icons">content_copy</span>
+                  XMLTV URL
+                </button>
+                <button className="btn-secondary" onClick={handleRegenerate} disabled={regenerating}>
+                  <span className={`material-icons ${regenerating ? 'spinning-cw' : ''}`}>refresh</span>
+                  {regenerating ? 'Regenerating...' : 'Regenerate'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={handleAddAllToDispatcharr}
+                  disabled={addingToDispatcharr !== null}
+                  title="Add all enabled profiles to Dispatcharr as EPG sources"
+                >
+                  <span className={`material-icons ${addingToDispatcharr === 'all' ? 'spinning' : ''}`}>cloud_upload</span>
+                  {addingToDispatcharr === 'all' ? 'Adding...' : 'Add All to Dispatcharr'}
+                </button>
+              </>
+            )}
+            {profiles.length > 0 && (
+              <button className="btn-secondary" onClick={handleExport}>
+                <span className="material-icons">upload</span>
+                Export
               </button>
-              <button className="btn-secondary" onClick={handleRegenerate} disabled={regenerating}>
-                <span className={`material-icons ${regenerating ? 'spinning-cw' : ''}`}>refresh</span>
-                {regenerating ? 'Regenerating...' : 'Regenerate'}
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={handleAddAllToDispatcharr}
-                disabled={addingToDispatcharr !== null}
-                title="Add all enabled profiles to Dispatcharr as EPG sources"
-              >
-                <span className={`material-icons ${addingToDispatcharr === 'all' ? 'spinning' : ''}`}>cloud_upload</span>
-                {addingToDispatcharr === 'all' ? 'Adding...' : 'Add All to Dispatcharr'}
-              </button>
-            </>
-          )}
-          {profiles.length > 0 && (
-            <button className="btn-secondary" onClick={handleExport}>
-              <span className="material-icons">upload</span>
-              Export
+            )}
+            <button className="btn-secondary" onClick={() => { setImportYaml(''); setImportYamlError(null); setShowImportYamlDialog(true); }}>
+              <span className="material-icons">download</span>
+              Import YAML
             </button>
-          )}
-          <button className="btn-secondary" onClick={() => { setImportYaml(''); setImportYamlError(null); setShowImportYamlDialog(true); }}>
-            <span className="material-icons">download</span>
-            Import YAML
-          </button>
-          <button className="btn-secondary" onClick={() => setImportModalOpen(true)}>
-            <span className="material-icons">download</span>
-            Import from Dispatcharr
-          </button>
-          <button className="btn-primary" onClick={handleAddProfile}>
-            <span className="material-icons">add</span>
-            Add Profile
-          </button>
-        </div>
-      </div>
+            <button className="btn-secondary" onClick={() => setImportModalOpen(true)}>
+              <span className="material-icons">download</span>
+              Import from Dispatcharr
+            </button>
+            <button className="btn-primary" onClick={handleAddProfile}>
+              <span className="material-icons">add</span>
+              Add Profile
+            </button>
+          </>
+        )}
+      />
 
       {profiles.length === 0 ? (
         <div className="dep-empty-state">
           <span className="material-icons">auto_fix_high</span>
-          <p>No ECM Dummy EPG profiles. Create one to generate EPG data from channel names using regex patterns and substitution pairs.</p>
+          <p>No Dummy EPG profiles. Create one to generate EPG data from channel names using regex patterns and substitution pairs.</p>
         </div>
       ) : (
         <div className="dep-profiles-list">
@@ -337,7 +333,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
               <div className="dep-profile-info">
                 <div className="dep-profile-name">{profile.name}</div>
                 <div className="dep-profile-details">
-                  <span className="dep-profile-type">ECM Dummy</span>
+                  <span className="dep-profile-type">Dummy</span>
                   <span className="dep-profile-channels">
                     {profile.group_count ?? 0} group{(profile.group_count ?? 0) !== 1 ? 's' : ''}
                   </span>
@@ -362,15 +358,18 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
                     }
                   }}
                   title="Copy profile XMLTV URL"
+                  aria-label="Copy profile XMLTV URL"
                 >
-                  <span className="material-icons">content_copy</span>
+                  <span className="material-icons" aria-hidden="true">content_copy</span>
                 </button>
                 <button
                   className={`action-btn toggle ${profile.enabled ? 'active' : ''}`}
                   onClick={() => handleToggleEnabled(profile)}
                   title={profile.enabled ? 'Disable' : 'Enable'}
+                  aria-label={profile.enabled ? 'Disable dummy EPG profile' : 'Enable dummy EPG profile'}
+                  aria-pressed={profile.enabled}
                 >
-                  <span className="material-icons">
+                  <span className="material-icons" aria-hidden="true">
                     {profile.enabled ? 'toggle_on' : 'toggle_off'}
                   </span>
                 </button>
@@ -379,8 +378,9 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
                   onClick={() => handleAddToDispatcharr(profile)}
                   disabled={addingToDispatcharr !== null}
                   title="Add to Dispatcharr as EPG source"
+                  aria-label="Add to Dispatcharr as EPG source"
                 >
-                  <span className={`material-icons ${addingToDispatcharr === profile.id ? 'spinning' : ''}`}>
+                  <span className={`material-icons ${addingToDispatcharr === profile.id ? 'spinning' : ''}`} aria-hidden="true">
                     publish
                   </span>
                 </button>
@@ -388,15 +388,17 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
                   className="action-btn"
                   onClick={() => handleEditProfile(profile)}
                   title="Edit"
+                  aria-label="Edit profile"
                 >
-                  <span className="material-icons">edit</span>
+                  <span className="material-icons" aria-hidden="true">edit</span>
                 </button>
                 <button
                   className="action-btn delete"
                   onClick={() => handleDeleteProfile(profile)}
                   title="Delete"
+                  aria-label="Delete profile"
                 >
-                  <span className="material-icons">delete</span>
+                  <span className="material-icons" aria-hidden="true">delete</span>
                 </button>
               </div>
             </div>

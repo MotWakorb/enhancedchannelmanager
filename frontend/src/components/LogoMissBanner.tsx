@@ -1,0 +1,172 @@
+/**
+ * LogoMissBanner — the restore-complete logo-miss RED banner (bead 0i2vt.19).
+ *
+ * ADR-012 **D9** ("Logo-miss severity"): a logo that cannot be matched on
+ * restore produces a WARN log + an aggregate count + a **prominent red banner on
+ * the restore-complete screen** — never a silent DEBUG line. This component is
+ * that banner. A restored channel with a missing logo looks identical to a
+ * correctly-restored one at the API level (DBAS's silent-DEBUG pattern hides
+ * this); the banner makes the problem unmissable at the moment the operator can
+ * act on it.
+ *
+ * Contract: the merged {@link RestoreReport} carries the logo-miss signal as an
+ * AGGREGATE COUNT (`logo_misses: number`) AND — since bead qhui4 — an OPTIONAL
+ * per-logo detail list (`logo_miss_details: LogoMissDetail[]`, each id + name).
+ * The aggregate count gates the red banner (D9, unchanged); when the detail list
+ * is present and non-empty the banner ADDS a drill-down enumerating which logos
+ * are missing. Since bead cm9bi each miss also carries its AFFECTED CHANNELS
+ * (`channels: LogoMissChannel[]` — destination Dispatcharr id where known +
+ * name); those render as nested per-channel rows, each with its own Dispatcharr
+ * link. Dispatcharr's SPA router exposes NO per-channel route (verified against
+ * the live bundle — only top-level paths like `/channels`; channel editing is a
+ * modal on that page), so per-channel links FALL BACK to the `/channels` list
+ * page while the row still names the channel + id for the operator to find it
+ * there. The banner also names the count and keeps the aggregate link to the
+ * Dispatcharr **Channels** admin page. All links are built with the same
+ * `${dispatcharrUrl}/…` pattern the rest of the app uses (see ChannelsPane).
+ *
+ * Colorblind-safe (WCAG 1.4.1): the meaning is carried by an icon + the word
+ * "missing" in the copy, not by red colour alone. `role="alert"` so assistive
+ * tech announces it.
+ *
+ * Renders into {@link RestoreCompleteSummary}'s `bannerSlot`, which places it at
+ * the very top of the summary, above the tri-state outcome banner.
+ */
+import type { RestoreReport } from '../services/api';
+import './LogoMissBanner.css';
+
+interface LogoMissBannerProps {
+  /** The realized restore report; `logo_misses` drives the banner. */
+  report: RestoreReport;
+  /**
+   * The Dispatcharr base URL (from settings — `App` exposes it as
+   * `dispatcharrUrl`). When present, the banner offers a "Fix in Dispatcharr"
+   * link to the Channels admin page. When absent/empty, the banner still warns;
+   * it just omits the link.
+   */
+  dispatcharrUrl?: string;
+}
+
+/** Plain-language count phrase — singular vs. plural, never the raw field name.
+ *
+ * `logo_misses` counts MISSED LOGOS, not channels (one shared logo affecting
+ * several channels is ONE miss), so the aggregate copy is logo-oriented; the
+ * per-channel impact lives in the nested affected-channel rows (PR #743
+ * review item 3).
+ */
+function missCopy(count: number): string {
+  return count === 1
+    ? '1 logo is missing after this restore'
+    : `${count} logos are missing after this restore`;
+}
+
+export function LogoMissBanner({ report, dispatcharrUrl }: LogoMissBannerProps) {
+  const count = report.logo_misses;
+
+  // Never fire when every logo was attached (count === 0). This is the
+  // success-signal contract from the bead: no banner on a clean restore.
+  if (!count || count <= 0) {
+    return null;
+  }
+
+  // Build the Dispatcharr Channels-page link with the same `${base}/…` pattern
+  // ChannelsPane uses; strip a trailing slash so we never double it. Dispatcharr
+  // has no per-channel route (channel editing is a modal on /channels), so the
+  // per-channel links below share this same href — swap in a deep-link builder
+  // here if Dispatcharr ever grows one.
+  const base = dispatcharrUrl?.replace(/\/+$/, '');
+  const channelsHref = base ? `${base}/channels` : null;
+
+  // Optional per-logo drill-down (bead qhui4). Additive to the aggregate count:
+  // present + non-empty => enumerate which logos are missing.
+  const details = report.logo_miss_details ?? [];
+  const hasDetails = details.length > 0;
+
+  return (
+    <div className="logo-miss-banner" data-testid="logo-miss-banner" role="alert">
+      <span className="material-icons logo-miss-icon" data-testid="logo-miss-icon" aria-hidden="true">
+        broken_image
+      </span>
+      <div className="logo-miss-text">
+        <span className="logo-miss-title">{missCopy(count)}</span>
+        <span className="logo-miss-detail">
+          The affected channels were restored without their logo. Open Dispatcharr to set a logo on each.
+        </span>
+        {hasDetails && (
+          <ul className="logo-miss-detail-list" data-testid="logo-miss-detail-list">
+            {details.map((miss, index) => {
+              const channels = miss.channels ?? [];
+              return (
+                <li
+                  className="logo-miss-detail-row"
+                  data-testid="logo-miss-detail-row"
+                  key={miss.source_export_id ?? `idx-${index}`}
+                >
+                  <span className="logo-miss-logo-name">
+                    {miss.label?.trim() || 'Unnamed logo'}
+                  </span>
+                  {channels.length > 0 && (
+                    <ul
+                      className="logo-miss-channel-list"
+                      data-testid="logo-miss-channel-list"
+                    >
+                      {channels.map((channel, channelIndex) => {
+                        const channelName = channel.name?.trim() || 'Unnamed channel';
+                        return (
+                          <li
+                            className="logo-miss-channel-row"
+                            data-testid="logo-miss-channel-row"
+                            key={channel.channel_id ?? `ch-${channelIndex}`}
+                          >
+                            <span className="logo-miss-channel-name">{channelName}</span>
+                            {typeof channel.channel_id === 'number' && (
+                              <span className="logo-miss-channel-id">
+                                (channel {channel.channel_id})
+                              </span>
+                            )}
+                            {channelsHref && (
+                              <a
+                                className="logo-miss-channel-link"
+                                data-testid="logo-miss-channel-link"
+                                href={channelsHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`Open ${channelName} in Dispatcharr`}
+                              >
+                                Open in Dispatcharr
+                                <span
+                                  className="material-icons logo-miss-link-icon"
+                                  aria-hidden="true"
+                                >
+                                  open_in_new
+                                </span>
+                              </a>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {channelsHref && (
+          <a
+            className="logo-miss-link"
+            data-testid="logo-miss-detail-link"
+            href={channelsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Fix in Dispatcharr
+            <span className="material-icons logo-miss-link-icon" aria-hidden="true">
+              open_in_new
+            </span>
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}

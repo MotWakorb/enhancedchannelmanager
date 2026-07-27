@@ -4,6 +4,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Channel } from '../types';
 import { openInVLC } from '../utils/vlc';
+import { CatchupBadge } from './CatchupBadge';
 
 export interface ChannelListItemProps {
   channel: Channel;
@@ -36,7 +37,6 @@ export interface ChannelListItemProps {
   onDelete: () => void;
   onEditChannel: () => void;
   onCopyChannelUrl?: () => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
   channelUrl?: string;
   showStreamUrls?: boolean;
   onProbeChannel?: () => void;
@@ -44,6 +44,22 @@ export interface ChannelListItemProps {
   hasFailedStreams?: boolean;
   hasBlackScreenStreams?: boolean;
   hasLowFpsStreams?: boolean;
+  /**
+   * bead enhancedchannelmanager-po78p / GH #696 — true when one or more of
+   * the channel's assigned streams are flagged `is_stale` by Dispatcharr
+   * (its own M3U refresh no longer re-matched the stream in the source
+   * playlist). Precedence: rendered after has-failed, before
+   * black-screen/low-fps — a stale-but-otherwise-healthy stream is a softer
+   * signal than a probe failure but still worth surfacing over cosmetic
+   * quality indicators.
+   */
+  hasStaleStreams?: boolean;
+  /**
+   * Count of the channel's assigned streams flagged stale, for the specific
+   * tooltip text ("2 streams no longer listed by provider (stale)"). Purely
+   * cosmetic — `hasStaleStreams` alone gates the icon/row styling.
+   */
+  staleStreamCount?: number;
   onPreviewChannel?: () => void;
   /**
    * bd-eio04.13 — proposed normalized name if the current channel name
@@ -53,6 +69,22 @@ export interface ChannelListItemProps {
   proposedNormalizedName?: string;
   /** Click handler for the would-normalize indicator. */
   onShowNormalizePreview?: () => void;
+  /**
+   * Applied TVG ID shown beneath the channel name — the channel's own
+   * tvg_id, falling back to the linked EPG record's tvg_id (resolved by
+   * the parent). Null/undefined hides it.
+   */
+  tvgId?: string | null;
+  /** Name of the linked EPG record, shown alongside the TVG ID. */
+  tvgName?: string | null;
+  /** Name of the EPG source the linked EPG record belongs to. */
+  epgSourceName?: string | null;
+  /**
+   * Distinct resolution capability tiers among the channel's probed streams,
+   * ordered highest-first (e.g. ['4K', 'FHD', 'HD']). Rendered as pills on
+   * line 2. Empty/undefined renders no pills.
+   */
+  capabilities?: string[];
 }
 
 interface ChannelMenuProps {
@@ -130,8 +162,9 @@ const ChannelMenu = memo(function ChannelMenu({
           }
         }}
         title="Channel actions"
+        aria-label="Channel actions"
       >
-        <span className="material-icons">more_vert</span>
+        <span className="material-icons" aria-hidden="true">more_vert</span>
       </button>
       {menuOpen && menuPosition && createPortal(
         <div
@@ -236,7 +269,6 @@ export const ChannelListItem = memo(function ChannelListItem({
   onDelete,
   onEditChannel,
   onCopyChannelUrl,
-  onContextMenu,
   channelUrl,
   showStreamUrls = true,
   onProbeChannel,
@@ -244,9 +276,15 @@ export const ChannelListItem = memo(function ChannelListItem({
   hasFailedStreams = false,
   hasBlackScreenStreams = false,
   hasLowFpsStreams = false,
+  hasStaleStreams = false,
+  staleStreamCount = 0,
   onPreviewChannel,
   proposedNormalizedName,
   onShowNormalizePreview,
+  tvgId,
+  tvgName,
+  epgSourceName,
+  capabilities = [],
 }: ChannelListItemProps) {
   const {
     attributes,
@@ -279,19 +317,38 @@ export const ChannelListItem = memo(function ChannelListItem({
     }
   };
 
+  const showTvgInfo = Boolean((tvgId || tvgName) && !isEditingName);
+  const hasCapabilities = capabilities.length > 0;
+  const showLine2 = showTvgInfo || hasCapabilities;
+
+  const streamCount = channel.streams.length;
+  const streamCountLabel = `${streamCount} stream${streamCount !== 1 ? 's' : ''}`;
+  // Healthy channels (streams present, no probe problem) show a neutral
+  // sources icon; problem states keep their existing status icon below.
+  const showNeutralStreamsIcon =
+    streamCount > 0 && !hasFailedStreams && !hasBlackScreenStreams && !hasLowFpsStreams && !hasStaleStreams;
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''}`}
+      className={`channel-item ${isSelected && isEditMode ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''} ${isModified ? 'channel-modified' : ''} ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasStaleStreams ? 'has-stale-streams' : ''}`}
       onClick={onClick}
-      onContextMenu={onContextMenu}
       onDragOver={onStreamDragOver}
       onDragLeave={onStreamDragLeave}
       onDrop={onStreamDrop}
     >
       {isEditMode && (
-        <span
+        /* Semantic, keyboard-operable selector (bead enhancedchannelmanager-
+           s8xpd, mirroring StreamsPane's stream-item selector from bead
+           zwhw4): a real <button> is natively focusable and Space/Enter fire
+           click; role="checkbox" + aria-checked announce the actual
+           selection state. */
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={isMultiSelected}
+          aria-label={`Select channel ${channel.name}`}
           className={`channel-select-indicator ${isMultiSelected ? 'selected' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
@@ -301,14 +358,12 @@ export const ChannelListItem = memo(function ChannelListItem({
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
-          title="Click to select/deselect"
+          draggable={false}
         >
-          {isMultiSelected ? (
-            <span className="material-icons">check_box</span>
-          ) : (
-            <span className="material-icons">check_box_outline_blank</span>
-          )}
-        </span>
+          <span className="material-icons" aria-hidden="true">
+            {isMultiSelected ? 'check_box' : 'check_box_outline_blank'}
+          </span>
+        </button>
       )}
       <span
         className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}
@@ -345,79 +400,131 @@ export const ChannelListItem = memo(function ChannelListItem({
           </div>
         )}
       </div>
-      {isEditingNumber ? (
-        <input
-          type="text"
-          className="channel-number-input"
-          value={editingNumber}
-          onChange={(e) => onEditingNumberChange(e.target.value)}
-          onKeyDown={handleNumberKeyDown}
-          onBlur={onSaveNumber}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-number ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditNumber}
-          title={isEditMode ? 'Double-click to edit' : 'Enter Edit Mode to change channel number'}
-        >
-          {channel.channel_number ?? '-'}
-        </span>
-      )}
-      {isEditingName ? (
-        <input
-          type="text"
-          className="channel-name-input"
-          value={editingName}
-          onChange={(e) => onEditingNameChange(e.target.value)}
-          onKeyDown={handleNameKeyDown}
-          onBlur={onSaveName}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span
-          className={`channel-name ${isEditMode ? 'editable' : ''}`}
-          onDoubleClick={onStartEditName}
-          title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
-        >
-          {channel.name}
-        </span>
-      )}
-      {proposedNormalizedName && !isEditingName && (
-        <button
-          type="button"
-          className="channel-normalize-indicator"
-          aria-label={`Channel name would normalize to "${proposedNormalizedName}". Click to preview.`}
-          title={`This name would be normalized to "${proposedNormalizedName}". Click to preview.`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onShowNormalizePreview?.();
-          }}
-          data-testid={`channel-normalize-indicator-${channel.id}`}
-          data-channel-id={channel.id}
-        >
-          <span className="material-icons" aria-hidden="true">auto_fix_high</span>
-        </button>
-      )}
-      {showStreamUrls && channelUrl && (
-        <span className="channel-url" title={channelUrl}>
-          {channelUrl}
-        </span>
-      )}
-      <span className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}>
+      <div className="channel-number-col">
+        {isEditingNumber ? (
+          <input
+            type="text"
+            className="channel-number-input"
+            value={editingNumber}
+            onChange={(e) => onEditingNumberChange(e.target.value)}
+            onKeyDown={handleNumberKeyDown}
+            onBlur={onSaveNumber}
+            onClick={(e) => e.stopPropagation()}
+            autoFocus
+          />
+        ) : (
+          <span
+            className={`channel-number ${isEditMode ? 'editable' : ''}`}
+            onDoubleClick={onStartEditNumber}
+            title={isEditMode ? 'Double-click to edit' : 'Enter Edit Mode to change channel number'}
+          >
+            {channel.channel_number ?? '-'}
+          </span>
+        )}
+      </div>
+      <div className="channel-content">
+        <div className="channel-line1">
+          {isEditingName ? (
+            <input
+              type="text"
+              className="channel-name-input"
+              value={editingName}
+              onChange={(e) => onEditingNameChange(e.target.value)}
+              onKeyDown={handleNameKeyDown}
+              onBlur={onSaveName}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span
+              className={`channel-name ${isEditMode ? 'editable' : ''}`}
+              onDoubleClick={onStartEditName}
+              title={isEditMode ? 'Double-click to edit name' : 'Enter Edit Mode to change channel name'}
+            >
+              {channel.name}
+            </span>
+          )}
+          {/* Catch-up (timeshift) support — bead enhancedchannelmanager-sy1sz.
+              Renders only when Dispatcharr flags the channel is_catchup. */}
+          <CatchupBadge isCatchup={channel.is_catchup} catchupDays={channel.catchup_days} />
+          {proposedNormalizedName && !isEditingName && (
+            <button
+              type="button"
+              className="channel-normalize-indicator"
+              aria-label={`Channel name would normalize to "${proposedNormalizedName}". Click to preview.`}
+              title={`This name would be normalized to "${proposedNormalizedName}". Click to preview.`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowNormalizePreview?.();
+              }}
+              data-testid={`channel-normalize-indicator-${channel.id}`}
+              data-channel-id={channel.id}
+            >
+              <span className="material-icons" aria-hidden="true">auto_fix_high</span>
+            </button>
+          )}
+          {showStreamUrls && channelUrl && (
+            <span
+              className="channel-url"
+              title="Click to copy channel URL"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopyChannelUrl?.();
+              }}
+            >
+              {channelUrl}
+            </span>
+          )}
+        </div>
+        {showLine2 && (
+          <div className="channel-line2">
+            {showTvgInfo && (
+              <span
+                className="channel-tvg-info"
+                title={[epgSourceName && `EPG: ${epgSourceName}`, tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
+                data-testid={`channel-tvg-info-${channel.id}`}
+              >
+                {[epgSourceName, tvgId, tvgName].filter(Boolean).join(' · ')}
+              </span>
+            )}
+            {hasCapabilities && (
+              <span className="channel-capabilities" data-testid={`channel-capabilities-${channel.id}`}>
+                {capabilities.map((cap) => (
+                  <span key={cap} className={`capability-pill cap-${cap.toLowerCase()}`}>
+                    {cap}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+      <span
+        className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasStaleStreams ? 'has-stale' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}
+        title={streamCountLabel}
+      >
         {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
         {hasFailedStreams && channel.streams.length > 0 && (
           <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
         )}
-        {!hasFailedStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
+        {!hasFailedStreams && hasStaleStreams && channel.streams.length > 0 && (
+          <span
+            className="material-icons stale-stream-icon"
+            title={`${staleStreamCount > 0 ? staleStreamCount : 'One or more'} stream${staleStreamCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
+          >
+            history
+          </span>
+        )}
+        {!hasFailedStreams && !hasStaleStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
           <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
         )}
-        {!hasFailedStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
+        {!hasFailedStreams && !hasStaleStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
           <span className="material-icons low-fps-icon" title="One or more streams have low FPS">slow_motion_video</span>
         )}
-        {channel.streams.length} stream{channel.streams.length !== 1 ? 's' : ''}
+        {showNeutralStreamsIcon && (
+          <span className="material-icons streams-count-icon">lan</span>
+        )}
+        {channel.streams.length}
       </span>
       <ChannelMenu
         channel={channel}

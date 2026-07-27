@@ -98,7 +98,11 @@ class TestListSavedBackups:
         text = _text(result)
         assert "ecm-backup-2026-05-24_120000.zip" in text
         assert "ecm-backup-2026-05-01_030000.yaml" in text
-        assert "zip" in text and "yaml" in text
+        # The tool renders [zip] / [yaml] type labels — assert the bracketed form
+        # so the test fails if the label is removed or changed, not just if the
+        # filename extension appears (which is incidental).
+        assert "[zip]" in text, f"Expected '[zip]' type label in output, got: {text!r}"
+        assert "[yaml]" in text, f"Expected '[yaml]' type label in output, got: {text!r}"
 
     @pytest.mark.asyncio
     async def test_empty(self):
@@ -154,3 +158,22 @@ class TestRestoreBackup:
         text = _text(result)
         assert "Error" in text
         assert "400" in text or "Invalid filename" in text
+
+    @pytest.mark.asyncio
+    async def test_surfaces_403_mcp_principal_rejected(self):
+        """bead 6n76m: the backup-restore endpoint now rejects the MCP service
+        principal (403). The tool must surface that cleanly, NOT crash — the MCP
+        key is denied the settings-write path and the operator sees why."""
+        mcp = _register_system()
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.side_effect = RuntimeError(
+            "POST /api/backup/restore-saved -> HTTP 403 Forbidden: "
+            "The MCP service principal cannot perform backup restore."
+        )
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "restore_backup", {"filename": "ecm-backup-2026-05-24_120000.zip"}
+            )
+        text = _text(result)
+        assert "Error" in text
+        assert "403" in text or "MCP service principal" in text

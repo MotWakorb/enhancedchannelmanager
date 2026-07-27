@@ -211,6 +211,25 @@ class TestLogEntries:
         mock_session.rollback.assert_called_once()
         mock_session.close.assert_called_once()
 
+    def test_log_entry_commit_failure_rolls_back_and_closes(self):
+        """A failed single-row commit never leaves its transaction/session open."""
+        mock_session = MagicMock()
+        mock_session.commit.side_effect = RuntimeError("disk full")
+
+        with patch("journal.get_session", return_value=mock_session):
+            from journal import log_entry
+
+            result = log_entry(
+                category="epg",
+                action_type="guide_migration",
+                entity_name="News",
+                description="Migration audit",
+            )
+
+        assert result is None
+        mock_session.rollback.assert_called_once_with()
+        mock_session.close.assert_called_once_with()
+
 
 class TestGetEntries:
     """Tests for get_entries() function."""
@@ -390,8 +409,8 @@ class TestAutoCreationMergeJournalRoundTrip:
     def _run_live_merge(self, execution_id, stream_id, channel):
         import asyncio
         from unittest.mock import MagicMock, AsyncMock
-        from auto_creation_executor import ActionExecutor, ExecutionContext
-        from auto_creation_evaluator import StreamContext
+        from channel_pipeline_executor import ActionExecutor, ExecutionContext
+        from channel_pipeline_evaluator import StreamContext
 
         client = MagicMock()
         client.update_channel = AsyncMock()
@@ -424,7 +443,7 @@ class TestAutoCreationMergeJournalRoundTrip:
         from journal import get_entries
 
         channel = {"id": 1, "name": "ESPN", "tvg_id": "ESPN.US",
-                   "channel_number": 100, "streams": [101]}
+                   "channel_number": 100, "streams": [101], "auto_created": True}
 
         with patch("journal.get_session", return_value=test_session):
             result = self._run_live_merge(execution_id=555, stream_id=201,
@@ -452,9 +471,9 @@ class TestAutoCreationMergeJournalRoundTrip:
 
         # Two channels, two live merges in the same run (execution_id=777).
         ch_a = {"id": 10, "name": "ESPN", "tvg_id": "ESPN.US",
-                "channel_number": 100, "streams": [1001]}
+                "channel_number": 100, "streams": [1001], "auto_created": True}
         ch_b = {"id": 20, "name": "ESPN", "tvg_id": "ESPN.US",
-                "channel_number": 101, "streams": []}
+                "channel_number": 101, "streams": [], "auto_created": True}
 
         with patch("journal.get_session", return_value=test_session):
             self._run_live_merge(execution_id=777, stream_id=2001, channel=ch_a)

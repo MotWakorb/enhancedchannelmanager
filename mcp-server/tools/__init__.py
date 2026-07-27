@@ -7,8 +7,9 @@ from . import (
     streams,
     m3u,
     epg,
-    auto_creation,
-    export,
+    channel_pipeline,
+    event_sync_exclusions,
+    cloud_targets,
     tasks,
     stats,
     system,
@@ -17,6 +18,13 @@ from . import (
     normalization,
     dedup,
     emby,
+    logos,
+    tags,
+    sync_targets,
+    channels_csv,
+    # ti939.4.2 — appended at the END (not beside channel_pipeline) to stay
+    # clear of the in-flight exclusions PR's insertion point.
+    event_sync_aliases,
 )
 
 _MODULES = [
@@ -25,8 +33,9 @@ _MODULES = [
     streams,
     m3u,
     epg,
-    auto_creation,
-    export,
+    channel_pipeline,
+    event_sync_exclusions,
+    cloud_targets,
     tasks,
     stats,
     system,
@@ -35,6 +44,11 @@ _MODULES = [
     normalization,
     dedup,
     emby,
+    logos,
+    tags,
+    sync_targets,
+    channels_csv,
+    event_sync_aliases,
 ]
 
 

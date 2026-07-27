@@ -46,8 +46,7 @@ Ports: `6100` (HTTP), `6143` (HTTPS when TLS enabled)
 | `epg.py` | 12 | EPG sources, data, grid, LCN lookup |
 | `settings.py` | 8 | App configuration, connection test, service restart |
 | `tasks.py` | 16 | Task engine, cron, schedules |
-| `ffmpeg.py` | 16+ | FFMPEG builder, profiles, probing |
-| `auto_creation.py` | 15+ | Rule-based channel auto-creation |
+| `channel_pipeline.py` | 15+ | Rule-based channel creation (Channel Pipeline; also mounted at the deprecated `/api/auto-creation/...` alias) |
 | `stream_stats.py` | 10+ | Stream probing and health |
 | `stream_preview.py` | 3 | Live stream/channel preview |
 | `notifications.py` | 7 | In-app notification system |
@@ -85,7 +84,7 @@ All routers are registered via `routers/__init__.py` → `all_routers` list, inc
 | `/api/cron/` | Cron | Cron expression presets/validation |
 | `/api/normalization/` | Normalization | Stream name normalization rules |
 | `/api/tags/` | Tags | Tag groups and tag engine |
-| `/api/auto-creation/` | Auto-Creation | Rule-based channel auto-creation |
+| `/api/channel-pipeline/` | Channel Pipeline | Rule-based channel creation (the old `/api/auto-creation/` path still works as a deprecated alias) |
 | `/api/stream-preview/` | Stream Preview | Live stream preview |
 
 ### Key Backend Modules
@@ -104,10 +103,10 @@ All routers are registered via `routers/__init__.py` → `all_routers` list, inc
 | `popularity_calculator.py` | Channel popularity scoring |
 | `m3u_change_detector.py` | M3U playlist change detection |
 | `normalization_engine.py` | Stream name normalization |
-| `auto_creation_engine.py` | Auto-creation rule engine |
-| `auto_creation_evaluator.py` | Condition evaluation |
-| `auto_creation_executor.py` | Action execution |
-| `auto_creation_schema.py` | Rule schema definitions |
+| `channel_pipeline_engine.py` | Channel Pipeline rule engine |
+| `channel_pipeline_evaluator.py` | Condition evaluation |
+| `channel_pipeline_executor.py` | Action execution |
+| `channel_pipeline_schema.py` | Rule schema definitions |
 | `task_engine.py` / `task_scheduler.py` | Background task scheduling |
 | `cron_parser.py` | Cron expression parsing |
 | `alert_methods.py` | Alert method base + manager |
@@ -145,7 +144,7 @@ ChannelManagerTab loads eagerly; all others are lazy-loaded via `React.lazy()`:
 | Journal | `JournalTab.tsx` | — |
 | Stats | `StatsTab.tsx` | BandwidthPanel, EnhancedStatsPanel, PopularityPanel, WatchHistoryPanel |
 | Settings | `SettingsTab.tsx` | AuthSettingsSection, LinkedAccountsSection, TagEngineSection, NormalizationEngineSection, TLSSettingsSection, UserManagementSection |
-| Auto-Creation | `AutoCreationTab.tsx` | RuleBuilder, ConditionEditor, ActionEditor |
+| Channel Pipeline | `ChannelPipelineTab.tsx` | RuleBuilder, ConditionEditor, ActionEditor |
 | Status | `StatusTab.tsx` | — |
 
 ### Shared Code
@@ -153,9 +152,9 @@ ChannelManagerTab loads eagerly; all others are lazy-loaded via `React.lazy()`:
 | Directory | Contents |
 |---|---|
 | `shared/common.css` | Buttons, forms, loading/error/empty states, badges, animations |
-| `hooks/` | Reusable hooks (useChangeHistory, useEditMode, useAuth, useAutoCreationRules, etc.) |
+| `hooks/` | Reusable hooks (useChangeHistory, useEditMode, useAuth, useChannelPipelineRules, etc.) |
 | `services/api.ts` | All backend API calls |
-| `services/autoCreationApi.ts` | Auto-creation API calls |
+| `services/channelPipelineApi.ts` | Channel Pipeline API calls |
 | `contexts/` | NotificationContext |
 | `types/` | TypeScript type definitions |
 | `utils/` | Helpers (channelRename, clipboard, naturalSort, logger, etc.) |
@@ -167,17 +166,48 @@ See `css-guidelines.md` for full details. Layers: design tokens (`index.css`) �
 ## Build & Deploy
 
 ```bash
-# Build frontend
-cd frontend && npm run build     # Output: frontend/dist/
+# Deploy a frontend-only change (build, remove stale assets, and copy)
+scripts/deploy-frontend.sh
 
-# Deploy to container (dev workflow)
-docker cp frontend/dist/. ecm-ecm-1:/app/static/   # Frontend only
+# Deploy a backend-only change
 docker cp backend/main.py ecm-ecm-1:/app/main.py    # Backend core
 docker cp backend/routers/. ecm-ecm-1:/app/routers/  # Backend routers (requires restart)
-
-# Restart backend in container
 docker restart ecm-ecm-1
 ```
+
+For a coupled change where the frontend calls a new or changed backend route,
+deploy and restart the backend first. Confirm that the container is running,
+then deploy the frontend:
+
+```bash
+docker cp backend/main.py ecm-ecm-1:/app/main.py
+docker cp backend/routers/. ecm-ecm-1:/app/routers/
+docker restart ecm-ecm-1
+ready=0
+for attempt in $(seq 1 30); do
+  if docker exec ecm-ecm-1 python -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=2)" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "ECM backend did not become ready; frontend was not deployed" >&2
+  docker logs --tail 100 ecm-ecm-1 >&2
+  exit 1
+fi
+scripts/deploy-frontend.sh
+```
+
+The readiness loop is bounded to 30 attempts with a two-second request timeout.
+It probes the public `/api/health/ready` endpoint from inside the container, so
+it honors the configured `ECM_PORT` and needs no credentials. If readiness
+fails, it prints the latest container logs and exits before frontend deployment.
+
+Roll back a coupled change in reverse dependency order: restore and deploy the
+previous frontend build first, then restore the previous backend files and
+restart `ecm-ecm-1`. This keeps the newer backend contract available until the
+dependent frontend is no longer live.
 
 ## Config & Data
 

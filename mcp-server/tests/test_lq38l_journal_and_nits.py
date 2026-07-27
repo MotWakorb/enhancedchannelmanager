@@ -48,7 +48,7 @@ def _register(module_name: str) -> FastMCP:
     elif module_name == "epg":
         from tools.epg import register
     elif module_name == "auto_creation":
-        from tools.auto_creation import register
+        from tools.channel_pipeline import register
     elif module_name == "stats":
         from tools.stats import register
     elif module_name == "export":
@@ -396,7 +396,7 @@ class TestAutoCreationRuleActionDescriptor:
             ],
         }
         mock_client = _client(return_value=rule)
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("get_auto_creation_rule", {"rule_id": 1})
         text = result[0][0].text
         assert "create_channel: {stream_name}" in text
@@ -428,8 +428,8 @@ class TestRunAutoCreationDryRunSample:
         }
         mock_client = _client(side_effect=[kickoff, final])
         with (
-            patch("tools.auto_creation.get_ecm_client", return_value=mock_client),
-            patch("tools.auto_creation._poll_sleep", new=AsyncMock(return_value=None)),
+            patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client),
+            patch("tools.channel_pipeline._poll_sleep", new=AsyncMock(return_value=None)),
         ):
             result = await mcp.call_tool("run_auto_creation", {"dry_run": True})
         text = result[0][0].text
@@ -458,8 +458,8 @@ class TestRunAutoCreationDryRunSample:
         }
         mock_client = _client(side_effect=[kickoff, final])
         with (
-            patch("tools.auto_creation.get_ecm_client", return_value=mock_client),
-            patch("tools.auto_creation._poll_sleep", new=AsyncMock(return_value=None)),
+            patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client),
+            patch("tools.channel_pipeline._poll_sleep", new=AsyncMock(return_value=None)),
         ):
             result = await mcp.call_tool("run_auto_creation", {"dry_run": True})
         text = result[0][0].text
@@ -488,29 +488,9 @@ class TestTopWatchedViewers:
 
 
 # ===========================================================================
-# lq38l.13 #7 — create_export_profile rejects an empty name
+# lq38l.13 #7 — create_export_profile validation: removed with the Export tab
+# (beads vrrxv / 1w428). The create_export_profile MCP tool no longer exists.
 # ===========================================================================
-
-class TestExportProfileNameValidation:
-    @pytest.mark.asyncio
-    async def test_empty_name_rejected_without_backend_call(self):
-        mcp = _register("export")
-        mock_client = _client(return_value={"id": 1, "name": ""})
-        with patch("tools.export.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("create_export_profile", {"name": "   "})
-        text = result[0][0].text
-        assert "must not be empty" in text
-        mock_client.call_endpoint.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_valid_name_creates_profile(self):
-        mcp = _register("export")
-        mock_client = _client(return_value={"id": 1, "name": "Plex"})
-        with patch("tools.export.get_ecm_client", return_value=mock_client):
-            result = await mcp.call_tool("create_export_profile", {"name": "Plex"})
-        text = result[0][0].text
-        assert "Export profile created: Plex" in text
-        mock_client.call_endpoint.assert_called_once()
 
 
 # ===========================================================================
@@ -634,7 +614,7 @@ class TestCreateRuleNewParams:
     async def test_quality_tie_break_and_match_scope_passed_through(self):
         mcp = _register("auto_creation")
         mock_client = _client(return_value={"id": 11, "name": "R"})
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("create_auto_creation_rule", {
                 "name": "R",
                 "conditions": [],
@@ -652,10 +632,91 @@ class TestCreateRuleNewParams:
         """Defaults stay None → fields absent from the body (backend keeps its defaults)."""
         mcp = _register("auto_creation")
         mock_client = _client(return_value={"id": 12, "name": "R"})
-        with patch("tools.auto_creation.get_ecm_client", return_value=mock_client):
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
             await mcp.call_tool("create_auto_creation_rule", {
                 "name": "R", "conditions": [], "actions": [],
             })
         body = mock_client.call_endpoint.call_args.kwargs["body"]
         assert "quality_tie_break_order" not in body
         assert "match_scope_target_group" not in body
+
+# ===========================================================================
+# enhancedchannelmanager-zrte6 — allow_manual_channel_merge (PR #547 / orzck)
+# is settable from MCP on both create and update rule tools (canonical names
+# AND the deprecated *_auto_creation_rule aliases, which forward explicitly).
+# ===========================================================================
+
+class TestAllowManualChannelMergeParam:
+    @pytest.mark.asyncio
+    async def test_create_passes_flag_through(self):
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"id": 21, "name": "R"})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("create_channel_pipeline_rule", {
+                "name": "R", "conditions": [], "actions": [],
+                "allow_manual_channel_merge": True,
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body["allow_manual_channel_merge"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_alias_forwards_flag(self):
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"id": 22, "name": "R"})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("create_auto_creation_rule", {
+                "name": "R", "conditions": [], "actions": [],
+                "allow_manual_channel_merge": True,
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body["allow_manual_channel_merge"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_omits_flag_when_not_set(self):
+        """None default → field absent so the backend default (False) rules."""
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"id": 23, "name": "R"})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("create_channel_pipeline_rule", {
+                "name": "R", "conditions": [], "actions": [],
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert "allow_manual_channel_merge" not in body
+
+    @pytest.mark.asyncio
+    async def test_update_passes_flag_through(self):
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"rule": {"id": 24, "name": "R"}})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("update_channel_pipeline_rule", {
+                "rule_id": 24,
+                "allow_manual_channel_merge": True,
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body == {"allow_manual_channel_merge": True}
+
+    @pytest.mark.asyncio
+    async def test_update_alias_forwards_flag(self):
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"rule": {"id": 25, "name": "R"}})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("update_auto_creation_rule", {
+                "rule_id": 25,
+                "allow_manual_channel_merge": False,
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body == {"allow_manual_channel_merge": False}
+
+    @pytest.mark.asyncio
+    async def test_update_stringified_bool_coerced(self):
+        """Top-level typed params get the same lax coercion as GH #600 nested
+        values — a client sending the stringified "true" must not 400."""
+        mcp = _register("auto_creation")
+        mock_client = _client(return_value={"rule": {"id": 26, "name": "R"}})
+        with patch("tools.channel_pipeline.get_ecm_client", return_value=mock_client):
+            await mcp.call_tool("update_channel_pipeline_rule", {
+                "rule_id": 26,
+                "allow_manual_channel_merge": "true",
+            })
+        body = mock_client.call_endpoint.call_args.kwargs["body"]
+        assert body == {"allow_manual_channel_merge": True}

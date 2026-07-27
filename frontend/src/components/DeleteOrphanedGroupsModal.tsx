@@ -56,8 +56,8 @@ function DeleteOrphanedGroupsModalInner({
       <div className="modal-container modal-md delete-orphaned-modal">
         <div className="modal-header">
           <h2>Delete Orphaned Channel Groups</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -111,6 +111,9 @@ function DeleteOrphanedGroupsModalInner({
         </div>
 
         <div className="modal-footer">
+          <button type="button" className="modal-btn modal-btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
           <button
             type="button"
             className="modal-btn modal-btn-danger"

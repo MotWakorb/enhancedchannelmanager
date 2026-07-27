@@ -23,10 +23,29 @@ import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { PageHeader } from '../PageHeader';
+import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import '../ModalBase.css';
 import './EPGManagerTab.css';
+
+// Priorities shared by two or more sources resolve ties by internal ID
+// (bead 09x38.15 item 1) — the header tooltip explains this, but the tie
+// itself was otherwise invisible. Returns the set of priority values that
+// occur more than once among the given sources.
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper co-located with the only component that uses it; splitting is mechanical churn
+export function getTiedPriorities(sources: EPGSource[]): Set<number> {
+  const counts = new Map<number, number>();
+  for (const s of sources) {
+    counts.set(s.priority, (counts.get(s.priority) || 0) + 1);
+  }
+  const tied = new Set<number>();
+  for (const [priority, count] of counts) {
+    if (count > 1) tied.add(priority);
+  }
+  return tied;
+}
 
 interface SortableEPGSourceRowProps {
   source: EPGSource;
@@ -35,9 +54,10 @@ interface SortableEPGSourceRowProps {
   onRefresh: (source: EPGSource) => void;
   onToggleActive: (source: EPGSource) => void;
   hideEpgUrls?: boolean;
+  isTied?: boolean;
 }
 
-function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive, hideEpgUrls = false }: SortableEPGSourceRowProps) {
+function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleActive, hideEpgUrls = false, isTied = false }: SortableEPGSourceRowProps) {
   const {
     attributes,
     listeners,
@@ -124,6 +144,14 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
 
       <div className="source-priority">
         {source.priority}
+        {isTied && (
+          <span
+            className="badge badge-warning badge-sm priority-tie-badge"
+            title="Another source shares this priority. Ties are broken by internal ID (lower wins) — drag in Reorder mode to assign a distinct priority."
+          >
+            tie
+          </span>
+        )}
       </div>
 
       <div className={`source-status ${getStatusClass(source.status)}`} title={source.last_message || ''}>
@@ -168,16 +196,19 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
               navigator.clipboard.writeText(source.url!);
             }}
             title="Copy URL"
+            aria-label="Copy URL"
           >
-            <span className="material-icons">content_copy</span>
+            <span className="material-icons" aria-hidden="true">content_copy</span>
           </button>
         )}
         <button
           className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(source)}
           title={source.is_active ? 'Disable' : 'Enable'}
+          aria-label={source.is_active ? 'Disable EPG source' : 'Enable EPG source'}
+          aria-pressed={source.is_active}
         >
-          <span className="material-icons">
+          <span className="material-icons" aria-hidden="true">
             {source.is_active ? 'toggle_on' : 'toggle_off'}
           </span>
         </button>
@@ -186,22 +217,25 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
           onClick={() => onRefresh(source)}
           title="Refresh"
           disabled={!source.is_active || source.status === 'fetching' || source.status === 'parsing'}
+          aria-label="Refresh EPG source"
         >
-          <span className="material-icons">refresh</span>
+          <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
         <button
           className="action-btn"
           onClick={() => onEdit(source)}
           title="Edit"
+          aria-label="Edit EPG source"
         >
-          <span className="material-icons">edit</span>
+          <span className="material-icons" aria-hidden="true">edit</span>
         </button>
         <button
           className="action-btn delete"
           onClick={() => onDelete(source)}
           title="Delete"
+          aria-label="Delete EPG source"
         >
-          <span className="material-icons">delete</span>
+          <span className="material-icons" aria-hidden="true">delete</span>
         </button>
       </div>
     </div>
@@ -355,8 +389,8 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
       <div className="modal-container modal-lg epg-source-modal">
         <div className="modal-header">
           <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -784,6 +818,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
+  const [migrationOpen, setMigrationOpen] = useState(false);
   // Dummy EPG modal state
   const [dummyModalOpen, setDummyModalOpen] = useState(false);
   const [editingDummySource, setEditingDummySource] = useState<EPGSource | null>(null);
@@ -941,12 +976,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     onSourcesChange?.();
   };
 
-  // Dummy EPG handlers
-  const handleAddDummySource = () => {
-    setEditingDummySource(null);
-    setDummyModalOpen(true);
-  };
-
+  // Dummy EPG handlers. New-creation is intentionally absent: the legacy
+  // Dispatcharr `source_type=dummy` path is deprecated in favor of the Dummy
+  // EPG Profiles section (bead 09x38.4). Existing legacy sources stay editable.
   const handleEditDummySource = async (source: EPGSource) => {
     try {
       // Fetch full source details to get custom_properties
@@ -1040,38 +1072,45 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     );
   }
 
+  const tiedPriorities = getTiedPriorities(sources);
+
   return (
     <div className="epg-manager-tab">
-      <div className="epg-header">
-        <div className="header-title">
-          <h2>EPG Sources</h2>
-          <p className="header-description">
-            Manage your Electronic Program Guide sources. Click Reorder to change priority.
-          </p>
-        </div>
-        <div className="header-actions">
-          {sources.length > 1 && (
-            <button
-              className="btn-secondary"
-              onClick={() => setIsReorderMode((v) => !v)}
-              title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
-            >
-              <span className="material-icons">
-                {isReorderMode ? 'check' : 'reorder'}
-              </span>
-              {isReorderMode ? 'Done' : 'Reorder'}
+      <PageHeader
+        className="epg-header"
+        title="EPG Sources"
+        description="Manage your Electronic Program Guide sources. Click Reorder to change priority."
+        actions={(
+          <>
+            {sources.length > 1 && (
+              <button
+                className="btn-secondary"
+                onClick={() => setIsReorderMode((v) => !v)}
+                title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+              >
+                <span className="material-icons">
+                  {isReorderMode ? 'check' : 'reorder'}
+                </span>
+                {isReorderMode ? 'Done' : 'Reorder'}
+              </button>
+            )}
+            <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
+              <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
+              {refreshingAll ? 'Refreshing...' : 'Refresh All'}
             </button>
-          )}
-          <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
-            <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
-            {refreshingAll ? 'Refreshing...' : 'Refresh All'}
-          </button>
-          <button className="btn-primary" onClick={handleAddSource}>
-            <span className="material-icons">add</span>
-            Add Standard EPG
-          </button>
-        </div>
-      </div>
+            {sources.length > 1 && (
+              <button className="btn-secondary" onClick={() => setMigrationOpen(true)}>
+                <span className="material-icons">swap_horiz</span>
+                Migrate Guides
+              </button>
+            )}
+            <button className="btn-primary" onClick={handleAddSource}>
+              <span className="material-icons">add</span>
+              Add Standard EPG
+            </button>
+          </>
+        )}
+      />
 
       {sources.length === 0 ? (
         <div className="empty-state">
@@ -1087,7 +1126,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         <div className="epg-sources-list">
           <div className="list-header">
             <span className="col-drag"></span>
-            <span className="col-priority" title="Higher priority number = matches first for EPG channel matching">Priority</span>
+            <span className="col-priority" title="Higher priority number = matches first for EPG channel matching. Ties are broken by which source was added to ECM first (lower internal ID wins) — drag any row in Reorder mode to assign each source a distinct priority and resolve ties explicitly.">Priority</span>
             <span className="col-status" title="Current refresh status. Idle and Ready are normal states.">Status</span>
             <span className="col-info" title="EPG source name, type, and URL">Source</span>
             <span className="col-stats" title="Number of channels matched to this EPG and total programs parsed">Stats</span>
@@ -1114,6 +1153,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     onRefresh={handleRefreshSource}
                     onToggleActive={handleToggleActive}
                     hideEpgUrls={hideEpgUrls}
+                    isTied={tiedPriorities.has(source.priority)}
                   />
                 ))}
               </SortableContext>
@@ -1127,6 +1167,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 onDelete={handleDeleteSource}
                 onRefresh={handleRefreshSource}
                 onToggleActive={handleToggleActive}
+                isTied={tiedPriorities.has(source.priority)}
                 hideEpgUrls={hideEpgUrls}
               />
             ))
@@ -1134,30 +1175,33 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         </div>
       )}
 
-      {/* Dummy EPG Sources Section */}
+      {/*
+        Legacy "Dummy EPG Sources" section (Dispatcharr-native
+        `source_type=dummy`). Deprecated in favor of Dummy EPG Profiles
+        (bead 09x38.4). Renders ONLY when legacy sources already exist so it
+        folds away entirely on instances with none; existing ones are
+        grandfathered — editable, but with no new-creation affordance.
+      */}
+      {dummySources.length > 0 && (
       <div className="dummy-epg-section">
-        <div className="epg-header">
-          <div className="header-title">
-            <h2>Dummy EPG Sources</h2>
-            <p className="header-description">
-              Pattern-based EPG sources that generate programs from channel/stream names.
-            </p>
-          </div>
-          <div className="header-actions">
-            <button className="btn-primary" onClick={handleAddDummySource}>
-              <span className="material-icons">add</span>
-              Add Dummy EPG
-            </button>
-          </div>
+        <PageHeader
+          className="epg-header"
+          title="Dummy EPG Sources (Legacy)"
+          description="Legacy Dispatcharr dummy EPG sources. Existing sources stay editable."
+        />
+
+        <div className="dummy-epg-deprecation-notice">
+          <span className="material-icons" aria-hidden="true">info</span>
+          <p>
+            This legacy dummy EPG source type is deprecated. Use the{' '}
+            <strong>Dummy EPG Profiles</strong> section below for new dummy EPG
+            data — it offers live preview, richer templates, and Event Sync
+            integration. Existing sources here remain editable but new ones can
+            no longer be created.
+          </p>
         </div>
 
-        {dummySources.length === 0 ? (
-          <div className="dummy-empty-state">
-            <span className="material-icons">auto_fix_high</span>
-            <p>No dummy EPG sources. Create one to generate EPG data from channel names using regex patterns.</p>
-          </div>
-        ) : (
-          <div className="dummy-sources-list">
+        <div className="dummy-sources-list">
             {dummySources.map((source) => (
               <div key={source.id} className={`dummy-source-row ${!source.is_active ? 'inactive' : ''}`}>
                 <div className={`dummy-status ${source.is_active ? 'active' : 'disabled'}`}>
@@ -1177,8 +1221,10 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
                     onClick={() => handleToggleDummyActive(source)}
                     title={source.is_active ? 'Disable' : 'Enable'}
+                    aria-label={source.is_active ? 'Disable EPG source' : 'Enable EPG source'}
+                    aria-pressed={source.is_active}
                   >
-                    <span className="material-icons">
+                    <span className="material-icons" aria-hidden="true">
                       {source.is_active ? 'toggle_on' : 'toggle_off'}
                     </span>
                   </button>
@@ -1186,22 +1232,24 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                     className="action-btn"
                     onClick={() => handleEditDummySource(source)}
                     title="Edit"
+                    aria-label="Edit EPG source"
                   >
-                    <span className="material-icons">edit</span>
+                    <span className="material-icons" aria-hidden="true">edit</span>
                   </button>
                   <button
                     className="action-btn delete"
                     onClick={() => handleDeleteDummySource(source)}
                     title="Delete"
+                    aria-label="Delete EPG source"
                   >
-                    <span className="material-icons">delete</span>
+                    <span className="material-icons" aria-hidden="true">delete</span>
                   </button>
                 </div>
               </div>
             ))}
-          </div>
-        )}
+        </div>
       </div>
+      )}
 
       <EPGSourceModal
         isOpen={modalOpen}
@@ -1217,7 +1265,26 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         onSave={handleSaveDummySource}
       />
 
-      {/* ECM Native Dummy EPG Profiles */}
+      <GuideMigrationModal
+        isOpen={migrationOpen}
+        sources={sources}
+        onClose={() => setMigrationOpen(false)}
+        onApplied={(result) => {
+          if (result.failed > 0 || result.audit_failed > 0) {
+            notifications.warning(
+              `Migrated ${result.mutated} channel guides; ${result.skipped} skipped, ${result.failed} failed, and ${result.audit_failed} audit writes failed.`,
+              'Guide Migration'
+            );
+          } else {
+            notifications.success(
+              `Migrated ${result.mutated} channel guides${result.skipped ? `; ${result.skipped} skipped` : ''}.`,
+              'Guide Migration'
+            );
+          }
+        }}
+      />
+
+      {/* Dummy EPG Profiles — the supported dummy EPG path (bead 09x38.4) */}
       <DummyEPGManagerSection onSourcesChanged={loadSources} />
     </div>
   );

@@ -111,6 +111,15 @@ const UNKNOWN_LABEL = 'Unknown';
 const UNKNOWN_TOOLTIP =
   'Provider attribution was not recorded for these observations (pre-cutover or unattributable).';
 
+// bd-oj02b: synthetic provider id the backend tags onto non-M3U / local-tuner
+// sources (HDHomeRun, direct tuner, custom streams) — streams Dispatcharr
+// serves with no m3u_account. Mirrors LOCAL_TUNER_PROVIDER_ID in
+// backend/bandwidth_tracker.py. Negative so it never collides with a real
+// (positive) M3U account id, and distinct from the NULL "Unknown" bucket
+// (genuine attribution failures stay NULL).
+const LOCAL_TUNER_PROVIDER_ID = -1;
+const LOCAL_TUNER_LABEL = 'HD HomeRun';
+
 /** Sentinel key used to address the NULL ("Unknown") provider in series maps. */
 const UNKNOWN_KEY = '__unknown__';
 
@@ -145,6 +154,8 @@ function providerLabel(
   nameMap?: ReadonlyMap<number, string>,
 ): string {
   if (id === null) return UNKNOWN_LABEL;
+  // bd-oj02b: non-M3U / local-tuner sentinel — never in the M3U nameMap.
+  if (id === LOCAL_TUNER_PROVIDER_ID) return LOCAL_TUNER_LABEL;
   const name = nameMap?.get(id);
   return name ?? `Provider ${id}`;
 }
@@ -490,7 +501,7 @@ export function ProvidersPanel() {
   // Auth still resolving — stay quiet until we know the posture.
   if (authLoading) {
     return (
-      <div className="providers-panel">
+      <div className="providers-panel" id="stats-section-providers">
         <h3 className="section-title">Providers</h3>
         <div className="loading-state">Loading…</div>
       </div>
@@ -500,7 +511,7 @@ export function ProvidersPanel() {
   // Known non-admin or backend 403: show the admin-only notice.
   if (knownNonAdmin || adminOnly) {
     return (
-      <div className="providers-panel">
+      <div className="providers-panel" id="stats-section-providers">
         <h3 className="section-title">Providers</h3>
         <div className="admin-only-state" role="note">
           Provider statistics require admin access.
@@ -536,7 +547,7 @@ export function ProvidersPanel() {
   // watch-time" set — the bar chart's data already IS the watch-time set.
 
   return (
-    <div className="providers-panel">
+    <div className="providers-panel" id="stats-section-providers">
       <div className="panel-header">
         <h3 className="section-title">Providers</h3>
         <div className="panel-controls">

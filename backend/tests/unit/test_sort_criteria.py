@@ -171,7 +171,7 @@ class TestSmartSortCustomStreamsProber:
     """Reviewer Warn-2 coverage (bd-sgtmx / GH #244): stream_prober.smart_sort_streams
     respects the ``"custom"`` key in m3u_account_priorities for operator-added
     streams without an M3U account. Mirrors TestSmartSortCustomStreams in
-    test_auto_creation_engine.py for the prober's smart-sort path."""
+    test_channel_pipeline_engine.py for the prober's smart-sort path."""
 
     def test_custom_key_lifts_custom_stream_above_m3u(self):
         """``"custom": 200`` sorts custom streams above M3U account with priority 100."""
@@ -319,6 +319,72 @@ class TestSmartSortCustomStreamsCriterion:
             custom_stream_ids={1, 2},  # both custom
         )
         # Both custom (tie); resolution breaks tie → higher res (id=2) first.
+        assert sorted_ids == [2, 1]
+
+
+class TestSmartSortCatchupCriterion:
+    """enhancedchannelmanager-jnbka / GH #652: catch-up-enabled streams rank first."""
+
+    def test_catchup_stream_sorts_first_when_top_criterion(self):
+        prober = create_prober(
+            stream_sort_priority=["catchup"],
+            stream_sort_enabled={"catchup": True},
+        )
+        stats_map = {1: create_mock_stats(1), 2: create_mock_stats(2)}
+
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {}, "Test Channel",
+            catchup_stream_ids={2},
+        )
+
+        assert sorted_ids == [2, 1]
+
+    def test_catchup_disabled_falls_through_to_resolution(self):
+        prober = create_prober(
+            stream_sort_priority=["catchup", "resolution"],
+            stream_sort_enabled={"catchup": False, "resolution": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {}, "Test Channel",
+            catchup_stream_ids={1},
+        )
+
+        assert sorted_ids == [2, 1]
+
+    def test_catchup_criterion_applies_without_probe_stats(self):
+        prober = create_prober(
+            stream_sort_priority=["catchup"],
+            stream_sort_enabled={"catchup": True},
+            deprioritize_failed_streams=False,
+        )
+
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], {}, {}, "Test Channel",
+            catchup_stream_ids={2},
+        )
+
+        assert sorted_ids == [2, 1]
+
+    def test_catchup_tie_falls_through_to_resolution(self):
+        prober = create_prober(
+            stream_sort_priority=["catchup", "resolution"],
+            stream_sort_enabled={"catchup": True, "resolution": True},
+        )
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+
+        sorted_ids = prober._smart_sort_streams(
+            [1, 2], stats_map, {}, "Test Channel",
+            catchup_stream_ids={1, 2},
+        )
+
         assert sorted_ids == [2, 1]
 
 

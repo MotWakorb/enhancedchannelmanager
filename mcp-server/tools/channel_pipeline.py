@@ -1,0 +1,1824 @@
+"""Channel pipeline (formerly "auto-creation") tools.
+
+The 13 primary tools were renamed from ``*_auto_creation*`` to
+``*_channel_pipeline*`` (enhancedchannelmanager-3udrl Phase 3). The old names
+stay registered as thin deprecated aliases that forward to the new
+implementations — see each alias's docstring for its ``[DEPRECATED — use ...
+instead]`` pointer. Remove the aliases in a later dated release once callers
+have migrated (tracking bead to be filed after this phase ships).
+"""
+import asyncio
+import json
+import logging
+
+from mcp.server.fastmcp import FastMCP
+
+from _endpoint_contracts import ENDPOINTS
+from ecm_client import get_ecm_client
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Polling constants for run_channel_pipeline (bd-1wq7z.8).
+# Extracted as module-level names so tests can patch them cheaply.
+# ---------------------------------------------------------------------------
+_POLL_INTERVAL_SECONDS: float = 5.0   # seconds between status checks
+_POLL_MAX_ATTEMPTS: int = 120          # cap at 120 × 5 s = 10 minutes
+
+# Terminal statuses that end the poll loop.
+#
+# The authoritative set a ChannelPipelineExecution.status can persist is
+# pending, running, completed, failed, rolled_back, capped,
+# completed_with_errors, abandoned (see alembic 0039
+# widen_pipeline_execution_status, the finalization branches in
+# backend/channel_pipeline_engine.py, AND task_engine's crash-reconciliation).
+# pending and running are transient; every other value is TERMINAL and must
+# break the poll loop.
+#
+# ``abandoned`` IS a persisted pipeline-execution status, NOT a task_engine-only
+# concept (an earlier version of this comment claimed otherwise — that was a
+# genuine miss: task_engine._abandon_orphaned_auto_creation_executions
+# transitions in-flight ChannelPipelineExecution rows from 'running' ->
+# 'abandoned' on startup crash-reconciliation, GH #473 / bd-exo4j). ECM and the
+# MCP server are separate processes, so the MCP poller survives the backend
+# restart that mints the abandoned row and would otherwise poll it all
+# _POLL_MAX_ATTEMPTS times, then falsely report "still running" — the same
+# false-polling defect we fixed for completed_with_errors/capped (y3m6o.1
+# review).
+_TERMINAL_STATUSES = frozenset({
+    "completed", "failed", "rolled_back", "capped", "completed_with_errors",
+    "abandoned",
+})
+
+
+async def _poll_sleep(seconds: float) -> None:
+    """Thin asyncio.sleep wrapper — patchable in tests."""
+    await asyncio.sleep(seconds)
+
+
+# ---------------------------------------------------------------------------
+# Lenient type coercion for values nested in ``conditions``/``actions`` (GH #600).
+#
+# Top-level tool params are typed, so the FastMCP/Pydantic boundary lax-coerces
+# a stringified "true" back to True — but values nested inside the ``list[dict]``
+# params are untyped (additionalProperties: true) and ride through verbatim.
+# Some LLM MCP clients stringify nested scalars ("true", "0.75", "[912, 913]"),
+# which the backend's strict isinstance validation then 400s — or worse, an
+# unvalidated truthy "false" for a condition's ``negate`` silently inverts it.
+# Coerce the known non-string fields with the same leniency the typed params
+# already get. Values that don't cleanly parse pass through unchanged so the
+# backend's validation errors still surface.
+# ---------------------------------------------------------------------------
+
+# Action params the backend type-checks strictly (channel_pipeline_schema
+# Action.validate), plus max_streams/max_streams_per_channel which the executor
+# consumes as ints.
+_ACTION_BOOL_KEYS = frozenset({
+    "remove_non_matching", "loose_name_match", "allow_no_callsign", "set_tvg_id",
+    # sort_group (enhancedchannelmanager-vy4fl):
+    "strip_numbers", "ignore_country",
+})
+_ACTION_NUMBER_KEYS = frozenset({"min_score"})
+_ACTION_INT_KEYS = frozenset({
+    "max_candidates", "epg_id", "profile_id",
+    "max_streams", "max_streams_per_channel",
+    # sort_group (enhancedchannelmanager-vy4fl):
+    "starting_number", "group_id",
+})
+_ACTION_INT_LIST_KEYS = frozenset({
+    "target_channel_in_group", "target_channel_not_in_group", "channel_profile_ids",
+})
+
+_CONDITION_BOOL_KEYS = frozenset({"negate", "case_sensitive"})
+# A condition's ``value`` is polymorphic — coerce only for condition types
+# whose expected value type is unambiguously non-string (Condition.validate).
+_CONDITION_INT_VALUE_TYPES = frozenset({
+    "channel_in_group", "normalized_name_in_group", "normalized_name_not_in_group",
+})
+_CONDITION_NUMBER_VALUE_TYPES = frozenset({
+    "quality_min", "quality_max", "channel_has_streams", "has_audio_tracks",
+})
+_CONDITION_BOOL_VALUE_TYPES = frozenset({"tvg_id_exists", "logo_exists", "has_channel"})
+
+
+def _coerce_bool(v):
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s == "true":
+            return True
+        if s == "false":
+            return False
+    return v
+
+
+def _coerce_int(v):
+    # bool is an int subclass — never reinterpret True as 1 (the backend
+    # rejects booleans masquerading as IDs deliberately).
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        try:
+            return int(v.strip())
+        except ValueError:
+            return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
+
+
+def _coerce_number(v):
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        try:
+            return float(s)
+        except ValueError:
+            return v
+    return v
+
+
+def _coerce_int_list(v):
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            return v
+        if not isinstance(parsed, list):
+            return v
+        v = parsed
+    if isinstance(v, list):
+        return [_coerce_int(item) for item in v]
+    return v
+
+
+def _coerce_actions(actions):
+    """Return ``actions`` with stringified values in known typed params coerced."""
+    if not isinstance(actions, list):
+        return actions
+    out = []
+    for action in actions:
+        if not isinstance(action, dict):
+            out.append(action)
+            continue
+        action = dict(action)
+        for key, value in action.items():
+            if key in _ACTION_BOOL_KEYS:
+                action[key] = _coerce_bool(value)
+            elif key in _ACTION_NUMBER_KEYS:
+                action[key] = _coerce_number(value)
+            elif key in _ACTION_INT_KEYS:
+                action[key] = _coerce_int(value)
+            elif key in _ACTION_INT_LIST_KEYS:
+                action[key] = _coerce_int_list(value)
+        out.append(action)
+    return out
+
+
+def _coerce_conditions(conditions):
+    """Return ``conditions`` with stringified typed values coerced (recursive)."""
+    if not isinstance(conditions, list):
+        return conditions
+    out = []
+    for cond in conditions:
+        if not isinstance(cond, dict):
+            out.append(cond)
+            continue
+        cond = dict(cond)
+        for key in _CONDITION_BOOL_KEYS:
+            if key in cond:
+                cond[key] = _coerce_bool(cond[key])
+        ctype = cond.get("type")
+        if "value" in cond:
+            v = cond["value"]
+            if ctype == "provider_is":
+                # provider_is accepts an int or a list of ints.
+                coerced = _coerce_int_list(v)
+                cond["value"] = coerced if isinstance(coerced, list) else _coerce_int(v)
+            elif ctype in _CONDITION_INT_VALUE_TYPES:
+                cond["value"] = _coerce_int(v)
+            elif ctype in _CONDITION_NUMBER_VALUE_TYPES:
+                cond["value"] = _coerce_number(v)
+            elif ctype in _CONDITION_BOOL_VALUE_TYPES:
+                cond["value"] = _coerce_bool(v)
+        # Nested condition groups carry their own ``conditions`` list.
+        if isinstance(cond.get("conditions"), list):
+            cond["conditions"] = _coerce_conditions(cond["conditions"])
+        out.append(cond)
+    return out
+
+
+def _action_descriptor(a: dict) -> str:
+    """Return a human-readable descriptor for an auto-creation action.
+
+    Actions are flattened ``{type, ...params}`` dicts whose descriptor field
+    varies by type (auto_creation_schema): create_channel / create_group /
+    merge_streams carry ``name_template``; merge_streams also has ``target``;
+    assign_* / set_channel_number carry ``value``; assign_epg has ``epg_id``;
+    assign_profile has ``profile_id``. Reading only ``value``/``target`` left
+    create_channel rendering as ``?`` (lq38l.13 #4).
+    """
+    for key in (
+        "name_template",
+        "value",
+        "target",
+        "epg_id",
+        "profile_id",
+        "channel_profile_ids",
+        "name",
+    ):
+        if a.get(key) not in (None, ""):
+            return str(a[key])
+    return "?"
+
+
+def _format_analyze_result(result: dict, source: str) -> str:
+    """Render a /rules/analyze response as a markdown report.
+
+    Output shape::
+
+        # Auto-creation rule analysis (<source>)
+
+        Summary: 0 errors, 3 warnings, 0 info.
+
+        ## <Rule name> (id=<n>)
+        | Code | Severity | Field | Message |
+        |---|---|---|---|
+        | REGEX_TRIVIALLY_MATCHES_ALL | warning | conditions[1].value | … |
+
+        ## <Next rule>
+        No findings.
+
+    The "no findings" branch is friendly — empty rule lists and
+    finding-free responses both surface as a clear all-clean message.
+    """
+    summary = result.get("summary") or {}
+    rules = result.get("rules") or []
+    total = sum(summary.values()) if summary else 0
+
+    lines = [f"# Auto-creation rule analysis ({source})", ""]
+    if total == 0:
+        lines.append(
+            f"No findings across {len(rules)} rule(s) — looks clean."
+        )
+        return "\n".join(lines)
+
+    lines.append(
+        f"Summary: {summary.get('error', 0)} errors, "
+        f"{summary.get('warning', 0)} warnings, "
+        f"{summary.get('info', 0)} info."
+    )
+    lines.append("")
+    for r in rules:
+        rid = r.get("rule_id")
+        name = r.get("rule_name") or "<unnamed>"
+        findings = r.get("findings") or []
+        header = f"## {name}"
+        if rid is not None:
+            header += f" (id={rid})"
+        lines.append(header)
+        if not findings:
+            lines.append("No findings.")
+            lines.append("")
+            continue
+        lines.append("| Code | Severity | Field | Message |")
+        lines.append("|---|---|---|---|")
+        for f in findings:
+            msg = (f.get("message") or "").replace("\n", " ").replace("|", "\\|")
+            field = (f.get("field") or "").replace("|", "\\|")
+            lines.append(
+                f"| {f.get('code', '?')} | {f.get('severity', '?')} | "
+                f"{field} | {msg} |"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def register(mcp: FastMCP):
+    @mcp.tool()
+    async def list_channel_pipeline_rules() -> str:
+        """List all auto-creation rules that automatically create channels from streams."""
+        try:
+            client = get_ecm_client()
+            resp = await client.call_endpoint(ENDPOINTS["ac_list_rules"])
+            # The backend wraps the list as {"rules": [...]}; unwrap defensively
+            # (older code iterated the dict's keys -> str.get() AttributeError,
+            # bd-pvw35 / GH #222). The `analyze` tool below already does this.
+            rules = resp.get("rules", []) if isinstance(resp, dict) else (resp or [])
+
+            if not rules:
+                return "No auto-creation rules configured."
+
+            lines = [f"Found {len(rules)} auto-creation rules:"]
+            for r in rules:
+                name = r.get("name", "Unnamed")
+                rid = r.get("id", "?")
+                enabled = "enabled" if r.get("enabled") else "disabled"
+                priority = r.get("priority", "?")
+                lines.append(f"  [{priority}] {name} (id={rid}) — {enabled}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_channel_pipeline_rules failed: %s", e)
+            return f"Error listing auto-creation rules: {e}"
+
+    @mcp.tool()
+    async def list_auto_creation_rules() -> str:
+        """[DEPRECATED — use list_channel_pipeline_rules instead] List all auto-creation rules that automatically create channels from streams."""
+        return await list_channel_pipeline_rules()
+
+    @mcp.tool()
+    async def run_channel_pipeline(dry_run: bool = True) -> str:
+        """Run the auto-creation pipeline to create channels from matching streams.
+
+        The backend returns 202 immediately and runs the pipeline in the
+        background. This tool polls until the run completes (or times out),
+        then reports the real results.
+
+        Args:
+            dry_run: If true (default), preview what would be created without making changes.
+                     Set to false to actually create the channels.
+        """
+        try:
+            client = get_ecm_client()
+
+            # Kick off the run. Backend returns 202 + execution_id immediately.
+            kickoff = await client.call_endpoint(
+                ENDPOINTS["ac_run"], body={"dry_run": dry_run}
+            )
+            execution_id = kickoff.get("execution_id")
+            if execution_id is None:
+                logger.error("[MCP] run_channel_pipeline: no execution_id in 202 response: %s", kickoff)
+                return "Error running auto-creation: backend did not return an execution_id"
+
+            logger.info("[MCP] run_channel_pipeline started execution_id=%s dry_run=%s", execution_id, dry_run)
+
+            # Poll until the execution reaches a terminal status.
+            result = None
+            for attempt in range(_POLL_MAX_ATTEMPTS):
+                await _poll_sleep(_POLL_INTERVAL_SECONDS)
+                try:
+                    result = await client.call_endpoint(
+                        ENDPOINTS["ac_get_execution"],
+                        path_args={"execution_id": execution_id},
+                    )
+                except Exception as poll_err:
+                    logger.warning(
+                        "[MCP] run_channel_pipeline poll attempt %d failed: %s",
+                        attempt + 1, poll_err,
+                    )
+                    continue
+
+                status = result.get("status", "")
+                logger.debug(
+                    "[MCP] run_channel_pipeline poll attempt=%d status=%s",
+                    attempt + 1, status,
+                )
+                if status in _TERMINAL_STATUSES:
+                    break
+            else:
+                # Timed out — return execution_id so the user can check manually.
+                return (
+                    f"Auto-creation run is still running after {_POLL_MAX_ATTEMPTS} polls "
+                    f"(execution_id={execution_id}). "
+                    "Check status with list_channel_pipeline_executions."
+                )
+
+            # result is now the final execution row.
+            status = result.get("status", "unknown")
+            if status == "failed":
+                err = result.get("error_message") or "unknown error"
+                return (
+                    f"Auto-creation run failed (execution_id={execution_id}): {err}"
+                )
+
+            mode = "Dry run" if dry_run else "Execution"
+            dur = result.get("duration_seconds")
+            dur_str = f"{dur:.1f}s" if dur is not None else "N/A"
+
+            # y3m6o.1 review: a run can finalize in a NON-green terminal state
+            # (completed_with_errors — one or more executed actions failed;
+            # capped — the created-channel cap was hit; or abandoned — the run
+            # was interrupted by a hard restart/OOM kill and crash-reconciled)
+            # while some (or, for abandoned, none) of its work landed. Surface
+            # the warning/error summary (error_message carries the failed-action
+            # summary, the cap guidance, or the "Abandoned: run was
+            # interrupted…" text) in the header instead of reporting a generic
+            # "complete", so the caller sees the run did NOT finish cleanly. The
+            # per-counter breakdown below still renders for context.
+            if status == "completed_with_errors":
+                header = (
+                    f"Auto-creation {mode} completed WITH ERRORS "
+                    f"(execution_id={execution_id}) — one or more actions failed:"
+                )
+            elif status == "capped":
+                header = (
+                    f"Auto-creation {mode} was CAPPED "
+                    f"(execution_id={execution_id}):"
+                )
+            elif status == "abandoned":
+                header = (
+                    f"Auto-creation {mode} was ABANDONED "
+                    f"(execution_id={execution_id}) — the run was interrupted "
+                    f"before it finished:"
+                )
+            else:
+                header = f"Auto-creation {mode} complete (execution_id={execution_id}):"
+
+            lines = [header]
+            summary = result.get("error_message")
+            if status in ("completed_with_errors", "capped", "abandoned") and summary:
+                lines.append(f"  Warning: {summary}")
+            # An abandoned run trips the run-on-refresh circuit breaker, which
+            # stays disabled across the restart until an operator clears it
+            # (GH #473 / bd-exo4j) — call that out so the caller knows why the
+            # post-refresh auto-fire chain is now off.
+            if status == "abandoned":
+                lines.append(
+                    "  Note: this trips the run-on-refresh circuit breaker; it "
+                    "stays disabled until an operator resets it."
+                )
+            # A run that changed channel-profile membership non-reversibly cannot
+            # be fully undone by rollback — disclose it on the terminal summary.
+            if result.get("has_non_reversible_profile_changes"):
+                lines.append(
+                    "  Note: this run changed channel-profile membership, which "
+                    "Rollback/Undo will NOT restore."
+                )
+            lines.append(f"  Streams evaluated: {result.get('streams_evaluated', 0)}")
+            lines.append(f"  Streams matched: {result.get('streams_matched', 0)}")
+            lines.append(
+                f"  Channels {'would be ' if dry_run else ''}created: "
+                f"{result.get('channels_created', 0)}"
+            )
+            lines.append(f"  Stream merges: {result.get('streams_merged', 0)}")
+            lines.append(f"  Channels touched: {result.get('channels_touched', 0)}")
+            lines.append(f"  Channels updated: {result.get('channels_updated', 0)}")
+            lines.append(f"  Groups created: {result.get('groups_created', 0)}")
+            lines.append(f"  Streams skipped: {result.get('streams_skipped', 0)}")
+            lines.append(f"  Duration: {dur_str}")
+
+            # Show rule match breakdown (present on some execution shapes)
+            rule_counts = result.get("rule_match_counts", {})
+            if rule_counts:
+                lines.append(f"  Rule matches: {rule_counts}")
+
+            # Show a sample of the entities that were / would be created.
+            #
+            # lq38l.13 #5: the dry-run path used to read raw dry_run_results
+            # rows — which have no channel_name/channel_number (only stream_name
+            # + an `action` string + would_create), so every sample rendered "?"
+            # and the "N more" counted ALL simulated actions (e.g. 482) while the
+            # summary's "Channels would be created" counted only would_create
+            # rows (e.g. 45). Filter dry_run_results to would_create entries so
+            # the sample and the "N more" line are consistent with the count.
+            if dry_run:
+                all_rows = result.get("dry_run_results", []) or []
+                created = [r for r in all_rows if r.get("would_create")]
+                label = "would be created"
+            else:
+                created = result.get("created_entities", []) or []
+                label = "created"
+
+            if created:
+                lines.append(f"\n  Sample channels ({label}):")
+                for entity in created[:20]:
+                    if dry_run:
+                        # dry_run rows: source stream name + the action taken.
+                        name = entity.get("stream_name") or "?"
+                        action_desc = entity.get("action", "")
+                        detail = f" — {action_desc}" if action_desc else ""
+                        lines.append(f"    {name}{detail}")
+                    else:
+                        # created_entities rows: {type, id, name}.
+                        name = entity.get("name", entity.get("channel_name", "?"))
+                        num = entity.get("channel_number", "")
+                        num_str = f" #{num}" if num else ""
+                        lines.append(f"    {name}{num_str}")
+                if len(created) > 20:
+                    lines.append(f"    ... and {len(created) - 20} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] run_channel_pipeline failed: %s", e)
+            return f"Error running auto-creation: {e}"
+
+    @mcp.tool()
+    async def run_auto_creation(dry_run: bool = True) -> str:
+        """[DEPRECATED — use run_channel_pipeline instead] Run the auto-creation pipeline to create channels from matching streams.
+
+        Args:
+            dry_run: If true (default), preview what would be created without making changes.
+                     Set to false to actually create the channels.
+        """
+        return await run_channel_pipeline(dry_run=dry_run)
+
+    @mcp.tool()
+    async def get_channel_pipeline_rule(rule_id: int) -> str:
+        """Get detailed information about a specific auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to look up
+        """
+        try:
+            client = get_ecm_client()
+            r = await client.call_endpoint(ENDPOINTS["ac_get_rule"], path_args={"rule_id": rule_id})
+
+            lines = [
+                f"Rule: {r.get('name', 'Unnamed')}",
+                f"  ID: {r.get('id')}",
+                f"  Enabled: {r.get('enabled', False)}",
+                f"  Priority: {r.get('priority', '?')}",
+            ]
+
+            if r.get("description"):
+                lines.append(f"  Description: {r['description']}")
+
+            lines.append(f"  Run on refresh: {r.get('run_on_refresh', False)}")
+            lines.append(f"  Stop on first match: {r.get('stop_on_first_match', True)}")
+            lines.append(f"  Skip struck streams: {r.get('skip_struck_streams', False)}")
+            lines.append(f"  Orphan action: {r.get('orphan_action', 'delete')}")
+
+            # Sort settings
+            if r.get("sort_field"):
+                lines.append(f"  Channel sort: {r['sort_field']} {r.get('sort_order', 'asc')}")
+            if r.get("stream_sort_field"):
+                lines.append(f"  Stream sort: {r['stream_sort_field']} {r.get('stream_sort_order', 'asc')}")
+
+            # Normalization groups
+            norm_ids = r.get("normalization_group_ids", [])
+            if norm_ids:
+                lines.append(f"  Normalization groups: {norm_ids}")
+
+            conditions = r.get("conditions", [])
+            if conditions:
+                lines.append(f"  Conditions ({len(conditions)}):")
+                for c in conditions[:10]:
+                    lines.append(f"    - {c.get('type', '?')}: {c.get('value', c.get('pattern', '?'))}")
+                if len(conditions) > 10:
+                    lines.append(f"    ... and {len(conditions) - 10} more")
+
+            actions = r.get("actions", [])
+            if actions:
+                lines.append(f"  Actions ({len(actions)}):")
+                for a in actions[:10]:
+                    lines.append(f"    - {a.get('type', '?')}: {_action_descriptor(a)}")
+                if len(actions) > 10:
+                    lines.append(f"    ... and {len(actions) - 10} more")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] get_channel_pipeline_rule failed: %s", e)
+            return f"Error getting rule {rule_id}: {e}"
+
+    @mcp.tool()
+    async def get_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use get_channel_pipeline_rule instead] Get detailed information about a specific auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to look up
+        """
+        return await get_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def toggle_channel_pipeline_rule(rule_id: int) -> str:
+        """Enable or disable an auto-creation rule (toggles current state).
+
+        Args:
+            rule_id: The rule ID to toggle
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rule_id})
+            enabled = result.get("enabled", "unknown")
+            return f"Rule {rule_id} is now {'enabled' if enabled else 'disabled'}."
+        except Exception as e:
+            logger.error("[MCP] toggle_channel_pipeline_rule failed: %s", e)
+            return f"Error toggling rule {rule_id}: {e}"
+
+    @mcp.tool()
+    async def toggle_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use toggle_channel_pipeline_rule instead] Enable or disable an auto-creation rule (toggles current state).
+
+        Args:
+            rule_id: The rule ID to toggle
+        """
+        return await toggle_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def bulk_toggle_channel_pipeline_rules(rule_ids: list[int]) -> str:
+        """Toggle multiple auto-creation rules at once (enable/disable).
+
+        Args:
+            rule_ids: List of rule IDs to toggle
+        """
+        try:
+            client = get_ecm_client()
+            results = []
+            errors = []
+            for rid in rule_ids:
+                try:
+                    result = await client.call_endpoint(ENDPOINTS["ac_toggle_rule"], path_args={"rule_id": rid})
+                    enabled = result.get("enabled", "unknown")
+                    state = "enabled" if enabled else "disabled"
+                    results.append(f"Rule {rid}: {state}")
+                except Exception as e:
+                    errors.append(f"Rule {rid}: {e}")
+
+            lines = [f"Toggled {len(results)}/{len(rule_ids)} rules:"]
+            for r in results:
+                lines.append(f"  - {r}")
+            if errors:
+                lines.append(f"Errors ({len(errors)}):")
+                for err in errors:
+                    lines.append(f"  - {err}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] bulk_toggle_channel_pipeline_rules failed: %s", e)
+            return f"Error toggling rules: {e}"
+
+    @mcp.tool()
+    async def bulk_toggle_auto_creation_rules(rule_ids: list[int]) -> str:
+        """[DEPRECATED — use bulk_toggle_channel_pipeline_rules instead] Toggle multiple auto-creation rules at once (enable/disable).
+
+        Args:
+            rule_ids: List of rule IDs to toggle
+        """
+        return await bulk_toggle_channel_pipeline_rules(rule_ids)
+
+    @mcp.tool()
+    async def duplicate_channel_pipeline_rule(rule_id: int) -> str:
+        """Duplicate an auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to duplicate
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["ac_duplicate_rule"], path_args={"rule_id": rule_id})
+            new_id = result.get("id", "?")
+            return f"Rule {rule_id} duplicated. New rule ID: {new_id}"
+        except Exception as e:
+            logger.error("[MCP] duplicate_channel_pipeline_rule failed: %s", e)
+            return f"Error duplicating rule {rule_id}: {e}"
+
+    @mcp.tool()
+    async def duplicate_auto_creation_rule(rule_id: int) -> str:
+        """[DEPRECATED — use duplicate_channel_pipeline_rule instead] Duplicate an auto-creation rule.
+
+        Args:
+            rule_id: The rule ID to duplicate
+        """
+        return await duplicate_channel_pipeline_rule(rule_id)
+
+    @mcp.tool()
+    async def delete_channel_pipeline_rule(rule_id: int, confirm: bool = False) -> str:
+        """Delete an auto-creation rule.
+
+        CONFIRM GATING (bd-onazy): this is a two-call operation. The first call
+        (``confirm=False``, the default) fetches the rule and returns a preview
+        naming it, deleting NOTHING. Re-invoke with ``confirm=True`` to actually
+        delete.
+
+        Args:
+            rule_id: The rule ID to delete
+            confirm: Set True on the second call to perform the deletion.
+        """
+        try:
+            client = get_ecm_client()
+            if not confirm:
+                rule = await client.call_endpoint(
+                    ENDPOINTS["ac_get_rule"], path_args={"rule_id": rule_id}
+                )
+                name = rule.get("name", "?") if isinstance(rule, dict) else "?"
+                return (
+                    f"Auto-creation rule {rule_id} '{name}' will be deleted — "
+                    f"re-invoke with confirm=True to delete."
+                )
+            await client.call_endpoint(ENDPOINTS["ac_delete_rule"], path_args={"rule_id": rule_id})
+            return f"Rule {rule_id} deleted."
+        except Exception as e:
+            logger.error("[MCP] delete_channel_pipeline_rule failed: %s", e)
+            return f"Error deleting rule {rule_id}: {e}"
+
+    @mcp.tool()
+    async def delete_auto_creation_rule(rule_id: int, confirm: bool = False) -> str:
+        """[DEPRECATED — use delete_channel_pipeline_rule instead] Delete an auto-creation rule.
+
+        This alias forwards every argument through unchanged — see
+        delete_channel_pipeline_rule for the full confirm-gating contract
+        (confirm=False previews, confirm=True actually deletes).
+
+        Args:
+            rule_id: The rule ID to delete
+            confirm: Set True on the second call to perform the deletion.
+        """
+        return await delete_channel_pipeline_rule(rule_id, confirm=confirm)
+
+    @mcp.tool()
+    async def create_channel_pipeline_rule(
+        name: str,
+        conditions: list[dict],
+        actions: list[dict],
+        description: str | None = None,
+        enabled: bool = True,
+        priority: int = 0,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        run_on_refresh: bool = False,
+        stop_on_first_match: bool = True,
+        sort_field: str | None = None,
+        sort_order: str = "asc",
+        probe_on_sort: bool = False,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str = "asc",
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool = False,
+        orphan_action: str = "delete",
+        quality_tie_break_order: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
+        match_scope_target_group: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
+    ) -> str:
+        """Create a new auto-creation rule.
+
+        Args:
+            name: Rule name
+            conditions: List of condition dicts. Each has 'type', 'value', optional 'connector'
+                ("and"/"or"), optional 'negate' (bool, inverts the match — see below), and
+                optional 'case_sensitive' (bool, string/regex types only).
+                Condition types:
+                  stream_name_contains — substring match on stream name
+                  stream_name_matches — regex match on stream name
+                  stream_group_contains — substring match on group name
+                  stream_group_matches — regex match on group name
+                  stream_group_is — EXACT match on the stream's provider group
+                    (value = the M3U group_title string, e.g. "USA Sports" — NOT
+                    the group id used by channel_in_group/normalized_name_in_group).
+                    Case-insensitive by default; set case_sensitive=true to require
+                    exact case. Caveats: (1) if two M3U accounts happen to use the
+                    same group name, this condition matches streams from BOTH —
+                    combine with provider_is to scope to one account; (2) if the
+                    provider renames the group upstream, this condition silently
+                    stops matching (no error — the group name just no longer
+                    appears on any stream).
+                  provider_is — from specific M3U account (value = account ID)
+                  tvg_id_exists — stream has EPG ID (no value needed)
+                  tvg_id_matches — regex match on EPG ID
+                  logo_exists — stream has logo URL
+                  quality_min / quality_max — min/max resolution height
+                  codec_is — video codec filter
+                  has_audio_tracks — minimum audio tracks
+                  has_channel — stream already assigned to a channel
+                  channel_exists_with_name — exact channel name exists
+                  channel_exists_matching — regex match on existing channels
+                  normalized_name_in_group / normalized_name_not_in_group —
+                    STREAM-side: fire only when the triggering stream's
+                    normalized name IS (or is NOT) already present in group N.
+                    These gate whether the rule FIRES; they do NOT constrain
+                    which existing channel a merge_streams action targets. To
+                    keep merges OUT of a group, use the merge_streams action's
+                    target_channel_not_in_group param (see actions below).
+                  normalized_name_exists / normalized_name_not_exists
+                  always / never — always or never matches
+                'negate': true inverts ANY condition's result — this is how to express
+                  exclusions. Most useful on the regex (_matches) types for a "does NOT
+                  match this regex" filter, e.g. exclude everything matching a pattern:
+                  {"type": "stream_name_matches", "value": "(?i)test|demo", "negate": true}
+                  Also works on non-regex types, e.g. {"type": "provider_is", "value": 3,
+                  "negate": true} means "NOT from M3U account 3".
+                Example: [{"type": "stream_group_contains", "value": "USA | Entertainment", "connector": "and"}]
+            actions: List of action dicts. Each has 'type' and type-specific fields.
+                Action types:
+                  create_group — params: name_template, if_exists (skip/use_existing)
+                  create_channel — params: name_template, if_exists (skip/merge/merge_only/update),
+                                   channel_number (e.g. "800-99999" for range)
+                  merge_streams — params: target (auto/existing_channel/new_channel),
+                                   find_channel_by (name_exact/name_regex/tvg_id) + find_channel_value,
+                                   max_streams_per_channel, remove_non_matching (bool),
+                                   loose_name_match (bool, default false). With target=auto the
+                                   stream merges into an existing channel only on EXACT normalized-
+                                   name equality; set loose_name_match=true to restore the legacy
+                                   fuzzy cascade (core-name/deparen/word-prefix/call-sign).
+                                   SCORED FUZZY (OTA/callsign locals): set loose_name_match=true AND
+                                   min_score (float, 0.60-1.00) to use the unified scoring core
+                                   instead of the legacy cascade. The scored path applies a callsign
+                                   HARD-REJECT (a WBAY stream never merges into a WGBA channel
+                                   regardless of name similarity), a tvg_id-callsign override, and a
+                                   Locals fuzzy fallback. A scored-fuzzy rule REQUIRES a non-empty
+                                   target_channel_in_group allowlist (it is refused otherwise) and,
+                                   by default, a parseable callsign on BOTH sides; set
+                                   allow_no_callsign=true to admit no-callsign pairs (only at
+                                   score>=0.90). Optional tie_break (lowest_id/highest_score) and
+                                   max_candidates. Per-merge score + provenance is written to the
+                                   journal. Legacy loose rules WITHOUT min_score are unchanged.
+                                   NOTE: match_by is a DEPRECATED no-op (validated but never
+                                   consumed at runtime) — use loose_name_match to control matching.
+                                   target_channel_not_in_group (list[int], default absent) — TARGET-
+                                   channel group filter: after the merge target is resolved, SKIP
+                                   the merge if the resolved channel's group is in this list. This
+                                   is the "keep merges OUT of group N" guard (the stream-side
+                                   normalized_name_not_in_group condition cannot do this). Optional
+                                   complement target_channel_in_group (list[int]) only merges when
+                                   the resolved channel's group IS in the list. Both default to
+                                   absent (no filter); they ride inside the action dict.
+                  assign_logo — params: value (URL or empty for stream logo)
+                  assign_tvg_id — params: value
+                  assign_epg — params: epg_id, set_tvg_id (bool)
+                  assign_profile — params: profile_id
+                  assign_channel_profile — params: channel_profile_ids (list)
+                  set_channel_number — params: value
+                  set_variable — params: name, value
+                  remove_from_channel — remove stream from current channel
+                  set_stream_priority — params: value
+                  probe_streams — trigger probe
+                  sort_group — GROUP-level post-run pass (NOT per-stream):
+                    alphabetically sorts and renumbers ALL channels in a
+                    group, once per group per run, after every stream has
+                    been processed — the automated equivalent of the
+                    manual Channel Manager "Sort & Renumber" tool. Params
+                    (all optional): order ("asc"/"desc", default "asc"),
+                    starting_number (int >= 1; default = the group's
+                    current lowest channel number, or 1 if none is set),
+                    strip_numbers (bool, default true — ignore embedded
+                    channel numbers in names when sorting, e.g. "209 |
+                    A&E"), ignore_country (bool, default false — ignore a
+                    leading country prefix like "US | " / "UK: " when
+                    sorting), group_id (int, optional explicit target
+                    group — otherwise resolved from the current stream's
+                    channel/group context, falling back to the rule's
+                    target_group_id). Sort order is natural (case-
+                    insensitive, "Channel 2" before "Channel 10") and
+                    matches the manual Sort & Renumber tool exactly. If
+                    the group can't be resolved (e.g. sort_group is the
+                    rule's ONLY action with no target_group_id set and no
+                    prior create_channel/merge_streams action), the
+                    action fails for that stream with an explanatory
+                    error — it does not silently no-op.
+                  skip — skip this stream
+                  stop_processing — stop processing further rules
+                  log_match — log when matched
+                Example: [{"type": "create_group", "name_template": "Entertainment", "if_exists": "use_existing"},
+                          {"type": "create_channel", "name_template": "{stream_name}", "if_exists": "merge"}]
+            description: Optional description
+            enabled: Whether the rule is enabled (default true)
+            priority: Execution priority (lower = first, default 0)
+            m3u_account_id: Optional M3U account filter
+            target_group_id: Optional target channel group ID
+            run_on_refresh: Run automatically when M3U refreshes
+            stop_on_first_match: Stop matching after first rule matches a stream
+            sort_field: Field to sort channels by (e.g. 'stream_name', 'stream_name_regex')
+            sort_order: 'asc' or 'desc'
+            probe_on_sort: Probe streams when sorting
+            sort_regex: Regex for extracting sort keys
+            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
+            stream_sort_order: 'asc' or 'desc'
+            normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
+            skip_struck_streams: Skip streams with consecutive probe failures
+            orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+            quality_tie_break_order: Tie-break order ('asc' or 'desc') when two streams
+                have equal quality during quality-based M3U sorting (backend default 'desc')
+            quality_m3u_tie_break_enabled: When True (backend default), M3U
+                account priority breaks ties between streams of otherwise-equal
+                quality during quality-based sorting. Set False to disable that
+                M3U-priority tie-break and fall through to
+                quality_tie_break_order instead.
+            match_scope_target_group: When True, restrict the existing-channel name
+                lookup (for merge/skip decisions) to the rule's target group
+                instead of searching all groups (backend default True)
+            allow_manual_channel_merge: When True, this rule may merge into /
+                adopt hand-built MANUAL channels (each adoption is journaled).
+                Backend default False — manual-channel isolation: a matching
+                manual channel is treated as "not found" (the blocked merge is
+                journaled as manual_channel_merge_blocked and shown in the
+                execution log) and the rule may create a new auto channel
+                instead of merging.
+        """
+        try:
+            client = get_ecm_client()
+            payload = {
+                "name": name,
+                "conditions": _coerce_conditions(conditions),
+                "actions": _coerce_actions(actions),
+                "enabled": enabled,
+                "priority": priority,
+                "run_on_refresh": run_on_refresh,
+                "stop_on_first_match": stop_on_first_match,
+                "sort_order": sort_order,
+                "probe_on_sort": probe_on_sort,
+                "stream_sort_order": stream_sort_order,
+                "skip_struck_streams": skip_struck_streams,
+                "orphan_action": orphan_action,
+            }
+            if description is not None:
+                payload["description"] = description
+            if m3u_account_id is not None:
+                payload["m3u_account_id"] = m3u_account_id
+            if target_group_id is not None:
+                payload["target_group_id"] = target_group_id
+            if sort_field is not None:
+                payload["sort_field"] = sort_field
+            if sort_regex is not None:
+                payload["sort_regex"] = sort_regex
+            if stream_sort_field is not None:
+                payload["stream_sort_field"] = stream_sort_field
+            if normalization_group_ids is not None:
+                payload["normalization_group_ids"] = normalization_group_ids
+            # lq38l.13 #12: both fields are accepted by the backend
+            # CreateAutoCreationRuleRequest and persisted by the create handler.
+            if quality_tie_break_order is not None:
+                payload["quality_tie_break_order"] = quality_tie_break_order
+            if quality_m3u_tie_break_enabled is not None:
+                payload["quality_m3u_tie_break_enabled"] = quality_m3u_tie_break_enabled
+            if match_scope_target_group is not None:
+                payload["match_scope_target_group"] = match_scope_target_group
+            # enhancedchannelmanager-zrte6: per-rule manual-channel isolation
+            # opt-in (PR #547 / orzck). None = omit → backend default (False).
+            if allow_manual_channel_merge is not None:
+                payload["allow_manual_channel_merge"] = allow_manual_channel_merge
+
+            result = await client.call_endpoint(ENDPOINTS["ac_create_rule"], body=payload)
+
+            rule = result.get("rule", result)
+            new_id = rule.get("id", "?")
+            return f"Created auto-creation rule '{name}' (id={new_id})."
+        except Exception as e:
+            logger.error("[MCP] create_channel_pipeline_rule failed: %s", e)
+            return f"Error creating rule: {e}"
+
+    @mcp.tool()
+    async def create_auto_creation_rule(
+        name: str,
+        conditions: list[dict],
+        actions: list[dict],
+        description: str | None = None,
+        enabled: bool = True,
+        priority: int = 0,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        run_on_refresh: bool = False,
+        stop_on_first_match: bool = True,
+        sort_field: str | None = None,
+        sort_order: str = "asc",
+        probe_on_sort: bool = False,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str = "asc",
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool = False,
+        orphan_action: str = "delete",
+        quality_tie_break_order: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
+        match_scope_target_group: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
+    ) -> str:
+        """[DEPRECATED — use create_channel_pipeline_rule instead] Create a new auto-creation rule.
+
+        See create_channel_pipeline_rule for the full parameter documentation
+        (conditions/actions schema, sort options, etc.) — this alias forwards
+        every argument through unchanged.
+        """
+        return await create_channel_pipeline_rule(
+            name=name,
+            conditions=conditions,
+            actions=actions,
+            description=description,
+            enabled=enabled,
+            priority=priority,
+            m3u_account_id=m3u_account_id,
+            target_group_id=target_group_id,
+            run_on_refresh=run_on_refresh,
+            stop_on_first_match=stop_on_first_match,
+            sort_field=sort_field,
+            sort_order=sort_order,
+            probe_on_sort=probe_on_sort,
+            sort_regex=sort_regex,
+            stream_sort_field=stream_sort_field,
+            stream_sort_order=stream_sort_order,
+            normalization_group_ids=normalization_group_ids,
+            skip_struck_streams=skip_struck_streams,
+            orphan_action=orphan_action,
+            quality_tie_break_order=quality_tie_break_order,
+            quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,
+            match_scope_target_group=match_scope_target_group,
+            allow_manual_channel_merge=allow_manual_channel_merge,
+        )
+
+    @mcp.tool()
+    async def update_channel_pipeline_rule(
+        rule_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+        priority: int | None = None,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        conditions: list[dict] | None = None,
+        actions: list[dict] | None = None,
+        run_on_refresh: bool | None = None,
+        stop_on_first_match: bool | None = None,
+        sort_field: str | None = None,
+        sort_order: str | None = None,
+        probe_on_sort: bool | None = None,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str | None = None,
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool | None = None,
+        orphan_action: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
+    ) -> str:
+        """Update an existing auto-creation rule. Only provided fields are changed.
+
+        Args:
+            rule_id: The rule ID to update
+            name: New rule name
+            description: New description
+            enabled: Enable/disable the rule
+            priority: Execution priority (lower = first)
+            m3u_account_id: M3U account filter
+            target_group_id: Target channel group ID
+            conditions: Replacement conditions list (see create_channel_pipeline_rule for types)
+            actions: Replacement actions list (see create_channel_pipeline_rule for types,
+                including the merge_streams scored-fuzzy path: loose_name_match + min_score
+                + required target_channel_in_group allowlist + optional allow_no_callsign)
+            run_on_refresh: Run automatically when M3U refreshes
+            stop_on_first_match: Stop matching after first rule matches a stream
+            sort_field: Field to sort channels by
+            sort_order: 'asc' or 'desc'
+            probe_on_sort: Probe streams when sorting
+            sort_regex: Regex for extracting sort keys
+            stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
+            stream_sort_order: 'asc' or 'desc'
+            normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
+            skip_struck_streams: Skip streams with consecutive probe failures
+            orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
+            quality_m3u_tie_break_enabled: When True (backend default), M3U
+                account priority breaks ties between streams of otherwise-equal
+                quality during quality-based sorting. Set False to disable that
+                M3U-priority tie-break and fall through to
+                quality_tie_break_order instead.
+            allow_manual_channel_merge: When True, this rule may merge into /
+                adopt hand-built MANUAL channels (each adoption is journaled).
+                When False (backend default) manual channels are protected: a
+                matching manual channel is treated as "not found" (journaled as
+                manual_channel_merge_blocked) and the rule may create a new
+                auto channel instead of merging.
+        """
+        try:
+            client = get_ecm_client()
+            payload = {}
+            # Only include fields that were explicitly provided
+            for field_name, value in [
+                ("name", name), ("description", description), ("enabled", enabled),
+                ("priority", priority), ("m3u_account_id", m3u_account_id),
+                ("target_group_id", target_group_id),
+                ("conditions", _coerce_conditions(conditions)),
+                ("actions", _coerce_actions(actions)), ("run_on_refresh", run_on_refresh),
+                ("stop_on_first_match", stop_on_first_match), ("sort_field", sort_field),
+                ("sort_order", sort_order), ("probe_on_sort", probe_on_sort),
+                ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
+                ("stream_sort_order", stream_sort_order), ("normalization_group_ids", normalization_group_ids),
+                ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
+                ("quality_m3u_tie_break_enabled", quality_m3u_tie_break_enabled),
+                ("allow_manual_channel_merge", allow_manual_channel_merge),
+            ]:
+                if value is not None:
+                    payload[field_name] = value
+
+            if not payload:
+                return "No fields to update."
+
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_update_rule"], path_args={"rule_id": rule_id}, body=payload,
+            )
+            rule = result.get("rule", result)
+            return f"Updated rule '{rule.get('name', rule_id)}' (id={rule_id}). Changed: {', '.join(payload.keys())}"
+        except Exception as e:
+            logger.error("[MCP] update_channel_pipeline_rule failed: %s", e)
+            return f"Error updating rule {rule_id}: {e}"
+
+    @mcp.tool()
+    async def update_auto_creation_rule(
+        rule_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+        priority: int | None = None,
+        m3u_account_id: int | None = None,
+        target_group_id: int | None = None,
+        conditions: list[dict] | None = None,
+        actions: list[dict] | None = None,
+        run_on_refresh: bool | None = None,
+        stop_on_first_match: bool | None = None,
+        sort_field: str | None = None,
+        sort_order: str | None = None,
+        probe_on_sort: bool | None = None,
+        sort_regex: str | None = None,
+        stream_sort_field: str | None = None,
+        stream_sort_order: str | None = None,
+        normalization_group_ids: list[int] | None = None,
+        skip_struck_streams: bool | None = None,
+        orphan_action: str | None = None,
+        quality_m3u_tie_break_enabled: bool | None = None,
+        allow_manual_channel_merge: bool | None = None,
+    ) -> str:
+        """[DEPRECATED — use update_channel_pipeline_rule instead] Update an existing auto-creation rule. Only provided fields are changed.
+
+        See update_channel_pipeline_rule for the full parameter documentation —
+        this alias forwards every argument through unchanged.
+        """
+        return await update_channel_pipeline_rule(
+            rule_id,
+            name=name,
+            description=description,
+            enabled=enabled,
+            priority=priority,
+            m3u_account_id=m3u_account_id,
+            target_group_id=target_group_id,
+            conditions=conditions,
+            actions=actions,
+            run_on_refresh=run_on_refresh,
+            stop_on_first_match=stop_on_first_match,
+            sort_field=sort_field,
+            sort_order=sort_order,
+            probe_on_sort=probe_on_sort,
+            sort_regex=sort_regex,
+            stream_sort_field=stream_sort_field,
+            stream_sort_order=stream_sort_order,
+            normalization_group_ids=normalization_group_ids,
+            skip_struck_streams=skip_struck_streams,
+            orphan_action=orphan_action,
+            quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,
+            allow_manual_channel_merge=allow_manual_channel_merge,
+        )
+
+    @mcp.tool()
+    async def list_channel_pipeline_executions(limit: int = 10) -> str:
+        """List recent auto-creation pipeline executions.
+
+        Each line ends with a snapshot marker (ADR-010):
+          - ``[snapshot]`` — the run captured a pre-run channel/stream snapshot,
+            so it is FULLY revertible via restore_channel_pipeline_snapshot (the
+            whole-run revert re-adds removed streams + restores drifted
+            metadata). rollback_channel_pipeline also uses the snapshot for these.
+          - ``[no snapshot]`` — a dry-run, a legacy run, or a run whose snapshot
+            capture failed. Only the narrower rollback_channel_pipeline applies
+            (deletes created channels, un-merges run-added streams).
+
+        Args:
+            limit: Number of executions to return (default 10)
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["ac_list_executions"], query={"limit": limit})
+
+            executions = result.get("executions", []) if isinstance(result, dict) else result
+
+            if not executions:
+                return "No auto-creation executions found."
+
+            lines = [f"Recent executions ({len(executions)}):"]
+            for ex in executions[:limit]:
+                eid = ex.get("id", "?")
+                status = ex.get("status", "?")
+                created = ex.get("created_at", ex.get("timestamp", "?"))
+                channels = ex.get("channels_created", ex.get("created", 0))
+                dry = " (dry run)" if ex.get("dry_run") else ""
+                # has_snapshot (ADR-010 §D6) tells the operator/agent which runs
+                # are fully revertible via restore_channel_pipeline_snapshot.
+                snap = "[snapshot]" if ex.get("has_snapshot") else "[no snapshot]"
+                lines.append(
+                    f"  #{eid}: {status} — {channels} channels{dry} {snap} ({created})"
+                )
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] list_channel_pipeline_executions failed: %s", e)
+            return f"Error listing executions: {e}"
+
+    @mcp.tool()
+    async def list_auto_creation_executions(limit: int = 10) -> str:
+        """[DEPRECATED — use list_channel_pipeline_executions instead] List recent auto-creation pipeline executions.
+
+        Args:
+            limit: Number of executions to return (default 10)
+        """
+        return await list_channel_pipeline_executions(limit)
+
+    @mcp.tool()
+    async def rollback_channel_pipeline(execution_id: int) -> str:
+        """Rollback an auto-creation execution.
+
+        Undoes everything the run did:
+          - DELETES every channel (and group) the run created.
+          - UN-MERGES streams the run added to PRE-EXISTING channels — each
+            touched channel is restored to its exact pre-run stream set. If the
+            run merged several streams into the same channel, the cumulative
+            snapshots are replayed in reverse so the ORIGINAL stream list wins
+            (bd-a7okb), not an intermediate state.
+
+        Guarantee: a successful rollback returns the affected channels to their
+        pre-run state — created channels gone, merged streams removed.
+
+        Caveat — no restore data: an execution that recorded NEITHER created NOR
+        modified entities (a legacy run from before entity tracking, or a run
+        that changed nothing) cannot be guaranteed reversible. Rather than mark
+        it rolled_back and report a phantom clean rollback, the engine REFUSES
+        and this tool surfaces the refusal. The execution's status is left
+        unchanged.
+
+        Args:
+            execution_id: The execution ID to rollback
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_rollback"], path_args={"execution_id": execution_id}, timeout=300.0,
+            )
+            # Defensive: if the engine refusal (or any failure) reaches us as a
+            # dict (success False / error) instead of an HTTP error, surface it
+            # rather than printing a phantom clean-rollback line. (The live
+            # backend turns engine refusals into HTTP 400, which arrives via the
+            # except branch below — this guards direct/changed call paths.)
+            if isinstance(result, dict) and (result.get("success") is False or result.get("error")):
+                return (
+                    f"Cannot roll back execution {execution_id}: "
+                    f"{result.get('error', 'rollback refused')}"
+                )
+            # Engine returns entities_removed (channels deleted) and
+            # entities_restored (channels whose pre-run stream set was put back,
+            # i.e. streams un-merged). Neither "deleted" nor "channels_deleted"
+            # exists in the response shape — reading those keys always produced
+            # 0 (bd-1wq7z.5).
+            removed = result.get("entities_removed", 0) if isinstance(result, dict) else 0
+            restored = result.get("entities_restored", 0) if isinstance(result, dict) else 0
+            msg = f"Execution {execution_id} rolled back. {removed} channel(s) deleted"
+            if restored:
+                msg += (
+                    f", {restored} channel(s) restored to their pre-run stream "
+                    f"sets (streams un-merged)"
+                )
+            msg += "."
+            return msg
+        except Exception as e:
+            # The backend converts the engine's no-restore-data refusal into an
+            # HTTP 400 whose detail is the refusal message; call_endpoint raises
+            # it here. Surface it clearly so the user sees WHY nothing changed.
+            logger.error("[MCP] rollback_channel_pipeline failed: %s", e)
+            return f"Error rolling back execution {execution_id}: {e}"
+
+    @mcp.tool()
+    async def rollback_auto_creation(execution_id: int) -> str:
+        """[DEPRECATED — use rollback_channel_pipeline instead] Rollback an auto-creation execution.
+
+        This alias forwards every argument through unchanged — see
+        rollback_channel_pipeline for the full contract (deletes channels/groups
+        the run created, un-merges streams via reverse-replay, and the
+        legacy-run no-restore-data refusal caveat).
+
+        Args:
+            execution_id: The execution ID to rollback
+        """
+        return await rollback_channel_pipeline(execution_id)
+
+    @mcp.tool()
+    async def restore_channel_pipeline_snapshot(
+        execution_id: int, confirm: bool = False
+    ) -> str:
+        """Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
+
+        This is the FULLER revert (vs rollback_channel_pipeline). It restores the
+        entire snapshotted channel<->stream state captured BEFORE the run mutated
+        anything: re-adds streams the run REMOVED, removes streams it added,
+        restores drifted metadata (channel group / EPG link / tvg id). Only runs
+        that captured a snapshot are eligible — check list_channel_pipeline_executions
+        for the ``[snapshot]`` marker first. Runs without a snapshot (dry-runs,
+        legacy runs, capture-failure runs) are NOT restorable this way; use
+        rollback_channel_pipeline for those (this tool returns guidance to do so).
+
+        SAFETY — OPTIMISTIC OVERWRITE, NOT UNDOABLE (ADR-010 §D5):
+        A restore spans EVERY channel in the snapshot (often hundreds). It
+        UNCONDITIONALLY OVERWRITES each channel's CURRENT stream assignments and
+        metadata with the pre-run state — any manual edit or Dispatcharr drift
+        made AFTER the run and BEFORE this revert is LOST. There is no conflict
+        detection and the restore CANNOT be undone.
+
+        Because of that blast radius this tool REQUIRES explicit confirmation:
+          - confirm=False (default) → NOTHING is restored. The tool returns the
+            warning (including how many channels would be overwritten, when the
+            snapshot was taken) and tells you to re-invoke with confirm=true.
+          - confirm=true → the restore runs. Partial failures (a channel deleted
+            since the run, a stream id that no longer resolves) are SURFACED
+            per-channel — never a silent partial success.
+
+        Args:
+            execution_id: The execution whose pre-run snapshot to restore.
+            confirm: Must be true to actually perform the (destructive,
+                non-undoable) restore. Defaults to false, which only returns the
+                warning and does NOT touch any channel.
+        """
+        client = get_ecm_client()
+
+        # confirm=False: refuse to act. Surface the §D5 warning + blast radius
+        # WITHOUT calling the restore endpoint at all. Try to read the snapshot's
+        # channel_count so the operator sees how many channels would be
+        # overwritten before re-invoking; best-effort — never block the warning.
+        if not confirm:
+            channel_count = None
+            snapshot_time = None
+            try:
+                snap = await client.call_endpoint(
+                    ENDPOINTS["ac_get_execution_snapshot"],
+                    path_args={"execution_id": execution_id},
+                )
+                if isinstance(snap, dict):
+                    channel_count = snap.get("channel_count")
+                    snapshot_time = snap.get("snapshot_time")
+            except Exception as e:
+                # No snapshot (404) is the common case here — tell the caller to
+                # use rollback_channel_pipeline instead, and do NOT pretend a
+                # restore is pending.
+                if "404" in str(e) or "no snapshot" in str(e).lower():
+                    return (
+                        f"Execution {execution_id} has NO pre-run snapshot, so it "
+                        f"cannot be restored with this tool. Use "
+                        f"rollback_channel_pipeline({execution_id}) instead (it deletes "
+                        f"channels the run created and un-merges streams it added)."
+                    )
+                logger.warning(
+                    "[MCP] restore_channel_pipeline_snapshot: could not read snapshot "
+                    "metadata for execution %s: %s", execution_id, e,
+                )
+
+            count_phrase = (
+                f"{channel_count} channel(s)" if channel_count is not None
+                else "every channel in the snapshot"
+            )
+            taken_phrase = f" (snapshot taken {snapshot_time})" if snapshot_time else ""
+            return (
+                f"CONFIRMATION REQUIRED — restore NOT performed.\n\n"
+                f"Restoring execution {execution_id} will OVERWRITE the current "
+                f"stream assignments and metadata of {count_phrase} with the "
+                f"pre-run state{taken_phrase}. Any changes made after the run "
+                f"(manual edits, Dispatcharr drift) WILL BE LOST. This is an "
+                f"optimistic overwrite with no conflict detection and CANNOT be "
+                f"undone.\n\n"
+                f"To proceed, re-invoke with confirm=true: "
+                f"restore_channel_pipeline_snapshot(execution_id={execution_id}, confirm=true)"
+            )
+
+        # confirm=True: perform the restore. ``confirm`` is a query param on the
+        # backend (ADR-010 §D8) — pass it through the contract.
+        try:
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_restore_snapshot"],
+                path_args={"execution_id": execution_id},
+                query={"confirm": True},
+                timeout=300.0,
+            )
+        except Exception as e:
+            # 404 → no snapshot: point at the narrower rollback path (§D8 step 1).
+            if "404" in str(e) or "no snapshot" in str(e).lower():
+                return (
+                    f"Execution {execution_id} has NO pre-run snapshot, so it "
+                    f"cannot be restored. Use rollback_channel_pipeline({execution_id}) "
+                    f"instead."
+                )
+            logger.error("[MCP] restore_channel_pipeline_snapshot failed: %s", e)
+            return f"Error restoring snapshot for execution {execution_id}: {e}"
+
+        if not isinstance(result, dict):
+            return f"Snapshot restore for execution {execution_id} returned an unexpected response."
+
+        # Defensive: a no_snapshot signal that arrives as a dict instead of HTTP
+        # 404 (changed/direct call paths) → same guidance, not a phantom success.
+        if result.get("no_snapshot"):
+            return (
+                f"Execution {execution_id} has NO pre-run snapshot, so it cannot "
+                f"be restored. Use rollback_channel_pipeline({execution_id}) instead."
+            )
+
+        removed = result.get("removed_channels", 0)
+        restored = result.get("restored_channels", 0)
+        failed_channels = result.get("failed_channels", []) or []
+
+        msg = (
+            f"Snapshot restore for execution {execution_id}: "
+            f"{restored} channel(s) restored to their pre-run state, "
+            f"{removed} run-created channel(s) deleted."
+        )
+        if failed_channels:
+            # Partial failure — surface exactly which channels failed and why.
+            detail = "; ".join(
+                f"#{fc.get('id', '?')} {fc.get('name', '')}".strip()
+                + (f" ({fc.get('error')})" if fc.get("error") else "")
+                for fc in failed_channels
+            )
+            msg += (
+                f"\nWARNING — {len(failed_channels)} channel(s) FAILED to restore "
+                f"(re-running the restore is safe and idempotent): {detail}"
+            )
+        return msg
+
+    @mcp.tool()
+    async def restore_auto_creation_snapshot(
+        execution_id: int, confirm: bool = False
+    ) -> str:
+        """[DEPRECATED — use restore_channel_pipeline_snapshot instead] Full WHOLE-RUN revert of an auto-creation run from its pre-run snapshot (ADR-010 §D8).
+
+        Args:
+            execution_id: The execution whose pre-run snapshot to restore.
+            confirm: Must be true to actually perform the (destructive,
+                non-undoable) restore. Defaults to false, which only returns the
+                warning and does NOT touch any channel.
+        """
+        return await restore_channel_pipeline_snapshot(execution_id, confirm=confirm)
+
+    @mcp.tool()
+    async def analyze_channel_pipeline_rules(bundle_path: str | None = None) -> str:
+        """Lint and structurally analyze auto-creation rules (bd-0gntx).
+
+        Returns a markdown report of advisory findings: regex shapes that
+        match everything by accident, operator/value mismatches, OR-arms
+        that drop a guard, and merge_streams targeting empty channel
+        groups. Findings are warnings — they never block rule saves.
+
+        Args:
+            bundle_path: Optional. If set, analyze rules.yaml from a
+                debug-bundle tar.gz at that filesystem path (the file
+                must exist on the MCP host). If unset, analyze the live
+                rules in the connected ECM instance.
+        """
+        import os
+
+        try:
+            client = get_ecm_client()
+            if bundle_path:
+                if not os.path.isfile(bundle_path):
+                    return f"Bundle file not found: {bundle_path}"
+                with open(bundle_path, "rb") as fh:
+                    content = fh.read()
+                filename = os.path.basename(bundle_path) or "debug.tar.gz"
+                # contract-exempt: multipart/form-data upload, not a JSON body —
+                # call_endpoint only models JSON-body endpoints.
+                result = await client.post_multipart(
+                    "/api/channel-pipeline/rules/analyze/from-bundle",
+                    files={"file": (filename, content, "application/gzip")},
+                )
+                source = f"bundle {filename}"
+            else:
+                result = await client.call_endpoint(ENDPOINTS["ac_analyze_rules"])
+                source = "live ECM"
+
+            return _format_analyze_result(result, source)
+        except Exception as e:
+            logger.error("[MCP] analyze_channel_pipeline_rules failed: %s", e)
+            return f"Error analyzing auto-creation rules: {e}"
+
+    @mcp.tool()
+    async def analyze_auto_creation_rules(bundle_path: str | None = None) -> str:
+        """[DEPRECATED — use analyze_channel_pipeline_rules instead] Lint and structurally analyze auto-creation rules (bd-0gntx).
+
+        Args:
+            bundle_path: Optional. If set, analyze rules.yaml from a
+                debug-bundle tar.gz at that filesystem path (the file
+                must exist on the MCP host). If unset, analyze the live
+                rules in the connected ECM instance.
+        """
+        return await analyze_channel_pipeline_rules(bundle_path=bundle_path)
+
+    @mcp.tool()
+    async def get_channel_pipeline_debug_bundle() -> str:
+        """Get info about the auto-creation debug bundle for troubleshooting.
+
+        The debug bundle is a tar.gz file that must be downloaded from the ECM UI.
+        This tool describes what it contains and how to get it.
+        """
+        return ("Debug bundle endpoints (bd-cns7j 202+poll):\n"
+                "  POST /api/channel-pipeline/debug-bundle           -> 202 + {job_id}\n"
+                "  GET  /api/channel-pipeline/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
+                "Or download it from the ECM UI: Auto-Creation / Channel Pipeline page > Debug Bundle button.\n\n"
+                "Bundle contains (all data obfuscated for safe sharing):\n"
+                "  - channels.json — channel data with stream details and stats\n"
+                "  - rules.yaml — auto-creation rules configuration\n"
+                "  - normalization_rules.yaml — normalization rule groups + rules (cross-references rules.yaml's normalization_group_ids)\n"
+                "  - channels.csv — all streams with metadata\n"
+                "  - settings.json — app settings (credentials redacted)\n"
+                "  - task_schedules.json — scheduled task configuration\n"
+                "  - channel_groups_diagnostic.json — Channel Manager group/membership diagnostic\n"
+                "  - logs.txt — recent application logs\n"
+                "  - manifest.json — bundle metadata + counts")
+
+    @mcp.tool()
+    async def get_auto_creation_debug_bundle() -> str:
+        """[DEPRECATED — use get_channel_pipeline_debug_bundle instead] Get info about the auto-creation debug bundle for troubleshooting."""
+        return await get_channel_pipeline_debug_bundle()
+
+    @mcp.tool()
+    async def get_channel_pipeline_circuit_breaker() -> str:
+        """Get the run-on-refresh circuit-breaker state (bd-rv5w1 / bd-exo4j).
+
+        ``disabled=true`` means a previous auto-fire run was abandoned
+        (likely an OOM crash) and the startup crash-sentinel tripped the
+        breaker: run-on-refresh auto-fire is paused until an operator clears
+        it via reset_channel_pipeline_circuit_breaker. Manual runs
+        (run_channel_pipeline) are NEVER gated by this breaker.
+        """
+        try:
+            client = get_ecm_client()
+            result = await client.call_endpoint(ENDPOINTS["channel_pipeline_circuit_breaker"])
+            disabled = result.get("disabled", False) if isinstance(result, dict) else False
+            reason = result.get("reason") if isinstance(result, dict) else None
+
+            if not disabled:
+                return "Circuit breaker is clear — run-on-refresh will auto-fire normally."
+            return (
+                f"Circuit breaker is TRIPPED (reason={reason or 'unknown'}) — "
+                "run-on-refresh auto-fire is paused after M3U refresh. "
+                "Use reset_channel_pipeline_circuit_breaker to clear it."
+            )
+        except Exception as e:
+            logger.error("[MCP] get_channel_pipeline_circuit_breaker failed: %s", e)
+            return f"Error getting circuit breaker state: {e}"
+
+    @mcp.tool()
+    async def reset_channel_pipeline_circuit_breaker(confirm: bool = False) -> str:
+        """Clear the run-on-refresh circuit breaker (bd-rv5w1 / bd-exo4j).
+
+        A DELIBERATE operator act — re-enables the post-refresh auto-fire
+        chain that the startup crash-sentinel disabled after an abandoned
+        (OOM-killed) run. The breaker never auto-resets on its own; this is
+        the only in-band recovery path. Idempotent: clearing an already-clear
+        breaker is a no-op success.
+
+        CONFIRM GATING: the first call (confirm=False, the default) fetches
+        the current breaker state and returns a preview — it resets NOTHING.
+        Re-invoke with confirm=True to actually clear it.
+
+        Args:
+            confirm: Set True on the second call to perform the reset.
+        """
+        try:
+            client = get_ecm_client()
+            if not confirm:
+                state = await client.call_endpoint(ENDPOINTS["channel_pipeline_circuit_breaker"])
+                disabled = state.get("disabled", False) if isinstance(state, dict) else False
+                if not disabled:
+                    return "Circuit breaker is already clear — nothing to reset."
+                return (
+                    "Circuit breaker is TRIPPED. Re-invoke with confirm=True to clear it "
+                    "and re-enable run-on-refresh auto-fire."
+                )
+            result = await client.call_endpoint(ENDPOINTS["channel_pipeline_reset_circuit_breaker"])
+            was_disabled = result.get("was_disabled", False) if isinstance(result, dict) else False
+            if not was_disabled:
+                return "Circuit breaker was already clear."
+            return "Circuit breaker cleared — run-on-refresh auto-fire is re-enabled."
+        except Exception as e:
+            logger.error("[MCP] reset_channel_pipeline_circuit_breaker failed: %s", e)
+            return f"Error resetting circuit breaker: {e}"
+
+    @mcp.tool()
+    async def preview_event_sync(
+        rule_id: int | None = None,
+        event_sync_config: dict | None = None,
+        max_rows: int = 50,
+    ) -> str:
+        """Dry-run Event Sync matching against live master channels — ZERO writes.
+
+        Mirrors POST /api/channel-pipeline/event-sync-preview (bead
+        ti939.1.4, Event Sync Phase 1A): runs the read-only pre-flight
+        (master group auto-sync ON, secondaries OFF), fetches the master
+        group's channels and the secondary groups' streams from Dispatcharr,
+        and scores every stream through the EXACT resolver the future attach
+        path will use. Nothing is merged, mutated, or toggled.
+
+        Provide EXACTLY ONE of:
+            rule_id: Preview a saved event_sync rule.
+            event_sync_config: Preview an inline config before saving. The
+                canonical scoping is provider-scoped:
+                {"master": {"group_id": int, "m3u_account_id": int | null},
+                 "secondary": [{"group_id": int, "m3u_account_id": int|null},
+                 ...], optional "patterns"/"group_patterns"/
+                 "time_window_minutes"/"attach_threshold"/"max_attach_per_run"/
+                 "auto_run"/"dummy_epg_profile_id"/
+                 "include_master_group_streams"/"assume_current_date"/
+                 "parse_master_from_stream"}.
+                A scope's m3u_account_id (null = whole group) draws streams
+                from ONE M3U provider, so provider A's copy of a group can be
+                the master while provider B's copy of the SAME group is a
+                secondary. The legacy flat shape
+                {"master_group_id": int, "secondary_group_ids": [int, ...]}
+                is still accepted and auto-upgraded to whole-group scopes; the
+                server derives and stores both shapes.
+                include_master_group_streams (bool, default false, bead
+                6xxmp): also match the MASTER group's OWN streams (any
+                provider) to the master channels — a whole-group catch-all for
+                a same-named cross-provider group (Dispatcharr merges
+                same-named groups into one id), usually superseded by adding
+                the same group under the other provider as a secondary scope.
+                Streams already attached are skipped, so only the unsynced
+                provider's streams attach.
+                assume_current_date (bool, default false): place a listing
+                that carries a time but NO date onto the CURRENT date so
+                dateless "today's schedule" feeds become matchable — relaxes
+                the never-guess-the-date rail (cross-day match risk).
+                parse_master_from_stream (bool, default false): read each
+                master channel's event identity (title+time) from its first
+                attached stream's name instead of the channel name, so master
+                channels can be named freely.
+                promote_unmatched (bool, default false, bead ti939.4.1):
+                promote unmatched secondary-only events to ECM-managed
+                channels in promote_target_group_id (required when enabled;
+                must be a dedicated group — never the master or a
+                secondary). ECM CREATES those channels and DELETES them via
+                orphan reconciliation when the justifying stream leaves the
+                provider playlist. max_promote_per_run (int, default 25,
+                max 200) caps NEW promoted channels per run. The preview
+                reports the plan under "promotion" / "Would promote".
+                The built-in parse patterns also accept "|" and "("
+                delimiters, weekday prefixes, trailing suffixes after the
+                time, and numeric month-first dates ("(7.12 9:15 AM ET)"); a
+                Dispatcharr Channel Group Override on the master group is
+                followed automatically (master channels are read from the
+                override's target group). None of those need config keys.
+
+        Args:
+            rule_id: Saved channel-pipeline rule id (event_sync kind).
+            event_sync_config: Inline event_sync config object.
+            max_rows: Cap on per-stream detail lines in the text report
+                (summary counts always cover everything).
+        """
+        if (rule_id is None) == (event_sync_config is None):
+            return (
+                "Error: provide exactly one of rule_id (saved rule) or "
+                "event_sync_config (inline config)."
+            )
+        try:
+            client = get_ecm_client()
+            body = (
+                {"rule_id": rule_id} if rule_id is not None
+                else {"event_sync_config": event_sync_config}
+            )
+            result = await client.call_endpoint(
+                ENDPOINTS["ac_event_sync_preview"], body=body, timeout=120.0
+            )
+            if not isinstance(result, dict):
+                return f"Unexpected response: {result!r}"
+
+            lines = ["Event Sync PREVIEW (dry-run, zero writes):"]
+
+            preflight = result.get("preflight") or {}
+            if preflight.get("ok"):
+                lines.append("Pre-flight: OK")
+            else:
+                lines.append("Pre-flight: FAILED — fix in Dispatcharr "
+                             "(ECM never toggles group settings for you):")
+                for f in preflight.get("failures", []):
+                    lines.append(
+                        f"  - group {f.get('group_id')} ({f.get('role')}): "
+                        f"{f.get('message')}"
+                    )
+
+            # bead 2ey2y: rule-level advisory warnings (e.g. the stale-dateless
+            # rail being inert for lack of snapshot coverage) — never a failure
+            # (preflight.ok is untouched), but silently dropping these left the
+            # operator unaware the rail wasn't actually protecting anything.
+            for w in preflight.get("warnings", []):
+                lines.append(f"  WARNING: {w.get('message')}")
+
+            s = result.get("summary") or {}
+            # ti939.3.5: the operator never-attach count rides the summary
+            # only when non-zero (older backends omit the field entirely).
+            excluded_count = s.get("excluded_by_operator", 0)
+            excluded_part = (
+                f"{excluded_count} excluded by operator, "
+                if excluded_count else ""
+            )
+            lines.append(
+                f"Summary: {s.get('secondary_streams', 0)} secondary streams -> "
+                f"{s.get('would_attach', 0)} would attach, "
+                f"{s.get('ambiguous_skipped', 0)} ambiguous (operator review), "
+                f"{excluded_part}"
+                f"{s.get('unmatched', 0)} unmatched, "
+                f"{s.get('parse_failed', 0)} parse failed | "
+                f"{s.get('master_channels', 0)} master channels "
+                f"({s.get('master_channels_unparsed', 0)} unparsable) | "
+                f"{s.get('stale_suspect_streams', 0)} stale-suspect, "
+                f"{s.get('freshness_unknown_streams', 0)} freshness-unknown"
+            )
+            if result.get("truncated"):
+                lines.append("NOTE: fetch caps hit — results are truncated.")
+
+            # bead ti939.4.1: unmatched-stream promotion plan — present
+            # ONLY when the rule/config opted in via promote_unmatched.
+            # Rendered as its own block (distinct from excluded/warnings):
+            # promotion is the one path where ECM would CREATE channels.
+            promo = result.get("promotion")
+            if promo:
+                lines.append(
+                    f"Would promote: {promo.get('would_promote', 0)} "
+                    f"channel(s) in target group "
+                    f"{promo.get('target_group_id')} "
+                    f"({promo.get('would_create', 0)} new, "
+                    f"{promo.get('would_attach_existing', 0)} adopt "
+                    f"existing) from "
+                    f"{promo.get('would_promote_streams', 0)} unmatched "
+                    f"stream(s). ECM creates AND deletes channels in that "
+                    f"group (reconciliation-driven lifecycle)."
+                )
+                if promo.get("capped"):
+                    lines.append(
+                        f"  NOTE: promotion capped at {promo.get('cap')} "
+                        f"— {promo.get('cap_overage')} unit(s) deferred "
+                        f"to the next run."
+                    )
+                for unit in promo.get("units", []):
+                    streams = unit.get("streams", [])
+                    lines.append(
+                        f"  PROMOTE [{unit.get('action')}] "
+                        f"'{unit.get('channel_name')}' <- "
+                        f"{len(streams)} stream(s): "
+                        + ", ".join(
+                            f"'{s.get('stream_name')}' "
+                            f"[{s.get('provider')}]"
+                            for s in streams[:5]
+                        )
+                        + (" ..." if len(streams) > 5 else "")
+                    )
+
+            for group in result.get("parse_failures", []):
+                lines.append(
+                    f"PARSE FAILURES in group {group.get('group_id')} "
+                    f"('{group.get('group_name')}'), reason="
+                    f"{group.get('reason')}: {group.get('count')} stream(s), "
+                    f"e.g. {group.get('stream_names', [])[:3]}"
+                )
+
+            shown = 0
+            for row in result.get("streams", []):
+                if shown >= max_rows:
+                    lines.append(
+                        f"  ... and {len(result.get('streams', [])) - shown} "
+                        f"more stream(s)"
+                    )
+                    break
+                shown += 1
+                if row.get("disposition") == "would_attach":
+                    master = row.get("would_attach_master") or {}
+                    top = (row.get("candidates") or [{}])[0]
+                    # S5 (bead sf8dj): flag rows admitted only by an optional
+                    # relaxation so the operator can double-check them.
+                    via = [v.get("label") for v in (row.get("matched_via") or [])]
+                    via_suffix = (
+                        f" (matched via: {', '.join(via)})" if via else ""
+                    )
+                    lines.append(
+                        f"  ATTACH  [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' -> channel "
+                        f"{master.get('channel_id')} '{master.get('name')}' "
+                        f"(score={top.get('score')}, "
+                        f"teams={top.get('team_verdict')}, "
+                        f"dt={top.get('time_delta_minutes')}m)"
+                        f"{via_suffix}"
+                    )
+                elif row.get("disposition") == "ambiguous":
+                    top = (row.get("candidates") or [{}])[0]
+                    lines.append(
+                        f"  REVIEW  [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' ~ "
+                        f"'{top.get('master_channel_name')}' "
+                        f"(score={top.get('score')} — ambiguous, never "
+                        f"auto-attached)"
+                    )
+                elif row.get("disposition") == "excluded_by_operator":
+                    # ti939.3.5: an operator standing order suppressed the
+                    # pairing — visibly a "never", not an inexplicable
+                    # unmatch. Manage via list/delete_event_sync_exclusion.
+                    excluded_masters = row.get("excluded_masters") or []
+                    lines.append(
+                        f"  EXCLUDED [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' (operator never-attach: "
+                        f"{', '.join(excluded_masters) or 'excluded pairing'})"
+                    )
+                elif row.get("disposition") == "unmatched":
+                    lines.append(
+                        f"  UNMATCHED [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' (no master within the "
+                        f"time window — master-as-ceiling)"
+                    )
+                else:
+                    lines.append(
+                        f"  PARSE-FAIL [{row.get('provider')}] "
+                        f"'{row.get('stream_name')}' "
+                        f"({row.get('unmatchable_reason')})"
+                    )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("[MCP] preview_event_sync failed: %s", e)
+            return f"Error previewing event sync: {e}"

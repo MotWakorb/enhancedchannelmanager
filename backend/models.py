@@ -30,6 +30,31 @@ class JournalEntry(Base):
     after_value = Column(Text, nullable=True)  # JSON of new state
     user_initiated = Column(Boolean, default=True, nullable=False)  # Manual vs automatic
     batch_id = Column(String(50), nullable=True)  # Groups related changes
+    # Actor / origin of the mutation (enhancedchannelmanager-vp1rx / W3).
+    # One of: "ui" (operator via JWT), "mcp_ai" (AI agent via static MCP key),
+    # "scheduler" (a scheduled task), "auto_creation" (the auto-creation pipeline).
+    # NULL for legacy rows and any path that did not stamp an actor — distinct
+    # from ``user_initiated`` (manual-vs-automatic), which is left untouched for
+    # back-compat. ``mutation_source`` answers WHO/WHAT initiated the change so
+    # an AI-driven mutation is traceable and recoverable; ``user_initiated`` only
+    # answers whether a human clicked a button.
+    mutation_source = Column(String(20), nullable=True)
+    # Automation marker (enhancedchannelmanager-uliyr follow-up). Whether the
+    # write came from a self-declared automated client:
+    #   True  — the request carried the ``X-ECM-Automated-Client`` header
+    #           (the backend E2E harness) — eligible for the noise purge.
+    #   False — an /api/* request WITHOUT the header (a real UI/MCP
+    #           operator) — the noise purge must keep these rows.
+    #   NULL  — pre-marker legacy rows and non-HTTP internal writers
+    #           (scheduler, pipelines, bandwidth tracker). Legacy rule
+    #           create/delete rows keep aging out of the noise purge until
+    #           the unmarked set shrinks to zero.
+    # Orthogonal to ``mutation_source`` (WHO: ui/mcp_ai/scheduler/...) —
+    # the E2E harness authenticates as a real user, so both automated and
+    # operator traffic read ``mutation_source="ui"``; only this
+    # self-declaration separates them. No index: the sole consumer is the
+    # noise purge's category/action-narrowed scan (idx_journal_category).
+    automated_client = Column(Boolean, nullable=True)
 
     # Indexes for common queries.
     #
@@ -51,6 +76,10 @@ class JournalEntry(Base):
         Index("idx_journal_action_type", action_type),
         Index("idx_journal_batch_id", batch_id),
         Index("idx_journal_entity", category, entity_id, timestamp.desc()),
+        # Single-column index for the "show me everything the AI did" forensic
+        # query (``WHERE mutation_source='mcp_ai'``) surfaced by the journal API
+        # filter (enhancedchannelmanager-vp1rx / W3).
+        Index("idx_journal_mutation_source", mutation_source),
     )
 
     def to_dict(self) -> dict:
@@ -67,6 +96,8 @@ class JournalEntry(Base):
             "after_value": json.loads(self.after_value) if self.after_value else None,
             "user_initiated": self.user_initiated,
             "batch_id": self.batch_id,
+            "mutation_source": self.mutation_source,
+            "automated_client": self.automated_client,
         }
 
     def __repr__(self):
@@ -1025,6 +1056,15 @@ class M3UDigestSettings(Base):
     # JSON arrays of regex patterns for excluding groups/streams from digest
     exclude_group_patterns = Column(Text, nullable=True)
     exclude_stream_patterns = Column(Text, nullable=True)
+    # JSON array of M3U account IDs to include in digest NOTIFICATIONS
+    # (GH #496). Scopes which accounts' changes are emailed/Discorded —
+    # DB logging in M3UChangeLog stays complete for every account
+    # regardless of this setting. Empty/null = all accounts (unchanged
+    # default behavior). Added for operators running a high-churn "FAST"
+    # provider (10k+ stream URL changes/hour) alongside slow-changing
+    # standard providers, who want the noisy provider excluded from
+    # notifications without losing its change history.
+    account_ids = Column(Text, nullable=True)
     # Tracking
     last_digest_at = Column(DateTime, nullable=True)
     # Timestamps
@@ -1070,6 +1110,19 @@ class M3UDigestSettings(Base):
         """Set exclude_stream_patterns from list."""
         self.exclude_stream_patterns = json.dumps(patterns) if patterns else None
 
+    def get_account_ids(self) -> list:
+        """Parse account_ids JSON into list."""
+        if not self.account_ids:
+            return []
+        try:
+            return json.loads(self.account_ids)
+        except (ValueError, TypeError):
+            return []
+
+    def set_account_ids(self, ids: list) -> None:
+        """Set account_ids from list."""
+        self.account_ids = json.dumps(ids) if ids else None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -1084,6 +1137,7 @@ class M3UDigestSettings(Base):
             "send_to_discord": self.send_to_discord,
             "exclude_group_patterns": self.get_exclude_group_patterns(),
             "exclude_stream_patterns": self.get_exclude_stream_patterns(),
+            "account_ids": self.get_account_ids(),
             "last_digest_at": self.last_digest_at.isoformat() + "Z" if self.last_digest_at else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
@@ -1756,6 +1810,15 @@ class UserSession(Base):
     # Token tracking (store hash of refresh token, not the token itself)
     refresh_token_hash = Column(String(255), nullable=False, unique=True)
 
+    # Rotation grace window (bd-x67qe): hash of the immediately-prior refresh
+    # token and when it was rotated away. For a short window after rotation
+    # the predecessor is still accepted by /auth/refresh (idempotent-refresh
+    # semantics) so two tabs racing the same rotation don't hard-logout the
+    # loser. Only ONE generation is kept — a normal rotation overwrites both
+    # fields, so a graced token can never chain to an older one.
+    prior_refresh_token_hash = Column(String(255), nullable=True)
+    rotated_at = Column(DateTime, nullable=True)
+
     # Session metadata
     ip_address = Column(String(45), nullable=True)  # IPv6 can be up to 45 chars
     user_agent = Column(String(500), nullable=True)
@@ -1777,6 +1840,7 @@ class UserSession(Base):
         Index("idx_session_user", user_id),
         Index("idx_session_expires", expires_at),
         Index("idx_session_token_hash", refresh_token_hash),
+        Index("idx_session_prior_token_hash", prior_refresh_token_hash),
     )
 
     def to_dict(self) -> dict:
@@ -1867,7 +1931,7 @@ class UserIdentity(Base):
 # Auto-Creation Pipeline Models (v0.12.0)
 # =============================================================================
 
-class AutoCreationRule(Base):
+class ChannelPipelineRule(Base):
     """
     Rule for automatic channel creation from streams.
 
@@ -1887,6 +1951,10 @@ class AutoCreationRule(Base):
     description = Column(Text, nullable=True)  # User notes about this rule
     enabled = Column(Boolean, default=True, nullable=False)
     priority = Column(Integer, default=0, nullable=False)  # Lower = runs first
+    # Optional inclusive calendar-date window. Null bounds are open-ended.
+    # Evaluated against the backend's UTC date before a rule can execute.
+    active_from = Column(Date, nullable=True)
+    active_until = Column(Date, nullable=True)
 
     # Scope - which streams this rule applies to
     m3u_account_id = Column(Integer, nullable=True)  # Null = all accounts
@@ -1952,6 +2020,41 @@ class AutoCreationRule(Base):
     # lookups so a Merge-Streams-only rule can finally scope its match to one
     # group instead of matching same-name channels in any group.
     match_scope_group_id = Column(Integer, nullable=True)
+
+    # Manual-channel isolation (enhancedchannelmanager-orzck / W1). When False
+    # (the default, and the safe behavior), auto-creation will NOT adopt a
+    # hand-built MANUAL channel (a channel whose ``auto_created`` flag is
+    # missing/falsy) as a merge/update/rename target on a name collision — the
+    # manual channel is treated as "not found" and a new auto channel is created
+    # instead. This fixes the reported bleed where merging auto-created channels
+    # overwrote regular (manual) channels' names/metadata/filters. Set True to
+    # opt a rule back into the legacy behavior of adopting same-name manual
+    # channels; each adoption is journaled for audit.
+    allow_manual_channel_merge = Column(Boolean, default=False, nullable=False)
+
+    # Fold match key (GH #645 / bead 0vao3). When True (opt-in, default
+    # False so existing installs are unchanged), the create_channel
+    # ``if_exists`` merge lookup additionally compares names by a canonical
+    # fold key — casefold + strip ALL whitespace (match_fold.fold_match_key)
+    # — so spelling variants like "eurosport 2" / "Eurosport2" merge into one
+    # channel instead of creating duplicates. Comparison key ONLY: visible
+    # channel names are never altered (this is deliberately NOT a
+    # normalization rule — see docs/normalization.md parity contract).
+    # Caveat: folding can over-merge genuinely distinct channels whose names
+    # differ only in spacing/case, which is why it is per-rule opt-in.
+    fold_match_key = Column(Boolean, default=False, nullable=False)
+
+    # Event Sync (enhancedchannelmanager-ti939.1.3, epic ti939). JSON config
+    # for the event_sync rule KIND: master_group_id, secondary_group_ids[],
+    # optional parse patterns (shared or per-group title/time/date regexes),
+    # time_window_minutes, attach_threshold, enabled. A rule with a non-NULL
+    # value IS an event_sync rule (see is_event_sync()); NULL = standard rule,
+    # so every pre-feature row keeps its exact prior behavior. Validated at
+    # write time by channel_pipeline_schema.validate_event_sync_config().
+    # Alembic 0031. PO decision (stateless recompute): NO new tables — this
+    # one nullable column plus journal provenance rows is the feature's entire
+    # durable state; channel IDs are never persisted across runs.
+    event_sync_config = Column(Text, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -2030,6 +2133,31 @@ class AutoCreationRule(Base):
         """Set normalization_group_ids from list of ints."""
         self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_event_sync_config(self) -> dict | None:
+        """Parse event_sync_config JSON into a dict (None when unset/corrupt)."""
+        if not self.event_sync_config:
+            return None
+        try:
+            parsed = json.loads(self.event_sync_config)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def set_event_sync_config(self, config: dict | None) -> None:
+        """Set event_sync_config from a dict (None/empty clears it)."""
+        self.event_sync_config = json.dumps(config) if config else None
+
+    def is_event_sync(self) -> bool:
+        """True when this rule is the event_sync KIND (ti939.1.3).
+
+        Kind is determined by the RAW column being set — not by parse
+        success — so a rule whose stored config is corrupt still counts as
+        event_sync and stays excluded from Pass 1/2 evaluation and Pass 4
+        orphan reconciliation, rather than falling back to running as a
+        standard rule against Dispatcharr-owned channels.
+        """
+        return bool(self.event_sync_config)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
         return {
@@ -2038,6 +2166,8 @@ class AutoCreationRule(Base):
             "description": self.description,
             "enabled": self.enabled,
             "priority": self.priority,
+            "active_from": self.active_from.isoformat() if self.active_from else None,
+            "active_until": self.active_until.isoformat() if self.active_until else None,
             "m3u_account_id": self.m3u_account_id,
             "target_group_id": self.target_group_id,
             "conditions": self.get_conditions(),
@@ -2057,6 +2187,9 @@ class AutoCreationRule(Base):
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,
             "match_scope_group_id": self.match_scope_group_id,
+            "allow_manual_channel_merge": self.allow_manual_channel_merge or False,
+            "fold_match_key": self.fold_match_key or False,
+            "event_sync_config": self.get_event_sync_config(),
             "last_run_at": self.last_run_at.isoformat() + "Z" if self.last_run_at else None,
             "last_run_stats": self.get_last_run_stats(),
             "match_count": self.match_count or 0,
@@ -2065,10 +2198,10 @@ class AutoCreationRule(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationRule(id={self.id}, name={self.name}, enabled={self.enabled}, priority={self.priority})>"
+        return f"<ChannelPipelineRule(id={self.id}, name={self.name}, enabled={self.enabled}, priority={self.priority})>"
 
 
-class AutoCreationExecution(Base):
+class ChannelPipelineExecution(Base):
     """
     Tracks each pipeline execution for audit and undo support.
 
@@ -2093,7 +2226,22 @@ class AutoCreationExecution(Base):
     duration_seconds = Column(Float, nullable=True)
 
     # Status
-    status = Column(String(20), nullable=False, default="pending")  # pending, running, completed, failed, rolled_back
+    # Allowed lifecycle values:
+    #   Transient: pending, running
+    #   Terminal:  completed, failed, rolled_back, capped,
+    #              completed_with_errors, abandoned
+    # 'abandoned' is set by task_engine's startup crash-reconciliation
+    # (_abandon_orphaned_auto_creation_executions, GH #473 / bd-exo4j) on rows
+    # left at 'running' by a hard restart/OOM kill; it also carries an
+    # error_message and trips the run-on-refresh circuit breaker.
+    # 'completed_with_errors' (build 0.17.6-0152, y3m6o.1 / GH #720) marks a run
+    # in which at least one executed action failed.
+    # Widened to String(32) in Alembic 0039 (y3m6o.1 / GH #720):
+    # 'completed_with_errors' (21 chars) overflowed the previous String(20). 32
+    # comfortably covers the full set above plus near-future statuses. SQLite
+    # ignores VARCHAR width, but a width-enforcing backend (Postgres) would
+    # truncate/reject — keep this contract honest.
+    status = Column(String(32), nullable=False, default="pending")
     error_message = Column(Text, nullable=True)  # Error details if failed
 
     # Statistics
@@ -2126,6 +2274,35 @@ class AutoCreationExecution(Base):
     # Captures condition evaluations and action results for each matched stream
     execution_log = Column(Text, nullable=True)
 
+    # Non-fatal run warnings surfaced in the run summary / executions UI
+    # (enhancedchannelmanager-e8p1h). JSON array of warning dicts, e.g. a rule
+    # that references DISABLED/missing normalization groups (so normalization
+    # silently applies nothing). Distinct from error_message — the run still
+    # completes; these are advisory config problems the operator should fix.
+    warnings = Column(Text, nullable=True)
+
+    # Structured Event Sync per-rule run summaries (enhancedchannelmanager-7wuhd).
+    # JSON array of the per-rule summary dicts the event_sync attach phase
+    # computes (secondary_streams, attached, already_attached, ambiguous_skipped,
+    # unmatched, parse_failed, attach_errors, capped, review_enqueued, ...) —
+    # persisted so the executions UI can render an event_sync-aware summary
+    # instead of the standard evaluated/matched/created counters, which are
+    # structurally 0 for event_sync runs. Nullable; get_event_sync_summary()
+    # returns [] for NULL.
+    event_sync_summary = Column(Text, nullable=True)
+
+    # True only for a PURE event_sync run — event_sync rule(s) ran and NO
+    # standard rules were in scope. Lets the executions UI swap the standard
+    # counter block for the event_sync block reliably even after the source
+    # rule is deleted (rule_id is ON DELETE SET NULL, so the rule kind can't be
+    # re-derived from the rule). A MIXED run (both kinds in one execution) is
+    # False so the UI stacks both blocks. server_default="0" so the NOT NULL
+    # add succeeds on tables with existing rows; the drift test filters the
+    # modify_default noise.
+    is_event_sync = Column(
+        Boolean, nullable=False, server_default=sa_text("0"), default=False
+    )
+
     # Rollback tracking
     rolled_back_at = Column(DateTime, nullable=True)
     rolled_back_by = Column(String(100), nullable=True)  # username or "system"
@@ -2134,7 +2311,7 @@ class AutoCreationExecution(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationship to rule
-    rule = relationship("AutoCreationRule", lazy="joined")
+    rule = relationship("ChannelPipelineRule", lazy="joined")
 
     __table_args__ = (
         Index("idx_auto_exec_rule", rule_id),
@@ -2216,8 +2393,35 @@ class AutoCreationExecution(Base):
         """Set execution_log from list."""
         self.execution_log = json.dumps(log) if log else None
 
+    def get_warnings(self) -> list:
+        """Parse warnings JSON into list (empty list when none)."""
+        if not self.warnings:
+            return []
+        try:
+            return json.loads(self.warnings)
+        except (ValueError, TypeError):
+            return []
+
+    def set_warnings(self, warnings: list) -> None:
+        """Set warnings from list."""
+        self.warnings = json.dumps(warnings) if warnings else None
+
+    def get_event_sync_summary(self) -> list:
+        """Parse event_sync_summary JSON into list (empty list when none)."""
+        if not self.event_sync_summary:
+            return []
+        try:
+            return json.loads(self.event_sync_summary)
+        except (ValueError, TypeError):
+            return []
+
+    def set_event_sync_summary(self, summaries: list) -> None:
+        """Set event_sync_summary from list (JSON), NULL when empty."""
+        self.event_sync_summary = json.dumps(summaries) if summaries else None
+
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
+        _warnings = self.get_warnings()
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
@@ -2241,6 +2445,28 @@ class AutoCreationExecution(Base):
             "rolled_back_at": self.rolled_back_at.isoformat() + "Z" if self.rolled_back_at else None,
             "rolled_back_by": self.rolled_back_by,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            # Advisory, non-fatal run warnings (e.g. disabled normalization
+            # groups). Always present so the UI can render unconditionally.
+            "warnings": _warnings,
+            # Event Sync run-kind flag + structured per-rule summaries
+            # (enhancedchannelmanager-7wuhd). Always present so the executions
+            # UI can branch its layout unconditionally: is_event_sync True ⇒
+            # pure event_sync run (swap the standard counter block), and
+            # event_sync_summary is [] for standard runs.
+            # bool() coerces the pre-flush None (Python default not yet applied)
+            # and any legacy NULL row to a real boolean.
+            "is_event_sync": bool(self.is_event_sync),
+            "event_sync_summary": self.get_event_sync_summary(),
+            # y3m6o.1 review (Finding 3): True when this run mutated
+            # channel-profile membership non-reversibly. Derived from the
+            # persisted ``non_reversible_profile_changes`` warning (no schema
+            # change) so the executions UI can DISCLOSE, on the rollback/undo
+            # affordances, that channel-profile membership will NOT be restored.
+            "has_non_reversible_profile_changes": any(
+                isinstance(w, dict)
+                and w.get("type") == "non_reversible_profile_changes"
+                for w in _warnings
+            ),
         }
         if include_entities:
             result["created_entities"] = self.get_created_entities()
@@ -2252,10 +2478,10 @@ class AutoCreationExecution(Base):
         return result
 
     def __repr__(self):
-        return f"<AutoCreationExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
+        return f"<ChannelPipelineExecution(id={self.id}, rule_id={self.rule_id}, status={self.status}, mode={self.mode})>"
 
 
-class AutoCreationSnapshot(Base):
+class ChannelPipelineSnapshot(Base):
     """Point-in-time snapshot of the manual (non-Dispatcharr-auto-created)
     channel<->stream state captured BEFORE an auto-creation execution mutated
     anything, to enable a full whole-run revert (ADR-010).
@@ -2281,7 +2507,7 @@ class AutoCreationSnapshot(Base):
     # without parsing the BLOB; feeds the retention metric in ADR-010 §D7).
     channel_count = Column(Integer, default=0, nullable=False)
     # Serialized per-channel payload. JSON TEXT (the project convention for
-    # snapshot/entity BLOBs — cf. AutoCreationExecution.created_entities and
+    # snapshot/entity BLOBs — cf. ChannelPipelineExecution.created_entities and
     # M3USnapshot.groups_data). Shape: {"channels": [{id, name,
     # channel_group_id, epg_data_id, tvg_id, stream_ids: [int]}, ...]}.
     channels_data = Column(Text, nullable=True)
@@ -2320,10 +2546,10 @@ class AutoCreationSnapshot(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationSnapshot(id={self.id}, execution_id={self.execution_id}, channel_count={self.channel_count})>"
+        return f"<ChannelPipelineSnapshot(id={self.id}, execution_id={self.execution_id}, channel_count={self.channel_count})>"
 
 
-class AutoCreationConflict(Base):
+class ChannelPipelineConflict(Base):
     """
     Tracks conflicts detected during pipeline execution.
 
@@ -2357,7 +2583,7 @@ class AutoCreationConflict(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationship to execution
-    execution = relationship("AutoCreationExecution", lazy="joined")
+    execution = relationship("ChannelPipelineExecution", lazy="joined")
 
     __table_args__ = (
         Index("idx_auto_conflict_execution", execution_id),
@@ -2409,7 +2635,7 @@ class AutoCreationConflict(Base):
         }
 
     def __repr__(self):
-        return f"<AutoCreationConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"
+        return f"<ChannelPipelineConflict(id={self.id}, execution_id={self.execution_id}, type={self.conflict_type})>"
 
 
 class FFmpegProfile(Base):
@@ -2948,4 +3174,198 @@ class PendingMergeJournal(Base):
             f"pending_merge_id={self.pending_merge_id}, "
             f"action={self.action_type}, "
             f"trigger={self.trigger_context})>"
+        )
+
+
+class EventSyncReview(Base):
+    """One reviewable event_sync pairing + its outcome (bead ti939.3.2).
+
+    Ambiguous-band matches (including the PR #613 contested rail) from
+    event_sync runs enqueue here instead of being silently skipped. One row
+    = one (secondary stream identity, master event identity) PAIRING under
+    one rule; a stream contested between two masters produces two rows.
+
+    **Keying (HARD security constraint, epic ti939.3):** the identity
+    columns are the content fingerprint — ``rule_id``, ``provider_id``,
+    ``stream_name_hash``, ``event_key`` — NEVER channel or stream IDs.
+    Stream IDs churn on provider refresh; channel IDs live only as long as
+    the event's channel. Fingerprint semantics (normalization, sentinel,
+    UTC event key) are defined in ``services/event_sync_review.py``; this
+    model carries only the shape.
+
+    ``evidence`` is a DISPLAY-ONLY JSON snapshot (raw names, parsed
+    identities, score/band/verdict/delta, snapshot stream/channel ids for
+    the accept endpoint's lazy re-verification). Nothing in it is ever
+    authoritative for identity — the accept path re-verifies snapshot IDs
+    against live Dispatcharr before using them and falls back to the
+    fingerprint-keyed next-run auto-attach when verification fails.
+
+    State machine: ``pending → accepted | rejected`` via the operator
+    endpoints; ``pending → superseded`` when a sibling pairing for the same
+    stream fingerprint is accepted (the stream-level question was answered;
+    superseded is terminal but distinct from an operator "no"). All
+    terminal rows persist as the decision record — the unique fingerprint
+    index makes "the queue must not refill with answered questions"
+    DB-enforced rather than application-checked.
+
+    Audit trail: accept/reject actions and queue-driven attaches write
+    ``journal_entries`` rows under category ``event_sync`` (no second
+    journal table — deliberate divergence from the ADR-008 §D6 twin-table
+    precedent, which predates the mutation_source-aware shared journal).
+    """
+
+    __tablename__ = "event_sync_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # The event_sync rule the question arose under. FK CASCADE: deleting a
+    # rule deletes its open questions AND its decisions — decisions are
+    # meaningless without the rule's config (patterns define the parse).
+    rule_id = Column(
+        Integer,
+        ForeignKey(
+            "auto_creation_rules.id",
+            name="fk_event_sync_reviews_rule",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # M3U account id of the secondary stream. 0 is the documented
+    # unknown-provider sentinel (services/event_sync_review.py) — NOT NULL
+    # because SQLite unique indexes treat NULLs as distinct, which would
+    # break the dedup invariant.
+    provider_id = Column(Integer, nullable=False)
+    # SHA-256 hex of the LOCALS-normalized secondary stream name.
+    stream_name_hash = Column(Text, nullable=False)
+    # Normalized master event identity: "<cleaned title>|<UTC ISO start>".
+    event_key = Column(Text, nullable=False)
+    # State machine column (CHECK is load-bearing).
+    status = Column(
+        Text,
+        nullable=False,
+        server_default=sa_text("'pending'"),
+        default="pending",
+    )
+    # Epoch-ms (ADR-007 / pending_merges convention).
+    created_at = Column(Integer, nullable=False)
+    # Epoch-ms of the last run that re-encountered this pending pairing
+    # (evidence snapshot refreshed alongside).
+    last_seen_at = Column(Integer, nullable=False)
+    # Epoch-ms when the row left 'pending'; NULL while pending.
+    resolved_at = Column(Integer, nullable=True)
+    # 'operator' / 'superseded_by_accept' (app-validated enum; NULL while
+    # pending).
+    resolution_source = Column(Text, nullable=True)
+    # Opaque acting-user DB id (ADR-008 §D6 posture); "anonymous" when auth
+    # is disabled; NULL while pending or when superseded mechanically.
+    actor_token_id = Column(Text, nullable=True)
+    # Display-only JSON snapshot (see class docstring).
+    evidence = Column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','accepted','rejected','superseded')",
+            name="ck_event_sync_reviews_status",
+        ),
+        # THE dedup invariant: one row per fingerprint, ever. Answered rows
+        # persist as decisions; re-encounters refresh, never duplicate.
+        Index(
+            "uq_event_sync_reviews_fingerprint",
+            "rule_id",
+            "provider_id",
+            "stream_name_hash",
+            "event_key",
+            unique=True,
+        ),
+        # Queue list + badge count read path.
+        Index("idx_event_sync_reviews_status_created", "status", "created_at"),
+        # Per-rule decision load (every run) + per-rule queue filters.
+        Index("idx_event_sync_reviews_rule_status", "rule_id", "status"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<EventSyncReview(id={self.id}, rule_id={self.rule_id}, "
+            f"provider_id={self.provider_id}, status={self.status})>"
+        )
+
+
+class EventSyncExclusion(Base):
+    """One operator "never attach this pairing" exclusion (bead ti939.3.5).
+
+    Solves the stateless-recompute loop the epic predicted: a false-positive
+    attach the operator manually detaches is re-attached on the next run,
+    forever, until the pattern/threshold changes. An exclusion row is the
+    durable "never": the resolver removes the pairing from candidate
+    consideration BEFORE the attach band is honored, on every run and
+    preview.
+
+    **Keying (HARD security constraint, epic ti939.3 — locked at planning):**
+    identity columns are the content fingerprint — ``rule_id``,
+    ``provider_id``, ``stream_name_hash``, ``event_key`` — NEVER channel or
+    stream IDs (both churn; see ``EventSyncReview``). Fingerprint semantics
+    live in ``services/event_sync_review.py``. Survival across refreshes and
+    stream-ID churn is therefore by construction.
+
+    **Precedence:** an exclusion outranks a prior review-queue ACCEPT for
+    the same fingerprint — the resolver filters excluded candidates before
+    the accept-upgrade step, so the two can never both apply
+    (``services/event_sync_resolver.py`` pins this).
+
+    Unlike ``EventSyncReview`` there is no state machine: the row's
+    existence IS the decision; removal (DELETE) is the undo. ``evidence``
+    is the same display-only JSON snapshot shape as review rows — raw
+    names for the operator's eyes, never identity-authoritative. Create
+    and delete journal under category ``event_sync``
+    (``exclusion_create`` / ``exclusion_delete``).
+    """
+
+    __tablename__ = "event_sync_exclusions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # FK CASCADE mirrors event_sync_reviews: an exclusion is meaningless
+    # without the rule's parse patterns.
+    rule_id = Column(
+        Integer,
+        ForeignKey(
+            "auto_creation_rules.id",
+            name="fk_event_sync_exclusions_rule",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    # M3U account id of the secondary stream; 0 = documented
+    # unknown-provider sentinel (NOT NULL — SQLite unique indexes treat
+    # NULLs as distinct, which would break the dedup invariant).
+    provider_id = Column(Integer, nullable=False)
+    # SHA-256 hex of the LOCALS-normalized secondary stream name.
+    stream_name_hash = Column(Text, nullable=False)
+    # Normalized master event identity (see services/event_sync_review.py).
+    event_key = Column(Text, nullable=False)
+    # Epoch-ms (ADR-007 / pending_merges convention).
+    created_at = Column(Integer, nullable=False)
+    # Optional operator free-text ("why I excluded this").
+    note = Column(Text, nullable=True)
+    # Opaque acting-user DB id; "anonymous" when auth is disabled.
+    actor_token_id = Column(Text, nullable=True)
+    # Display-only JSON snapshot (same shape/role as EventSyncReview.evidence).
+    evidence = Column(Text, nullable=False)
+
+    __table_args__ = (
+        # One exclusion per fingerprint, ever — create is idempotent.
+        Index(
+            "uq_event_sync_exclusions_fingerprint",
+            "rule_id",
+            "provider_id",
+            "stream_name_hash",
+            "event_key",
+            unique=True,
+        ),
+        # Per-rule load (every run/preview) + per-rule list filter.
+        Index("idx_event_sync_exclusions_rule", "rule_id"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<EventSyncExclusion(id={self.id}, rule_id={self.rule_id}, "
+            f"provider_id={self.provider_id})>"
         )

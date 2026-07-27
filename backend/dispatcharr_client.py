@@ -8,6 +8,7 @@ import httpx
 import logging
 from typing import Optional
 from config import get_settings, DispatcharrSettings
+from concurrency import run_cpu_bound
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,18 @@ def upstream_http_exception(exc: Exception):
 # cache-key derivation).
 _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 
+# DBAS-restore endpoint paths (enhancedchannelmanager-0i2vt.13). Isolated as
+# constants so a single live-verification follow-up can correct any path string
+# without editing the methods. Dispatcharr groups core resources under
+# ``/api/core/`` (confirmed for streamprofiles/version/system-events); the DVR
+# module lives under ``/api/dvr/``. These specific paths are best-known and not
+# yet live-confirmed — see the method block for the deferred-verification note.
+_USER_AGENTS_PATH = "/api/core/useragents/"
+_CORE_SETTINGS_PATH = "/api/core/settings/"
+_DVR_RULES_PATH = "/api/dvr/rules/"
+_EPG_DATA_BYTES_PER_RESULT = 2048
+_EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
+
 
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
@@ -209,7 +222,17 @@ class DispatcharrClient:
         **kwargs,
     ) -> httpx.Response:
         """Make an authenticated request with automatic token refresh."""
-        logger.debug("[DISPATCHARR] API request: %s %s", method, path)
+        # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
+        # sink in this method. ``path`` is attacker-influenced/credential-tainted
+        # in practice -- callers such as ``update_core_setting`` build it from a
+        # settings key (``f"{_CORE_SETTINGS_PATH}{setting_name}/"``), and a path
+        # *could* in principle carry a query string with a token. CodeQL's
+        # py/clear-text-logging-sensitive-data correctly traces that credential
+        # source into ``path`` and flags every ``logger.*(..., path)`` sink here.
+        # These logs use only NON-sensitive fields -- HTTP method, status code,
+        # and (on error) the exception TYPE name -- which is plenty to triage an
+        # upstream failure without ever emitting a URL, token, or response body.
+        logger.debug("[DISPATCHARR] API request: %s", method)
         await self._ensure_authenticated()
 
         headers = kwargs.pop("headers", {})
@@ -245,7 +268,7 @@ class DispatcharrClient:
             # If unauthorized in JWT mode, try refreshing token and retry.
             # In api-key mode a 401 is terminal (the key is invalid or revoked).
             if response.status_code == 401 and not self._uses_api_key:
-                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s %s", method, path)
+                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
                 response = await self._client.request(
@@ -257,13 +280,18 @@ class DispatcharrClient:
                 )
 
             if response.status_code >= 400:
-                logger.warning("[DISPATCHARR] API request failed: %s %s - status: %s", method, path, response.status_code)
+                logger.warning("[DISPATCHARR] API request failed: %s - status: %s", method, response.status_code)
             else:
-                logger.debug("[DISPATCHARR] API request successful: %s %s - status: %s", method, path, response.status_code)
+                logger.debug("[DISPATCHARR] API request successful: %s - status: %s", method, response.status_code)
 
             return response
         except Exception as e:
-            logger.exception("[DISPATCHARR] API request error: %s %s - %s", method, path, e)
+            # Log only the exception TYPE name -- never the exception object or
+            # ``str(e)``. An httpx error's text can embed the full request URL
+            # (with query params/credentials), so logging ``e`` here would leak
+            # exactly what CodeQL flags. Method + exception type is enough to
+            # triage; ``logger.exception`` still attaches the traceback.
+            logger.exception("[DISPATCHARR] API request error: %s - %s", method, type(e).__name__)
             raise
 
     # -------------------------------------------------------------------------
@@ -424,8 +452,16 @@ class DispatcharrClient:
         search: Optional[str] = None,
         channel_group_name: Optional[str] = None,
         m3u_account: Optional[int] = None,
+        is_catchup: Optional[bool] = None,
     ) -> dict:
-        """Get paginated list of streams."""
+        """Get paginated list of streams.
+
+        ``is_catchup`` filters by Dispatcharr's catch-up flag when set. The flag
+        is ``db_index=True`` upstream, so a ``page_size=1`` request with
+        ``is_catchup=True`` is a cheap indexed count query — used by the
+        provider catch-up badge (bead 4dpiz) to detect whether a provider has
+        any catch-up stream via the paginated ``count``.
+        """
         params = {"page": page, "page_size": page_size}
         if search:
             params["search"] = search
@@ -436,6 +472,9 @@ class DispatcharrClient:
         # channel_group=0 bug in get_channels).
         if m3u_account is not None:
             params["m3u_account"] = m3u_account
+        # Dispatcharr's BooleanFilter expects the lowercase string form.
+        if is_catchup is not None:
+            params["is_catchup"] = "true" if is_catchup else "false"
 
         response = await self._request("GET", "/api/channels/streams/", params=params)
         response.raise_for_status()
@@ -454,6 +493,46 @@ class DispatcharrClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def create_stream(self, data: dict) -> dict:
+        """Create a new stream.
+
+        Used by the Channels restore importer (enhancedchannelmanager-nav0c):
+        channels carry embedded (non-standalone) streams, so restoring a channel
+        means recreating any of its streams that no matcher tier resolved to an
+        existing one.
+
+        Returns the created stream, or raises an exception with the response body
+        if creation fails. The error message uses the same
+        ``"<thing> failed: <status> - <body>"`` shape as ``create_channel`` /
+        ``create_channel_group`` so ``upstream_http_exception`` can parse the
+        upstream status + actionable detail (see restore_contracts mapper).
+        """
+        if not isinstance(data, dict):
+            raise ValueError("create_stream requires a dict payload")
+        response = await self._request(
+            "POST", "/api/channels/streams/", json=data
+        )
+        if response.status_code >= 400:
+            # Include response body in exception for better error handling
+            error_body = response.text
+            raise Exception(f"Stream creation failed: {response.status_code} - {error_body}")
+        return response.json()
+
+    async def delete_stream(self, stream_id: int) -> None:
+        """Delete a stream by ID.
+
+        Used as the rollback compensation for a previously created stream
+        (restore_contracts rollback ledger, enhancedchannelmanager-nav0c): if a
+        later step in the same restore fails, streams created earlier in the run
+        are deleted to avoid leaving orphans. A 404 here means the stream is
+        already gone, which the caller treats as a successful (idempotent)
+        compensation.
+        """
+        response = await self._request(
+            "DELETE", f"/api/channels/streams/{stream_id}/"
+        )
+        response.raise_for_status()
 
     async def get_streams_by_ids(self, ids: list[int]) -> list:
         """Get multiple streams by IDs."""
@@ -569,35 +648,124 @@ class DispatcharrClient:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
 
         The channel_groups data is embedded in the accounts response, so we extract it from there.
-        When multiple accounts have settings for the same group, prefer the one with auto_channel_sync enabled.
+
+        GLOBAL-PER-CHANNEL-GROUP contract (GH #720 Part B, decision "global per
+        group"): when multiple accounts carry settings for the SAME global
+        channel-group id we collapse to ONE row DETERMINISTICALLY — precedence
+        is ``auto_channel_sync`` ON first, then the LOWEST ``m3u_account_id``.
+        (The prior "prefer auto_channel_sync, else first-seen" collapse was
+        order-dependent across accounts with the same auto_channel_sync state.)
+        The winning row also carries ``_ecm_channel_profile_conflict``: True
+        when two account rows for the group hold DIFFERENT non-empty
+        ``channel_profile_ids`` selections, so the profile reconcile can warn.
         """
         accounts = await self.get_m3u_accounts()
         logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
-        all_settings = {}
+
+        # Gather ALL account rows per global group id first, then pick a
+        # deterministic winner (auto_channel_sync ON first, then lowest account
+        # id). Collecting first also lets us detect cross-account selection
+        # conflicts.
+        rows_by_group: dict = {}
         total_groups_found = 0
         for account in accounts:
-            # channel_groups is embedded in the account response
             channel_groups = account.get("channel_groups", [])
             total_groups_found += len(channel_groups)
             logger.info("[DISPATCHARR]   Account %s: %s has %s channel_groups", account.get('id'), account.get('name'), len(channel_groups))
             for setting in channel_groups:
                 channel_group_id = setting.get("channel_group")
                 if channel_group_id:
-                    new_setting = {
+                    rows_by_group.setdefault(channel_group_id, []).append({
+                        **setting,
+                        "m3u_account_id": account["id"],
+                        "m3u_account_name": account.get("name", ""),
+                    })
+
+        # Finding 2: coerce ids exactly as _selection_from_setting does (numeric
+        # strings -> int) so the winner tiebreak, conflict detection, and
+        # normalize all see the SAME coerced ints. Int-only DROP here (while the
+        # reconcile coerces) made a legacy ["12"] row lose the has-selection
+        # tiebreak, never flag ["12"] vs [13] as a conflict, and never get
+        # normalized to int storage.
+        from services.profile_reconcile import coerce_profile_id
+
+        def _row_selection(r):
+            cp = r.get("custom_properties")
+            if isinstance(cp, dict):
+                sel = cp.get("channel_profile_ids")
+                if isinstance(sel, list) and sel:
+                    coerced = [coerce_profile_id(x) for x in sel]
+                    valid = [x for x in coerced if x is not None]
+                    if valid:
+                        return tuple(sorted(valid))
+            return None
+
+        all_settings = {}
+        for channel_group_id, rows in rows_by_group.items():
+            # Deterministic precedence: auto_channel_sync ON (0) before OFF (1),
+            # then — within a tier — prefer a row that HAS a non-empty selection
+            # (0) over one that does not (1) so an operator's real selection is
+            # never silently shadowed by a no-selection winner (Should-Fix 3),
+            # then LOWEST m3u_account_id.
+            winner = min(
+                rows,
+                key=lambda r: (
+                    0 if r.get("auto_channel_sync") else 1,
+                    0 if _row_selection(r) is not None else 1,
+                    r.get("m3u_account_id") if r.get("m3u_account_id") is not None else 1 << 62,
+                ),
+            )
+            distinct_selections = {
+                s for s in (_row_selection(r) for r in rows) if s is not None
+            }
+            winner_selection = _row_selection(winner)
+            # Conflict when either two rows carry DIFFERENT non-empty selections,
+            # OR some row carries a selection but the chosen winner does not
+            # (a selection-vs-no-selection disagreement that would otherwise
+            # silently ignore the operator's choice — Should-Fix 3).
+            conflict = len(distinct_selections) > 1 or (
+                bool(distinct_selections) and winner_selection is None
+            )
+            if conflict:
+                logger.warning(
+                    "[DISPATCHARR] group %s has CONFLICTING channel_profile_ids across "
+                    "accounts (selections=%s, winner account %s selection=%s)",
+                    channel_group_id, sorted(distinct_selections),
+                    winner.get("m3u_account_id"), winner_selection,
+                )
+            # NOTE: ``_ecm_channel_profile_conflict`` is an ECM-SYNTHETIC key —
+            # it is NOT a Dispatcharr field. It must be STRIPPED before any
+            # Dispatcharr group-settings PATCH (NIT 9). Today's save paths build
+            # explicit payloads and never round-trip it; a future consumer that
+            # forwards a collapsed row wholesale must drop this key first.
+            all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
+
+        logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
+        logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
+        return all_settings
+
+    async def get_m3u_group_settings_by_provider(self) -> dict:
+        """Per-(m3u_account_id, channel_group_id) group settings, NON-collapsed.
+
+        Complements :meth:`get_all_m3u_group_settings`, which collapses to one
+        entry per channel-group id (preferring auto_channel_sync ON). Provider-
+        scoped event_sync needs the SPECIFIC junction row for a (provider,
+        group) pair — e.g. on a group shared by two providers, provider A's row
+        may be auto_channel_sync ON while provider B's is OFF. Keyed by the
+        ``(m3u_account_id, channel_group_id)`` tuple.
+        """
+        accounts = await self.get_m3u_accounts()
+        by_pair: dict = {}
+        for account in accounts:
+            for setting in account.get("channel_groups", []):
+                channel_group_id = setting.get("channel_group")
+                if channel_group_id:
+                    by_pair[(account["id"], channel_group_id)] = {
                         **setting,
                         "m3u_account_id": account["id"],
                         "m3u_account_name": account.get("name", ""),
                     }
-                    # If this group already exists, only overwrite if new setting has auto_channel_sync
-                    # and existing one doesn't (prefer the one with auto_channel_sync enabled)
-                    existing = all_settings.get(channel_group_id)
-                    if existing is None:
-                        all_settings[channel_group_id] = new_setting
-                    elif new_setting.get("auto_channel_sync") and not existing.get("auto_channel_sync"):
-                        all_settings[channel_group_id] = new_setting
-        logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
-        logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
-        return all_settings
+        return by_pair
 
     async def get_m3u_account(self, account_id: int) -> dict:
         """Get a single M3U account by ID."""
@@ -802,6 +970,24 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_all_logos_raw(self) -> list[dict]:
+        """Fetch the complete, unpaginated list of logos from Dispatcharr.
+
+        Dispatcharr's LogoViewSet has no ordering support and its DjangoFilterBackend
+        declares no filterset_fields, so there is no ``ordering`` param to forward
+        (confirmed by reading apps/channels/api_views.py in the live dispatcharr
+        container — get_queryset() unconditionally ends with `.order_by('name')`).
+        ECM's sort_by/sort_order/unused_only support (bead enhancedchannelmanager-
+        09x38.13) therefore fetches everything in one call — via the
+        ``no_pagination=true`` escape hatch LogoPagination.paginate_queryset already
+        supports — and sorts/filters/paginates locally in Python.
+        """
+        response = await self._request(
+            "GET", "/api/channels/logos/", params={"no_pagination": "true"}
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_logo(self, logo_id: int) -> dict:
         """Get a single logo by ID."""
         response = await self._request("GET", f"/api/channels/logos/{logo_id}/")
@@ -869,6 +1055,54 @@ class DispatcharrClient:
         """Delete a logo."""
         response = await self._request("DELETE", f"/api/channels/logos/{logo_id}/")
         response.raise_for_status()
+
+    async def bulk_delete_logos(self, logo_ids: list[int]) -> dict:
+        """Bulk-delete logos by id (DBAS restore bulk-delete pre-step, bead 0i2vt.15).
+
+        Issues a single ``DELETE /api/channels/logos/bulk-delete/`` with
+        ``{"logo_ids": [...]}``. Used by the logos importer to clear existing
+        logos before a streaming re-upload. An empty ``logo_ids`` is a no-op
+        (nothing to delete) and never hits the API.
+
+        Credential/path hygiene: this method logs only the COUNT of ids, never
+        the upstream response body (the response can echo names/paths) — the
+        importer surfaces a sanitized failure if the call raises.
+        """
+        if not logo_ids:
+            return {"deleted": 0}
+        response = await self._request(
+            "DELETE",
+            "/api/channels/logos/bulk-delete/",
+            json={"logo_ids": logo_ids},
+        )
+        if response.status_code >= 400:
+            # Do NOT echo the response body — it may carry logo names/paths. The
+            # status code alone is a safe operator-facing signal.
+            raise Exception(f"Logo bulk-delete failed: {response.status_code}")
+        return response.json() if response.content else {"deleted": len(logo_ids)}
+
+    async def get_all_logos_paginated(self, page_size: int = 500) -> list[dict]:
+        """Return ALL logos by walking every page (DBAS restore, bead 0i2vt.15).
+
+        Paginates ``GET /api/channels/logos/`` until the ``next`` link is
+        exhausted and returns the flattened list of logo records. Used by the
+        logos importer to (a) build the bulk-delete id list for the destructive
+        pre-step and (b) enumerate destination logos for the 3-tier match.
+
+        Mirrors :meth:`find_logo_by_url`'s pagination convention. Logs only the
+        running count — never a logo url/name/path.
+        """
+        logos: list[dict] = []
+        page = 1
+        while True:
+            result = await self.get_logos(page=page, page_size=page_size)
+            results = result.get("results", []) if isinstance(result, dict) else result
+            logos.extend(r for r in (results or []) if isinstance(r, dict))
+            if not (isinstance(result, dict) and result.get("next")):
+                break
+            page += 1
+        logger.debug("[DISPATCHARR] Fetched %d logo(s) across all pages.", len(logos))
+        return logos
 
     # -------------------------------------------------------------------------
     # EPG Sources
@@ -1026,6 +1260,7 @@ class DispatcharrClient:
         page_size: int = 500,
         search: Optional[str] = None,
         epg_source: Optional[int] = None,
+        max_results: Optional[int] = None,
     ) -> list:
         """Get all EPG data entries.
 
@@ -1038,29 +1273,97 @@ class DispatcharrClient:
         if epg_source:
             params["epg_source"] = epg_source
 
-        response = await self._request("GET", "/api/epg/epgdata/", params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        # New Dispatcharr: flat list response
-        if isinstance(data, list):
-            return data
-
-        # Old Dispatcharr: paginated dict response - fetch all pages
-        all_results = data.get("results", [])
-        while data.get("next"):
-            page += 1
-            params["page"] = page
+        if max_results is None:
             response = await self._request("GET", "/api/epg/epgdata/", params=params)
             response.raise_for_status()
             data = response.json()
+        else:
+            # Newer Dispatcharr versions ignore pagination and return one flat
+            # array. Stream that response behind a byte ceiling so a bounded
+            # caller cannot be forced to materialize arbitrarily large JSON.
+            max_bytes = max(
+                _EPG_DATA_MIN_RESPONSE_BYTES,
+                max_results * _EPG_DATA_BYTES_PER_RESULT,
+            )
+            data = await self._get_json_bounded(
+                "/api/epg/epgdata/", params=params, max_bytes=max_bytes
+            )
+
+        # New Dispatcharr: flat list response
+        if isinstance(data, list):
+            return data[:max_results] if max_results is not None else data
+
+        # Old Dispatcharr: paginated dict response - fetch all pages
+        all_results = data.get("results", [])
+        if max_results is not None and len(all_results) >= max_results:
+            return all_results[:max_results]
+        while data.get("next"):
+            page += 1
+            params["page"] = page
+            if max_results is None:
+                response = await self._request(
+                    "GET", "/api/epg/epgdata/", params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+            else:
+                data = await self._get_json_bounded(
+                    "/api/epg/epgdata/", params=params, max_bytes=max_bytes
+                )
             if isinstance(data, list):
                 # Switched to new format mid-pagination (unlikely but safe)
                 all_results.extend(data)
                 break
             all_results.extend(data.get("results", []))
+            if max_results is not None and len(all_results) >= max_results:
+                return all_results[:max_results]
 
-        return all_results
+        return all_results[:max_results] if max_results is not None else all_results
+
+    async def _get_json_bounded(
+        self, path: str, *, params: dict, max_bytes: int
+    ):
+        """GET and decode JSON only after its streamed body fits ``max_bytes``."""
+        await self._ensure_authenticated()
+        headers = {}
+        if self._uses_api_key:
+            headers["X-API-Key"] = (
+                self.settings.dispatcharr_api_key or self.settings.api_key
+            )
+        else:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        headers["Accept-Encoding"] = "identity"
+
+        async def send() -> httpx.Response:
+            request = self._client.build_request(
+                "GET", f"{self.base_url}{path}", headers=headers, params=params
+            )
+            return await self._client.send(request, stream=True)
+
+        response = await send()
+        if response.status_code == 401 and not self._uses_api_key:
+            await response.aclose()
+            await self._refresh_access_token()
+            headers["Authorization"] = f"Bearer {self.access_token}"
+            response = await send()
+        try:
+            response.raise_for_status()
+            content_encoding = response.headers.get("Content-Encoding", "").strip()
+            if content_encoding and content_encoding.lower() != "identity":
+                raise ValueError(
+                    "Dispatcharr EPG response used unexpected Content-Encoding"
+                )
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(body) + len(chunk) > max_bytes:
+                    raise ValueError(
+                        f"Dispatcharr EPG response exceeds {max_bytes} bytes"
+                    )
+                body.extend(chunk)
+            # Parsing occurs only after the bounded stream is complete.
+            return await run_cpu_bound(json.loads, bytes(body))
+        finally:
+            await response.aclose()
 
     async def get_epg_data_by_id(self, data_id: int) -> dict:
         """Get a single EPG data entry by ID."""
@@ -1119,6 +1422,22 @@ class DispatcharrClient:
         response = await self._request("POST", "/api/core/streamprofiles/", json=data)
         response.raise_for_status()
         return response.json()
+
+    async def delete_stream_profile(self, profile_id: int) -> None:
+        """Delete a stream profile by ID.
+
+        Backs the DBAS restore/sync compensating rollback
+        (enhancedchannelmanager-v1uz9): when an apply fails AFTER a stream profile
+        was created, the orchestrator issues this single-id DELETE to undo it.
+
+        Dispatcharr exposes ``/api/core/streamprofiles/`` as a standard DRF
+        ModelViewSet — the detail route allows DELETE (live-confirmed:
+        ``OPTIONS /api/core/streamprofiles/{id}/`` → ``Allow: GET, PUT, PATCH,
+        DELETE, HEAD, OPTIONS``), mirroring ``delete_channel_profile``. A 404 here
+        means the profile is already gone, which the rollback treats as success.
+        """
+        response = await self._request("DELETE", f"/api/core/streamprofiles/{profile_id}/")
+        response.raise_for_status()
 
     # -------------------------------------------------------------------------
     # Channel Profiles
@@ -1203,6 +1522,132 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_current_user(self) -> dict:
+        """Return the AUTH SUBJECT of the credentials in use.
+
+        Reads ``/api/accounts/users/me/`` — the user that the configured
+        Dispatcharr credentials (api_key or JWT) authenticate as. This is the
+        load-bearing security control for the Users restore importer
+        (enhancedchannelmanager-l1p4p): the *current operator* must be identified
+        by auth subject, NOT by a username or id from the archive. A cross-instance
+        restore remaps ids, and a malicious or stale archive can carry a username
+        that collides with the operator's — so the operator is matched against
+        whoever ``/users/me/`` reports here, never against archive data.
+
+        Works in both ``api_key`` and ``password`` auth modes (the endpoint is the
+        same; ``_request`` attaches the right credential). Raises on a non-2xx
+        response: the importer MUST NOT proceed without a confirmed operator
+        identity (fail closed rather than guess).
+        """
+        response = await self._request("GET", "/api/accounts/users/me/")
+        response.raise_for_status()
+        return response.json()
+
+    async def create_user(self, data: dict) -> dict:
+        """Create a Dispatcharr (Django) user account — NO password ever sent.
+
+        Used by the Users restore importer (enhancedchannelmanager-l1p4p). Per
+        spike tsfv0 (live-confirmed vs Dispatcharr 0.26.0): the User serializer
+        exposes ``password`` as a WRITE-ONLY plaintext field and there is no
+        retrievable hash, so a restored user is created OMITTING ``password``
+        entirely -> Django stores an unusable password and the operator resets it
+        out-of-band (force-reset).
+
+        This method **strips ``password`` and any ``password_hash`` key** from the
+        payload defensively, so a password/hash can never cross the boundary even
+        if a caller accidentally includes one. NEVER fabricate, derive, or rehash
+        a password; never forward an incoming hash field.
+
+        The error message uses the same ``"<thing> failed: <status> - <body>"``
+        shape as ``create_channel`` / ``create_stream`` so ``upstream_http_exception``
+        (restore_contracts mapper) can parse the upstream status + detail.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("create_user requires a dict payload")
+        # Defense in depth: never let a secret cross the boundary, regardless of
+        # what the caller passed. The importer already omits these; this is the
+        # last line of defense at the client edge.
+        payload = {
+            k: v for k, v in data.items() if k not in ("password", "password_hash")
+        }
+        if not payload.get("username"):
+            raise ValueError("create_user requires a username")
+        response = await self._request("POST", "/api/accounts/users/", json=payload)
+        if response.status_code >= 400:
+            error_body = response.text
+            raise Exception(f"User creation failed: {response.status_code} - {error_body}")
+        return response.json()
+
+    async def delete_user(self, user_id: int) -> None:
+        """Delete a Dispatcharr user by ID.
+
+        Used as the rollback compensation for a previously created user
+        (restore_contracts rollback ledger, enhancedchannelmanager-l1p4p): if a
+        later step in the same restore fails, users created earlier in the run are
+        deleted to avoid leaving orphans. A 404 here means the user is already
+        gone, which the caller treats as a successful (idempotent) compensation.
+        """
+        response = await self._request("DELETE", f"/api/accounts/users/{user_id}/")
+        response.raise_for_status()
+
+    async def get_user_schema_write_fields(self) -> set:
+        """Return the set of WRITABLE request-body field names for user-create.
+
+        Reads the OpenAPI document at ``/api/schema/`` and extracts the property
+        names of the request body for ``POST /api/accounts/users/`` (resolving a
+        ``$ref`` into ``components.schemas`` when present), excluding any property
+        flagged ``readOnly``.
+
+        This feeds the Users importer's capability check
+        (enhancedchannelmanager-l1p4p): if a ``password_hash`` (or similar
+        pre-hashed-password) WRITE field ever appears in this set, the importer
+        fails the users category CLOSED rather than silently begin writing hashes.
+        Returns an empty set if the schema cannot be parsed — the importer treats
+        an unparseable schema as "cannot confirm safety" and also fails closed.
+        """
+        response = await self._request("GET", "/api/schema/")
+        response.raise_for_status()
+        doc = response.json()
+        if not isinstance(doc, dict):
+            return set()
+
+        post_op = (
+            doc.get("paths", {})
+            .get("/api/accounts/users/", {})
+            .get("post", {})
+        )
+        body_schema = (
+            post_op.get("requestBody", {})
+            .get("content", {})
+            .get("application/json", {})
+            .get("schema", {})
+        )
+        if not isinstance(body_schema, dict):
+            return set()
+
+        # Resolve a local $ref into components.schemas (one hop is sufficient for
+        # the User-create request body; we do not chase nested refs).
+        ref = body_schema.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/"):
+            target: object = doc
+            for part in ref.lstrip("#/").split("/"):
+                if isinstance(target, dict):
+                    target = target.get(part, {})
+                else:
+                    target = {}
+                    break
+            if isinstance(target, dict):
+                body_schema = target
+
+        props = body_schema.get("properties", {})
+        if not isinstance(props, dict):
+            return set()
+        return {
+            name
+            for name, spec in props.items()
+            if not (isinstance(spec, dict) and spec.get("readOnly") is True)
+        }
+
     async def get_channel_stats(self) -> dict:
         """Get status of all active channels.
 
@@ -1253,6 +1698,132 @@ class DispatcharrClient:
         response = await self._request("POST", f"/proxy/ts/stop_client/{channel_id}")
         response.raise_for_status()
         return response.json() if response.content else {"success": True}
+
+    # -------------------------------------------------------------------------
+    # DBAS Restore — User Agents / Core Settings / DVR Rules / Comskip
+    # (enhancedchannelmanager-0i2vt.13)
+    #
+    # These methods back the Phase-2 ``settings_agents`` restore importer. They
+    # were ADDED by 0i2vt.13 — none existed before (verify-then-size: ``grep
+    # user_agent / comskip / dvr / core_settings dispatcharr_client.py`` = 0
+    # method hits at the start of the bead).
+    #
+    # ENDPOINT NOTE (verify-then-size): Dispatcharr groups core resources under
+    # the ``/api/core/`` namespace (confirmed live for ``streamprofiles``,
+    # ``version``, ``system-events`` — see those methods above), so user agents and
+    # core settings are placed there. The DVR-rules path lives under Dispatcharr's
+    # DVR module (``/api/dvr/``). The exact path strings below are the best-known
+    # values from the Dispatcharr REST surface; they are isolated to module-level
+    # constants so a single live-verification follow-up can correct any one path
+    # without touching the importer. No live Dispatcharr instance was available to
+    # confirm them tonight — flagged as a deferred verification follow-up.
+    # -------------------------------------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        """Get all Dispatcharr user-agent records.
+
+        Used by the DBAS settings/agents restore importer
+        (enhancedchannelmanager-0i2vt.13) to detect name collisions before
+        creating. Returns the raw list as Dispatcharr serializes it.
+        """
+        response = await self._request("GET", _USER_AGENTS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        """Create a Dispatcharr user-agent record.
+
+        A user agent is a benign label + UA string (e.g. ``VLC/3.0.20``). It
+        carries no credential material, so the payload and any error body are
+        safe to forward. Mirrors ``create_m3u_account`` shape.
+        """
+        response = await self._request("POST", _USER_AGENTS_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        """Delete a Dispatcharr user agent by ID (rollback compensation).
+
+        A 404 means it is already gone — the caller treats that as a successful
+        idempotent compensation (restore_contracts rollback ledger).
+        """
+        response = await self._request("DELETE", f"{_USER_AGENTS_PATH}{user_agent_id}/")
+        response.raise_for_status()
+
+    async def get_dvr_rules(self) -> list:
+        """Get all Dispatcharr DVR / recording rules.
+
+        Used by the DBAS restore importer (enhancedchannelmanager-0i2vt.13) to
+        detect collisions by name/title before creating.
+        """
+        response = await self._request("GET", _DVR_RULES_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def create_dvr_rule(self, data: dict) -> dict:
+        """Create a Dispatcharr DVR / recording rule.
+
+        FK references (e.g. ``channel``) MUST already be remapped to destination
+        ids by the caller — this method forwards the payload as given.
+        """
+        response = await self._request("POST", _DVR_RULES_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_dvr_rule(self, rule_id: int) -> None:
+        """Delete a Dispatcharr DVR rule by ID (rollback compensation).
+
+        A 404 means already-gone — treated as successful idempotent compensation.
+        """
+        response = await self._request("DELETE", f"{_DVR_RULES_PATH}{rule_id}/")
+        response.raise_for_status()
+
+    async def get_core_settings(self) -> dict:
+        """Get Dispatcharr's core/global settings as a key->value mapping.
+
+        WARNING (DBAS restore, enhancedchannelmanager-0i2vt.13): the response can
+        carry credential/instance-identity material (API keys, auth config). The
+        caller (settings_agents importer) MUST sanitize before logging/reporting.
+        Returns the raw mapping; callers normalize a list-of-{key,value} response
+        into a dict themselves.
+        """
+        response = await self._request("GET", _CORE_SETTINGS_PATH)
+        response.raise_for_status()
+        return response.json()
+
+    async def update_core_setting(self, setting_name: str, setting_value) -> dict:
+        """Apply ONE core setting name->value via PATCH.
+
+        Per-key application (NOT a bulk PUT that could clobber unrelated keys).
+        The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
+        credential/auth/instance-identity key. ``setting_value`` is forwarded
+        as-is; this method NEVER logs the value (it may be sensitive for a
+        non-allowlisted key if a future caller misuses it).
+
+        Clear-text-logging hygiene (bead 0i2vt.13): the parameters are named
+        ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
+        ``value``. CodeQL's py/clear-text-logging-sensitive-data taints any value
+        flowing from a ``key``-named variable as a secret; a ``key`` parameter
+        here would taint the request ``path`` (and the JSON body the
+        ``setting_value``), both of which reach the shared ``_request`` log/exc
+        sinks. We also catch any upstream error and re-raise a generic,
+        payload-free message so neither the setting name, the setting value, nor
+        an upstream response body can propagate into ``_request``'s
+        ``logger.exception(..., e)`` sink via the raised exception.
+        """
+        try:
+            response = await self._request(
+                "PATCH",
+                f"{_CORE_SETTINGS_PATH}{setting_name}/",
+                json={"value": setting_value},
+            )
+            response.raise_for_status()
+        except Exception:
+            # Generic, payload-free re-raise: the original exception text could
+            # echo the request URL or response body (which may carry the setting
+            # value). Drop it so nothing sensitive reaches a logging sink.
+            raise RuntimeError("Core setting update failed") from None
+        return response.json() if response.content else {"updated": True}
 
     # -------------------------------------------------------------------------
     # Cleanup

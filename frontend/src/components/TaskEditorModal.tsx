@@ -1,23 +1,29 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../services/api';
-import * as autoCreationApi from '../services/autoCreationApi';
+import * as channelPipelineApi from '../services/channelPipelineApi';
 import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema, SettingsResponse } from '../services/api';
 import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
-import type { AutoCreationRule } from '../types/autoCreation';
+import type { ChannelPipelineRule } from '../types/channelPipeline';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useBackupDestinationPrompt } from '../contexts/BackupDestinationPromptContext';
 import './ModalBase.css';
 import './TaskEditorModal.css';
+
+/** The scheduled-backup task whose schedule enable/create triggers the backup-destination choice (bead s5a3o). */
+const BACKUP_TASK_ID = 'dbas_backup';
 
 interface TaskEditorModalProps {
   task: TaskStatus;
   onClose: () => void;
   onSaved: () => void;
+  /** Open with the Add Schedule sub-editor already showing (vkktd.4 Fix-it path). */
+  openAddSchedule?: boolean;
 }
 
-export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps) {
+export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: TaskEditorModalProps) {
   // Task state
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
@@ -37,13 +43,13 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   // Schedules state
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
-  const [isAddingSchedule, setIsAddingSchedule] = useState(false);
+  const [isAddingSchedule, setIsAddingSchedule] = useState(!!openAddSchedule);
 
   // EPG/M3U/Channel Group data for task-specific config and schedule parameters
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
-  const [autoCreationRules, setAutoCreationRules] = useState<AutoCreationRule[]>([]);
+  const [channelPipelineRules, setChannelPipelineRules] = useState<ChannelPipelineRule[]>([]);
   const [backupSections, setBackupSections] = useState<{key: string; label: string}[]>([]);
 
   // Settings for default parameter values (stream_probe)
@@ -57,6 +63,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [runningSchedules, setRunningSchedules] = useState<Set<number>>(new Set());
   const notifications = useNotifications();
+  const { promptBackupDestination } = useBackupDestinationPrompt();
+
+  // Enabling/creating a backup schedule is one of the two "actively configuring
+  // backups" triggers for the backup-destination first-run choice (bead s5a3o).
+  // Only fires for the dbas_backup task, and only the first time (no-op once the
+  // operator has answered). Non-blocking — the schedule change has already committed.
+  const maybePromptBackupDestination = useCallback(() => {
+    if (task.task_id === BACKUP_TASK_ID) {
+      promptBackupDestination();
+    }
+  }, [task.task_id, promptBackupDestination]);
 
   // Load data for task-specific config and schedule parameters
   useEffect(() => {
@@ -81,7 +98,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           loaders.push(api.getM3UAccounts().then(setM3uAccounts));
         }
         if (sources.has('auto_creation_rules')) {
-          loaders.push(autoCreationApi.getAutoCreationRules().then(setAutoCreationRules));
+          loaders.push(channelPipelineApi.getChannelPipelineRules().then(setChannelPipelineRules));
         }
         if (sources.has('backup_sections')) {
           loaders.push(api.getExportSections().then(setBackupSections));
@@ -131,9 +148,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       }));
     }
 
-    // Auto-creation rules (for auto_creation)
-    if (autoCreationRules.length > 0) {
-      options['auto_creation_rules'] = autoCreationRules.map(r => ({
+    // Channel pipeline rules (for auto_creation)
+    if (channelPipelineRules.length > 0) {
+      options['auto_creation_rules'] = channelPipelineRules.map(r => ({
         value: r.id,
         label: r.name,
         badge: r.enabled ? undefined : 'disabled',
@@ -149,7 +166,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     }
 
     return options;
-  }, [channelGroups, m3uAccounts, epgSources, autoCreationRules, backupSections]);
+  }, [channelGroups, m3uAccounts, epgSources, channelPipelineRules, backupSections]);
 
   // Compute default parameters for new schedules
   const defaultParameters = useMemo(() => {
@@ -190,9 +207,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
     refreshSchedules();
   }, [refreshSchedules]);
 
+  // vkktd.4: a task fires only when BOTH the parent task AND >=1 child
+  // schedule are enabled. MANUAL-only tasks (legacy schedule_type 'manual',
+  // no schedule rows) never auto-fire by design and must not be flagged.
+  const manualOnly = task.schedule?.schedule_type === 'manual' && schedules.length === 0;
+  const wontRun = enabled && !manualOnly && !schedules.some(s => s.enabled);
+  // The backend auto-reconcile (enable the newest existing schedule on task
+  // enable) skips MANUAL-typed tasks, so only promise it when it will happen.
+  const reconcileOnSave = wontRun && schedules.length > 0 && task.schedule?.schedule_type !== 'manual';
+
   // Save task-level settings (enabled, config, alerts)
   const handleSaveTask = async () => {
     setSaving(true);
+
+    // vkktd.4: saving with the task enabled and no enabled child schedule
+    // triggers the backend auto-reconcile (it enables the newest existing
+    // schedule so the task actually fires). Detect it so we can surface a
+    // toast — a silent reconcile is a different trust problem.
+    const mayReconcile = reconcileOnSave;
 
     try {
       const config: api.TaskConfigUpdate = {
@@ -219,6 +251,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       onSaved();
       onClose();
       notifications.success('Settings saved successfully');
+
+      // Confirm the auto-reconcile actually happened (rather than assuming)
+      // before announcing it: re-read the schedules post-save.
+      if (mayReconcile) {
+        try {
+          const after = await api.getTaskSchedules(task.task_id);
+          const nowEnabled = after.schedules.find(s => s.enabled);
+          if (nowEnabled) {
+            notifications.info(
+              `Also enabled the "${nowEnabled.name || nowEnabled.description}" schedule, so this task will actually run`,
+              task.task_name
+            );
+          }
+        } catch (reconcileErr) {
+          // Non-fatal — the save already succeeded; we just can't confirm the toast.
+          logger.warn('Failed to confirm schedule auto-reconcile', reconcileErr);
+        }
+      }
     } catch (err) {
       logger.error('Failed to save task configuration', err);
       notifications.error('Failed to save configuration', 'Save Failed');
@@ -235,6 +285,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       await refreshSchedules();
       setIsAddingSchedule(false);
       onSaved();
+      // Creating a backup schedule = actively configuring backups (bead s5a3o).
+      maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to create schedule', err);
       throw err;
@@ -252,6 +304,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
       await refreshSchedules();
       setEditingSchedule(null);
       onSaved();
+      // Editing a backup schedule into the enabled state = actively configuring
+      // backups (bead s5a3o). Only when the save results in an enabled schedule.
+      if (data.enabled) maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to update schedule', err);
       throw err;
@@ -263,11 +318,14 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
   // Toggle schedule enabled/disabled
   const handleToggleSchedule = async (schedule: TaskSchedule) => {
     try {
+      const nowEnabled = !schedule.enabled;
       await api.updateTaskSchedule(task.task_id, schedule.id, {
-        enabled: !schedule.enabled,
+        enabled: nowEnabled,
       });
       await refreshSchedules();
       onSaved();
+      // Toggling a backup schedule ON = actively configuring backups (bead s5a3o).
+      if (nowEnabled) maybePromptBackupDestination();
     } catch (err) {
       logger.error('Failed to toggle schedule', err);
     }
@@ -305,15 +363,24 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
         }
       } else if (showNotifications) {
         // Only show toast if show_notifications is enabled
-        if (result.success) {
-          notifications.success(
-            `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
-            'Task Completed'
-          );
-        } else {
+        if (!result.success) {
           notifications.error(
             result.message || `${task.task_name} failed`,
             'Task Failed'
+          );
+        } else if (result.failed_count > 0) {
+          // Completed WITH WARNINGS (e.g. a coalesced/deferred profile reconcile
+          // returns success=true, failed_count>0): never render deferred/partial
+          // work as a plain green success — surface the message amber, matching
+          // the Task History panel.
+          notifications.warning(
+            result.message || `${task.task_name} completed with warnings: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Completed with warnings'
+          );
+        } else {
+          notifications.success(
+            `${task.task_name} completed: ${result.success_count} succeeded, ${result.failed_count} failed`,
+            'Task Completed'
           );
         }
       }
@@ -360,8 +427,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             <h2>Configure Task</h2>
             <div className="modal-subtitle">{task.task_name}</div>
           </div>
-          <button className="modal-close-btn" onClick={onClose}>
-            <span className="material-icons">close</span>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+            <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
 
@@ -383,7 +450,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
               <span>Enable task</span>
             </label>
             <div className="enable-hint">
-              When disabled, no schedules will run for this task.
+              The task and at least one schedule below must both be enabled for this to run automatically.
             </div>
           </div>
 
@@ -396,6 +463,21 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                 Add Schedule
               </button>
             </div>
+
+            {/* vkktd.4: live "enabled but won't run" warning — the task is
+                enabled but no child schedule is, so it will never fire. */}
+            {wontRun && (
+              <div className="schedule-wont-run-warning" role="alert" data-testid="schedule-wont-run-warning">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                <span>
+                  {schedules.length === 0
+                    ? 'This task is enabled but has no schedules, so it will not run automatically. Add a schedule below.'
+                    : reconcileOnSave
+                      ? 'This task is enabled but none of its schedules are, so it will not run automatically. Enable a schedule below, or save and the most recent schedule will be enabled for you.'
+                      : 'This task is enabled but none of its schedules are, so it will not run automatically. Enable a schedule below.'}
+                </span>
+              </div>
+            )}
 
             {schedules.length === 0 ? (
               <div className="empty-schedules">
@@ -457,8 +539,9 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                           onClick={() => handleRunSchedule(schedule)}
                           disabled={runningSchedules.has(schedule.id) || runningSchedules.size > 0}
                           title={runningSchedules.has(schedule.id) ? 'Running...' : 'Run now with this schedule\'s settings'}
+                          aria-label={runningSchedules.has(schedule.id) ? 'Running...' : 'Run now with this schedule\'s settings'}
                         >
-                          <span className="material-icons" style={runningSchedules.has(schedule.id) ? { animation: 'spin 1s linear infinite reverse' } : undefined}>
+                          <span className="material-icons" style={runningSchedules.has(schedule.id) ? { animation: 'spin 1s linear infinite reverse' } : undefined} aria-hidden="true">
                             {runningSchedules.has(schedule.id) ? 'sync' : 'play_arrow'}
                           </span>
                         </button>
@@ -467,15 +550,17 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                         className="schedule-action-btn"
                         onClick={() => setEditingSchedule(schedule)}
                         title="Edit schedule"
+                        aria-label="Edit schedule"
                       >
-                        <span className="material-icons">edit</span>
+                        <span className="material-icons" aria-hidden="true">edit</span>
                       </button>
                       <button
                         className="schedule-action-btn delete"
                         onClick={() => handleDeleteSchedule(schedule)}
                         title="Delete schedule"
+                        aria-label="Delete schedule"
                       >
-                        <span className="material-icons">delete</span>
+                        <span className="material-icons" aria-hidden="true">delete</span>
                       </button>
                     </div>
                   </div>
@@ -631,7 +716,7 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
                     per DBA spike), the legacy health_checks table (14% / 53k
                     rows), and the notifications table. */}
                 <div className="retention-item">
-                  <label>Auto-creation execution BLOB retention (days)</label>
+                  <label>Channel Pipeline execution BLOB retention (days)</label>
                   <input
                     type="number"
                     min={1}
@@ -686,10 +771,96 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
             </div>
           )}
 
+          {/* Task-Specific Configuration: Journal Noise Purge
+              (beads enhancedchannelmanager-uliyr and -gjb01). Surfaces the
+              PO-decided auto-purge policy: the four automated-noise journal
+              buckets and the 3-day default retention window. */}
+          {task.task_id === 'journal_noise_purge' && (
+            <div className="config-section">
+              <label className="section-label">Automated-Noise Retention</label>
+              <div className="retention-grid">
+                <div className="retention-item">
+                  <label htmlFor="journal-noise-retention-days">Noise retention (days)</label>
+                  <input
+                    id="journal-noise-retention-days"
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={(taskConfig.retention_days as number) || 3}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, retention_days: parseInt(e.target.value) || 3 })}
+                  />
+                  <small className="form-hint">
+                    Automated-noise journal entries older than this many days
+                    are deleted on each run. Default 3 days. Only the
+                    categories below are purged — all other journal categories
+                    are untouched (use the Journal tab&apos;s Purge control for
+                    those).
+                  </small>
+                </div>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_watch_events !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_watch_events: e.target.checked })}
+                  />
+                  <span>Watch start/stop events</span>
+                </label>
+                <small className="form-hint">
+                  Automatic viewing telemetry logged by the bandwidth tracker
+                  each time a channel starts or stops being watched.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_pipeline_rule_pairs !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_pipeline_rule_pairs: e.target.checked })}
+                  />
+                  <span>Channel Pipeline rule create/delete entries</span>
+                </label>
+                <small className="form-hint">
+                  Rule create/delete churn from automated test clients (plus
+                  unmarked entries from before the automation marker existed).
+                  Operator-initiated rule create/delete entries are kept, as
+                  are rule updates, imports, rollbacks, and snapshot entries.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_run_on_refresh_skipped !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_run_on_refresh_skipped: e.target.checked })}
+                  />
+                  <span>Run-on-refresh suppression notices</span>
+                </label>
+                <small className="form-hint">
+                  &quot;Auto-creation after M3U refresh skipped&quot; entries
+                  written on every refresh while the circuit breaker or
+                  break-glass switch is active.
+                </small>
+                <label className="config-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={taskConfig.purge_task_start_complete !== false}
+                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_task_start_complete: e.target.checked })}
+                  />
+                  <span>Scheduled-task start/complete entries</span>
+                </label>
+                <small className="form-hint">
+                  Routine lifecycle rows from scheduled task runs.
+                  Manually-triggered runs and task cancel/fail/error entries
+                  are kept, and full execution history remains in Task
+                  History under its own retention.
+                </small>
+              </div>
+            </div>
+          )}
+
         </div>
 
         {/* Footer */}
         <div className="modal-footer">
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleSaveTask}
@@ -706,8 +877,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Add Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor
@@ -729,8 +900,8 @@ export function TaskEditorModal({ task, onClose, onSaved }: TaskEditorModalProps
           <div className="modal-container modal-sm">
             <div className="modal-header">
               <h2>Edit Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)}>
-                <span className="material-icons">close</span>
+              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)} aria-label="Close" title="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor

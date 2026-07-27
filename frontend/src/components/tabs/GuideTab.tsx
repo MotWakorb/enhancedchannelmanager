@@ -6,6 +6,7 @@ import { EditChannelModal, type ChannelMetadataChanges } from '../EditChannelMod
 import { PrintGuideModal } from '../PrintGuideModal';
 import { CustomSelect } from '../CustomSelect';
 import { getDateLocale } from '../../utils/formatting';
+import { getProgramStart, getProgramEnd, buildProgramsByTvgId } from '../../utils/epgProgram';
 import './GuideTab.css';
 
 // Constants for grid layout
@@ -21,16 +22,6 @@ const getLocalDateString = (date: Date): string => {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-};
-
-// Helper to get program start time (handles both start_time and start field names)
-const getProgramStart = (program: EPGProgram): Date => {
-  return new Date(program.start_time || program.start || '');
-};
-
-// Helper to get program end time (handles both end_time and stop field names)
-const getProgramEnd = (program: EPGProgram): Date => {
-  return new Date(program.end_time || program.stop || '');
 };
 
 interface GuideTabProps {
@@ -80,6 +71,19 @@ export function GuideTab({
   const [loading, setLoading] = useState(true);
   const notifications = useNotifications();
 
+  // Held in a ref so the mount-only data-load effect doesn't list it as a
+  // dependency (which would re-run the effect on every notification change).
+  const notificationsRef = useRef(notifications);
+  notificationsRef.current = notifications;
+
+  // Whether the parent supplied channels/logos as props. Captured once so the
+  // mount effect's self-fetch fallback is stable and doesn't depend on the
+  // (progressively-loaded) prop values. Note: App always passes these arrays
+  // (often empty at first), so in practice channels/logos come from props via
+  // the sync effects below, not from a self-fetch.
+  const hasChannelProp = useRef(propChannels !== undefined);
+  const hasLogoProp = useRef(propLogos !== undefined);
+
   // Time selection state
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateString(new Date()));
   const [startHour, setStartHour] = useState(() => {
@@ -118,21 +122,7 @@ export function GuideTab({
   }, [epgData]);
 
   // Build programs map by tvg_id for quick lookup
-  const programsByTvgId = useMemo(() => {
-    const map = new Map<string, EPGProgram[]>();
-    programs.forEach(program => {
-      if (program.tvg_id) {
-        const existing = map.get(program.tvg_id) || [];
-        existing.push(program);
-        map.set(program.tvg_id, existing);
-      }
-    });
-    // Sort programs by start time within each tvg_id
-    map.forEach((progs) => {
-      progs.sort((a, b) => getProgramStart(a).getTime() - getProgramStart(b).getTime());
-    });
-    return map;
-  }, [programs]);
+  const programsByTvgId = useMemo(() => buildProgramsByTvgId(programs), [programs]);
 
 
   // Get selected profile for filtering
@@ -220,35 +210,62 @@ export function GuideTab({
     };
   }, [sortedChannels, scrollTop, viewportHeight]);
 
-  // Load data on mount
+  // Mirror channels/logos from the parent whenever it supplies or updates them.
+  // App owns channel/logo loading and streams them in progressively (paginated),
+  // so we sync into local state here — cheaply, with no network — rather than
+  // refetching. Local copies let edits made in this tab update rows in place.
   useEffect(() => {
+    if (propChannels) setChannels(propChannels);
+  }, [propChannels]);
+
+  useEffect(() => {
+    if (propLogos) setLogos(propLogos);
+  }, [propLogos]);
+
+  // Load guide-specific data (programs, profiles, groups) once on mount. These
+  // are never passed as props. We deliberately do NOT depend on
+  // propChannels/propLogos here: doing so re-ran this whole effect — including
+  // the expensive getEPGGrid() — every time App's progressive loads updated
+  // those props, resetting `loading` to true on each pass. Landing directly on
+  // the Guide tab (before App's channel/logo loads settle) left it stuck on
+  // "Loading guide data..." forever. Channels/logos come from the sync effects
+  // above; we self-fetch them only when the parent didn't supply them at all.
+  useEffect(() => {
+    let cancelled = false;
     const loadData = async () => {
       setLoading(true);
-
       try {
-        // Fetch all needed data in parallel
-        const [channelsData, logosData, programsData, profilesData, groupsData] = await Promise.all([
-          propChannels ? Promise.resolve({ results: propChannels }) : api.getChannels({ pageSize: 5000 }),
-          propLogos ? Promise.resolve({ results: propLogos }) : api.getLogos({ pageSize: 10000 }),
+        const [programsData, profilesData, groupsData] = await Promise.all([
           api.getEPGGrid(),
           api.getChannelProfiles(),
           api.getChannelGroups(),
         ]);
-
-        setChannels((channelsData as { results: Channel[] }).results);
-        setLogos((logosData as { results: Logo[] }).results);
+        if (cancelled) return;
         setPrograms(programsData);
         setChannelProfiles(profilesData);
         setChannelGroups(groupsData);
+
+        // Fallback for standalone use (no parent-provided data).
+        if (!hasChannelProp.current) {
+          const channelsData = await api.getChannels({ pageSize: 5000 });
+          if (!cancelled) setChannels(channelsData.results);
+        }
+        if (!hasLogoProp.current) {
+          const logosData = await api.getLogos({ pageSize: 10000 });
+          if (!cancelled) setLogos(logosData.results);
+        }
       } catch (err) {
-        notifications.error(err instanceof Error ? err.message : 'Failed to load guide data', 'Guide');
+        if (!cancelled) {
+          notificationsRef.current.error(err instanceof Error ? err.message : 'Failed to load guide data', 'Guide');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadData();
-  }, [propChannels, propLogos, notifications]);
+    return () => { cancelled = true; };
+  }, []);
 
   // Refresh programs only
   const handleRefresh = useCallback(async () => {
@@ -600,8 +617,10 @@ export function GuideTab({
                   if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
                 }}
                 title="Filter: Show only channels in selected group"
+                aria-label="Switch to filter mode"
+                aria-pressed={groupFilterMode === 'filter'}
               >
-                <span className="material-icons">filter_list</span>
+                <span className="material-icons" aria-hidden="true">filter_list</span>
               </button>
               <button
                 className={`mode-btn ${groupFilterMode === 'jump' ? 'active' : ''}`}
@@ -610,8 +629,10 @@ export function GuideTab({
                   if (selectedGroup) setSelectedGroup(''); // Reset when switching modes
                 }}
                 title="Jump: Scroll to first channel in selected group"
+                aria-label="Switch to jump mode"
+                aria-pressed={groupFilterMode === 'jump'}
               >
-                <span className="material-icons">arrow_downward</span>
+                <span className="material-icons" aria-hidden="true">arrow_downward</span>
               </button>
             </div>
           </div>

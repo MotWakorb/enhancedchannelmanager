@@ -101,7 +101,7 @@ Re-tune after 30 days of production data. If we sustain 99.9% comfortably, tight
 
 **What breaks this SLO:**
 
-- Database file lock contention (`/config/journal.db` under heavy auto-creation load).
+- Database file lock contention (`/config/journal.db` under heavy Channel Pipeline load).
 - Dispatcharr unreachable (network partition, Dispatcharr restart, bad credentials).
 - ffprobe binary missing or permissions broken (degrades but does not fail readiness — see `routers/health.py` skip-vs-fail semantics).
 
@@ -133,7 +133,7 @@ Tighten to p95 < 250ms once we have baseline data showing we comfortably beat 50
 
 **What breaks this SLO:**
 
-- SQLite write amplification during bulk auto-creation (lots of small transactions).
+- SQLite write amplification during bulk Channel Pipeline runs (lots of small transactions).
 - Dispatcharr API slowness (ECM proxies many requests).
 - N+1 query patterns in frontends (often the real culprit — a single user view hitting `/api/channels/*` 500 times serially).
 
@@ -159,7 +159,7 @@ sum(rate(ecm_http_requests_total[5m]))
 **Why this target (initial):** 1% is intentionally loose for a scaffold. A mature SLO would target 0.1% or tighter, but:
 
 1. Some ECM endpoints wrap Dispatcharr (not our failure mode, but our status code).
-2. Auto-creation rules with bad upstream streams will 5xx as designed until the user fixes the rule.
+2. Channel Pipeline rules with bad upstream streams will 5xx as designed until the user fixes the rule.
 3. We don't yet separate "our bug" 5xxs from "integration partner down" 5xxs.
 
 A follow-up bead should split this SLO by `path` label once we've observed which routes dominate the error budget, and introduce per-route sub-objectives (e.g., `/api/auth/login` should be far stricter than `/api/stream/probe`).
@@ -204,7 +204,7 @@ histogram_quantile(
 
 ## SLO-5: Normalization Correctness
 
-**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the auto-creation executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
+**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the Channel Pipeline executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
 
 **Prometheus expression (SLI numerator over denominator):**
 ```promql
@@ -230,7 +230,7 @@ human-readable number of SLO-5 breaches in the last 7 days.
 
 **Error budget:** **Zero.** There is no tolerable rate of Test-Rules vs. Auto-Create divergence. The error budget policy below is punitive because a single divergence reproduces the exact failure mode behind GH #104.
 
-**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the auto-creation executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
+**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the Channel Pipeline executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
 
 **Why this uses SLO-5 (not SLO-4):** SLO-4 is already claimed by Readiness Sub-check Latency above — renaming bd-eio04.9 to the next free slot was called out in the grooming comment on the bead.
 
@@ -254,7 +254,7 @@ The "block release cut" rule overrides the normal 25%/50%/75%/100% budget bands 
 
 **Supplementary diagnostic signal (not the SLI):**
 
-A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (auto_creations_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
+A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (channel_pipeline_runs_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
 
 ---
 
@@ -338,7 +338,7 @@ The single alert in `prometheus_rules.yaml` uses the simpler form "failure rate 
 
 **What breaks this SLO:**
 
-- SQLite WAL contention from concurrent writes (auto-creation bulk operations during a poll cycle).
+- SQLite WAL contention from concurrent writes (Channel Pipeline bulk operations during a poll cycle).
 - Migration mismatch (a poll runs against a database schema that doesn't yet have the columns the writer expects).
 - Disk full (`/config/journal.db` partition).
 - Dispatcharr unreachable mid-resolver call — the resolver returns unresolved and the writer still completes, so this does NOT increment `result="failure"`; it shows up in SLO-8 instead.
@@ -570,8 +570,11 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 | `ECMTaskScheduleStaleCleanup` | `cleanup` last success > 8d ago | 24h | warning |
 | `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 30m ago | 1h | warning |
 | `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago (guarded — see below) | 6h | warning |
+| `ECMSyncStalledTargetDrift` | `dbas_sync` last success > 3h ago (guarded — see below) | 1h | warning |
 
-**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults — `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults — `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence; `dbas_sync` (cross-instance A→B sync, epic i39wu) defaults to MANUAL in code with no in-code interval, so the budget is sized against the cheapest-reads convergence cadence the operator is expected to pick — hourly (ADR-013 S9: config categories are cheap reads every cycle) → 3h budget = 3 missed runs. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+
+**`ECMSyncStalledTargetDrift` — partial-apply caveat:** Only a FULL success stamps `ecm_task_schedule_last_success_timestamp` (the task_engine stamps it on `TaskResult.success`). A tri-state `partial` run — an APPLY that mixed/rolled-back — does NOT stamp it, so a *sustained partial-apply loop* also trips this alert even though the task is "running." This is intentional: target B is drifting from A whether the cycle failed outright or only half-applied. The companion counter `ecm_sync_runs_total{result}` (tri-state `success`/`partial`/`failed`, mirrors `ecm_backup_runs_total`) lets the responder tell "B unreachable / aborting" (`failed`) from "applies but keeps half-failing" (`partial`). The runbook is [`sync-target-stalled-drift.md`](../runbooks/sync-target-stalled-drift.md).
 
 **Fresh-install / operator-disabled-task guard:** Every per-task staleness alert in `prometheus_rules.yaml` includes `AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0` so the alert only fires after the task has succeeded at least once on this install. This prevents false pages on fresh installs (where the gauge defaults to 0 because nothing has ever run) and on operator-disabled or MANUAL-mode tasks (where the gauge legitimately stays at 0 forever). Without this guard, `ECMTaskScheduleStaleStreamProbe` would page every fresh-install operator 48h after first boot because `stream_probe` defaults to MANUAL.
 
@@ -625,7 +628,7 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No traffic-weighted availability.** SLO-1 treats every 15-second scrape of `ecm_health_ready_ok` as equal weight, regardless of how many user requests landed during that interval. A future refinement: weight by `ecm_http_requests_total` rate.
 - **No per-tenant SLO.** ECM is single-tenant by deployment, but the SLOs above are global — they don't distinguish a power user from a casual one. Fine for v1; revisit if we ship multi-tenant.
 - **No Dispatcharr-upstream vs ECM-self attribution.** When `ecm_http_requests_total{status="502"}` fires because Dispatcharr returned 502, it still counts against our SLO. The fix is a separate label or metric, tracked as a follow-up.
-- **No SLO for long-running tasks.** Task success rate matters (restore jobs, auto-creation runs) but has no metric today. Separate bead.
+- **No SLO for long-running tasks.** Task success rate matters (restore jobs, Channel Pipeline runs) but has no metric today. Separate bead.
 
 ## Changelog
 

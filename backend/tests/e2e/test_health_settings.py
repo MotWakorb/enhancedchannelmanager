@@ -30,9 +30,19 @@ class TestCache:
     """Tests for /api/cache/* endpoints."""
 
     def test_cache_stats(self, e2e_client):
-        """GET /api/cache/stats returns cache statistics."""
+        """GET /api/cache/stats returns cache statistics with the documented shape."""
         response = e2e_client.get("/api/cache/stats")
+        skip_if_not_api(response)
         assert response.status_code == 200
+        data = response.json()
+        # The endpoint is named/documented as returning cache statistics — inspect
+        # the body rather than only the status code. These counters/shape fields
+        # are the contract the frontend cache panel reads.
+        assert isinstance(data["entry_count"], int)
+        assert isinstance(data["hits"], int)
+        assert isinstance(data["misses"], int)
+        assert "hit_rate_percent" in data
+        assert isinstance(data["entries"], list)
 
     def test_cache_invalidate(self, e2e_client):
         """POST /api/cache/invalidate clears the cache."""

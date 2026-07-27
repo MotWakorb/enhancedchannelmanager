@@ -10,15 +10,17 @@ If a topic you need is missing, check the cross-references at the bottom — muc
 
 ## Sections
 
-### 1. [Getting Started](getting-started/index.md) — Stub
+### 1. [Getting Started](getting-started/index.md) — In progress
 
 Install ECM, connect it to Dispatcharr, and verify the connection is healthy. Start here on day one.
+
+- **[Set Up Your First Channels](getting-started/your-first-channels.md)** — end-to-end workflow tutorial: add an M3U account, add an EPG source, choose which stream groups to sync, refresh, then create channels, channel groups, and stream assignments in Channel Manager.
 
 ### 2. [Channels & Streams](channels-streams/index.md) — Stub
 
 The day-to-day surface: managing channels, assigning streams, working with the journal of changes. The model that everything else operates on.
 
-### 3. [Auto Creation](auto-creation/index.md) — Stub
+### 3. [Channel Pipeline](channel-pipeline/index.md) — Stub
 
 Define rules that automatically create channels from incoming streams. Conditions, actions, bulk operations, and how to debug a rule that isn't firing.
 
@@ -55,13 +57,43 @@ Code `.mcp.json` path, both using the static `?api_key=` authentication method.
 - **[MCP Integration](integrations/mcp.md)** — step-by-step mcp-remote bridge
   setup, Claude Code `.mcp.json`, key rotation, and troubleshooting.
 
-### 9. [Backup & Restore](backup-restore/index.md) — Placeholder
+### 9. [Backup & Restore](backup-restore/index.md) — In progress
 
-Backing up your ECM configuration and restoring it on a new install. Currently a placeholder; the v0.18.0 epic (bd-0i2vt) and the immediate import work (bd-gb5r5.3) will fill in the operator workflow.
+Backing up your ECM configuration and restoring it on a new install.
+
+- **[Cross-Instance Sync](backup-restore/cross-instance-sync.md)** (v0.18.1) — One-way A→B config replication for DR standbys and multi-instance setups. Covers setup, the two load-bearing semantics (one-way, credentials not synced), and troubleshooting.
+
+Earlier DBAS articles (backup, restore, migration) are planned for a follow-on release.
 
 ### 10. [Troubleshooting](troubleshooting/index.md) — Stub
 
 Common problems, how to read ECM's logs, and what to gather before asking for help.
+
+## By tab
+
+Looking for the tutorial for a specific ECM tab? This table lists every tab
+in the order it appears in ECM's navigation and links straight to the
+section that owns (or will own) its "Common tasks" tutorials.
+
+| Tab | Tutorials live in |
+|-|-|
+| M3U Manager | `m3u-manager/` — **Planned** |
+| EPG Manager | [EPG](epg/index.md) |
+| Channel Manager | [Channels & Streams](channels-streams/index.md) |
+| Guide | `guide/` — **Planned** |
+| Logo Manager | `logo-manager/` — **Planned** |
+| M3U Changes | `m3u-changes/` — **Planned** |
+| Channel Pipeline | [Channel Pipeline](channel-pipeline/index.md) |
+| Journal | `journal/` — **Planned** |
+| Stats | [Stats](stats/index.md) |
+| Settings | `settings/` — **Planned** |
+
+Settings is one tab but many pages: some of its subsections already have a
+home in an existing section — Normalization ([`normalization/`](normalization/index.md)),
+Backup & Restore ([`backup-restore/`](backup-restore/index.md)), and MCP
+Integration ([`integrations/mcp.md`](integrations/mcp.md)) — and are
+cross-linked from the Settings landing page once it ships rather than
+duplicated there.
 
 ## Conventions
 

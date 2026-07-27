@@ -23,6 +23,38 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
 
+# GH #473 OOM cluster — named, settings-overridable safety-valve defaults.
+#
+# MAX_AUTO_CREATION_LOG_ENTRIES (bd-sjdsq): hard cap on the number of
+# per-stream execution_log entries RETAINED in memory (and therefore
+# serialized to the auto_creation_executions.execution_log TEXT column) for a
+# single non-dry-run pipeline run. The dominant accumulator on a runaway run is
+# this log — it holds the full per-stream rule/condition trace — so bounding it
+# incrementally during the run is what keeps peak RSS flat regardless of how
+# many streams match. Dry-run is exempt (it mutates nothing and the operator
+# wants the full trace for debugging). Default 500.
+#
+# MAX_AUTO_CREATED_CHANNELS_PER_RUN (bd-h2xnl, shared with bd-exo4j as the
+# run-size lever): hard cap on the number of channels a single run will
+# CREATE. When a run reaches it the engine soft-aborts — it stops creating
+# further channels, leaves the already-created channels consistent, marks the
+# execution status='capped', and alerts. This is the systemic safety valve for
+# the PPV/event expansion blast radius (186 -> 2400+); it is NOT the root-cause
+# fix. Default 500.
+DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES = 500
+DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN = 500
+
+# bd-p8fx9 (W4): batch-size caps for the destructive MCP bulk tools. Surfaced on
+# GET /api/settings so the MCP guardrails (mcp-server/tools/_guardrails.py) can
+# read them; conservative defaults mirror the mcp-server module defaults. SOFT
+# cap forces the confirm-token; HARD cap refuses outright. Raisable here for a
+# deliberate large migration.
+DEFAULT_MCP_BULK_DELETE_SOFT_CAP = 25
+DEFAULT_MCP_BULK_DELETE_HARD_CAP = 500
+DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP = 10
+DEFAULT_MCP_BULK_MERGE_SOFT_CAP = 20
+DEFAULT_MCP_BULK_MERGE_HARD_CAP = 200
+
 
 def validate_url_scheme(url: str, field_name: str = "URL") -> None:
     """Validate that a URL uses an allowed scheme (http/https only).
@@ -70,6 +102,19 @@ class DispatcharrSettings(BaseModel):
     # Appearance settings
     show_stream_urls: bool = True  # Show stream URLs in the UI (can hide for screenshots)
     hide_auto_sync_groups: bool = False  # Hide auto-sync channel groups by default
+    # bd-dgs64 (GH #591): Dispatcharr channel groups are global entities — a
+    # group with the same name on two M3U providers shares one channel_group
+    # ID. The M3UGroupsModal frontend guard (commit 030c1ef8) therefore locks
+    # a group's Auto-Sync toggle/Start#/Settings to a single "owning" account
+    # once any OTHER account has auto_channel_sync enabled for that group ID,
+    # to prevent two providers silently double-creating channels for the same
+    # group. This flag lets an operator opt OUT of that guard so the same
+    # group CAN be auto-synced from multiple providers at once, as Dispatcharr
+    # itself allows. Admin-gated (routers/settings.py
+    # _ADMIN_ONLY_SETTINGS_FIELDS) because enabling it is an install-wide
+    # duplicate-channel risk, not a per-user display preference. Default False
+    # preserves today's single-owner lock.
+    allow_multi_provider_auto_sync: bool = False
     hide_ungrouped_streams: bool = True  # Hide ungrouped streams in the streams pane
     hide_epg_urls: bool = False  # Hide EPG URLs in EPG Manager tab
     hide_m3u_urls: bool = False  # Hide M3U URLs in M3U Manager tab
@@ -104,6 +149,46 @@ class DispatcharrSettings(BaseModel):
     custom_network_suffixes: list[str] = []
     # Stats polling interval in seconds (how often to check Dispatcharr for channel stats)
     stats_poll_interval: int = 10
+    # ADR-013 §D2 (bead 312nk.3): steady-state ``session_telemetry`` write
+    # cadence in seconds. Observation freshness (byte-delta bandwidth,
+    # ChannelBandwidth/BandwidthDaily, in-memory active-channel/client tracking)
+    # is decoupled from this — it updates on EVERY observation (~2s under the WS
+    # driver). The heavy write path (provider resolution, system-events ingest,
+    # media-server attribution, session_telemetry insert) only runs once per
+    # this interval. Edge-triggered writes on session start/stop (a channel
+    # becomes newly active, or a client appears/leaves) still fire IMMEDIATELY
+    # even mid-interval, so session boundaries are captured at WS latency.
+    # PO-LOCKED DEFAULT 10s — preserves today's session_telemetry row cadence
+    # (matches the default stats_poll_interval). No migration (settings.json).
+    telemetry_write_interval: int = 10
+    # ADR-013: WebSocket channel_stats subscriber (bead 312nk.2). Master enable
+    # for the WS driver that feeds Dispatcharr's channel_stats broadcast into
+    # the bandwidth tracker as a drop-in for the /proxy/ts/status poll. Default
+    # OFF — the poll remains the permanent fallback. The settings-restart path
+    # (_restart_background_services) reconstructs the tracker, so toggling this
+    # re-reads it on the next start.
+    use_ws_channel_stats: bool = False
+    # ADR-013 §D5 / PO decision #3. When the WS is healthy: if True, the poll
+    # skips its get_channel_stats() fetch entirely (WS is the sole driver); if
+    # False (the soak default), the poll STILL fetches but cross-validates
+    # against the last WS snapshot instead of double-processing telemetry. Flip
+    # to True once the feature defaults ON.
+    ws_suppress_poll_when_healthy: bool = False
+    # ADR-013 §D3 (bead 312nk.4): coarse safety TTL (seconds) for the
+    # process-lived stream_id -> (m3u_account_id, provider_name) cache. The
+    # cache is event-invalidated by the WS stream_rehash / channels_created
+    # broadcasts while the WS is healthy; this TTL bounds staleness if an
+    # invalidation event is missed during a WS gap, and is the ONLY invalidation
+    # on the poll-fallback path (degraded mode). Default 300s matches the
+    # bd-1qmn0 M3U-accounts snapshot cache. Operator-driven via settings.json
+    # (not surfaced in the UI). No migration.
+    stream_provider_cache_ttl: int = 300
+    # ADR-013 §D4 (bead 312nk.4): TTL (seconds) for the user_id -> username
+    # cache that replaces the per-write get_users() fetch. Dispatcharr usernames
+    # change rarely, so minutes of staleness on a display name is harmless.
+    # Default 300s. Operator-driven via settings.json (not surfaced in the UI).
+    # No migration.
+    user_username_cache_ttl: int = 300
     # User timezone for stats display (IANA timezone name, e.g. "America/Los_Angeles")
     # Empty string means use UTC
     user_timezone: str = ""
@@ -145,11 +230,11 @@ class DispatcharrSettings(BaseModel):
     stream_fetch_page_limit: int = 200
     # Stream sort priority order for "Smart Sort" feature
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
-    # Valid values: "resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"
-    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams"]
+    # Valid values: "resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"
+    stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
-    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False}
+    stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}
     # M3U account priorities for sorting - maps M3U account ID (as string) to priority value
     # Higher priority value = preferred (sorted first). Accounts not in this map get priority 0.
     # Example: {"1": 100, "2": 50} means M3U account 1 is preferred over account 2
@@ -209,6 +294,15 @@ class DispatcharrSettings(BaseModel):
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
     auto_creation_exclude_auto_sync_groups: bool = False  # Exclude streams in Dispatcharr auto-sync groups
+    # Event Sync operator team-alias dictionary (bead ti939.4.2). Each entry
+    # is {"terms": [str, ...], "note": str|None} — one group of KNOWN-
+    # equivalent team spellings ("Man Utd" == "Manchester United" == "MUFC")
+    # consulted by the event matcher's team-token layer
+    # (services/event_sync_matcher.py). Written ONLY through the dedicated
+    # PUT /api/event-sync/team-aliases endpoint (routers/event_sync_aliases.py
+    # — validated + journaled there), never by the general settings form.
+    # Ships EMPTY by design: aliases are corpus-gated (docs/event_sync.md).
+    event_sync_team_aliases: list[dict] = []
     # Auto-creation pre-run snapshot retention (ADR-010 §D7 / uc51o.3). Two
     # bounds, whichever fires first, pruned by CleanupTask BEFORE the VACUUM
     # step. Without these, a per-run ~570-channel snapshot captured on every
@@ -218,6 +312,42 @@ class DispatcharrSettings(BaseModel):
     # M3USnapshot newest-N precedent (ADR-010 §D7).
     auto_creation_snapshot_days: int = 30  # Age window — prune snapshots older than this many days (by snapshot_time).
     auto_creation_snapshot_max: int = 50  # Count cap — keep at most this many newest snapshots; older ones pruned regardless of age.
+    # GH #473 OOM cluster safety valves (settings-overridable; module defaults
+    # in DEFAULT_MAX_* above). See those constants for the full rationale.
+    # bd-sjdsq: max per-stream execution_log entries retained in memory per
+    # non-dry-run run. Dry-run keeps the full trace. <= 0 disables the cap.
+    max_auto_creation_log_entries: int = DEFAULT_MAX_AUTO_CREATION_LOG_ENTRIES
+    # bd-h2xnl / bd-exo4j: max channels a single run will create before
+    # soft-aborting (status='capped'). <= 0 disables the cap.
+    max_auto_created_channels_per_run: int = DEFAULT_MAX_AUTO_CREATED_CHANNELS_PER_RUN
+    # bd-p8fx9 (W4): MCP destructive-bulk batch-size caps (read by the MCP
+    # guardrails over GET /api/settings). SOFT forces the confirm-token; HARD
+    # refuses outright. Raise deliberately for a large planned migration.
+    mcp_bulk_delete_soft_cap: int = DEFAULT_MCP_BULK_DELETE_SOFT_CAP
+    mcp_bulk_delete_hard_cap: int = DEFAULT_MCP_BULK_DELETE_HARD_CAP
+    mcp_clear_auto_created_group_soft_cap: int = DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP
+    mcp_bulk_merge_soft_cap: int = DEFAULT_MCP_BULK_MERGE_SOFT_CAP
+    mcp_bulk_merge_hard_cap: int = DEFAULT_MCP_BULK_MERGE_HARD_CAP
+    # bd-exo4j circuit breaker (THE breaker, persisted across restarts): when
+    # the startup crash-sentinel abandons a run left 'running' by an OOM
+    # SIGKILL, it sets this flag True. While True, run_auto_creation_after_refresh
+    # SKIPS the auto-fire chain (manual "Run Now" is NOT gated). NEVER
+    # auto-reset — the operator must deliberately clear it via
+    # POST /api/auto-creation/reset-circuit-breaker. Internal bookkeeping, not a
+    # user-facing preference.
+    auto_creation_run_on_refresh_disabled: bool = False
+    # ADR-011 (bd-ka7j9): refresh watermark decoupling M3U refresh from
+    # auto-creation. M3U refresh no longer hard-chains auto-creation as a
+    # side-effect; instead it advances ``last_m3u_refresh_completed_at`` on
+    # EVERY successful refresh (Q1: NOT change-gated — preserves today's
+    # "runs after every refresh" behavior). The interval-scheduled
+    # ChannelPipelineTask auto-fires only when the refresh watermark is newer than
+    # ``last_auto_creation_consumed_refresh_at`` (which it advances to the
+    # consumed value when it runs). Both are ISO-8601 UTC strings (matching the
+    # other timestamp fields); empty string == "never" (sorts before any real
+    # timestamp, so a fresh install with at least one refresh fires once).
+    last_m3u_refresh_completed_at: str = ""
+    last_auto_creation_consumed_refresh_at: str = ""
     # M3U change-tracking retention (bd-wehek / bd-f9gd8 DBA spike). Both tables
     # grow with every Dispatcharr upstream change (every 5-min poll if upstream
     # churns): m3u_snapshots stores ~1-10 kB groups_data JSON per row;
@@ -234,6 +364,17 @@ class DispatcharrSettings(BaseModel):
     # Prune by age, BEFORE the VACUUM step, mirroring the established
     # age-window pattern.  90-day default mirrors the M3U retention window above.
     unique_client_connection_days: int = 90  # Delete unique_client_connections rows older than this many days (by connected_at).
+    # DBAS outbound SSRF mode (bead 0i2vt.5, threat model §9.4 item 7 / ADR-012
+    # D4). The SINGLE wizard knob governing the outbound-destination policy for
+    # cloud upload (S3/WebDAV/OneDrive/Dropbox/GDrive). "lan_friendly" (DEFAULT)
+    # allows RFC1918 private + 127/8 loopback destinations (operators backing up
+    # to a LAN NAS); "public_only" blocks those. The ALWAYS-ON denylist
+    # (metadata/link-local/CGNAT/IPv6-special/non-http(s)) is enforced
+    # unconditionally in code (security/ssrf.py) regardless of this value — this
+    # key can ONLY move the RFC1918/loopback band, never the always-on denylist
+    # (threat model B6). The first-run wizard that records this choice is a
+    # separate frontend bead; this field is the persistence seam.
+    ssrf_outbound_mode: str = "lan_friendly"
     # MCP server API key for Claude integration (empty = not configured)
     mcp_api_key: str = ""
     # Frontend error telemetry toggle (ADR-006 §10, bd-i6a1m).
@@ -358,6 +499,30 @@ class DispatcharrSettings(BaseModel):
                 _dedup_threshold_floor_warned = True
             v = CONFIDENCE_FLOOR
 
+        return v
+
+    @field_validator(
+        "max_auto_created_channels_per_run",
+        "max_auto_creation_log_entries",
+    )
+    @classmethod
+    def normalize_auto_creation_cap(cls, v: int) -> int:
+        """Normalize the GH #473 auto-creation safety-valve caps (skg35).
+
+        Both caps share the same ``<= 0`` disable sentinel, surfaced to
+        operators via the settings API/UI. Any value at or below zero means
+        "disabled" (no cap). A negative is just another way of saying disabled,
+        so we normalize it to ``0`` for a single canonical disabled value —
+        keeping the stored settings.json tidy and the GET response unambiguous.
+
+        Deliberately permissive on the upper bound: an operator running a large
+        deliberate expansion may raise the cap arbitrarily high, and the engine
+        already treats the cap as a soft-abort threshold (no allocation tied to
+        the value). No upper clamp here would only invite a footgun without a
+        real failure mode, so we leave positive values untouched.
+        """
+        if v < 0:
+            return 0
         return v
 
     def is_configured(self) -> bool:

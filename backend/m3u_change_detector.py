@@ -4,6 +4,7 @@ M3U Change Detection Service.
 Compares current M3U state with previous snapshots to detect changes.
 """
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -296,15 +297,41 @@ class M3UChangeDetector:
                 enabled=group.get("enabled", False),
             ))
 
+        # enhancedchannelmanager-wawwh: local (not module-level) import of the
+        # real per-group name-capture cap so the pure-rename guard below
+        # never drifts from the value the snapshot writer actually applies.
+        # Deliberately NOT imported at module scope: tasks.m3u_refresh
+        # defines M3URefreshTask decorated with @register_task, which runs
+        # get_registry().register(...) as an import-time side effect --
+        # pulling in task_scheduler/dispatcharr_client and the task registry
+        # just for a constant, for every caller of this lean module
+        # (including unit tests that import M3UChangeDetector directly).
+        # Same rationale services/event_sync_staleness.py documents for
+        # mirroring this constant instead of importing it; here we import
+        # the real one lazily rather than mirror it, since the call is
+        # already deep inside a method (no top-level cost) and a mirrored
+        # copy would reintroduce the "duplicated literal" problem instead.
+        from tasks.m3u_refresh import MAX_STREAM_NAMES as _stream_name_cap
+
         # Detect stream count changes in existing groups
         for group_name in prev_group_names & curr_group_names:
             prev_count = prev_groups[group_name].get("stream_count", 0)
             curr_count = curr_groups[group_name].get("stream_count", 0)
             curr_enabled = curr_groups[group_name].get("enabled", False)
 
-            # Get stream names from previous and current snapshots for comparison
-            prev_stream_names = set(prev_groups[group_name].get("stream_names", []))
-            curr_stream_names = set(stream_names_by_group.get(group_name, [])) if stream_names_by_group else set()
+            # Get stream names from previous and current snapshots for comparison.
+            # Raw lists are kept alongside the sets: the count-changed branches
+            # below only ever need set membership, but the count-stable pure-
+            # rename branch (enhancedchannelmanager-wawwh review round 2) needs
+            # the duplicate-preserving lists for multiset (Counter) diffing --
+            # a set collapses ["Event A", "Event A"] to one entry and would hide
+            # a duplicate-name replacement.
+            prev_stream_names_list = prev_groups[group_name].get("stream_names", []) or []
+            curr_stream_names_list = (
+                stream_names_by_group.get(group_name, []) if stream_names_by_group else []
+            ) or []
+            prev_stream_names = set(prev_stream_names_list)
+            curr_stream_names = set(curr_stream_names_list)
 
             # Debug log for groups with stream count changes
             if curr_count != prev_count:
@@ -351,6 +378,80 @@ class M3UChangeDetector:
                     count=diff,
                     enabled=curr_enabled,
                 ))
+            elif (
+                prev_stream_names
+                and curr_stream_names
+                and prev_count < _stream_name_cap
+                and curr_count < _stream_name_cap
+            ):
+                # enhancedchannelmanager-wawwh: stream COUNT is unchanged but
+                # membership differs -- a pure rename (old name out, new name
+                # in, e.g. a PPV slot provider swapping "Event A" for "Event
+                # B" in place). The count-equality gate above only ever
+                # compared counts, so this case previously recorded nothing.
+                # prev_stream_names/curr_stream_names are already built
+                # above for every common group each refresh (not just
+                # count-changed ones), so this reuses sets that are already
+                # in memory -- no additional fetch, and the set-difference
+                # itself is bounded by the capture cap per side, same cost
+                # class as the added/removed branches above.
+                #
+                # The count < cap check (not just "both sets non-empty") is
+                # load-bearing, not cosmetic: get_streams_grouped() caps each
+                # group's captured name list at MAX_STREAM_NAMES, and
+                # Dispatcharr's stream listing carries no explicit ordering
+                # param (DRF unordered-queryset gotcha) -- a >=cap group can
+                # get a different truncated *window* of names between two
+                # refreshes with byte-identical real membership, which would
+                # fabricate a phantom rename (prev/curr sets both non-empty,
+                # both size-500, but drawn from different pages). Requiring
+                # BOTH snapshots' TRUE totals (stream_count, not the
+                # truncated list length) to be below the cap guarantees each
+                # captured list is the group's COMPLETE membership, not a
+                # window of it, so the set diff is a real diff. A group at or
+                # above the cap stays silent here -- matching the codebase's
+                # existing philosophy for this exact cap (see
+                # services/event_sync_staleness.py: "the cap can cause missed
+                # detections, never false staleness").
+                #
+                # enhancedchannelmanager-wawwh review round 2: use multiset
+                # (Counter) semantics, not set semantics, here. The captured
+                # per-group name lists preserve duplicates (m3u_refresh.py
+                # appends names as-is), but a plain set() collapses repeats --
+                # ["Event A", "Event A"] -> ["Event A", "Event B"] would diff
+                # as "added Event B" with no removal, hiding the fact that one
+                # of the two "Event A" occurrences was actually replaced. The
+                # sub-cap guard above already guarantees both lists are
+                # COMPLETE captures (never a truncated window), so Counter
+                # subtraction is a sound multiset diff: added = curr - prev,
+                # removed = prev - curr, each keeping only positive counts.
+                added_counter = Counter(curr_stream_names_list) - Counter(prev_stream_names_list)
+                removed_counter = Counter(prev_stream_names_list) - Counter(curr_stream_names_list)
+                added_streams = list(added_counter.elements())
+                removed_streams = list(removed_counter.elements())
+
+                if added_streams or removed_streams:
+                    logger.info(
+                        "[M3U-CHANGE] Group '%s': count stable at %s but names changed "
+                        "(pure rename) -- %s added, %s removed",
+                        group_name, curr_count, len(added_streams), len(removed_streams)
+                    )
+                    if added_streams:
+                        change_set.streams_added.append(StreamChange(
+                            group_name=group_name,
+                            change_type="streams_added",
+                            stream_names=added_streams,
+                            count=len(added_streams),
+                            enabled=curr_enabled,
+                        ))
+                    if removed_streams:
+                        change_set.streams_removed.append(StreamChange(
+                            group_name=group_name,
+                            change_type="streams_removed",
+                            stream_names=removed_streams,
+                            count=len(removed_streams),
+                            enabled=curr_enabled,
+                        ))
 
         if change_set.has_changes:
             logger.info(

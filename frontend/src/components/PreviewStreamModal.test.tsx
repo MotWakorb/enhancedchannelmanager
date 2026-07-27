@@ -23,6 +23,8 @@ vi.mock('../services/api', async () => {
   };
 });
 
+import * as api from '../services/api';
+
 describe('PreviewStreamModal', () => {
   const mockStream: Stream = {
     id: 1,
@@ -70,26 +72,39 @@ describe('PreviewStreamModal', () => {
       expect(container.firstChild).toBeNull();
     });
 
-    it('returns null when no stream or channel provided', () => {
+    it('returns null when no stream or channel provided', async () => {
       const { container } = render(
         <PreviewStreamModal {...defaultProps} />
       );
       expect(container.firstChild).toBeNull();
+
+      // Let the mount-time getSettings() fetch settle so the resulting state
+      // update (setPreviewMode) happens inside act() — otherwise React logs
+      // an act() warning for the un-awaited promise resolution.
+      await waitFor(() => {
+        expect(api.getSettings).toHaveBeenCalled();
+      });
     });
   });
 
   describe('rendering - stream preview', () => {
-    it('renders modal when isOpen is true with stream', () => {
+    it('renders modal when isOpen is true with stream', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('Stream Preview')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle so the resulting state
+      // update (setPreviewMode) happens inside act().
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders stream name', () => {
+    it('renders stream name', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('Test Stream')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders channel name when provided', () => {
+    it('renders channel name when provided', async () => {
       render(
         <PreviewStreamModal
           {...defaultProps}
@@ -98,19 +113,25 @@ describe('PreviewStreamModal', () => {
         />
       );
       expect(screen.getByText('My Channel')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders TVG-ID metadata', () => {
+    it('renders TVG-ID metadata', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('TVG-ID: test.stream')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders channel group metadata', () => {
+    it('renders channel group metadata', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('Sports')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders provider name when provided', () => {
+    it('renders provider name when provided', async () => {
       render(
         <PreviewStreamModal
           {...defaultProps}
@@ -119,55 +140,77 @@ describe('PreviewStreamModal', () => {
         />
       );
       expect(screen.getByText('My IPTV Provider')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders video player', () => {
+    it('renders video player', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByTestId('mock-video-player')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders fallback options for streams', () => {
+    it('renders fallback options for streams', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('Open in VLC')).toBeInTheDocument();
       expect(screen.getByText('Download M3U')).toBeInTheDocument();
       expect(screen.getByText('Copy URL')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
   });
 
   describe('rendering - channel preview', () => {
-    it('renders channel preview title', () => {
+    it('renders channel preview title', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText('Channel Preview')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle so the resulting state
+      // update (setPreviewMode) happens inside act().
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders channel name', () => {
+    it('renders channel name', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText('Test Channel')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders channel number metadata', () => {
+    it('renders channel number metadata', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText('Channel 101')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders stream count metadata', () => {
+    it('renders stream count metadata', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText('2 streams')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders TVG-ID for channel', () => {
+    it('renders TVG-ID for channel', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText('TVG-ID: test.channel')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('renders channel preview note', () => {
+    it('renders channel preview note', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.getByText(/channel output as it would appear to clients/)).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('does not render fallback options for channels', () => {
+    it('does not render fallback options for channels', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
       expect(screen.queryByText('Open in VLC')).not.toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
   });
 
@@ -195,21 +238,30 @@ describe('PreviewStreamModal', () => {
   });
 
   describe('close functionality', () => {
-    it('renders close button', () => {
+    it('renders close button', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('close')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('calls onClose when close button clicked', () => {
+    it('calls onClose when close button clicked', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       fireEvent.click(screen.getByText('close'));
       expect(defaultProps.onClose).toHaveBeenCalled();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
     });
 
-    it('does not close when overlay clicked', () => {
+    it('does not close when overlay clicked', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       fireEvent.click(document.querySelector('.modal-overlay')!);
       expect(defaultProps.onClose).not.toHaveBeenCalled();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
     it('does not close when modal content clicked', async () => {
@@ -226,15 +278,21 @@ describe('PreviewStreamModal', () => {
       expect(defaultProps.onClose).not.toHaveBeenCalled();
     });
 
-    it('renders footer close button', () => {
+    it('renders footer close button', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       expect(screen.getByText('Close')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('calls onClose when footer close button clicked', () => {
+    it('calls onClose when footer close button clicked', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       fireEvent.click(screen.getByText('Close'));
       expect(defaultProps.onClose).toHaveBeenCalled();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
     });
   });
 
@@ -289,10 +347,13 @@ describe('PreviewStreamModal', () => {
       expect(screen.getByText('Playback Error')).toBeInTheDocument();
     });
 
-    it('shows alternative options section for streams', () => {
+    it('shows alternative options section for streams', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
       // The "Alternative Options" header should be visible for streams
       expect(screen.getByText('Alternative Options')).toBeInTheDocument();
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
   });
 
@@ -328,20 +389,26 @@ describe('PreviewStreamModal', () => {
   });
 
   describe('preview URL generation', () => {
-    it('generates stream preview URL for streams', () => {
+    it('generates stream preview URL for streams', async () => {
       render(<PreviewStreamModal {...defaultProps} stream={mockStream} />);
 
       // Check the src that was passed to VideoPlayer via the stored window value
       const passedSrc = (window as unknown as { __videoPlayerSrc: string }).__videoPlayerSrc;
       expect(passedSrc).toContain('/api/stream-preview/1');
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
 
-    it('generates channel preview URL for channels', () => {
+    it('generates channel preview URL for channels', async () => {
       render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
 
       // Check the src that was passed to VideoPlayer via the stored window value
       const passedSrc = (window as unknown as { __videoPlayerSrc: string }).__videoPlayerSrc;
       expect(passedSrc).toContain('/api/channel-preview/1');
+
+      // Let the mount-time getSettings() fetch settle.
+      await waitFor(() => expect(screen.getByText('Transcode')).toBeInTheDocument());
     });
   });
 });
