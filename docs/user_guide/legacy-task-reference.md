@@ -1281,38 +1281,71 @@ confirmation dialog to remove it.
 
 When authentication is enabled, ECM requires login to access the application.
 
-- Enter your **Username** and **Password**
-- Or click **Login with Dispatcharr** to use your Dispatcharr credentials (SSO)
-- Sessions are maintained with automatic token refresh
+- For a local account, choose **Local Account** when the provider selector is
+  shown, enter **Username** and **Password**, then select **Sign In**.
+- For Dispatcharr SSO, choose **Dispatcharr** when the provider selector is
+  shown, enter the Dispatcharr **Username** and **Password**, then select
+  **Sign in with Dispatcharr**.
+- The provider selector appears only when both providers are enabled. If only
+  Dispatcharr is enabled, the Dispatcharr sign-in form is shown directly.
+- Sessions are maintained with automatic token refresh.
 
 ### Authentication Settings
 
-Configure in Settings → Authentication:
+Administrators configure authentication in **Settings** → **Authentication**:
 
 - **Require Authentication** - Enable or disable login requirement
-- **Primary Auth Mode** - Choose Local or Dispatcharr as the primary method
-- **Local Authentication** - Enable/disable username/password login
-- **Dispatcharr Authentication** - Enable/disable Dispatcharr SSO
+- **Enable local authentication** - Allow locally stored username/password
+  accounts
+- **Minimum Password Length** - Set the local minimum from 6 to 32 characters
+- **Enable Dispatcharr SSO** - Allow sign-in with Dispatcharr credentials
+- **Auto-create Users** - Create an ECM account on a Dispatcharr user's first
+  successful sign-in
+
+Select **Save Authentication Settings** after changing these controls. There
+is no primary-auth-mode selector; the enabled providers determine which login
+choices are available.
 
 ### User Management (Admin)
 
-Administrators can manage users in Settings → Users:
+Administrators manage accounts in **Settings** → **User Management**. The list
+shows **Username**, **Email**, **Provider**, **Status**, **Role**, and
+**Actions**.
 
-- **View Users** - See all accounts with username, email, provider, status, and role
-- **Edit Users** - Modify email, display name, admin status, and active status
-- **Activate/Deactivate** - Toggle user account status
-- **Delete Users** - Remove accounts (soft delete)
+- Select **Edit** to change **Email**, **Active**, or **Admin**, then select
+  **Save** or **Cancel**.
+- Select the **Active** or **Inactive** status button to deactivate or activate
+  another account.
+- Select **Delete** to permanently delete another account after confirming the
+  browser prompt.
+- ECM disables deactivation and deletion for the currently signed-in account.
+- **Admin** users can open these settings and manage other accounts. **User**
+  accounts cannot.
 
-### Account Linking
+There is no create-user control in **User Management**. Dispatcharr users can
+be provisioned by **Auto-create Users**; the initial local administrator is
+created by the first-run **Create Account** flow.
 
-Users can link multiple authentication methods to a single account (e.g., local password + Dispatcharr SSO). This allows logging in with either method.
+### Profile and Local Password
 
-### Password Reset
+Open the signed-in user menu:
 
-**Via Email (SMTP Required):**
-1. Click "Forgot password?" on the login page
-2. Enter your email address
-3. Check email for a reset link (valid 1 hour)
+- **Edit Profile** changes **Display Name** and **Email**; select **Save
+  Changes**.
+- Local accounts also have **Change Password**. Enter **Current Password**,
+  **New Password**, and **Confirm New Password**, then select **Change
+  Password**.
+- Dispatcharr-authenticated accounts do not receive the local **Change
+  Password** action.
+
+### Local Password Reset
+
+**Via email (SMTP required):**
+
+1. On the local sign-in form, select **Forgot password?**.
+2. Enter **Email Address** and select **Send Reset Link**.
+3. Open the emailed link, enter **New Password** and **Confirm Password**, then
+   select **Reset Password**. The link is valid for one hour.
 
 **Via Command Line (No SMTP Needed):**
 See [CLI Tools](#cli-tools) below.

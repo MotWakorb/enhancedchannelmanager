@@ -26,6 +26,11 @@ const STALE_WORKFLOWS = [
   /\bchannel pipeline.{0,240}\bclick save\b/i,
   /\bclick add method\b/i,
   /\bnotification center from the bell icon\b/i,
+  /\blogin with dispatcharr\b/i,
+  /\bprimary auth mode\b/i,
+  /\benable dispatcharr authentication\b/i,
+  /\bmanage (?:accounts|users) in settings\s*(?:→|->)\s*users\b/i,
+  /\blink multiple authentication methods\b/i,
 ]
 
 const REQUIRED_WORKSPACE_IMAGES = new Map([

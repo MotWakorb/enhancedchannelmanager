@@ -60,6 +60,11 @@ test('rejects retired operator controls and selection workflows', () => {
     'In Channel Pipeline, configure the actions, then click **Save**.',
     'Click **Add Method** to configure an alert.',
     'Access the notification center from the **bell icon**.',
+    'Click **Login with Dispatcharr**.',
+    'Set **Primary Auth Mode** to Local.',
+    'Enable **Dispatcharr Authentication**.',
+    'Manage accounts in **Settings** → **Users**.',
+    'Users can link multiple authentication methods.',
   ]
   for (const example of staleExamples) {
     const root = fixture()
