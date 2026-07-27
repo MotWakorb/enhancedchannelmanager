@@ -53,6 +53,7 @@ def register(mcp: FastMCP):
         enabled: bool = True,
         insecure: bool = False,
         fuzzy_stream_matching: bool = False,
+        sync_logos: bool = False,
     ) -> str:
         """Create a sync target — a remote instance this instance can push
         config to.
@@ -71,6 +72,10 @@ def register(mcp: FastMCP):
             insecure: Skip TLS certificate verification (not recommended).
             fuzzy_stream_matching: Use fuzzy matching when reconciling
                 streams against the remote instance.
+            sync_logos: Opt this target into the logo replication slice
+                (default off — logos then stream to the remote one missed
+                file at a time; the sync path never bulk-deletes the
+                remote's logos).
         """
         try:
             client = get_ecm_client()
@@ -80,6 +85,7 @@ def register(mcp: FastMCP):
                 "enabled": enabled,
                 "insecure": insecure,
                 "fuzzy_stream_matching": fuzzy_stream_matching,
+                "sync_logos": sync_logos,
             }
             if credentials is not None:
                 body["credentials"] = credentials
@@ -101,6 +107,7 @@ def register(mcp: FastMCP):
         enabled: bool | None = None,
         insecure: bool | None = None,
         fuzzy_stream_matching: bool | None = None,
+        sync_logos: bool | None = None,
     ) -> str:
         """Update a sync target — only provided fields change.
 
@@ -127,6 +134,8 @@ def register(mcp: FastMCP):
                 payload["insecure"] = insecure
             if fuzzy_stream_matching is not None:
                 payload["fuzzy_stream_matching"] = fuzzy_stream_matching
+            if sync_logos is not None:
+                payload["sync_logos"] = sync_logos
 
             if not payload:
                 return "No changes specified."

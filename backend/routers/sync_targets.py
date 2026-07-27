@@ -94,6 +94,8 @@ class SyncTargetCreate(BaseModel):
     enabled: bool = True
     insecure: bool = False
     fuzzy_stream_matching: bool = False
+    # Opt-in logo replication (bead 7ipq2.1) — default OFF (ADR-013 S9).
+    sync_logos: bool = False
 
     @field_validator("base_url")
     @classmethod
@@ -108,6 +110,7 @@ class SyncTargetUpdate(BaseModel):
     enabled: Optional[bool] = None
     insecure: Optional[bool] = None
     fuzzy_stream_matching: Optional[bool] = None
+    sync_logos: Optional[bool] = None
 
     @field_validator("base_url")
     @classmethod
@@ -131,6 +134,7 @@ class SyncTargetResponse(BaseModel):
     last_outcome: Optional[str] = None
     last_source_fingerprint: Optional[str] = None
     fuzzy_stream_matching: bool
+    sync_logos: bool
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -193,6 +197,7 @@ async def create_sync_target(req: SyncTargetCreate, _admin=RequireAdminIfEnabled
             enabled=req.enabled,
             insecure=req.insecure,
             fuzzy_stream_matching=req.fuzzy_stream_matching,
+            sync_logos=req.sync_logos,
         )
         db.add(target)
         db.commit()
@@ -270,6 +275,8 @@ async def update_sync_target(target_id: int, req: SyncTargetUpdate, _admin=Requi
             target.insecure = req.insecure
         if req.fuzzy_stream_matching is not None:
             target.fuzzy_stream_matching = req.fuzzy_stream_matching
+        if req.sync_logos is not None:
+            target.sync_logos = req.sync_logos
         if req.credentials is not None:
             target.credentials = encrypt_credentials(req.credentials)
 

@@ -44,6 +44,8 @@ class TestCreateSyncTarget:
         assert body["last_outcome"] is None
         assert body["last_source_fingerprint"] is None
         assert body["fuzzy_stream_matching"] is False
+        # Logo sync is OPT-IN (bead 7ipq2.1) — default OFF on a fresh target.
+        assert body["sync_logos"] is False
         # Credentials masked — never the plaintext value.
         assert body["credentials"] == {"token": "***2345"}
         assert "supersecrettoken12345" not in str(body)
@@ -192,11 +194,12 @@ class TestUpdateSyncTarget:
         tid = created.json()["id"]
         resp = await async_client.put(
             f"/api/sync-targets/{tid}",
-            json={"fuzzy_stream_matching": True, "insecure": True},
+            json={"fuzzy_stream_matching": True, "insecure": True, "sync_logos": True},
         )
         assert resp.status_code == 200
         assert resp.json()["fuzzy_stream_matching"] is True
         assert resp.json()["insecure"] is True
+        assert resp.json()["sync_logos"] is True
         assert resp.json()["credential_version"] == 1  # metadata-only
 
     @pytest.mark.asyncio

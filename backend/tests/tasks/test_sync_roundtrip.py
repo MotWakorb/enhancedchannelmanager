@@ -361,3 +361,101 @@ def test_distinct_id_bases_prevent_a_b_id_collision():
     a_ids = {r["id"] for r in a.m3u_accounts.list()}
     # B's next-assigned id base is far from A's, so a leaked A-id is detectable.
     assert b.m3u_accounts._next_id not in a_ids
+
+
+# ---------------------------------------------------------------------------
+# (f) LOGOS opt-in slice (bead 7ipq2.1) — convergence + idempotency through the
+#     stateful harness, with REAL source logo files on disk (tmp CONFIG_DIR),
+#     and the never-destructive invariant (ADR-013 S9).
+# ---------------------------------------------------------------------------
+
+_PNG_BYTES = __import__("base64").b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def _seed_source_logo_files(config_dir, names=("cnn.png", "espn.png")):
+    logos_dir = config_dir / "uploads" / "logos"
+    logos_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (logos_dir / name).write_bytes(_PNG_BYTES)
+
+
+@pytest.mark.asyncio
+async def test_logo_slice_converges_and_is_idempotent(tmp_path):
+    """Opt-in logo sync: apply uploads A's logo files onto B (correlated name
+    where A's Dispatcharr record joins by basename, stem fallback otherwise);
+    a SECOND run is a genuine no-op — B's own now-populated logo list matches,
+    zero re-uploads. The destructive bulk-delete NEVER fires either run."""
+    config_dir = tmp_path / "config"
+    _seed_source_logo_files(config_dir)
+
+    source = StatefulDispatcharrFake.seeded_source()
+    # A's Dispatcharr logo record correlates cnn.png -> display name "CNN Logo".
+    source.logos.create({"name": "CNN Logo", "url": "http://a/data/logos/cnn.png"})
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest,
+        target=make_sync_target(sync_logos=True),
+        config_dir=config_dir,
+    )
+    ledger_dir = tmp_path / "ledger"
+
+    first = await harness.run(confirm_apply=True, ledger_dir=ledger_dir)
+    assert first.outcome == RestoreOutcome.SUCCESS
+    assert first.category(EntityType.LOGO).created == 2
+    assert dest.logo_names() == {"cnn logo", "espn"}
+
+    second = await harness.run(confirm_apply=True, ledger_dir=ledger_dir)
+    assert second.outcome == RestoreOutcome.SUCCESS
+    assert second.category(EntityType.LOGO).created == 0
+    assert second.category(EntityType.LOGO).skipped == 2
+    assert dest.logo_names() == {"cnn logo", "espn"}  # stable across runs
+
+    # ADR-013 S9 invariant: the sync path NEVER bulk-deletes B's logos.
+    assert dest.bulk_logo_delete_calls == []
+
+
+@pytest.mark.asyncio
+async def test_logo_slice_never_deletes_b_only_logos(tmp_path):
+    """Non-destructive proof: a logo that exists ONLY on B survives an opted-in
+    apply untouched (source-wins adds, never clears)."""
+    config_dir = tmp_path / "config"
+    _seed_source_logo_files(config_dir, names=("cnn.png",))
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    dest.logos.create({"name": "B Only", "url": "/data/logos/b-only.png"})
+
+    harness = SyncHarness(
+        source=source, dest=dest,
+        target=make_sync_target(sync_logos=True),
+        config_dir=config_dir,
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path / "ledger")
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert "b only" in dest.logo_names()  # B-only logo untouched
+    assert "cnn" in dest.logo_names()     # A's logo added alongside
+    assert dest.bulk_logo_delete_calls == []
+
+
+@pytest.mark.asyncio
+async def test_logo_slice_off_by_default_b_logos_untouched(tmp_path):
+    """Default target (sync_logos=False): source logo files on disk are NEVER
+    pushed — B's logo surface stays empty."""
+    config_dir = tmp_path / "config"
+    _seed_source_logo_files(config_dir)
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(source=source, dest=dest, config_dir=config_dir)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path / "ledger")
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert dest.logo_names() == set()
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 0 and cat.would_create == 0

@@ -42,13 +42,18 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | Stream profiles | Profile definitions. |
 | Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. |
 
+### Opt-in per target
+
+| Category | Notes |
+|-|-|
+| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate locally-hosted logo files each cycle. Only logos B is missing are uploaded (matched by id, name, then filename), streamed one file at a time; sync never deletes or bulk-clears B's existing logos. |
+
 ### Never synced
 
 | Category | Why |
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced — it cannot be configured away. |
 | **Credentials** | M3U passwords, EPG passwords, API tokens. Redacted before transmission to avoid streaming live secrets on a recurring schedule. Migrate secrets via encrypted backup. |
-| **Logos** | Excluded from the per-cycle slice in v0.18.1. Will be added in a later release once the cost of streaming logo assets per-interval is measured. |
 
 ---
 
