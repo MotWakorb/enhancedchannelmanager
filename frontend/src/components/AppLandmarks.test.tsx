@@ -1,7 +1,6 @@
-import { createRef } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { RoutePageHeading, SkipToMainContent } from './AppLandmarks';
+import { SkipToMainContent } from './AppLandmarks';
 
 describe('application landmarks', () => {
   it.each(['#guide', '#settings/appearance'])(
@@ -28,11 +27,4 @@ describe('application landmarks', () => {
       replace.mockRestore();
     },
   );
-
-  it('provides a focusable semantic destination heading', () => {
-    const ref = createRef<HTMLHeadingElement>();
-    render(<RoutePageHeading ref={ref} activeTab="channel-pipeline" />);
-    ref.current?.focus();
-    expect(screen.getByRole('heading', { level: 1, name: 'Channel Pipeline' })).toHaveFocus();
-  });
 });

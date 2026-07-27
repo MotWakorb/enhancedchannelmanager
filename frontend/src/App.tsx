@@ -9,6 +9,7 @@ import {
   SettingsModal,
   EditModeExitDialog,
   TabNavigation,
+  PageHeader,
   UserMenu,
   NAVIGATE_TO_ORPHANED_GROUPS_EVENT,
   type TabId,
@@ -28,8 +29,10 @@ import { NotificationCenter } from './components/NotificationCenter';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPromptContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { RoutePageHeading, SkipToMainContent } from './components/AppLandmarks';
+import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
+import { ROUTE_HIERARCHY } from './components/routeHierarchy';
+import type { SettingsPage } from './hooks/useHashRoute';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
@@ -2229,6 +2232,63 @@ function App() {
     ? [...channelGroups, ...stagedGroups]
     : channelGroups;
 
+  const channelManagerPageAction = activeTab === 'channel-manager' && (
+    isEditMode ? (
+      <div className="edit-mode-header-controls">
+        <span className="edit-mode-label">
+          <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+          Edit Mode
+        </span>
+        {stagedOperationCount > 0 && (
+          <span className="edit-mode-changes">
+            {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {editModeEnteredAt !== null && <EditModeTimer enteredAt={editModeEnteredAt} />}
+        <div className="edit-mode-buttons">
+          <button
+            className="edit-mode-done-btn"
+            onClick={handleExitEditMode}
+            disabled={isCommitting}
+            title="Apply changes"
+          >
+            <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+            Done
+            {stagedOperationCount > 0 && <span className="edit-mode-done-count">{stagedOperationCount}</span>}
+          </button>
+          <button
+            className="edit-mode-cancel-btn"
+            onClick={() => {
+              if (stagedOperationCount > 0) {
+                if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                  discard();
+                  setSelectedChannelIds(new Set());
+                }
+              } else {
+                discard();
+                setSelectedChannelIds(new Set());
+              }
+            }}
+            disabled={isCommitting}
+            title="Cancel and discard changes"
+          >
+            <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : (
+      <button
+        className="enter-edit-mode-btn"
+        onClick={enterEditMode}
+        title="Enter Edit Mode to make changes"
+      >
+        <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+        Edit Mode
+      </button>
+    )
+  );
+
   return (
     <NotificationProvider position="top-right">
     <BackupDestinationPromptProvider>
@@ -2237,69 +2297,6 @@ function App() {
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <span className="header-context">Operator workspace</span>
         <div className="header-actions">
-          {/* Edit Mode Controls - only show on Channel Manager tab */}
-          {activeTab === 'channel-manager' && (
-            <>
-              {isEditMode ? (
-                <div className="edit-mode-header-controls">
-                  <span className="edit-mode-label">
-                    <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
-                    Edit Mode
-                  </span>
-                  {stagedOperationCount > 0 && (
-                    <span className="edit-mode-changes">
-                      {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {editModeEnteredAt !== null && (
-                    <EditModeTimer enteredAt={editModeEnteredAt} />
-                  )}
-                  <div className="edit-mode-buttons">
-                    <button
-                      className="edit-mode-done-btn"
-                      onClick={handleExitEditMode}
-                      disabled={isCommitting}
-                      title="Apply changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                      Done
-                      {stagedOperationCount > 0 && (
-                        <span className="edit-mode-done-count">{stagedOperationCount}</span>
-                      )}
-                    </button>
-                    <button
-                      className="edit-mode-cancel-btn"
-                      onClick={() => {
-                        if (stagedOperationCount > 0) {
-                          if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
-                            discard();
-                            setSelectedChannelIds(new Set());
-                          }
-                        } else {
-                          discard();
-                          setSelectedChannelIds(new Set());
-                        }
-                      }}
-                      disabled={isCommitting}
-                      title="Cancel and discard changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  className="enter-edit-mode-btn"
-                  onClick={enterEditMode}
-                  title="Enter Edit Mode to make changes"
-                >
-                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-                  Edit Mode
-                </button>
-              )}
-            </>
-          )}
           <a
             href="https://github.com/MotWakorb/enhancedchannelmanager/blob/main/USER_GUIDE.md"
             target="_blank"
@@ -2363,11 +2360,27 @@ function App() {
       />
 
       <main id="main-content" className="main" tabIndex={-1}>
-        <RoutePageHeading ref={routeHeadingRef} activeTab={activeTab} />
+        <PageHeader
+          className="route-page-header"
+          headingLevel={1}
+          headingRef={routeHeadingRef}
+          group={ROUTE_HIERARCHY[activeTab].group}
+          title={ROUTE_TITLES[activeTab].toUpperCase()}
+          description={ROUTE_HIERARCHY[activeTab].purpose}
+          actions={channelManagerPageAction}
+          relatedLinks={ROUTE_HIERARCHY[activeTab].settingsLinks?.map((link) => ({
+            ...link,
+            onClick: (event) => {
+              if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              setHash('settings', link.href.slice('#settings/'.length) as SettingsPage);
+            },
+          }))}
+        />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'dashboard' && (
             <section className="dashboard-route">
-              <p>Operational overview is coming in the next workspace increment.</p>
+              <p>Operational overview cards will be added in the Dashboard delivery.</p>
             </section>
           )}
           {activeTab === 'channel-manager' && (

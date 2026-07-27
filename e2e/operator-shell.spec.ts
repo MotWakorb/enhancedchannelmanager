@@ -31,9 +31,9 @@ async function shellMetrics(page: Page) {
 }
 
 async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'guide') {
-  const selectors = route === 'channel-manager'
-    ? ['.channel-manager-tab', '.channels-pane', '.streams-pane', '.channels-pane h2', '.streams-pane h2', 'input[placeholder="Search streams..."]']
-    : ['.guide-tab', '.guide-controls', 'button[title="Refresh program data"]', 'button[title="Print channel guide"]', '.guide-container', '.guide-footer']
+  const selectors = ['.route-page-header', '#main-content h1', ...(route === 'channel-manager'
+    ? ['.route-page-header .enter-edit-mode-btn', '.channel-manager-tab', '.channels-pane', '.streams-pane', '.channels-pane h2', '.streams-pane h2', 'input[placeholder="Search streams..."]']
+    : ['.guide-tab', '.guide-controls', 'button[title="Refresh program data"]', 'button[title="Print channel guide"]', '.guide-container', '.guide-footer'])]
 
   for (const selector of selectors) {
     const item = page.locator(selector).first()
@@ -118,9 +118,37 @@ test.describe('operator shell navigation behavior', () => {
       await expect(link).toBeFocused()
       await appPage.keyboard.press('Enter')
       await expect(appPage).toHaveURL(new RegExp(`${hash.replace('#', '#')}$`))
-      await expect(appPage.locator('.route-page-heading')).toBeFocused()
+      await expect(appPage.locator('#main-content h1')).toBeFocused()
+      await expect(appPage.locator('#main-content h1')).toHaveText(new RegExp(` / ${name.toUpperCase()}$`))
+      await expect(appPage.locator('#main-content h1')).toHaveCount(1)
       await expect(appPage).toHaveTitle(`${name} | Enhanced Channel Manager`)
     }
+  })
+
+  test('contextual settings links use stable current hashes', async ({ appPage }) => {
+    await dismissFirstRunPromptIfPresent(appPage)
+    const link = appPage.getByRole('link', { name: 'Channel default settings' })
+    await expect(link).toHaveAttribute('href', '#settings/channel-defaults')
+    await link.click()
+    await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+  })
+
+  test('the Channel Manager primary action belongs to its page header', async ({ appPage }) => {
+    await dismissFirstRunPromptIfPresent(appPage)
+    const action = appPage.locator('.route-page-header .enter-edit-mode-btn')
+    await expect(action).toBeVisible()
+    await expect(appPage.locator('header.header .enter-edit-mode-btn')).toHaveCount(0)
+    const followsHeading = await appPage.evaluate(() => {
+      const heading = document.querySelector('#main-content h1')
+      const button = document.querySelector('.route-page-header .enter-edit-mode-btn')
+      return Boolean(
+        heading
+        && button
+        && (heading.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING),
+      )
+    })
+    expect(followsHeading).toBe(true)
   })
 
   test('skip link focuses main without changing a non-default route or history', async ({ appPage }) => {
@@ -161,7 +189,8 @@ test.describe('operator shell navigation behavior', () => {
     await dismissFirstRunPromptIfPresent(appPage)
     await appPage.emulateMedia({ reducedMotion: 'reduce' })
     await expect(appPage.locator('.primary-sidebar')).toHaveCSS('transition-duration', '0s')
-    await appPage.evaluate(() => { document.documentElement.style.zoom = '2' })
+    // A 1280x720 browser at 200% zoom exposes a 640x360 CSS layout viewport.
+    await appPage.setViewportSize({ width: 640, height: 360 })
     for (const link of await appPage.getByRole('navigation', { name: 'Primary' }).getByRole('link').all()) {
       await link.scrollIntoViewIfNeeded()
       await expect(link).toBeVisible()

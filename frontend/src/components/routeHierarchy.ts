@@ -1,0 +1,57 @@
+import type { TabId } from './TabNavigation';
+import { ROUTE_TITLES } from './routeTitles';
+
+export interface RouteSettingsLink {
+  href: `#settings/${string}`;
+  label: string;
+}
+
+interface RouteHierarchy {
+  group: 'OVERVIEW' | 'OPERATIONS' | 'AUTOMATION' | 'INSIGHTS' | 'SYSTEM';
+  heading: string;
+  purpose: string;
+  settingsLinks?: RouteSettingsLink[];
+}
+
+function route(
+  group: RouteHierarchy['group'],
+  tab: TabId,
+  purpose: string,
+  settingsLinks?: RouteSettingsLink[],
+): RouteHierarchy {
+  return { group, heading: `${group} / ${ROUTE_TITLES[tab].toUpperCase()}`, purpose, settingsLinks };
+}
+
+export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
+  dashboard: route('OVERVIEW', 'dashboard', 'Review ECM status and move directly to the workspace that needs attention.'),
+  'channel-manager': route(
+    'OPERATIONS',
+    'channel-manager',
+    'Build and maintain the channel lineup and its assigned streams.',
+    [{ href: '#settings/channel-defaults', label: 'Channel default settings' }],
+  ),
+  guide: route('OPERATIONS', 'guide', 'Review scheduled programming across the active channel lineup.'),
+  'm3u-manager': route(
+    'OPERATIONS',
+    'm3u-manager',
+    'Configure and maintain provider playlists and their account connections.',
+    [{ href: '#settings/linked-accounts', label: 'Linked account settings' }],
+  ),
+  'epg-manager': route('OPERATIONS', 'epg-manager', 'Configure the programme-guide sources used to enrich channels.'),
+  'logo-manager': route('OPERATIONS', 'logo-manager', 'Organize and maintain artwork used throughout the channel lineup.'),
+  'channel-pipeline': route(
+    'AUTOMATION',
+    'channel-pipeline',
+    'Define and monitor rules that automate channel processing.',
+    [{ href: '#settings/channel-pipeline', label: 'Channel Pipeline settings' }],
+  ),
+  'm3u-changes': route(
+    'AUTOMATION',
+    'm3u-changes',
+    'Review provider playlist changes before acting on lineup differences.',
+    [{ href: '#settings/m3u-digest', label: 'M3U digest settings' }],
+  ),
+  stats: route('INSIGHTS', 'stats', 'Monitor current playback activity and channel performance.'),
+  journal: route('INSIGHTS', 'journal', 'Trace recorded channel, guide, provider, and automation events.'),
+  settings: route('SYSTEM', 'settings', 'Configure ECM behavior, integrations, access, and maintenance.'),
+};

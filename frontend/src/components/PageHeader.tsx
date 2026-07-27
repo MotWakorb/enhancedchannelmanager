@@ -1,10 +1,18 @@
-import type { ReactNode } from 'react';
+import type { MouseEventHandler, ReactNode, Ref } from 'react';
 import './PageHeader.css';
 
 interface PageHeaderProps {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  group?: string;
+  headingLevel?: 1 | 2;
+  headingRef?: Ref<HTMLHeadingElement>;
+  relatedLinks?: Array<{
+    href: string;
+    label: string;
+    onClick?: MouseEventHandler<HTMLAnchorElement>;
+  }>;
   /**
    * Extra class name(s) applied to the outer row, for tabs whose own CSS
    * still targets a legacy wrapper class (e.g. `.logo-header` in a
@@ -30,12 +38,31 @@ interface PageHeaderProps {
  * component just standardizes the wrapper row so the layout can't diverge
  * per tab again.
  */
-export function PageHeader({ title, description, actions, className }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  description,
+  actions,
+  className,
+  group,
+  headingLevel = 2,
+  headingRef,
+  relatedLinks,
+}: PageHeaderProps) {
+  const heading = group ? `${group} / ${title}` : title;
   return (
     <div className={`page-header${className ? ` ${className}` : ''}`}>
       <div className="header-title">
-        <h2>{title}</h2>
+        {headingLevel === 1
+          ? <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>
+          : <h2 ref={headingRef}>{heading}</h2>}
         {description && <p className="header-description">{description}</p>}
+        {relatedLinks && relatedLinks.length > 0 && (
+          <nav className="page-header-related-links" aria-label="Related settings">
+            {relatedLinks.map((link) => (
+              <a key={link.href} href={link.href} onClick={link.onClick}>{link.label}</a>
+            ))}
+          </nav>
+        )}
       </div>
       {actions && <div className="header-actions">{actions}</div>}
     </div>
