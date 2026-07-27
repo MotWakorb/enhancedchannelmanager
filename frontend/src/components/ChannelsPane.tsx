@@ -387,8 +387,17 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     }
   }, [menuOpen, menuPosition]);
 
+  useEffect(() => {
+    if (sortSubMenuOpen) {
+      dropdownRef.current
+        ?.querySelector<HTMLButtonElement>('.pane-toolbar-menu-submenu [role="menuitem"]:not(:disabled)')
+        ?.focus();
+    }
+  }, [sortSubMenuOpen]);
+
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const items = [...(dropdownRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const scope = (event.target as HTMLElement).closest<HTMLElement>('[role="menu"]') ?? dropdownRef.current;
+    const items = [...(scope?.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]:not(:disabled)') ?? [])];
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -403,6 +412,13 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     } else if (event.key === 'End') {
       event.preventDefault();
       items[items.length - 1]?.focus();
+    } else if (event.key === 'ArrowRight' && (event.target as HTMLElement).classList.contains('has-submenu')) {
+      event.preventDefault();
+      setSortSubMenuOpen(true);
+    } else if (event.key === 'ArrowLeft' && (event.target as HTMLElement).classList.contains('submenu-item')) {
+      event.preventDefault();
+      setSortSubMenuOpen(false);
+      dropdownRef.current?.querySelector<HTMLButtonElement>('.has-submenu')?.focus();
     }
   };
 
@@ -451,8 +467,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
             <span>Channel Profiles</span>
           </button>
           {isEditMode && (
-            <button className="pane-toolbar-menu-item" onClick={() => { close(); onShowHiddenGroups(); }}>
-              <span className="material-icons">visibility_off</span>
+            <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onShowHiddenGroups(); }}>
+              <span className="material-icons" aria-hidden="true">visibility_off</span>
               <span>Hidden Groups</span>
             </button>
           )}
@@ -464,63 +480,66 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
               {anySortEnabled && (
                 <>
                   <button
+                    role="menuitem"
+                    aria-haspopup="menu"
+                    aria-expanded={sortSubMenuOpen}
                     className={`pane-toolbar-menu-item has-submenu ${sortSubMenuOpen ? 'submenu-open' : ''} ${bulkSortingByQuality ? 'loading' : ''}`}
                     onClick={() => setSortSubMenuOpen(!sortSubMenuOpen)}
                     disabled={bulkSortingByQuality}
                   >
-                    <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
+                    <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`} aria-hidden="true">
                       {bulkSortingByQuality ? 'sync' : 'sort'}
                     </span>
                     <span>{bulkSortingByQuality ? 'Sorting...' : 'Sort All Streams'}</span>
-                    <span className="material-icons submenu-arrow">
+                    <span className="material-icons submenu-arrow" aria-hidden="true">
                       {sortSubMenuOpen ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {sortSubMenuOpen && (
-                    <div className="pane-toolbar-menu-submenu">
-                      <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('smart')}>
-                        <span className="material-icons">auto_awesome</span>
+                    <div className="pane-toolbar-menu-submenu" role="menu" aria-label="Sort all streams">
+                      <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('smart')}>
+                        <span className="material-icons" aria-hidden="true">auto_awesome</span>
                         <span>Smart Sort</span>
                       </button>
                       {sortEnabledCriteria.resolution && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('resolution')}>
-                          <span className="material-icons">aspect_ratio</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('resolution')}>
+                          <span className="material-icons" aria-hidden="true">aspect_ratio</span>
                           <span>By Resolution</span>
                         </button>
                       )}
                       {sortEnabledCriteria.bitrate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('bitrate')}>
-                          <span className="material-icons">speed</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('bitrate')}>
+                          <span className="material-icons" aria-hidden="true">speed</span>
                           <span>By Bitrate</span>
                         </button>
                       )}
                       {sortEnabledCriteria.framerate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('framerate')}>
-                          <span className="material-icons">slow_motion_video</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('framerate')}>
+                          <span className="material-icons" aria-hidden="true">slow_motion_video</span>
                           <span>By Framerate</span>
                         </button>
                       )}
                       {sortEnabledCriteria.m3u_priority && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('m3u_priority')}>
-                          <span className="material-icons">low_priority</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('m3u_priority')}>
+                          <span className="material-icons" aria-hidden="true">low_priority</span>
                           <span>By M3U Priority</span>
                         </button>
                       )}
                       {sortEnabledCriteria.audio_channels && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('audio_channels')}>
-                          <span className="material-icons">surround_sound</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('audio_channels')}>
+                          <span className="material-icons" aria-hidden="true">surround_sound</span>
                           <span>By Audio Channels</span>
                         </button>
                       )}
                       {sortEnabledCriteria.custom_streams && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('custom_streams')}>
-                          <span className="material-icons">edit_note</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('custom_streams')}>
+                          <span className="material-icons" aria-hidden="true">edit_note</span>
                           <span>By Custom Streams</span>
                         </button>
                       )}
                       {sortEnabledCriteria.catchup && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
-                          <span className="material-icons">history</span>
+                        <button role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
+                          <span className="material-icons" aria-hidden="true">history</span>
                           <span>By Catch-up</span>
                         </button>
                       )}
@@ -528,8 +547,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                   )}
                 </>
               )}
-              <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumberAllGroups(); }}>
-                <span className="material-icons">format_list_numbered</span>
+              <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onRenumberAllGroups(); }}>
+                <span className="material-icons" aria-hidden="true">format_list_numbered</span>
                 <span>Renumber All Groups</span>
               </button>
             </>
@@ -546,8 +565,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
             <span>Export CSV</span>
           </button>
           {isEditMode && (
-            <button className="pane-toolbar-menu-item" onClick={() => { close(); onImportCSV(); }}>
-              <span className="material-icons">upload_file</span>
+            <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onImportCSV(); }}>
+              <span className="material-icons" aria-hidden="true">upload_file</span>
               <span>Import CSV</span>
             </button>
           )}

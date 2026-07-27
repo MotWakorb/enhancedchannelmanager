@@ -13,7 +13,7 @@
  */
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChannelsPane } from './ChannelsPane';
 import { NotificationProvider } from '../contexts/NotificationContext';
@@ -159,6 +159,41 @@ describe('ChannelsPane selection action bar integration', () => {
     expect(labels.some((l) => l.includes('Normalize Names'))).toBe(false);
     expect(labels.some((l) => l.includes('Enable in Profile'))).toBe(false);
     expect(labels.some((l) => l.includes('Disable in Profile'))).toBe(false);
+  });
+
+  it('exposes every Edit Mode pane action to roving keyboard navigation, including the sort submenu', async () => {
+    const user = userEvent.setup();
+    renderPane({ selectedChannelIds: new Set([1]) });
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    const menu = screen.getByRole('menu', { name: 'Channel pane actions' });
+    const expected = [
+      'Channel Profiles', 'Hidden Groups', 'Sort All Streams',
+      'Renumber All Groups', 'CSV Template', 'Export CSV', 'Import CSV',
+    ];
+    for (const name of expected) {
+      const item = within(menu).getByRole('menuitem', { name });
+      expect(item.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
+    }
+    expect(within(menu).getAllByRole('menuitem')).toHaveLength(expected.length);
+    expect(within(menu).getByRole('menuitem', { name: 'Channel Profiles' })).toHaveFocus();
+
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    const sort = within(menu).getByRole('menuitem', { name: 'Sort All Streams' });
+    expect(sort).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    const submenu = screen.getByRole('menu', { name: 'Sort all streams' });
+    expect(within(submenu).getByRole('menuitem', { name: 'Smart Sort' })).toHaveFocus();
+    expect(within(submenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'auto_awesomeSmart Sort', 'aspect_ratioBy Resolution', 'speedBy Bitrate', 'slow_motion_videoBy Framerate',
+    ]);
+    await user.keyboard('{ArrowLeft}');
+    expect(sort).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Channel pane actions' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });
 
