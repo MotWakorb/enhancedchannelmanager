@@ -76,6 +76,25 @@
   background-color: var(--bg-primary);
 }
 
+.material-icons {
+  display: inline-block;
+  width: 1em;
+  overflow: hidden;
+  font-family: "Material Icons";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: "liga";
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
 /* Light theme */
 [data-theme="light"] {
   --bg-primary: #ffffff;

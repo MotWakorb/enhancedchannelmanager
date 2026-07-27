@@ -476,7 +476,7 @@ jobs:
             --workers=1 \
             --retries=0 \
             --reporter=github,html
-          node scripts/verify-operator-workspace-release-artifacts.mjs
+          node scripts/verify-operator-workspace-release-artifacts.mjs --require-icon-metadata
         env:
           PLAYWRIGHT_HTML_OPEN: never
 

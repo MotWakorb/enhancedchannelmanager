@@ -404,6 +404,15 @@ the following 13 state names:
 - `health-and-artwork-matrix-expanded`
 - `health-and-artwork-matrix-collapsed`
 
+Material Icons is self-hosted through `@fontsource/material-icons`; canonical
+captures do not depend on Google Fonts or another network request. Before each
+PNG, the gate waits for `document.fonts.ready`, loads and checks the exact
+`Material Icons` face, audits every visible icon for icon-sized geometry and
+raw ligature overflow, and rechecks collapsed-sidebar client/scroll width.
+Each PNG has a matching `.icons.json` record. The manifest command requires
+all 26 metadata records and rejects an unavailable font, invalid icon,
+raw-ligature rendering, or unsettled collapsed rail.
+
 The selection-menu capture waits for Probe Started/Complete toasts to be
 dismissed. PNGs are run artifacts, not source-controlled baselines. The CI job
 explicitly enables GitHub and HTML Playwright reporters, then uploads the

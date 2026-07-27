@@ -1,6 +1,6 @@
 import { test, expect, type Page } from './fixtures/base'
 import type { TestInfo } from '@playwright/test'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const operatorReleaseArtifactDirectory = resolve(process.cwd(), 'test-results/operator-workspace-release')
@@ -19,6 +19,49 @@ async function captureOperatorReleaseArtifact(
   const name = `operator-workspace--${viewport.width}x${viewport.height}--${state}.png`
   await mkdir(operatorReleaseArtifactDirectory, { recursive: true })
   const path = resolve(operatorReleaseArtifactDirectory, name)
+  const iconReadiness = await page.evaluate(async () => {
+    await document.fonts.ready
+    await document.fonts.load('24px "Material Icons"', 'check')
+    const fontAvailable = document.fonts.check('24px "Material Icons"', 'check')
+    const visibleIcons = [...document.querySelectorAll<HTMLElement>('.material-icons')]
+      .filter((icon) => icon.offsetParent !== null)
+    const invalidIcons = visibleIcons.flatMap((icon) => {
+      const style = getComputedStyle(icon)
+      const rect = icon.getBoundingClientRect()
+      const fontSize = Number.parseFloat(style.fontSize)
+      const issues = [
+        !style.fontFamily.includes('Material Icons') && 'font-family',
+        (rect.width <= 0 || rect.height <= 0) && 'empty-geometry',
+        rect.width > fontSize * 1.5 && 'wide-element',
+        rect.height > fontSize * 1.75 && 'tall-element',
+        icon.scrollWidth > fontSize * 1.5 && 'raw-ligature',
+      ].filter(Boolean)
+      return issues.length
+        ? [{ text: icon.textContent?.trim(), issues, rect: { width: rect.width, height: rect.height }, fontSize, scrollWidth: icon.scrollWidth }]
+        : []
+    })
+    const sidebar = document.querySelector<HTMLElement>('.primary-sidebar')
+    const sidebarCollapsed = sidebar?.classList.contains('is-collapsed') ?? false
+    return {
+      fontAvailable,
+      fontStatus: document.fonts.status,
+      visibleIconCount: visibleIcons.length,
+      invalidIcons,
+      sidebarCollapsed,
+      sidebarClientWidth: sidebar?.clientWidth ?? null,
+      sidebarScrollWidth: sidebar?.scrollWidth ?? null,
+      sidebarWidthSettled: !sidebarCollapsed || sidebar?.clientWidth === sidebar?.scrollWidth,
+    }
+  })
+  expect(iconReadiness.fontStatus).toBe('loaded')
+  expect(iconReadiness.fontAvailable).toBe(true)
+  expect(iconReadiness.visibleIconCount).toBeGreaterThan(0)
+  expect(iconReadiness.invalidIcons).toEqual([])
+  expect(iconReadiness.sidebarWidthSettled).toBe(true)
+  await writeFile(
+    resolve(operatorReleaseArtifactDirectory, name.replace(/\.png$/, '.icons.json')),
+    `${JSON.stringify({ viewport, state, ...iconReadiness }, null, 2)}\n`,
+  )
   await page.screenshot({ path, fullPage: true, animations: 'disabled' })
   await testInfo.attach(name, { path, contentType: 'image/png' })
 }
