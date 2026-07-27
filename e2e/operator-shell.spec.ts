@@ -318,11 +318,29 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await copyAction.press('Enter')
 
       await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
-      await expect(page.locator('.channel-column-headers')).toHaveText(/NumberChannelGuideStreams/)
+      await expect(page.locator('.channel-column-headers')).toHaveText(/NumberChannel \/ GuideStreams/)
       await expect(page.locator('.channel-number-col')).toHaveText('101')
       await expect(page.locator('.channel-number-col')).not.toContainText('#')
       await expect(page.getByText('Schedules Direct – ESPN')).toBeVisible()
       await expect(page.getByLabel('1 stream; healthy')).toBeVisible()
+      const expectChannelColumnsAligned = async () => {
+        expect(await page.evaluate(() => {
+          const center = (selector: string) => {
+            const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect()
+            return rect.left + rect.width / 2
+          }
+          const left = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().left
+          return {
+            number: Math.abs(center('.channel-column-number') - center('.channel-number-col')),
+            identity: Math.abs(left('.channel-column-identity') - left('.channel-content')),
+            streams: Math.abs(center('.channel-column-streams') - center('.channel-streams-count')),
+          }
+        })).toEqual({ number: 0, identity: 0, streams: 0 })
+      }
+      await expectChannelColumnsAligned()
+      await page.getByRole('button', { name: 'Edit Mode' }).click()
+      await expectChannelColumnsAligned()
+      await page.getByRole('button', { name: 'Done' }).click()
       const channelActions = page.getByRole('button', { name: 'Channel actions' })
       await channelActions.focus()
       await channelActions.press('Enter')

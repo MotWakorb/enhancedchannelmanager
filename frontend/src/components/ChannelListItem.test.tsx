@@ -267,7 +267,7 @@ describe('ChannelListItem — canonical identity and compact health summary', ()
   });
 
   it.each([
-    ['no streams', {}, 'warning', 'No streams assigned'],
+    ['no streams', {}, 'warning', '0 streams; no streams assigned'],
     ['failed probe', { hasFailedStreams: true }, 'error', '1 stream; failed probe'],
     ['stale', { hasStaleStreams: true, staleStreamCount: 1 }, 'history', '1 stream; stale'],
     ['black screen', { hasBlackScreenStreams: true }, 'videocam_off', '1 stream; black screen'],
@@ -291,6 +291,15 @@ describe('ChannelListItem — canonical identity and compact health summary', ()
       hasLowFpsStreams: true,
     });
     expect(screen.getByLabelText('2 streams; failed probe').querySelector('.material-icons')).toHaveTextContent('error');
+  });
+
+  it('applies black-screen precedence over low FPS', () => {
+    renderRow({
+      channel: { ...makeChannel(), streams: [1] },
+      hasBlackScreenStreams: true,
+      hasLowFpsStreams: true,
+    });
+    expect(screen.getByLabelText('1 stream; black screen').querySelector('.material-icons')).toHaveTextContent('videocam_off');
   });
 });
 
@@ -425,20 +434,81 @@ describe('ChannelListItem — channel actions menu', () => {
     renderRow({
       channel: { ...makeChannel(), streams: [1] },
       isEditMode: true,
+      channelUrl: '/channel/42',
       onProbeChannel: vi.fn(),
       onPreviewChannel: vi.fn(),
     });
     const trigger = screen.getByRole('button', { name: 'Channel actions' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
     trigger.focus();
     await user.keyboard('{Enter}');
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const menu = screen.getByRole('menu', { name: 'Channel actions' });
     const items = within(menu).getAllByRole('menuitem');
     expect(items.length).toBeGreaterThan(2);
     expect(items.every((item) => item.querySelector('.material-icons'))).toBe(true);
+    expect(items.every((item) => item.querySelector('.material-icons')?.getAttribute('aria-hidden') === 'true')).toBe(true);
+    for (const name of ['Probe Channel', 'Preview', 'Open in VLC', 'Edit Channel', 'Delete Channel']) {
+      expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
+    }
+    expect(items[0]).toHaveFocus();
+    await user.keyboard('{End}');
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(items[0]).toHaveFocus();
+    await user.keyboard('{ArrowUp}');
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
     expect(items[0]).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    ['Probe Channel', 'onProbeChannel'],
+    ['Copy URL', 'onCopyChannelUrl'],
+  ] as const)('%s closes and returns focus to the trigger', async (name, callbackName) => {
+    const user = userEvent.setup();
+    const callback = vi.fn();
+    renderRow({
+      channel: { ...makeChannel(), streams: [1] },
+      channelUrl: '/channel/42',
+      [callbackName]: callback,
+    });
+    const trigger = screen.getByRole('button', { name: 'Channel actions' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name }));
+    expect(callback).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    ['Preview', 'onPreviewChannel'],
+    ['Edit Channel', 'onEditChannel'],
+    ['Delete Channel', 'onDelete'],
+  ] as const)('%s closes without stealing focus from the launched dialog', async (name, callbackName) => {
+    const user = userEvent.setup();
+    const callback = vi.fn(() => {
+      const dialog = document.createElement('button');
+      dialog.textContent = 'Dialog control';
+      document.body.append(dialog);
+      dialog.focus();
+    });
+    renderRow({
+      channel: { ...makeChannel(), streams: [1] },
+      isEditMode: true,
+      onPreviewChannel: vi.fn(),
+      [callbackName]: callback,
+    });
+    await user.click(screen.getByRole('button', { name: 'Channel actions' }));
+    await user.click(screen.getByRole('menuitem', { name }));
+    expect(callback).toHaveBeenCalledOnce();
+    expect(screen.getByText('Dialog control')).toHaveFocus();
+    screen.getByText('Dialog control').remove();
   });
 });
 

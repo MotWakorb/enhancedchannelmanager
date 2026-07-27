@@ -53,6 +53,7 @@ import { CSVImportModal } from './CSVImportModal';
 import { MergeChannelsModal } from './MergeChannelsModal';
 import { SelectionActionBar } from './SelectionActionBar';
 import { resolveChannelArtwork } from './channelRowPresentation';
+import { channelCapabilityTiers } from './channelCapabilities';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -1053,35 +1054,6 @@ const DroppableGroupEnd = memo(function DroppableGroupEnd({
     </div>
   );
 });
-
-/** Capability tiers in display order — highest resolution first. */
-const CAPABILITY_TIER_ORDER = ['4K', 'FHD', 'HD', 'SD'] as const;
-
-/**
- * Distinct resolution capability tiers among a channel's successfully-probed
- * streams, ordered highest-first (4K → FHD → HD → SD). Streams without a
- * successful probe or a parseable resolution contribute nothing; a channel
- * with no probed streams yields an empty array (no pills). Height buckets
- * mirror StreamListItem's formatResolution.
- */
-function channelCapabilityTiers(
-  streamIds: number[],
-  statsMap: Map<number, StreamStats>,
-): string[] {
-  const tiers = new Set<string>();
-  for (const streamId of streamIds) {
-    const stats = statsMap.get(streamId);
-    if (!stats || stats.probe_status !== 'success' || !stats.resolution) continue;
-    const match = stats.resolution.match(/(\d+)x(\d+)/);
-    if (!match) continue;
-    const height = parseInt(match[2], 10);
-    if (height >= 2160) tiers.add('4K');
-    else if (height >= 1080) tiers.add('FHD');
-    else if (height >= 720) tiers.add('HD');
-    else tiers.add('SD');
-  }
-  return CAPABILITY_TIER_ORDER.filter((tier) => tiers.has(tier));
-}
 
 export function ChannelsPane({
   channelGroups,
@@ -7117,8 +7089,7 @@ export function ChannelsPane({
       >
         <div className={`channel-column-headers ${isEditMode ? 'edit-mode' : ''}`} aria-hidden="true">
           <span className="channel-column-number">Number</span>
-          <span className="channel-column-name">Channel</span>
-          <span className="channel-column-guide">Guide</span>
+          <span className="channel-column-identity">Channel / Guide</span>
           <span className="channel-column-streams">Streams</span>
         </div>
         {loading ? (

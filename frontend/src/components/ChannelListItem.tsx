@@ -148,6 +148,12 @@ const ChannelMenu = memo(function ChannelMenu({
     if (returnFocus) btnRef.current?.focus();
   };
 
+  const runAction = (action: () => void, returnFocus: boolean) => {
+    setMenuOpen(false);
+    action();
+    if (returnFocus) btnRef.current?.focus();
+  };
+
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const items = [...(dropdownRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -188,6 +194,8 @@ const ChannelMenu = memo(function ChannelMenu({
         }}
         title="Channel actions"
         aria-label="Channel actions"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
       >
         <span className="material-icons" aria-hidden="true">more_vert</span>
       </button>
@@ -206,10 +214,10 @@ const ChannelMenu = memo(function ChannelMenu({
               className={`channel-menu-item ${isProbing ? 'loading' : ''}`}
               role="menuitem"
               title={isProbing ? 'Probing channel streams' : 'Probe channel streams'}
-              onClick={() => { setMenuOpen(false); onProbeChannel(); }}
+              onClick={() => runAction(onProbeChannel, true)}
               disabled={isProbing}
             >
-              <span className={`material-icons ${isProbing ? 'spinning' : ''}`}>
+              <span className={`material-icons ${isProbing ? 'spinning' : ''}`} aria-hidden="true">
                 {isProbing ? 'sync' : 'speed'}
               </span>
               <span>{isProbing ? 'Probing...' : 'Probe Channel'}</span>
@@ -220,9 +228,9 @@ const ChannelMenu = memo(function ChannelMenu({
               className="channel-menu-item"
               role="menuitem"
               title="Preview channel"
-              onClick={() => { setMenuOpen(false); onPreviewChannel(); }}
+              onClick={() => runAction(onPreviewChannel, false)}
             >
-              <span className="material-icons">visibility</span>
+              <span className="material-icons" aria-hidden="true">visibility</span>
               <span>Preview</span>
             </button>
           )}
@@ -231,9 +239,9 @@ const ChannelMenu = memo(function ChannelMenu({
               className="channel-menu-item"
               role="menuitem"
               title="Open channel in VLC"
-              onClick={() => { setMenuOpen(false); openInVLC(channelUrl, channel.name); }}
+              onClick={() => runAction(() => openInVLC(channelUrl, channel.name), true)}
             >
-              <span className="material-icons">play_circle</span>
+              <span className="material-icons" aria-hidden="true">play_circle</span>
               <span>Open in VLC</span>
             </button>
           )}
@@ -242,9 +250,9 @@ const ChannelMenu = memo(function ChannelMenu({
               className="channel-menu-item"
               role="menuitem"
               title="Copy channel URL"
-              onClick={() => { setMenuOpen(false); onCopyChannelUrl(); }}
+              onClick={() => runAction(onCopyChannelUrl, true)}
             >
-              <span className="material-icons">content_copy</span>
+              <span className="material-icons" aria-hidden="true">content_copy</span>
               <span>Copy URL</span>
             </button>
           )}
@@ -255,18 +263,18 @@ const ChannelMenu = memo(function ChannelMenu({
                 className="channel-menu-item"
                 role="menuitem"
                 title="Edit channel"
-                onClick={() => { setMenuOpen(false); onEditChannel(); }}
+                onClick={() => runAction(onEditChannel, false)}
               >
-                <span className="material-icons">edit</span>
+                <span className="material-icons" aria-hidden="true">edit</span>
                 <span>Edit Channel</span>
               </button>
               <button
                 className="channel-menu-item danger"
                 role="menuitem"
                 title="Delete channel"
-                onClick={() => { setMenuOpen(false); onDelete(); }}
+                onClick={() => runAction(onDelete, false)}
               >
-                <span className="material-icons">delete</span>
+                <span className="material-icons" aria-hidden="true">delete</span>
                 <span>Delete Channel</span>
               </button>
             </>
@@ -364,7 +372,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   const streamCount = channel.streams.length;
   const streamCountText = `${streamCount} stream${streamCount !== 1 ? 's' : ''}`;
   const health = streamCount === 0
-    ? { key: 'no-streams', icon: 'warning', label: 'No streams assigned', detail: 'No streams assigned' }
+    ? { key: 'no-streams', icon: 'warning', label: '0 streams; no streams assigned', detail: '0 streams; no streams assigned' }
     : hasFailedStreams
       ? { key: 'failed', icon: 'error', label: `${streamCountText}; failed probe`, detail: 'One or more streams failed probe' }
       : hasStaleStreams
