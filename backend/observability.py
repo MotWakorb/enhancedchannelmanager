@@ -803,6 +803,13 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         # the freshness/last-success staleness alert (ECMSyncStalledTargetDrift)
         # is the time-since-success counterpart. Cardinality is fixed at three
         # series.
+        #
+        # 7ipq2.3 (per-target sync tasks): this counter stays RESULT-ONLY —
+        # an AGGREGATE across sync targets (one increment per run, whichever
+        # target ran). Per-target attribution lives in the last-success gauge
+        # instead (task_id=dbas_sync_<target_id> series). Adding a target
+        # label here is a deliberate cardinality/design decision deferred to
+        # the PO — do not add it casually.
         # ----------------------------------------------------------------
         "sync_runs_total": Counter(
             "ecm_sync_runs_total",
@@ -909,13 +916,19 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         #
         # ``task_schedule_last_success_timestamp`` labels by ``task_id`` —
         # a bounded enum drawn from the task_registry (~15 tasks defined
-        # in code; the label space is the set of task_class.task_id
-        # constants, not user-derived input, so cardinality cannot grow
-        # at runtime). Updated by the task_engine on every successful
-        # task execution to the current Unix epoch seconds. Per-task so
-        # SRE staleness alerts can distinguish a stuck stats_v2_rollup
-        # from a stuck cleanup from a stuck stream_probe — each has a
-        # different cadence and a different acceptable staleness window.
+        # in code as task_class.task_id constants, PLUS one dynamically
+        # registered ``dbas_sync_<sync_target_id>`` per SyncTarget row —
+        # 7ipq2.3 / ADR-013 S6. The sync family is operator-created but
+        # tightly bounded: a self-hosted install has 1-3 sync targets,
+        # and ids come from code-controlled registration keyed on DB
+        # pks, never raw user input). Updated by the task_engine on
+        # every successful task execution to the current Unix epoch
+        # seconds. Per-task so SRE staleness alerts can distinguish a
+        # stuck stats_v2_rollup from a stuck cleanup from a stuck
+        # stream_probe — each has a different cadence and a different
+        # acceptable staleness window — and, for sync, a stalled target
+        # B2 from a healthy B1 (ECMSyncStalledTargetDrift evaluates per
+        # target series).
         #
         # ``task_schedule_next_run_null_count`` is label-free — the count
         # of task_schedules rows where next_run_at IS NULL AND enabled=1

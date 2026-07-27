@@ -4947,7 +4947,9 @@ export async function deleteEventSyncExclusion(
 // one-way sync engine. The CRUD mirrors backend/routers/sync_targets.py:
 // credentials are WRITE-ONLY (Fernet-encrypted at rest, never echoed back
 // decrypted — responses mask them to last-4). The actual sync is driven by
-// `runTask('dbas_sync', undefined, { sync_target_id, confirm_apply })`.
+// `runTask(`dbas_sync_${id}`, undefined, { sync_target_id, confirm_apply })` —
+// one registered task per target (7ipq2.3 / ADR-013 S6), so distinct targets
+// sync concurrently and a second run against the SAME target is refused.
 // -------------------------------------------------------------------------
 
 /**

@@ -54,14 +54,23 @@ def test_sync_alert_mirrors_sibling_staleness_shape(_rules):
     alert = _find_alert(_rules, "ecm_task_scheduler", _ALERT_NAME)
     expr = alert["expr"]
 
-    # Staleness expression keyed on the per-task last-success gauge.
-    assert 'ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"}' in expr
+    # Staleness expression keyed on the per-task last-success gauge. 7ipq2.3 /
+    # ADR-013 S6: sync tasks are registered per target (dbas_sync_<target_id>),
+    # so the matcher is a regex over the per-target id family — an exact
+    # task_id="dbas_sync" matcher would match NOTHING and the alert would
+    # silently die. Per-series evaluation also fixes the k78ja blind spot:
+    # under the shared id, one healthy target's success reset the staleness
+    # clock for every other (possibly drifting) target.
+    assert (
+        'ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}' in expr
+    )
+    assert 'task_id="dbas_sync"' not in expr
     assert "time() -" in expr
     # 3h budget = 3 missed hourly runs (ADR-013 S9 cheap-reads cadence basis).
     assert "10800" in expr
     # Fresh-install / operator-disabled guard — mirrors every sibling alert.
     assert (
-        'AND ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"} > 0'
+        'AND ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"} > 0'
         in expr
     )
 

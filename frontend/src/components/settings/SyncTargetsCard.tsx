@@ -178,7 +178,12 @@ export function SyncTargetsCard() {
     async (target: api.SyncTarget) => {
       setBusyId(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        // Per-target task id (7ipq2.3 / ADR-013 S6): each target owns
+        // `dbas_sync_<id>`, so two targets can sync concurrently while the
+        // engine still refuses a second run against the SAME target.
+        // sync_target_id stays in the payload as a self-documenting
+        // cross-check — the backend hard-fails on a mismatch.
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: false,
         });
@@ -216,7 +221,7 @@ export function SyncTargetsCard() {
       if (!ok) return;
       setBusyId(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: true,
         });

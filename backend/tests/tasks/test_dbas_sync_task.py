@@ -3,7 +3,10 @@
 Covers ``tasks.dbas_sync.DbasSyncTask`` — the ``TaskScheduler`` wrapper that makes
 the cross-instance sync ENGINE (``tasks.dbas_sync_engine.run_sync``) OPERATOR-
 TRIGGERABLE: schedulable on an interval AND manually force-triggerable via the
-generic ``POST /api/tasks/dbas_sync/run`` endpoint.
+generic ``POST /api/tasks/dbas_sync_<target_id>/run`` endpoint (7ipq2.3: one
+registered task per SyncTarget; per-target concurrency semantics live in
+``test_dbas_sync_concurrency.py`` — this file tests the shared base behavior
+on direct, unbound instances).
 
 Two behavioral surfaces under test:
 
@@ -192,14 +195,19 @@ def _apply_partial_report_with_categories() -> RestoreReport:
 # ---------------------------------------------------------------------------
 
 
-def test_task_is_registered():
-    """The task must be importable via the registry under its task_id."""
+def test_base_class_not_statically_registered_but_importable():
+    """7ipq2.3 / ADR-013 S6: sync tasks are registered ONE PER SyncTarget
+    (``dbas_sync_<target_id>``, see ``test_dbas_sync_concurrency.py``); the
+    shared parameterized ``dbas_sync`` id would bypass per-target locking, so
+    the base class must no longer self-register. It stays importable via the
+    tasks package (it is the behavior-carrying base for the bound subclasses)."""
     import tasks  # noqa: F401 — triggers @register_task side effects
     from task_registry import get_registry
+    from tasks.dbas_sync import DbasSyncTask
 
     registry = get_registry()
-    assert registry.is_registered("dbas_sync")
-    assert registry.get_task_class("dbas_sync").default_enabled is False
+    assert not registry.is_registered("dbas_sync")
+    assert DbasSyncTask.default_enabled is False
 
 
 def test_default_enabled_is_false():

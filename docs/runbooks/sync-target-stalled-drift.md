@@ -9,7 +9,7 @@
 
 **Alerts that route here:**
 
-- `ECMSyncStalledTargetDrift` (warning) — the `dbas_sync` task has not recorded a FULL success in over 3 hours (hourly cadence basis, 3-missed-run budget); sustained 1h.
+- `ECMSyncStalledTargetDrift` (warning) — a per-target sync task (`dbas_sync_<sync_target_id>`) has not recorded a FULL success in over 3 hours (hourly cadence basis, 3-missed-run budget); sustained 1h. Fires PER TARGET — the `$labels.task_id` in the alert names which target is drifting (7ipq2.3: one task per `SyncTarget`; another target syncing cleanly does NOT clear this).
 
 **SLO:** [Task scheduler health](../sre/slos.md#capacity-planning-task-scheduler-health-bd-qxi02) (capacity-planning class, not a numbered SLO).
 
@@ -17,12 +17,12 @@
 
 ## What this is
 
-The cross-instance sync task (`dbas_sync`, epic `i39wu`) does a one-way push of this instance's config (and channels) from Dispatcharr-A to a remote Dispatcharr-B `SyncTarget`. It is idempotent — each cycle reads A's then-current config and converges B toward it, so "just re-run next interval" is a complete recovery story.
+The cross-instance sync tasks (`dbas_sync_<sync_target_id>` — one registered task per `SyncTarget` row, ADR-013 S6 / bead `7ipq2.3`; epic `i39wu`) do a one-way push of this instance's config (and channels) from Dispatcharr-A to a remote Dispatcharr-B `SyncTarget`. Each cycle is idempotent — it reads A's then-current config and converges B toward it, so "just re-run next interval" is a complete recovery story. Distinct targets run concurrently (bounded by `ECM_SYNC_MAX_CONCURRENT`, default 3); a second run against the SAME target is refused `ALREADY_RUNNING` by the engine's per-task_id guard.
 
-The alert fires when `dbas_sync` has not recorded a FULL success within its staleness budget. The metrics:
+The alert fires when ONE target's task has not recorded a FULL success within its staleness budget. The metrics:
 
-- `ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"}` (gauge) — Unix-epoch seconds of the last FULL success. Stamped by the task_engine on `TaskResult.success`. The alert is `(time() - this) > 10800`, guarded `> 0` so it stays silent on fresh installs / operators who left the task MANUAL.
-- `ecm_sync_runs_total{result}` (counter) — tri-state run outcome, `result ∈ {success, partial, failed}` (mirrors `ecm_backup_runs_total`). The companion signal that tells you WHICH failure mode you are in.
+- `ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"}` (gauge, per target) — Unix-epoch seconds of the last FULL success for that target. Stamped by the task_engine on `TaskResult.success`. The alert is `(time() - this) > 10800` per series, guarded `> 0` so it stays silent on fresh installs / targets the operator left MANUAL.
+- `ecm_sync_runs_total{result}` (counter) — tri-state run outcome, `result ∈ {success, partial, failed}` (mirrors `ecm_backup_runs_total`). The companion signal that tells you WHICH failure mode you are in. NOTE: this counter is result-only — an AGGREGATE across targets; use the per-target gauge (and per-task run history) to attribute a failure mode to a specific target on multi-target installs.
 
 ## Why this matters
 
@@ -38,11 +38,11 @@ The #1 operator risk for cross-instance sync is **silent drift discovered at fai
 
 ## First 10 minutes
 
-1. **Confirm the alert is real.** Read the staleness directly:
+1. **Confirm the alert is real.** Read the staleness directly for the target named in the alert's `task_id` label:
    ```promql
-   time() - ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"}
+   time() - ecm_task_schedule_last_success_timestamp{task_id="dbas_sync_<sync_target_id>"}
    ```
-   If the gauge is `0` / absent, the task has never succeeded on this install (fresh install or operator left it MANUAL) — the `> 0` guard should have suppressed the alert; treat as a false positive and capture for tuning.
+   If the gauge is `0` / absent, that target's task has never succeeded on this install (fresh install, target just created, or operator left it MANUAL) — the `> 0` guard should have suppressed the alert; treat as a false positive and capture for tuning.
 
 2. **Failed vs partial — which mode?** Compare the tri-state counter:
    ```promql
@@ -81,14 +81,14 @@ The most common subcase is a **credential-freshness abort** — the bound `SyncT
 The apply runs but a category mixes/rolls-back every cycle, so the run never reports a clean success and the last-success gauge never advances.
 
 - **First rule out an unreachable B** (live-validated: total B outage surfaces as `partial`, not `failed` — every category fails per-item and the run rolls back): `curl -fsS <base_url>/api/core/version/`.
-- Pull the most recent run's per-category report: the task result's `details.sync_report` (Task History UI, or `POST /api/tasks/dbas_sync/run` response for a manual re-run) — each category carries `created/updated/skipped/failed` plus per-item `failure_details` with sanitized upstream messages (live example: `400 {"auto_created_by": ["Invalid pk ..."]}` pinpointed a payload bug in minutes).
+- Pull the most recent run's per-category report: the task result's `details.sync_report` (Task History UI, or `POST /api/tasks/dbas_sync_<sync_target_id>/run` response for a manual re-run) — each category carries `created/updated/skipped/failed` plus per-item `failure_details` with sanitized upstream messages (live example: `400 {"auto_created_by": ["Invalid pk ..."]}` pinpointed a payload bug in minutes).
 - Cross-reference whether the failing category is a known-fragile importer (channels/streams 4-tier matcher, per ADR-013 S9).
 
 ## Resolution
 
 TODO — fill in once the team has resolved at least one real incident. Likely categories:
 
-1. **B unreachable**: restore connectivity to Dispatcharr-B, then force one manual re-sync (idempotent) — `POST /api/tasks/dbas_sync/run` with `{sync_target_id, confirm_apply}`. The alert clears on the next full success.
+1. **B unreachable**: restore connectivity to Dispatcharr-B, then force one manual re-sync (idempotent) — `POST /api/tasks/dbas_sync_<sync_target_id>/run` with `{confirm_apply}`. The alert clears on that target's next full success.
 2. **Credentials rotated/revoked**: re-validate the `SyncTarget`, re-save the sync schedule to re-capture `credential_version`, then force a manual re-sync.
 3. **Partial-apply loop**: identify the failing category from the sync report, fix the underlying cause (B-side schema/config divergence), then re-sync.
 

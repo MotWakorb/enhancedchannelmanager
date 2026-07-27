@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0002",
+    version="0.18.1-0003",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1230,6 +1230,15 @@ async def startup_event():
         # Import tasks module to trigger @register_task decorators
         import tasks  # noqa: F401 - imported for side effects
         logger.info("[MAIN] Task modules loaded and registered")
+
+        # Register one cross-instance sync task per SyncTarget row (7ipq2.3 /
+        # ADR-013 S6: task_id dbas_sync_<target_id>, per-target overlap guard)
+        # and migrate any legacy shared-id 'dbas_sync' schedule rows. MUST run
+        # BEFORE start_engine(): sync_from_database creates scheduled_tasks
+        # rows only for ids registered at that point. Defensive internally —
+        # never raises into startup.
+        from tasks.dbas_sync import register_sync_target_tasks
+        register_sync_target_tasks()
 
         # Start the task engine
         from task_engine import start_engine, get_engine

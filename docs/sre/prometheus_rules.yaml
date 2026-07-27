@@ -937,13 +937,23 @@ groups:
           runbook_url: docs/runbooks/task_scheduler_stalled.md
 
       - alert: ECMSyncStalledTargetDrift
-        # dbas_sync (cross-instance A->B sync, epic i39wu) defaults to
-        # MANUAL in code; when an operator schedules it on a recurring
-        # cadence, the cheapest-reads convergence interval is hourly
-        # (ADR-013 S9 — config categories are cheap reads every cycle).
-        # 3h budget = 3 missed runs against that 1h basis, room for a
-        # transient B-unreachable blip without firing on every miss.
-        # Window 1h — sustained drift, not single-scrape transient.
+        # Cross-instance A->B sync (epic i39wu) defaults to MANUAL in
+        # code; when an operator schedules it on a recurring cadence, the
+        # cheapest-reads convergence interval is hourly (ADR-013 S9 —
+        # config categories are cheap reads every cycle). 3h budget = 3
+        # missed runs against that 1h basis, room for a transient
+        # B-unreachable blip without firing on every miss. Window 1h —
+        # sustained drift, not single-scrape transient.
+        #
+        # 7ipq2.3 / ADR-013 S6: sync tasks are registered ONE PER
+        # SyncTarget (task_id dbas_sync_<target_id>), so this matcher is
+        # a regex over the per-target id family and the alert evaluates
+        # PER TARGET SERIES — target B2 drifting fires its own alert even
+        # while B1 keeps succeeding. (Under the pre-7ipq2.3 shared
+        # 'dbas_sync' id, any target's success reset the staleness clock
+        # for every other target — the exact blind spot this closes.)
+        # Cardinality is bounded by the operator's sync_targets rows
+        # (typically 1-3).
         #
         # CAVEAT for the responder: ONLY a FULL success stamps
         # ecm_task_schedule_last_success_timestamp (the task_engine stamps
@@ -952,25 +962,27 @@ groups:
         # PARTIAL-APPLY LOOP also trips this alert even though the task is
         # "running." That is correct: B is drifting from A whether the
         # cycle failed outright or only half-applied. Cross-reference
-        # ecm_sync_runs_total{result="partial"} to tell the two apart.
+        # ecm_sync_runs_total{result="partial"} to tell the two apart
+        # (that counter stays result-only — aggregate across targets).
         #
-        # Guard: only fires once the task has succeeded at least once on
-        # this install (the fresh-install / operator-left-it-MANUAL state
-        # leaves the gauge at 0 forever — see the group-level comment).
+        # Guard: only fires once THAT TARGET's task has succeeded at least
+        # once on this install (the fresh-install / operator-left-it-MANUAL
+        # state leaves the gauge at 0 forever — see the group-level comment).
         expr: |
-          time() - ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"} > 10800
-          AND ecm_task_schedule_last_success_timestamp{task_id="dbas_sync"} > 0
+          time() - ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"} > 10800
+          AND ecm_task_schedule_last_success_timestamp{task_id=~"dbas_sync_.+"} > 0
         for: 1h
         labels:
           severity: warning
           slo: task_scheduler_health
           service: ecm
         annotations:
-          summary: "dbas_sync hasn't succeeded in {{ $value | humanizeDuration }} — target B drifting"
+          summary: "{{ $labels.task_id }} hasn't succeeded in {{ $value | humanizeDuration }} — target B drifting"
           description: |
-            The cross-instance sync task (Dispatcharr-A -> Dispatcharr-B,
+            The cross-instance sync task for this target (task_id
+            dbas_sync_<sync_target_id>; Dispatcharr-A -> Dispatcharr-B,
             epic i39wu) has not completed a FULL success in over 3 hours
-            (hourly cadence basis, 3-missed-run budget). Target B is
+            (hourly cadence basis, 3-missed-run budget). That target B is
             drifting from A — the #1 operator risk is discovering this only
             at failover. Severity is warning (NOT page) — ECM is a
             self-hosted single-operator tool and a stale B is recoverable

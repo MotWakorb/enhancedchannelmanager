@@ -8,9 +8,11 @@
  *   - The enable/disable toggle (the KILL SWITCH) calls updateSyncTarget with
  *     the flipped `enabled` value.
  *   - Delete confirms first, then calls deleteSyncTarget.
- *   - "Sync now" runs a DRY-RUN preview — runTask('dbas_sync', undefined,
+ *   - "Sync now" runs a DRY-RUN preview — runTask(`dbas_sync_${id}`, undefined,
  *     { sync_target_id, confirm_apply: false }) — and only an explicit Apply
- *     runs with confirm_apply: true.
+ *     runs with confirm_apply: true. The task id is PER TARGET (7ipq2.3 /
+ *     ADR-013 S6): distinct targets sync concurrently; the backend refuses a
+ *     second run against the same target.
  *   - The load-bearing operator copy (one-way overwrite + credentials-not-synced)
  *     is present in the card (ADR-013).
  */
@@ -150,7 +152,7 @@ describe('SyncTargetsCard', () => {
     fireEvent.click(screen.getByTestId('sync-target-preview-7'));
 
     await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(1));
-    expect(api.runTask).toHaveBeenCalledWith('dbas_sync', undefined, {
+    expect(api.runTask).toHaveBeenCalledWith('dbas_sync_7', undefined, {
       sync_target_id: 7,
       confirm_apply: false,
     });
@@ -170,7 +172,7 @@ describe('SyncTargetsCard', () => {
 
     // Apply confirm dialog (source-wins overwrite) — confirm spy returns true.
     await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(2));
-    expect(api.runTask).toHaveBeenLastCalledWith('dbas_sync', undefined, {
+    expect(api.runTask).toHaveBeenLastCalledWith('dbas_sync_7', undefined, {
       sync_target_id: 7,
       confirm_apply: true,
     });
