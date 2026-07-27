@@ -1512,7 +1512,7 @@ export function StreamsPane({
   };
 
   return (
-    <div className="streams-pane">
+    <div className="streams-pane" aria-labelledby="streams-pane-heading">
       {/* Copy feedback notifications */}
       {copySuccess && (
         <div className="copy-feedback copy-success">
@@ -1528,7 +1528,7 @@ export function StreamsPane({
       )}
 
       <div className="pane-header">
-        <h2>
+        <h2 id="streams-pane-heading">
           Streams
           {onRefreshStreams && (
             <button
@@ -1542,6 +1542,9 @@ export function StreamsPane({
             </button>
           )}
         </h2>
+        <span className="pane-item-count" aria-label={`${streamGroups.reduce((total, group) => total + group.count, 0)} streams`}>
+          {streamGroups.reduce((total, group) => total + group.count, 0)}
+        </span>
         {selectedCount > 0 && (
           <div className="selection-info">
             <span className="selection-count">
@@ -1603,6 +1606,7 @@ export function StreamsPane({
             <input
               type="text"
               placeholder="Search streams..."
+              aria-label="Search streams"
               value={searchTerm}
               onChange={(e) => onSearchChange(e.target.value)}
               className="search-input"

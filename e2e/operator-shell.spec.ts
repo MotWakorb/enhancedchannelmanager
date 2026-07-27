@@ -124,6 +124,56 @@ async function openShellWithPipelineFixture(page: Page, rulesStatus = 200) {
   await expect(page.locator('.tab-navigation')).toBeVisible()
 }
 
+async function seedChannelWorkspace(page: Page, populated: boolean) {
+  const channel = {
+    id: 41,
+    name: 'A deliberately long channel identity that must remain inside the Channels pane',
+    channel_number: 101,
+    channel_group_id: 7,
+    streams: [501],
+    logo_id: null,
+    tvg_id: null,
+  }
+  const stream = {
+    id: 501,
+    name: 'A deliberately long source stream identity that must ellipsize before inventory actions',
+    url: `https://example.invalid/${'very-long-path/'.repeat(12)}playlist.m3u8`,
+    channel_group_name: 'Provider Sports',
+    m3u_account: 3,
+    logo_url: null,
+  }
+  await page.route(/\/api\/channel-groups(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(populated ? [{ id: 7, name: 'Sports' }] : []),
+  }))
+  await page.route(/\/api\/channels(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      count: populated ? 1 : 0,
+      next: null,
+      previous: null,
+      results: populated ? [channel] : [],
+    }),
+  }))
+  await page.route(/\/api\/stream-groups(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(populated ? [{ name: 'Provider Sports', count: 1 }] : []),
+  }))
+  await page.route(/\/api\/streams(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      count: populated ? 1 : 0,
+      next: null,
+      previous: null,
+      results: populated ? [stream] : [],
+    }),
+  }))
+}
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
   test.describe(`operator shell geometry at ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport, serviceWorkers: 'block' })
@@ -173,6 +223,50 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           return rect.left >= main.left - 1 && rect.right <= main.right + 1
             && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
         })).toBe(true)
+      }
+    })
+
+    test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
+      await seedChannelWorkspace(page, true)
+      await openShellWithPipelineFixture(page)
+      await dismissFirstRunPromptIfPresent(page)
+
+      await expect(page.locator('#main-content h1')).toHaveText('OPERATIONS / CHANNEL MANAGER')
+      await expect(page.locator('#main-content h1')).toHaveCount(1)
+      await expect(page.getByRole('region', { name: 'Channels' })).toBeVisible()
+      await expect(page.getByRole('region', { name: 'Streams' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Channels', level: 2 })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Streams', level: 2 })).toBeVisible()
+      await expect(page.getByLabel('1 channels')).toBeVisible()
+      await expect(page.getByLabel('1 streams')).toBeVisible()
+      await expect(page.getByRole('separator', { name: 'Resize Channels and Streams panes' })).toBeVisible()
+
+      for (const collapsed of [false, true]) {
+        if (collapsed) await page.getByRole('button', { name: 'Collapse navigation' }).click()
+        const geometry = await page.evaluate(() => {
+          const workspace = document.querySelector<HTMLElement>('.split-pane')!
+          const channels = document.querySelector<HTMLElement>('.split-pane-left')!
+          const streams = document.querySelector<HTMLElement>('.split-pane-right')!
+          const main = document.querySelector<HTMLElement>('#main-content')!
+          const mainRect = main.getBoundingClientRect()
+          return {
+            noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+            workspaceInsideMain: workspace.getBoundingClientRect().left >= mainRect.left
+              && workspace.getBoundingClientRect().right <= mainRect.right + 1,
+            channelsUsable: channels.clientWidth >= 300,
+            streamsUsable: streams.clientWidth >= 260,
+          }
+        })
+        expect(geometry).toEqual({
+          noDocumentOverflow: true,
+          workspaceInsideMain: true,
+          channelsUsable: true,
+          streamsUsable: true,
+        })
+        await testInfo.attach(
+          `channel-manager-${viewport.width}x${viewport.height}-${collapsed ? 'collapsed' : 'expanded'}`,
+          { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' },
+        )
       }
     })
   })

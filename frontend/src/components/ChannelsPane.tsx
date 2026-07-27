@@ -5374,7 +5374,7 @@ export function ChannelsPane({
   };
 
   return (
-    <div className="channels-pane">
+    <div className="channels-pane" aria-labelledby="channels-pane-heading">
       {/* Copy feedback notifications */}
       {copySuccess && (
         <div className="copy-feedback copy-success">
@@ -5391,7 +5391,10 @@ export function ChannelsPane({
 
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2>Channels</h2>
+          <h2 id="channels-pane-heading">Channels</h2>
+          <span className="pane-item-count" aria-label={`${channels.length} channels`}>
+            {channels.length}
+          </span>
           {(() => {
             const channelsMissingStreams = channels.filter(ch => ch.streams.length === 0);
             const missingStreamsCount = channelsMissingStreams.length;
@@ -6818,6 +6821,7 @@ export function ChannelsPane({
             <input
               type="text"
               placeholder="Search channels..."
+              aria-label="Search channels"
               value={searchTerm}
               onChange={(e) => onSearchChange(e.target.value)}
               className="search-input"

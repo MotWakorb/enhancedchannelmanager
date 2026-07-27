@@ -24,8 +24,8 @@ import { ChannelManagerTab, PENDING_MERGES_EVENT } from './ChannelManagerTab';
 import * as api from '../../services/api';
 
 vi.mock('../', () => ({
-  SplitPane: ({ left, right }: { left: React.ReactNode; right: React.ReactNode }) => (
-    <div data-testid="split-pane">
+  SplitPane: ({ left, right, leftLabel, rightLabel }: { left: React.ReactNode; right: React.ReactNode; leftLabel?: string; rightLabel?: string }) => (
+    <div data-testid="split-pane" data-left-label={leftLabel} data-right-label={rightLabel}>
       <div>{left}</div>
       <div>{right}</div>
     </div>
@@ -169,6 +169,8 @@ describe('ChannelManagerTab — Pending Merges subnav (BD-J / bd-gfxrz)', () => 
 
     // The default split-pane is always rendered.
     expect(screen.getByTestId('split-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-left-label', 'Channels');
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-right-label', 'Streams');
 
     // Wait for the count poll to settle, then assert the subnav stays hidden.
     await waitFor(() => {

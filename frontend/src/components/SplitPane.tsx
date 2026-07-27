@@ -4,6 +4,8 @@ import './SplitPane.css';
 interface SplitPaneProps {
   left: ReactNode;
   right: ReactNode;
+  leftLabel?: string;
+  rightLabel?: string;
   defaultLeftWidth?: number; // percentage (0-100)
   minLeftWidth?: number; // percentage
   maxLeftWidth?: number; // percentage
@@ -12,9 +14,11 @@ interface SplitPaneProps {
 export function SplitPane({
   left,
   right,
-  defaultLeftWidth = 50,
-  minLeftWidth = 20,
-  maxLeftWidth = 80,
+  leftLabel = 'Left pane',
+  rightLabel = 'Right pane',
+  defaultLeftWidth = 58,
+  minLeftWidth = 35,
+  maxLeftWidth = 70,
 }: SplitPaneProps) {
   const [leftWidth, setLeftWidth] = useState(defaultLeftWidth);
   const [isDragging, setIsDragging] = useState(false);
@@ -44,6 +48,17 @@ export function SplitPane({
     setIsDragging(false);
   }, []);
 
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    let nextWidth: number | null = null;
+    if (e.key === 'ArrowLeft') nextWidth = leftWidth - 2;
+    if (e.key === 'ArrowRight') nextWidth = leftWidth + 2;
+    if (e.key === 'Home') nextWidth = minLeftWidth;
+    if (e.key === 'End') nextWidth = maxLeftWidth;
+    if (nextWidth === null) return;
+    e.preventDefault();
+    setLeftWidth(Math.min(Math.max(nextWidth, minLeftWidth), maxLeftWidth));
+  }, [leftWidth, maxLeftWidth, minLeftWidth]);
+
   useEffect(() => {
     if (isDragging) {
       document.addEventListener('mousemove', handleMouseMove);
@@ -61,19 +76,31 @@ export function SplitPane({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   return (
-    <div ref={containerRef} className="split-pane">
-      <div className="split-pane-left" style={{ width: `${leftWidth}%` }}>
+    <div
+      ref={containerRef}
+      className="split-pane"
+      style={{ '--split-pane-left': `${leftWidth}%` } as React.CSSProperties}
+    >
+      <section className="split-pane-left" aria-label={leftLabel}>
         {left}
-      </div>
+      </section>
       <div
         className={`split-pane-divider ${isDragging ? 'dragging' : ''}`}
         onMouseDown={handleMouseDown}
+        onKeyDown={handleKeyDown}
+        role="separator"
+        tabIndex={0}
+        aria-label={`Resize ${leftLabel} and ${rightLabel} panes`}
+        aria-orientation="vertical"
+        aria-valuemin={minLeftWidth}
+        aria-valuemax={maxLeftWidth}
+        aria-valuenow={Math.round(leftWidth)}
       >
         <div className="divider-handle" />
       </div>
-      <div className="split-pane-right" style={{ width: `${100 - leftWidth}%` }}>
+      <section className="split-pane-right" aria-label={rightLabel}>
         {right}
-      </div>
+      </section>
     </div>
   );
 }

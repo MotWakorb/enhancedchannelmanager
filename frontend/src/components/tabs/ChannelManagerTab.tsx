@@ -480,6 +480,8 @@ export function ChannelManagerTab({
         <PendingMergesPage />
       ) : (
         <SplitPane
+      leftLabel="Channels"
+      rightLabel="Streams"
       left={
         <ChannelsPane
           channelGroups={channelGroups}

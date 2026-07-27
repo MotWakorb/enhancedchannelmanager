@@ -3,6 +3,8 @@
   flex-direction: column;
   height: 100%;
   background-color: var(--bg-primary);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pane-header {
@@ -13,6 +15,8 @@
   justify-content: space-between;
   height: 56px;
   box-sizing: border-box;
+  min-width: 0;
+  gap: 0.5rem;
 }
 
 .pane-header h2 {
@@ -24,6 +28,7 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
+  min-width: 0;
 }
 
 .refresh-streams-btn {
@@ -110,6 +115,7 @@
   flex-shrink: 0;
   position: relative;
   z-index: var(--z-raised);
+  min-width: 0;
 }
 
 /* Hide mapped streams toggle button */
@@ -208,6 +214,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 /* Category headers grouping stream groups by naming-convention prefix
