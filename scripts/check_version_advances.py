@@ -100,7 +100,7 @@ def parse_build(version: str | None) -> BuildParse:
 
 @dataclass(frozen=True)
 class AdvanceResult:
-    status: str  # advanced | not_advanced | exempt_no_suffix | malformed_current | baseline_unavailable
+    status: str  # advanced | advanced_prefix | not_advanced | prefix_regression | exempt_no_suffix | malformed_current | baseline_unavailable
     exit_code: int
     message: str
 
@@ -159,7 +159,37 @@ def evaluate_advance(
         )
 
     assert current.build is not None and baseline.build is not None
-    assert current.prefix is not None
+    assert current.prefix is not None and baseline.prefix is not None
+
+    # Prefix-aware comparison (beads 92fhj + w9irb follow-up): the BUILD
+    # counter is scoped to its MAJOR.MINOR.PATCH prefix. After a release cut,
+    # dev legitimately reopens at the next target's -0000 (shipping.md §Cut
+    # Mechanics step 8; June precedent 0.17.4-0000 / 0.18.0-0000), so when the
+    # prefix strictly advances the build number is allowed to reset. The
+    # converse also holds: a prefix REGRESSION fails outright — previously a
+    # lower prefix with a higher build slipped through the build-only compare.
+    current_prefix = tuple(int(part) for part in current.prefix.split("."))
+    baseline_prefix = tuple(int(part) for part in baseline.prefix.split("."))
+    if current_prefix > baseline_prefix:
+        return AdvanceResult(
+            "advanced_prefix",
+            0,
+            f"OK: version prefix advances — current {current_version} "
+            f"({current.prefix}) > baseline {baseline_version} "
+            f"({baseline.prefix}); build counter reset is legitimate "
+            "(post-release reopen per docs/shipping.md step 8).",
+        )
+    if current_prefix < baseline_prefix:
+        return AdvanceResult(
+            "prefix_regression",
+            1,
+            f"FAIL: version prefix regresses — current {current_version} "
+            f"({current.prefix}) < baseline {baseline_version} "
+            f"({baseline.prefix}). A lower MAJOR.MINOR.PATCH must not ship, "
+            "regardless of build number.",
+        )
+
+    # Same prefix: the original build-number-advance rule applies unchanged.
     # Zero-pad width follows the baseline's own formatting (4 digits today).
     width = len(re.sub(r"^\d+\.\d+\.\d+-", "", (baseline_version or "").strip()))
     width = max(width, 4)

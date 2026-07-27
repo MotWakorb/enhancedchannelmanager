@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- **Build-advance guard now understands the post-release counter reset (beads enhancedchannelmanager-92fhj, enhancedchannelmanager-w9irb, build 0000).** `scripts/check_version_advances.py` compared BUILD numbers only, so the documented post-release reopen at the next target's `-0000` (shipping.md §Cut Mechanics step 8) was blocked by both the agent-side ship hook and the CI version-consistency job — first hit by the v0.18.0 back-sync PR (`0.18.1-0000` vs baseline `0.17.6-0174`). The comparator is now prefix-aware: a strictly greater `MAJOR.MINOR.PATCH` prefix passes with the counter reset (`advanced_prefix`), and the converse hole is closed — a prefix *regression* now fails outright (`prefix_regression`) even when its build number exceeds the baseline's, where previously it slipped through the build-only compare. Red-first unit coverage for both directions plus the unchanged same-prefix rules.
+
 ## [0.18.0] — 2026-07-26
 
 ### Security
