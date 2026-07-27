@@ -305,15 +305,14 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     expect((usHeader as HTMLElement).querySelector('.group-stale-count')).not.toBeInTheDocument();
   });
 
-  it('renders a stale-count pill on a group header containing a stale stream', async () => {
+  it('renders no stale-count warning on inventory group headers', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
     const ukHeader = screen.getByText('UK | Sports').closest('.stream-group-header');
     expect(ukHeader).not.toBeNull();
-    const pill = within(ukHeader as HTMLElement).getByTitle(/1 stream.*no longer listed by provider \(stale\)/i);
-    expect(pill).toHaveTextContent('1');
+    expect((ukHeader as HTMLElement).querySelector('.group-stale-count')).not.toBeInTheDocument();
   });
 
   it('does not render per-row STALE badges in source inventory', async () => {

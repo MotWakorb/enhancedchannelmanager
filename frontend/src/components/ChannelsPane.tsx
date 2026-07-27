@@ -375,9 +375,35 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
 
-  const close = () => {
+  const close = (returnFocus = false) => {
     setMenuOpen(false);
     setSortSubMenuOpen(false);
+    if (returnFocus) btnRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (menuOpen && menuPosition) {
+      dropdownRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+    }
+  }, [menuOpen, menuPosition]);
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = [...(dropdownRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
   };
 
   const handleSortAllClick = (mode: SortMode) => {
@@ -402,6 +428,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
         }}
         title="More actions"
         aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
       >
         <span className={`material-icons ${anyLoading ? 'spinning' : ''}`} aria-hidden="true">
           {anyLoading ? 'sync' : 'more_vert'}
@@ -410,13 +438,16 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
       {menuOpen && menuPosition && createPortal(
         <div
           className="pane-toolbar-menu-dropdown"
+          role="menu"
+          aria-label="Channel pane actions"
           ref={dropdownRef}
           style={{ top: menuPosition.top, left: menuPosition.left }}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={handleMenuKeyDown}
         >
           {/* Manage & Groups */}
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onOpenProfiles(); }}>
-            <span className="material-icons">group</span>
+          <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onOpenProfiles(); }}>
+            <span className="material-icons" aria-hidden="true">group</span>
             <span>Channel Profiles</span>
           </button>
           {isEditMode && (
@@ -506,12 +537,12 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
 
           {/* CSV */}
           <div className="pane-toolbar-menu-divider" />
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onDownloadTemplate(); }}>
-            <span className="material-icons">description</span>
+          <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onDownloadTemplate(); }}>
+            <span className="material-icons" aria-hidden="true">description</span>
             <span>CSV Template</span>
           </button>
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onExportCSV(); }}>
-            <span className="material-icons">download</span>
+          <button role="menuitem" className="pane-toolbar-menu-item" onClick={() => { close(); onExportCSV(); }}>
+            <span className="material-icons" aria-hidden="true">download</span>
             <span>Export CSV</span>
           </button>
           {isEditMode && (

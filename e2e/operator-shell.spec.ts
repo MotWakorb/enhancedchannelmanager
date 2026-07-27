@@ -178,6 +178,31 @@ async function seedChannelWorkspace(page: Page, populated: boolean) {
       results: populated ? [stream] : [],
     }),
   }))
+  await page.route(/\/api\/stream-stats\/by-ids(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(populated ? {
+      501: {
+        stream_id: 501,
+        stream_name: stream.name,
+        resolution: null,
+        fps: null,
+        video_codec: null,
+        audio_codec: null,
+        audio_channels: null,
+        stream_type: null,
+        bitrate: null,
+        video_bitrate: null,
+        probe_status: 'timeout',
+        error_message: 'Probe exceeded the configured 30 second deadline while waiting for the upstream provider response',
+        last_probed: null,
+        created_at: '2026-07-27T00:00:00Z',
+        consecutive_failures: 3,
+        is_black_screen: false,
+        is_low_fps: false,
+      },
+    } : {}),
+  }))
   await page.route(/\/api\/epg\/sources(?:\?|$)/, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -299,8 +324,17 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       const moreActions = page.locator('.channels-pane').getByRole('button', { name: 'More actions' })
       await moreActions.focus()
       await moreActions.press('Enter')
-      await expect(page.getByRole('button', { name: /Channel Profiles/i })).toBeVisible()
-      await moreActions.click()
+      const paneMenu = page.getByRole('menu', { name: 'Channel pane actions' })
+      await expect(paneMenu).toBeVisible()
+      await expect(page.getByRole('menuitem', { name: 'Channel Profiles' })).toBeFocused()
+      await expect(page.getByRole('menuitem', { name: 'Channel Profiles' }).locator('.material-icons')).toHaveText('group')
+      await page.keyboard.press('End')
+      await expect(page.getByRole('menuitem', { name: 'Export CSV' })).toBeFocused()
+      await page.keyboard.press('Home')
+      await expect(page.getByRole('menuitem', { name: 'Channel Profiles' })).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(paneMenu).toHaveCount(0)
+      await expect(moreActions).toBeFocused()
 
       const category = page.getByRole('button', { name: /^Other/ })
       await category.click()
@@ -316,13 +350,22 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       const copyAction = page.locator('.streams-pane').getByRole('button', { name: 'Copy stream URL' })
       await copyAction.focus()
       await copyAction.press('Enter')
+      const inventoryPreview = page.locator('.streams-pane').getByRole('button', { name: 'Preview stream in browser' })
+      await inventoryPreview.focus()
+      await expect(inventoryPreview).toHaveCSS('opacity', '1')
+      await page.keyboard.press('Shift+Tab')
+      await page.keyboard.press('Tab')
+      await expect(inventoryPreview).toBeFocused()
+      await inventoryPreview.press('Enter')
+      await expect(page.getByRole('button', { name: 'Close', exact: true }).first()).toBeVisible()
+      await page.getByRole('button', { name: 'Close', exact: true }).first().click()
 
       await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
       await expect(page.locator('.channel-column-headers')).toHaveText(/NumberChannel \/ GuideStreams/)
       await expect(page.locator('.channel-number-col')).toHaveText('101')
       await expect(page.locator('.channel-number-col')).not.toContainText('#')
       await expect(page.getByText('Schedules Direct – ESPN')).toBeVisible()
-      await expect(page.getByLabel('1 stream; healthy')).toBeVisible()
+      await expect(page.getByLabel('1 stream; failed probe')).toBeVisible()
       const expectChannelColumnsAligned = async () => {
         expect(await page.evaluate(() => {
           const center = (selector: string) => {
@@ -352,6 +395,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       const channelIdentity = page.getByText('A deliberately long channel identity that must remain inside the Channels pane')
       await channelIdentity.click()
       await expect(page.locator('.inline-stream-name').filter({ hasText: 'A deliberately long source stream identity' })).toBeVisible()
+      const timeoutWarning = page.getByLabel(
+        'Probe timeout. Probe exceeded the configured 30 second deadline while waiting for the upstream provider response. 3 of 3 strikes.',
+      )
+      await expect(timeoutWarning).toHaveText(/Probe timeout\s*•\s*3\/3/)
+      const assignedPreview = page.locator('.channels-pane').getByRole('button', { name: 'Preview stream in browser' })
+      await assignedPreview.focus()
+      await expect(assignedPreview).toHaveCSS('opacity', '1')
+      await assignedPreview.press('Enter')
+      await expect(page.getByRole('button', { name: 'Close', exact: true }).first()).toBeVisible()
+      await page.getByRole('button', { name: 'Close', exact: true }).first().click()
 
       expect(await inventoryIdentity.evaluate((identity) => {
         const info = identity.closest<HTMLElement>('.stream-info')!
@@ -391,6 +444,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         const inlineRow = document.querySelector<HTMLElement>('.inline-stream-item')!
         const inlineInfo = inlineRow.querySelector<HTMLElement>('.inline-stream-info')!.getBoundingClientRect()
         const inlineActions = inlineRow.querySelector<HTMLElement>('.inline-stream-actions')!.getBoundingClientRect()
+        const warning = inlineRow.querySelector<HTMLElement>('.probe-warning-summary')!.getBoundingClientRect()
+        const inlineUrl = inlineRow.querySelector<HTMLElement>('.inline-stream-url')!.getBoundingClientRect()
+        const provider = inlineRow.querySelector<HTMLElement>('.inline-stream-provider')!.getBoundingClientRect()
         return {
           urlContained: streamUrl.left >= pane.left && streamUrl.right <= pane.right + 1,
           channelContained: channel.left >= channelPane.left && channel.right <= channelPane.right + 1,
@@ -398,6 +454,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           inlineIdentityUsable: inlineInfo.width >= 80,
           inlineActionsFixed: inlineActions.left >= inlineInfo.right - 1
             && inlineActions.right <= inlineRow.getBoundingClientRect().right + 1,
+          timeoutDetailsUsable: warning.width >= 80 && inlineUrl.width >= 48 && provider.width >= 48,
+          timeoutDetailsBeforeActions: [warning, inlineUrl, provider]
+            .every((rect) => rect.right <= inlineActions.left + 1),
         }
       })).toEqual({
         urlContained: true,
@@ -405,6 +464,8 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         inlineContained: true,
         inlineIdentityUsable: true,
         inlineActionsFixed: true,
+        timeoutDetailsUsable: true,
+        timeoutDetailsBeforeActions: true,
       })
 
       for (const collapsed of [false, true]) {

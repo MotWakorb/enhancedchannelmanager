@@ -1986,24 +1986,6 @@ export function StreamsPane({
                       <span className="group-name">{group.name}</span>
                     </button>
                     <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
-                    {(() => {
-                      // bead enhancedchannelmanager-po78p / GH #696 — group-level
-                      // stale-count pill. Streams pane rows already carry
-                      // Dispatcharr's own `is_stale` flag verbatim, so no extra
-                      // fetch is needed here (unlike ChannelsPane, which resolves
-                      // against a fetched stale-id set for cross-pane consistency).
-                      const staleCount = group.streams.filter((s) => s.is_stale).length;
-                      if (staleCount === 0) return null;
-                      return (
-                        <span
-                          className="group-stale-count"
-                          title={`${staleCount} stream${staleCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
-                        >
-                          <span className="material-icons" aria-hidden="true">history</span>
-                          {staleCount}
-                        </span>
-                      );
-                    })()}
                     {isEditMode && onBulkCreateFromGroup && (
                       <button
                         className="bulk-create-btn"

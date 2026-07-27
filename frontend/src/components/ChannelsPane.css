@@ -1859,6 +1859,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 5rem;
+  min-width: 3rem;
 }
 
 .inline-stream-provider {
@@ -1867,6 +1869,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 5rem;
+  min-width: 3rem;
 }
 
 .inline-stream-actions {
@@ -1874,6 +1878,8 @@
 }
 
 .probe-warning-summary {
+  flex: 0 1 9rem;
+  min-width: 5rem;
   max-width: 9rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1908,7 +1914,11 @@
 
 .inline-stream-item:hover .copy-url-btn,
 .inline-stream-item:hover .vlc-btn,
-.inline-stream-item:hover .preview-btn {
+.inline-stream-item:hover .preview-btn,
+.inline-stream-item:focus-within .copy-url-btn,
+.inline-stream-item:focus-within .vlc-btn,
+.inline-stream-item:focus-within .preview-btn,
+.inline-stream-item:focus-within .remove-stream-btn {
   opacity: 1;
 }
 

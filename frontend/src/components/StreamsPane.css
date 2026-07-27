@@ -632,7 +632,10 @@ button.group-selection-checkbox {
 /* Component-specific: show on hover */
 .stream-item:hover .copy-url-btn,
 .stream-item:hover .vlc-btn,
-.stream-item:hover .preview-btn {
+.stream-item:hover .preview-btn,
+.stream-item:focus-within .copy-url-btn,
+.stream-item:focus-within .vlc-btn,
+.stream-item:focus-within .preview-btn {
   opacity: 1;
 }
 

@@ -1077,6 +1077,14 @@
   background: var(--accent-10);
 }
 
+.copy-url-btn:focus-visible,
+.vlc-btn:focus-visible,
+.preview-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .copy-url-btn .material-icons {
   font-size: 1rem;
 }
