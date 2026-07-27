@@ -11,7 +11,7 @@
 
 - `ECMDedupMergeApiErrorRateHigh` (**page**) — `sum(rate(ecm_dedup_merge_requests_total{status="error"}[5m])) / sum(rate(ecm_dedup_merge_requests_total[5m])) > 0.01` sustained 5m, with a guard that total rate must exceed 0.01 req/s to avoid paging on a single mid-call exception during idle periods
 
-**SLO:** [SLO-10c Merge API Error Rate](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+**SLO:** [SLO-10c Merge API Error Rate](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 
 ---
 
@@ -118,7 +118,7 @@ If the alert persists more than 15 minutes after triage:
 
 ## References
 
-- [SLO-10c](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+- [SLO-10c](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 - bd-ft3hk (this runbook + alert), bd-1v4ht (dedup epic)
 - bd-ct9wl (single-merge 422 pattern — the correct-behavior reference for what NOT to count as error)
 - bd-ozhkf (bulk-merge 422 pattern — same)

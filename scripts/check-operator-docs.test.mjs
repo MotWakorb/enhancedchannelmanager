@@ -41,7 +41,7 @@ test('accepts current navigation language, links, and required image dimensions'
 
 test('rejects stale navigation language', () => {
   const root = fixture()
-  fs.writeFileSync(path.join(root, 'docs/user_guide/index.md'), 'Open the Channel Manager tab.\n')
+  fs.writeFileSync(path.join(root, 'docs/user_guide/index.md'), 'Open the **Channel Manager**\n tab.\n')
   assert.match(checkOperatorDocs(root).join('\n'), /stale navigation term/)
 })
 
@@ -55,4 +55,16 @@ test('rejects missing links and incorrect screenshot dimensions', () => {
   const errors = checkOperatorDocs(root).join('\n')
   assert.match(errors, /missing local target/)
   assert.match(errors, /expected 1280x720, got 800x600/)
+})
+
+test('validates Markdown fragments', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'docs/user_guide/target.md'), '# Existing Heading\n')
+  fs.writeFileSync(
+    path.join(root, 'docs/user_guide/index.md'),
+    '[Valid](target.md#existing-heading)\n[Invalid](target.md#missing-heading)\n',
+  )
+  const errors = checkOperatorDocs(root).join('\n')
+  assert.doesNotMatch(errors, /existing-heading/)
+  assert.match(errors, /missing fragment #missing-heading/)
 })

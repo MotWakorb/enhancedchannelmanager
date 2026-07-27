@@ -29,7 +29,7 @@ internet**.
 | **Config file** | `claude_desktop_config.json` | `.mcp.json` in your project directory |
 | **Network** | Private OK — bridge runs on your machine, connects over LAN/VPN | Private OK — Claude Code connects directly from your machine |
 
-- **Using Claude Desktop?** See [mcp-remote bridge](#claude-desktop--mcp-remote-bridge-node-required).
+- **Using Claude Desktop?** See [mcp-remote bridge](#claude-desktop-mcp-remote-bridge-node-required).
 - **Using Claude Code?** See [Claude Code](#claude-code-mcpjson).
 
 ---
@@ -284,7 +284,7 @@ see `ecm` with a connected status and the list of available tools.
 
 If `ecm` is listed but shows an error, check that the ECM MCP container is
 running and reachable at port 6101. See
-[Troubleshooting — MCP server not reachable](#mcp-server-not-reachable-settings--mcp-integration-shows-offline).
+[Troubleshooting — MCP server not reachable](#mcp-server-not-reachable-settings-mcp-integration-shows-offline).
 
 **First test prompt:** ask Claude Code "List my ECM channels." A valid response
 confirms the connection is working end-to-end.

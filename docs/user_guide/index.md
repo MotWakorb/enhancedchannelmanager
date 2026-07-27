@@ -13,6 +13,11 @@ Workspace](operator-workspace.md)** for the grouped sidebar, Dashboard
 drill-down, Settings safeguards, Channel Manager mental model, keyboard
 instructions, screenshots, and legacy URL behavior.
 
+Need a detailed task whose destination-specific tutorial is still planned?
+Use the **[Retained Task Reference](legacy-task-reference.md)** for current
+M3U, Guide, Logo, Journal, Settings, authentication, CLI, and logging
+instructions. Unsupported older workflows are explicitly labeled there.
+
 ## Sections
 
 ### 1. [Getting Started](getting-started/index.md) — In progress

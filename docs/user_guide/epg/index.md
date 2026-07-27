@@ -142,8 +142,8 @@ have enough signal to disambiguate automatically.
 
 Dummy EPG generates programme listings from channel/stream **names** (via regex
 patterns and templates) for channels that have no upstream guide data. In ECM
-this is managed in the **Dummy EPG Profiles** section at the bottom of the EPG
-Manager tab: create a profile, then copy its XMLTV URL (or use *Add to
+this is managed in the **Dummy EPG Profiles** section at the bottom of
+**Operations** → **EPG Manager**: create a profile, then copy its XMLTV URL (or use *Add to
 Dispatcharr*) to wire it in as a guide source. Profiles offer live preview,
 rich per-state templates, and Event Sync integration.
 

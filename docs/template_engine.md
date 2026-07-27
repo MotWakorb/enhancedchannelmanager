@@ -7,7 +7,7 @@ descriptions, and URLs from regex groups. The Python engine lives in
 server-side XMLTV output are always byte-identical.
 
 > **Supported surface: Dummy EPG Profiles.** This engine backs the **Dummy EPG
-> Profiles** section of the EPG Manager tab (the `dummy_epg_profiles` table and
+> Profiles** section of the EPG Manager page (the `dummy_epg_profiles` table and
 > the `/api/dummy-epg/*` endpoints) — the supported way to author dummy EPG in
 > ECM, and the one Event Sync integrates with. A second, older surface exists:
 > Dispatcharr-native EPG sources of `source_type=dummy` (created via the legacy

@@ -24,7 +24,7 @@ Run this **after any frontend release** (any deploy that changes `/app/static/*`
 Do **not** run this runbook if:
 
 - The deploy did not change frontend assets (backend-only change, config change, env var bump).
-- ECM is reached directly (browser → ECM) with nothing in between — the [browser-cache runbook](./dep-bump-frontend-regression.md#4-browser-cache-verification--is-the-user-on-the-rolled-back-bundle) is sufficient.
+- ECM is reached directly (browser → ECM) with nothing in between — the [browser-cache runbook](./dep-bump-frontend-regression.md#4-browser-cache-verification-is-the-user-on-the-rolled-back-bundle) is sufficient.
 
 ## Why infra-side caches matter
 
@@ -97,7 +97,7 @@ docker exec ecm-ecm-1 curl -sS http://localhost:${ECM_PORT:-6100}/ | grep -oE '/
 
 Decision tree:
 
-- **All three match `SERVER_HASHES`** → infra is not caching `index.html`. If users still hit a stale bundle, check their browser (run the [browser-cache runbook](./dep-bump-frontend-regression.md#4-browser-cache-verification--is-the-user-on-the-rolled-back-bundle)).
+- **All three match `SERVER_HASHES`** → infra is not caching `index.html`. If users still hit a stale bundle, check their browser (run the [browser-cache runbook](./dep-bump-frontend-regression.md#4-browser-cache-verification-is-the-user-on-the-rolled-back-bundle)).
 - **CDN edge differs, origin matches** → CDN is holding a stale `index.html`. Go to the Cloudflare / CDN section.
 - **Origin host differs, container matches** → reverse proxy (nginx/Varnish/etc.) is holding it. Go to the matching proxy section.
 - **Container differs from what you just deployed** → not a cache problem; the server-side deploy didn't take. Re-run the deploy steps and verify `ls -la /app/static/assets/` shows fresh mtimes.
@@ -362,7 +362,7 @@ After purging, re-run the diagnosis in reverse — you are checking that every h
    ```
 
 4. **End-user verification** — have at least one reporting user run the
-   [browser-side hash check](./dep-bump-frontend-regression.md#4-browser-cache-verification--is-the-user-on-the-rolled-back-bundle)
+   [browser-side hash check](./dep-bump-frontend-regression.md#4-browser-cache-verification-is-the-user-on-the-rolled-back-bundle)
    from the companion runbook. Only when their `document.scripts` output
    matches `CONTAINER_HASHES` is the incident closed.
 

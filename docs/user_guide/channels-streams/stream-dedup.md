@@ -74,7 +74,7 @@ After the bulk M3U refresh completes, ECM shows a toast notification indicating 
 
 ### Navigating to the Pending Merges page
 
-1. Open the **Channel Manager** tab.
+1. Under **Operations**, open **Channel Manager**.
 2. The subnav bar shows a **Pending Merges** item with a count badge (e.g., "Pending Merges (3)") when rows are waiting for a decision.
 3. Click **Pending Merges** to open the page.
 

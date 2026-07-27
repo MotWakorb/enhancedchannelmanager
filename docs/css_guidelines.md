@@ -78,7 +78,7 @@ CSS is organized in layers. Always use the highest-level shared class available 
 
 **Every header/toolbar row that pairs a title with an action cluster MUST have
 a defined overflow behavior. The policy is: the row wraps.** This is one
-reusable idiom, not a per-tab judgment call — headers were repeatedly shipping
+reusable idiom, not a route-local judgment call — headers were repeatedly shipping
 with no overflow strategy, so a wide-enough toolbar either squeezed the title
 to min-content (M3U title wrapped one word per line at 1280px) or overflowed an
 `overflow: hidden` ancestor and clipped a button out of reach (Guide "Print

@@ -17,6 +17,7 @@ exclude_docs: |
   !/index.md
   /adr/
   /commands/
+  /design/
   /runbooks/
   /security/
   /sre/
@@ -69,6 +70,9 @@ plugins:
 
 nav:
   - Home: index.md
+  - User Guide: user_guide/index.md
+  - Operator Workspace: user_guide/operator-workspace.md
+  - Retained Task Reference: user_guide/legacy-task-reference.md
   - Getting Started:
       - user_guide/getting-started/index.md
       - Set Up Your First Channels: user_guide/getting-started/your-first-channels.md
@@ -84,6 +88,7 @@ nav:
   - EPG:
       - user_guide/epg/index.md
       - Finding & Fixing Mis-linked Channels: user_guide/epg/finding-mislinked-channels.md
+      - Migrate Guides: user_guide/epg/migrate-guides.md
   - Normalization: user_guide/normalization/index.md
   - Stats:
       - user_guide/stats/index.md

@@ -70,7 +70,7 @@ auto-sync gotcha](#still-seeing-duplicate-channels) below.
 
 ### 3. Create the Event Sync rule
 
-Channel Pipeline tab → **Create Rule**. Pick **Event Sync rule** from the
+Channel Pipeline page → **Create Rule**. Pick **Event Sync rule** from the
 kind chooser (not Standard rule — Event Sync rules carry a JSON config
 instead of conditions/actions and never run in a Standard rule's engine
 path):
@@ -402,7 +402,7 @@ backward compatibility; the rule editor now reads and writes the nested shape.
 | `dummy_epg_profile_id` | no (absent = off) | Phase 2 (bead ti939.3.3): id of a [dummy EPG profile](template_engine.md) auto-assigned to the master group's channels on every run. Must reference an **existing** profile (teaching error otherwise); the key is never default-filled — omit it to disable. See [Automatic guide data for master channels](#automatic-guide-data-for-master-channels-dummy-epg). |
 | `include_master_group_streams` | no (default **false**) | bead 6xxmp: when true, the **master group's own streams** (from *any* provider) are also matched to the master channels; streams already attached are skipped. A whole-group catch-all for a same-named cross-provider group — now usually superseded by adding the same group under the other provider as a `secondary` scope (which targets exactly one provider). Still useful when a same-named group spans **three or more** providers and you want them all. See [Two providers, one group name](#two-providers-one-group-name) below. |
 | `assume_current_date` | no (default **false**) | When true, a listing that carries a **time but no date** is placed on the **current date** so it becomes matchable — deliberately relaxing the never-guess-the-date rail. Accepts the cross-day match risk. See [Dateless live listings](#dateless-live-listings). |
-| `demote_stale_dateless` | no (default **true**) | bead jqwfq: guard for `assume_current_date`. When true (the default), a would-attach whose **dateless** stream name was **already present in the provider's previous-day M3U snapshot** is routed to the [review queue](#the-review-queue-ambiguous-matches-become-questions) (reason `stale_dateless_stream_name`) instead of auto-attached — a name left over from yesterday must not attach to today's master. Positive snapshot membership is the only demoting signal (missing/capped snapshots **fail open** and never demote); dated names are never touched; a prior review-queue **accept** of the pairing outranks the guard. Set **false** only for recurring daily events whose names legitimately repeat every day. Inert unless `assume_current_date` is on. See [Reviewing ambiguous matches](#reviewing-ambiguous-matches-phase-2-review-queue). |
+| `demote_stale_dateless` | no (default **true**) | bead jqwfq: guard for `assume_current_date`. When true (the default), a would-attach whose **dateless** stream name was **already present in the provider's previous-day M3U snapshot** is routed to the [review queue](#reviewing-ambiguous-matches-phase-2-review-queue) (reason `stale_dateless_stream_name`) instead of auto-attached — a name left over from yesterday must not attach to today's master. Positive snapshot membership is the only demoting signal (missing/capped snapshots **fail open** and never demote); dated names are never touched; a prior review-queue **accept** of the pairing outranks the guard. Set **false** only for recurring daily events whose names legitimately repeat every day. Inert unless `assume_current_date` is on. See [Reviewing ambiguous matches](#reviewing-ambiguous-matches-phase-2-review-queue). |
 | `parse_master_from_stream` | no (default **false**) | When true, each master channel's event identity (title + time) is read from its **first attached stream's name** instead of the channel name — so master channels can be named freely. A master with no attached stream is skipped. See [The master channels' date+time must be in their NAMES](#the-master-channels-datetime-must-be-in-their-names). |
 | `promote_unmatched` | no (default **false**) | bead ti939.4.1: opt-in promotion of **unmatched secondary-only events** to ECM-managed channels — the ONE sanctioned exception to "ECM never creates channels". Absent means the feature is completely invisible (no preview keys, no Pass 4 participation). **With this on, ECM CREATES and DELETES channels** in `promote_target_group_id`. See [Promoting unmatched events](#promoting-unmatched-events-phase-3-opt-in). |
 | `promote_target_group_id` | when promoting | The **dedicated ECM-owned channel group** promoted event channels live in. Required when `promote_unmatched` is true. The master group (Dispatcharr-owned) and every secondary group are refused — ownership rails. Treat this group as ECM's: channels in it appear and disappear with the provider playlist. |
@@ -1108,7 +1108,7 @@ then runs the match/attach. Key properties:
   channels from a Celery task *after* the refresh, so a run landing immediately
   after the pre-refresh can still precede a new event's master channel — that
   stream attaches on a later run, exactly as in the [timing
-  note](#timing-note--refresh-ordering) above. The flag freshens the provider
+  note](#timing-note-refresh-ordering) above. The flag freshens the provider
   *streams* the run sees; it does not force Dispatcharr's channel sync to finish
   first.
 
@@ -1244,7 +1244,7 @@ masters — are never auto-attached. Before Phase 2 they were silently
 skipped and re-skipped forever; now every event_sync run (manual **and**
 auto-run) **queues them for your decision** instead.
 
-The queue lives on the **Channel Pipeline tab → Event Sync Review**
+The queue lives on the **Channel Pipeline page → Event Sync Review**
 section (it appears once at least one event_sync rule exists). Each card
 is **one exact pairing** — one secondary stream against one master
 channel — with the full evidence the matcher saw, never just a score:
@@ -1359,7 +1359,7 @@ on every refresh and event channels only live as long as the event, so an
 ID-keyed exclusion would silently stop matching the moment either churned.
 Keyed on content identity instead, the same exclusion keeps suppressing
 the same real-world pairing indefinitely, exactly as a review decision
-does. See [Review queue keying](#review-queue-keying-ti93932--fingerprint-reference)
+does. See [Review queue keying](#review-queue-keying-ti93932-fingerprint-reference)
 below for the full fingerprint definition.
 
 ### Creating an exclusion

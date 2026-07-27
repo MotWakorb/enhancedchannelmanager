@@ -22,6 +22,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  operator-docs:
+    name: Operator Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Check links, terminology, and screenshots
+        run: npm run docs:check
+
   # ─── Backend tests ────────────────────────────────────────────────────
   backend:
     name: Backend Tests

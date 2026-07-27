@@ -21,7 +21,7 @@
 
 - `ecm_session_telemetry_writes_total{result="failure"}` rate climbs and exceeds 5% of total writes.
 - New `session_telemetry` rows stop appearing or appear intermittently; Stats v2 panels go stale.
-- Frontend Stats tab still renders, but data is hours behind real time — the user-visible signal is "the chart hasn't updated since X."
+- Frontend Stats page still renders, but data is hours behind real time — the user-visible signal is "the chart hasn't updated since X."
 - Logs contain `[STATS_V2]` ERROR or WARNING lines (the helper logs the swallowed exception before incrementing the failure counter).
 
 ## First 5 minutes

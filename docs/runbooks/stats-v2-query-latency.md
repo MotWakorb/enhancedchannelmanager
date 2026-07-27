@@ -1,6 +1,6 @@
 # Runbook: Stats v2 Query Latency
 
-> Stats v2 query latency has breached the SLO-9 target. The `/api/stats/*` endpoints are responding slowly, causing visible stalls on the Stats tab.
+> Stats v2 query latency has breached the SLO-9 target. The `/api/stats/*` endpoints are responding slowly, causing visible stalls on the Stats page.
 
 - **Severity**: Warning (non-paging; SLO-9 is warn-only — stats panels are admin tooling, not a user-facing outage)
 - **Owner**: SRE
@@ -19,7 +19,7 @@
 ## Symptoms
 
 - `ECMStatsQueryLatencyHigh` or `ECMStatsQueryLatencyP99High` alert fires.
-- Stats tab in the UI takes noticeably long to render (>1s spinner).
+- Stats page in the UI takes noticeably long to render (>1s spinner).
 - `ecm_stats_query_duration_seconds` p95 or p99 histograms exceed thresholds when queried by endpoint.
 - No SLO-7 write-failure alert is co-firing (if it is, start with the [write-failures runbook](./stats-v2-write-failures.md) first).
 
@@ -153,7 +153,7 @@ If the same endpoint appears dozens of times in a short window: a frontend compo
 SLO-9 is warn-only. This alert does not require 3 AM paging. Triage during business hours:
 
 - Provide: alert start time, slow endpoint(s) from PromQL, row count from sqlite3, branch from diagnosis tree that matched.
-- Escalate to P2 if query latency is causing users to report the Stats tab as unusable (subjective threshold: > 5 s on a panel load that was previously < 1 s).
+- Escalate to P2 if query latency is causing users to report the Stats page as unusable (subjective threshold: > 5 s on a panel load that was previously < 1 s).
 
 ## Post-incident
 

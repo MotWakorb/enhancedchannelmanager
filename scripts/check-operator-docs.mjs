@@ -26,14 +26,52 @@ function markdownFiles(root) {
       else if (entry.name.endsWith('.md')) files.push(path.relative(root, absolute))
     }
   }
-  walk(path.join(root, 'docs/user_guide'))
-  return files
+  const docs = path.join(root, 'docs')
+  for (const entry of fs.readdirSync(docs, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.md')) files.push(`docs/${entry.name}`)
+  }
+  for (const directory of ['user_guide', 'runbooks']) {
+    const target = path.join(docs, directory)
+    if (fs.existsSync(target)) walk(target)
+  }
+  return [...new Set(files)]
 }
 
 function pngDimensions(file) {
   const header = fs.readFileSync(file).subarray(0, 24)
   if (header.length < 24 || header.toString('ascii', 1, 4) !== 'PNG') return null
   return [header.readUInt32BE(16), header.readUInt32BE(20)]
+}
+
+function normalizedMarkdown(content) {
+  return content
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[*_`~]/g, '')
+    .replace(/\s+/g, ' ')
+}
+
+function headingAnchors(content) {
+  const anchors = new Set()
+  const counts = new Map()
+  for (const line of content.split('\n')) {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)
+    if (!heading) continue
+    const explicit = heading[1].match(/\{#([^}]+)\}\s*$/)
+    let slug = explicit?.[1] ?? heading[1]
+      .replace(/\{#([^}]+)\}\s*$/, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/[*`~]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/[^\p{L}\p{N}_\s-]/gu, '')
+      .replace(/[-\s]+/g, '-')
+    const duplicate = counts.get(slug) ?? 0
+    counts.set(slug, duplicate + 1)
+    if (duplicate) slug = `${slug}-${duplicate}`
+    anchors.add(slug)
+  }
+  return anchors
 }
 
 export function checkOperatorDocs(root = process.cwd()) {
@@ -45,19 +83,26 @@ export function checkOperatorDocs(root = process.cwd()) {
 
     lines.forEach((line, index) => {
       if (/[ \t]+$/.test(line)) errors.push(`${relative}:${index + 1}: trailing whitespace`)
-      for (const pattern of STALE_NAVIGATION) {
-        if (pattern.test(line)) errors.push(`${relative}:${index + 1}: stale navigation term: ${line.trim()}`)
-      }
     })
+    const normalized = normalizedMarkdown(content)
+    for (const pattern of STALE_NAVIGATION) {
+      if (pattern.test(normalized)) errors.push(`${relative}: stale navigation term matching ${pattern}`)
+    }
 
     const links = content.matchAll(/!?\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g)
     for (const match of links) {
       const rawTarget = match[1]
-      if (/^(?:https?:|mailto:|#)/.test(rawTarget)) continue
-      const target = decodeURIComponent(rawTarget.split(/[?#]/, 1)[0])
-      if (!target) continue
-      const resolved = path.resolve(path.dirname(absolute), target)
+      if (/^(?:https?:|mailto:)/.test(rawTarget)) continue
+      if (rawTarget === 'url') continue
+      const [pathPart, fragmentPart] = rawTarget.split('#', 2)
+      const target = decodeURIComponent(pathPart.split('?', 1)[0])
+      const resolved = target ? path.resolve(path.dirname(absolute), target) : absolute
       if (!fs.existsSync(resolved)) errors.push(`${relative}: missing local target: ${rawTarget}`)
+      else if (fragmentPart && fs.statSync(resolved).isFile() && resolved.endsWith('.md')) {
+        const fragment = decodeURIComponent(fragmentPart).toLowerCase()
+        const anchors = headingAnchors(fs.readFileSync(resolved, 'utf8'))
+        if (!anchors.has(fragment)) errors.push(`${relative}: missing fragment #${fragmentPart} in ${rawTarget}`)
+      }
     }
   }
 

@@ -15,7 +15,7 @@ container names) in nature.
 
 - [Naming Conventions](#naming-conventions)
   - [Python](#python)
-  - [TypeScript / React](#typescript--react)
+  - [TypeScript / React](#typescript-react)
   - [CSS](#css)
   - [Filenames](#filenames)
 - [Module Organization](#module-organization)
@@ -39,7 +39,7 @@ container names) in nature.
 - [CSS Conventions](#css-conventions)
 - [Frontend Lint Policy](#frontend-lint-policy)
 - [Test Conventions](#test-conventions)
-  - [Test validity / anti-patterns](#test-validity--anti-patterns)
+  - [Test validity / anti-patterns](#test-validity-anti-patterns)
 
 ---
 

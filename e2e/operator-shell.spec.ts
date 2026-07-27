@@ -16,6 +16,8 @@ async function captureOperatorReleaseArtifact(
   viewport: { width: number; height: number },
   state: string,
 ) {
+  await dismissReleaseToasts(page)
+  await expect(page.locator('.toast')).toHaveCount(0)
   const name = `operator-workspace--${viewport.width}x${viewport.height}--${state}.png`
   await mkdir(operatorReleaseArtifactDirectory, { recursive: true })
   const path = resolve(operatorReleaseArtifactDirectory, name)
@@ -151,11 +153,21 @@ async function expectMainKeyboardTraversal(page: Page) {
 }
 
 async function dismissReleaseToasts(page: Page) {
-  const dismissButtons = page.locator('.toast .toast-dismiss')
-  for (let attempt = 0; attempt < 10 && await dismissButtons.count(); attempt += 1) {
-    await dismissButtons.first().evaluate((button) => button.click())
+  const toasts = page.locator('.toast')
+  const dismissButtons = toasts.locator('.toast-dismiss')
+  // Clipboard and other async actions can enqueue a toast just after the
+  // initiating promise resolves. Require a quiet window, not merely one
+  // zero-count sample, before a release screenshot is allowed.
+  await page.waitForTimeout(500)
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await dismissButtons.evaluateAll((buttons) => buttons.forEach((button) => button.click()))
+    await page.waitForTimeout(350)
+    if (await toasts.count() === 0) {
+      await page.waitForTimeout(350)
+      if (await toasts.count() === 0) return
+    }
   }
-  await expect(page.locator('.toast')).toHaveCount(0)
+  await expect(toasts).toHaveCount(0)
 }
 
 async function openDeterministicOperatorShell(page: Page) {

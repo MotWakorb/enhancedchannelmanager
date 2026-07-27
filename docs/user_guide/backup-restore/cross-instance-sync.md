@@ -25,7 +25,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 **Do not use sync to:**
 - Replace backups — sync does not capture a point-in-time snapshot you can restore from. Take regular encrypted backups as well.
 - Carry credentials to B — they are redacted before transmission. Use an encrypted backup for the initial credential migration.
-- Replicate user accounts — users are never synced (see [What never syncs](#what-never-syncs)).
+- Replicate user accounts — users are never synced (see [What never syncs](#what-syncs-vs-what-never-does)).
 
 ---
 
@@ -149,5 +149,5 @@ If you enabled **Allow insecure TLS** on a target, every sync cycle logs an audi
 ## Going deeper
 
 - [ADR-013 — Cross-Instance Live Sync](../../adr/ADR-013-cross-instance-live-sync.md) — the architecture decision record; covers conflict policy, security controls, category decisions, and phasing.
-- [Security threat model — Addendum D](../../security/threat_model_dbas_import.md#11-addendum-d--cross-instance-live-sync-v0181-one-way-ab-config-replication) — STRIDE analysis of the sync egress surface: why credentials are redacted, why users never sync, SSRF controls.
+- [Security threat model — Addendum D](../../security/threat_model_dbas_import.md#11-addendum-d-cross-instance-live-sync-v0181-one-way-ab-config-replication) — STRIDE analysis of the sync egress surface: why credentials are redacted, why users never sync, SSRF controls.
 - [Runbook: ECMSyncStalledTargetDrift](../../runbooks/sync-target-stalled-drift.md) — step-by-step when the sync stalls alert fires.

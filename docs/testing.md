@@ -126,7 +126,7 @@ Located in `frontend/src/`, run with `cd frontend && npm test`
 - `services/channelPipelineApi.test.ts` - Channel Pipeline API service
 
 **Component Tests:**
-- `components/channelPipeline/ChannelPipelineTab.test.tsx` - Channel Pipeline tab
+- `components/channelPipeline/ChannelPipelineTab.test.tsx` - Channel Pipeline page
 - `components/channelPipeline/RuleBuilder.test.tsx` - Rule builder
 - `components/channelPipeline/ConditionEditor.test.tsx` - Condition editor
 - `components/channelPipeline/ActionEditor.test.tsx` - Action editor

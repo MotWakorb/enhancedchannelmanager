@@ -6,7 +6,7 @@ ECM uses a grouped sidebar so related pages stay together while the main work
 area keeps as much width as possible. This page explains where things moved,
 how deep links behave, and how to use the workspace with a keyboard. It is an
 orientation reference, not a replacement for the task tutorials tracked in
-the [`gsnw0` tutorial index](README.md#planned-sections-bd-gsnw0).
+the [user-guide destination index](index.md#by-workspace-destination).
 
 ## Primary navigation
 
@@ -106,7 +106,12 @@ Channel Manager remains a two-pane workspace at both audited viewports:
 - **Streams** on the right is the all-provider inventory from which streams
   are assigned.
 - The separator between them is named **Resize Channels and Streams panes**.
-  Drag it with a pointer, or focus it and use the supported keyboard controls.
+  Drag it with a pointer. With a keyboard, press `Tab` until the separator has
+  a visible focus outline and its current percentage is announced. Press
+  `ArrowLeft` or `ArrowRight` to move the split by 2 percentage points,
+  `Home` for the minimum Channels width, or `End` for the maximum. The
+  separator exposes its current, minimum, and maximum percentages to assistive
+  technology.
 
 ![Channel Manager health and artwork states at 1920×1080 with expanded navigation](../images/user_guide/operator-workspace/2-channel-manager-1920-health-expanded.png)
 
@@ -208,6 +213,6 @@ For step-by-step work, continue through the existing guide index:
 
 - [Set Up Your First Channels](getting-started/your-first-channels.md)
 - [Channels & Streams](channels-streams/index.md)
-- [Per-destination tutorial plan (`gsnw0`)](README.md#planned-sections-bd-gsnw0)
+- [Per-destination tutorial status](index.md#by-workspace-destination)
 
 This orientation page deliberately does not duplicate those tutorials.

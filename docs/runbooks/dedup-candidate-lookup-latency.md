@@ -11,7 +11,7 @@
 
 - `ECMDedupCandidateLookupLatencyHigh` (warning) — `histogram_quantile(0.99, ecm_dedup_candidate_lookup_duration_seconds_bucket) > 500ms` sustained 10m
 
-**SLO:** [SLO-10a Candidate Lookup Latency](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+**SLO:** [SLO-10a Candidate Lookup Latency](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 
 ---
 
@@ -93,6 +93,6 @@ If the alert persists more than 1 hour after triage:
 
 ## References
 
-- [SLO-10](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+- [SLO-10](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 - bd-ft3hk (this runbook + alert), bd-1v4ht (dedup epic)
 - BD-B (dedup index), BD-D (candidate-lookup endpoint)
