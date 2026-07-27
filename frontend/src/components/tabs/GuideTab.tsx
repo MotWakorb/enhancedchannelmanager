@@ -661,44 +661,54 @@ export function GuideTab({
 
       {/* Guide Grid */}
       <div className="guide-container">
-        {/* Timeline Header */}
-        <div className="timeline-header-wrapper">
-          <div className="timeline-header-spacer" />
-          <div className="timeline-header" ref={timelineHeaderRef}>
-            <div className="timeline-slots" style={{ width: `${timelineWidth}px` }}>
-              {timeSlots.map((slot, idx) => (
-                <div key={idx} className="time-slot-header">
-                  {formatTime(slot)}
+        {sortedChannels.length === 0 ? (
+          <div className="empty-state guide-empty-state" role="status">
+            <span className="material-icons" aria-hidden="true">live_tv</span>
+            <h2>No channels to display</h2>
+            <p>Add or enable channels in Channel Manager, then refresh the guide.</p>
+          </div>
+        ) : (
+          <>
+            {/* Timeline Header */}
+            <div className="timeline-header-wrapper">
+              <div className="timeline-header-spacer" />
+              <div className="timeline-header" ref={timelineHeaderRef}>
+                <div className="timeline-slots" style={{ width: `${timelineWidth}px` }}>
+                  {timeSlots.map((slot, idx) => (
+                    <div key={idx} className="time-slot-header">
+                      {formatTime(slot)}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-        </div>
 
-        {/* Grid Content */}
-        <div
-          className="guide-content"
-          ref={gridContentRef}
-          onScroll={handleContentScroll}
-        >
-          <div
-            className="guide-channels-wrapper"
-            style={{ height: `${virtualizedRows.totalHeight}px` }}
-          >
+            {/* Grid Content */}
             <div
-              className="guide-channels"
-              style={{ transform: `translateY(${virtualizedRows.offsetY}px)` }}
+              className="guide-content"
+              ref={gridContentRef}
+              onScroll={handleContentScroll}
             >
-              {virtualizedRows.visibleChannels.map(renderChannelRow)}
-            </div>
-            {nowIndicatorPosition !== null && (
               <div
-                className="now-indicator"
-                style={{ left: `${200 + nowIndicatorPosition}px` }}
-              />
-            )}
-          </div>
-        </div>
+                className="guide-channels-wrapper"
+                style={{ height: `${virtualizedRows.totalHeight}px` }}
+              >
+                <div
+                  className="guide-channels"
+                  style={{ transform: `translateY(${virtualizedRows.offsetY}px)` }}
+                >
+                  {virtualizedRows.visibleChannels.map(renderChannelRow)}
+                </div>
+                {nowIndicatorPosition !== null && (
+                  <div
+                    className="now-indicator"
+                    style={{ left: `${200 + nowIndicatorPosition}px` }}
+                  />
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Channel count footer */}

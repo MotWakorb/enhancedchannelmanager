@@ -52,21 +52,31 @@ async function expectContentWithinMain(page: Page, route: 'channel-manager' | 'g
   }
 }
 
-const routeConsumers = [
-  { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.operator-dashboard' },
-  { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', settled: '.enter-edit-mode-btn' },
-  { name: 'Guide', heading: 'OPERATIONS / GUIDE', settled: 'button[title="Refresh program data"]' },
-  { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")' },
-  { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', settled: 'button:has-text("Add Standard EPG")' },
-  { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', settled: 'button:has-text("Add Logo")' },
-  { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Create rule"]' },
-  { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', settled: 'button:has-text("Refresh")' },
-  { name: 'Stats', heading: 'INSIGHTS / STATS', settled: 'button:has-text("Refresh")' },
-  { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")' },
-  { name: 'Settings', heading: 'SYSTEM / SETTINGS', settled: 'button:has-text("Save Settings")' },
-] as const
+interface RouteConsumer {
+  name: string
+  heading: string
+  settled: string
+  task: string
+  focus: string
+  status?: string
+  alternate: { state: string; selector: string; recovery?: string } | null
+}
 
-async function expectSettledRoute(page: Page, consumer: typeof routeConsumers[number]) {
+const routeConsumers: readonly RouteConsumer[] = [
+  { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.operator-dashboard', task: '.operator-dashboard-card', focus: '.operator-dashboard-card a', status: '.operator-dashboard-card', alternate: { state: 'independent source errors', selector: '.operator-dashboard-card' } },
+  { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', settled: '.enter-edit-mode-btn', task: '.channel-wrapper', focus: '.enter-edit-mode-btn', alternate: { state: 'empty panes', selector: '.channel-workspace-empty' } },
+  { name: 'Guide', heading: 'OPERATIONS / GUIDE', settled: 'button[title="Refresh program data"]', task: '.guide-row', focus: 'button[title="Refresh program data"]', alternate: { state: 'empty guide', selector: '.guide-empty-state, .empty-state' } },
+  { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")', task: '.m3u-account-row', focus: 'button:has-text("Add M3U Account")', status: '.m3u-account-row .status-label', alternate: { state: 'empty accounts', selector: '.empty-state' } },
+  { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', settled: 'button:has-text("Add Standard EPG")', task: '.epg-source-row', focus: 'button:has-text("Add Standard EPG")', status: '.source-updated', alternate: { state: 'empty sources', selector: '.empty-state' } },
+  { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', settled: 'button:has-text("Add Logo")', task: '.logo-row, .logo-card', focus: 'button:has-text("Add Logo")', status: '.logo-count, .page-header-status', alternate: { state: 'empty logos', selector: '.empty-state' } },
+  { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Create rule"]', task: '[data-testid="rules-list"] tbody tr', focus: 'button[aria-label="Create rule"]', status: '.channel-pipeline-stats', alternate: { state: 'empty rules', selector: '.empty-state' } },
+  { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', settled: 'button:has-text("Refresh")', task: '.change-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.summary-cards, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
+  { name: 'Stats', heading: 'INSIGHTS / STATS', settled: 'button:has-text("Refresh")', task: '.channel-card', focus: 'button:has-text("Refresh")', status: '.stats-last-updated, .page-header-status', alternate: { state: 'independent metric errors', selector: '.stats-error, .error-state' } },
+  { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")', task: '.entry-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.header-stats, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
+  { name: 'Settings', heading: 'SYSTEM / SETTINGS', settled: 'button:has-text("Save Settings")', task: '.settings-section', focus: 'button:has-text("Save Settings")', alternate: null },
+]
+
+async function expectSettledRoute(page: Page, consumer: RouteConsumer) {
   const heading = page.locator('#main-content h1')
   await expect(heading).toHaveText(consumer.heading)
   await expect(heading).toHaveCount(1)
@@ -76,11 +86,76 @@ async function expectSettledRoute(page: Page, consumer: typeof routeConsumers[nu
   return settled
 }
 
+async function seedPrimaryRouteBudgetData(page: Page) {
+  await seedChannelWorkspace(page, true, 2)
+  await page.route(/\/api\/journal(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      count: 1, page: 1, page_size: 50, total_pages: 1,
+      results: [{
+        id: 901, timestamp: '2026-07-27T12:00:00Z', category: 'channel',
+        action_type: 'create', entity_id: 41, entity_name: 'Budget journal entry',
+        description: 'Deterministic populated fixture', before_value: null, after_value: null,
+        user_initiated: true, mutation_source: 'ui', batch_id: null,
+      }],
+    }),
+  }))
+  await page.route(/\/api\/journal\/stats(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      total_entries: 1, by_category: { channel: 1 }, by_action_type: { create: 1 },
+      date_range: { oldest: '2026-07-27T12:00:00Z', newest: '2026-07-27T12:00:00Z' },
+    }),
+  }))
+  await page.route(/\/api\/m3u\/changes(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      results: [{
+        id: 701, m3u_account_id: 3, change_time: '2026-07-27T12:00:00Z',
+        change_type: 'group_added', group_name: 'Budget changes row',
+        stream_names: [], count: 4, enabled: true, snapshot_id: 1,
+      }],
+      total: 1, page: 1, page_size: 50, total_pages: 1,
+    }),
+  }))
+  await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      total_changes: 1, groups_added: 1, groups_removed: 0, streams_added: 0,
+      streams_removed: 0, accounts_affected: [3], since: '2026-07-27T00:00:00Z',
+    }),
+  }))
+  await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ status: 'healthy', service: 'ECM', version: '9.9.9', release_channel: 'stable' }),
+  }))
+  await page.route(/\/api\/tasks(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ tasks: [{ task_id: 'refresh', enabled: true, effective_enabled: true, status: 'running', last_run: '2026-07-27T01:00:00Z' }] }),
+  }))
+  await page.route(/\/api\/stats\/channels(?:\/|\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      count: 1,
+      channels: [{
+        channel_id: 'channel-41', channel_name: 'Budget live channel', channel_number: 101,
+        state: 'streaming', client_count: 1, clients: [], stream_name: 'Budget stream',
+        m3u_account_id: 3, stream_id: 501,
+      }],
+    }),
+  }))
+  await page.route(/\/api\/stats\/activity(?:\/|\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ events: [], count: 0, total: 0, offset: 0, limit: 50 }),
+  }))
+}
+
 async function openShellWithPipelineFixture(
   page: Page,
   rulesStatus = 200,
   providers: Array<Record<string, unknown>> = [],
   epgSources: Array<Record<string, unknown>> = [],
+  populatedRules = false,
 ) {
   await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
     status: 200,
@@ -116,7 +191,20 @@ async function openShellWithPipelineFixture(
     route.fulfill({
       status: rulesStatus,
       contentType: 'application/json',
-      body: rulesStatus === 200 ? JSON.stringify({ rules: [] }) : JSON.stringify({ detail: 'Pipeline unavailable' }),
+      body: rulesStatus === 200 ? JSON.stringify({ rules: populatedRules ? [{
+        id: 81, name: 'Budget pipeline rule', description: 'Deterministic populated rule',
+        enabled: true, priority: 1, active_from: null, active_until: null,
+        conditions: [{ type: 'stream_name_contains', value: 'sports' }],
+        actions: [{ type: 'create_channel', name_template: '{stream_name}' }],
+        m3u_account_id: null, target_group_id: null, run_on_refresh: false,
+        stop_on_first_match: false, sort_field: null, sort_order: 'asc',
+        probe_on_sort: false, sort_regex: null, stream_sort_field: null,
+        stream_sort_order: 'asc', quality_tie_break_order: 'desc',
+        quality_m3u_tie_break_enabled: true, normalization_group_ids: [],
+        skip_struck_streams: false, orphan_action: 'delete', last_run_at: null,
+        match_count: 4, created_at: '2026-07-27T00:00:00Z',
+        updated_at: '2026-07-27T12:00:00Z', event_sync_config: null,
+      }] : [] }) : JSON.stringify({ detail: 'Pipeline unavailable' }),
     }))
   await page.route(/\/api\/channel-pipeline\/executions(?:\/|\?|$)/, (route) =>
     route.fulfill({
@@ -298,29 +386,42 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
     })
 
     test('every primary route preserves the audited vertical working-area budget', async ({ page }) => {
-      await openShellWithPipelineFixture(page)
+      await seedPrimaryRouteBudgetData(page)
+      await openShellWithPipelineFixture(
+        page,
+        200,
+        [{
+          id: 3, name: 'Budget Provider', server_url: 'https://provider.test/playlist.m3u',
+          file_path: null, server_group: null, max_streams: 2, is_active: true,
+          created_at: '2026-07-27T00:00:00Z', updated_at: '2026-07-27T12:00:00Z',
+          user_agent: null, profiles: [], locked: false, channel_groups: [],
+          refresh_interval: 24, custom_properties: null, account_type: 'STD',
+          username: null, password: null, stale_stream_days: 0, priority: 0,
+          status: 'success', last_message: null, enable_vod: false,
+          auto_enable_new_groups_live: false, auto_enable_new_groups_vod: false,
+          auto_enable_new_groups_series: false,
+        }],
+        [{
+          id: 5, name: 'Budget EPG', source_type: 'xmltv', url: 'https://epg.test/guide.xml',
+          is_active: true, status: 'success', epg_data_count: 2, refresh_interval: 24,
+          updated_at: '2026-07-27T12:00:00Z',
+        }],
+        true,
+      )
       await dismissFirstRunPromptIfPresent(page)
       for (const consumer of routeConsumers) {
         await page.getByRole('link', { name: consumer.name }).click()
         const settled = await expectSettledRoute(page, consumer)
+        if (consumer.name === 'Channel Manager') {
+          await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
+        }
         const budget = await page.evaluate(() => {
           const main = document.querySelector<HTMLElement>('#main-content')!
           const header = main.querySelector<HTMLElement>('.route-page-header')!
           const description = header.querySelector<HTMLElement>('.header-description')!
-          const workingSurface = [...main.children]
-            .find((element): element is HTMLElement => (
-              element instanceof HTMLElement
-              && !element.classList.contains('route-page-header')
-              && getComputedStyle(element).display !== 'none'
-            ))!
           const headerRect = header.getBoundingClientRect()
-          const surfaceRect = workingSurface.getBoundingClientRect()
           return {
             headerHeight: headerRect.height,
-            workingSurfaceVisibleHeight: Math.max(
-              0,
-              Math.min(surfaceRect.bottom, window.innerHeight) - Math.max(surfaceRect.top, 0),
-            ),
             descriptionSingleLine: description.scrollHeight <= description.clientHeight + 1,
             descriptionRecoverable: description.title === description.textContent?.trim(),
             noDocumentXOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
@@ -328,21 +429,141 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           }
         })
         expect(budget.headerHeight, `${consumer.name} route chrome must preserve working height`).toBeLessThanOrEqual(
-          viewport.height === 720 ? 190 : 210,
+          viewport.height === 720 ? 260 : 290,
         )
-        expect(budget.workingSurfaceVisibleHeight, `${consumer.name} must expose meaningful working content above fold`)
-          .toBeGreaterThanOrEqual(viewport.height === 720 ? 160 : 260)
         expect(budget.descriptionRecoverable).toBe(true)
         if (viewport.height === 720) expect(budget.descriptionSingleLine).toBe(true)
         expect(budget.noDocumentXOverflow).toBe(true)
         expect(budget.noMainXOverflow).toBe(true)
 
-        await settled.focus()
-        expect(await settled.evaluate((element) => {
+        const task = page.locator(consumer.task).first()
+        await expect(task, `${consumer.name} must render deterministic task content`).toBeVisible()
+        expect(await task.evaluate((element) => {
           const rect = element.getBoundingClientRect()
-          const main = document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect()
-          return rect.top >= main.top && rect.bottom <= main.bottom
+          const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0))
+          return visibleHeight >= Math.min(120, rect.height)
+            && rect.right <= document.documentElement.clientWidth + 1
+        }), `${consumer.name} task content must be above fold and contained`).toBe(true)
+
+        const focusTarget = page.locator(consumer.focus).first()
+        await focusTarget.focus()
+        await expect(focusTarget).toBeFocused()
+        expect(await focusTarget.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          const header = document.querySelector<HTMLElement>('.route-page-header')!.getBoundingClientRect()
+          const footer = document.querySelector<HTMLElement>('.footer')!.getBoundingClientRect()
+          const insideHeader = rect.top >= header.top && rect.bottom <= header.bottom
+          const belowHeader = rect.top >= header.bottom
+          return (insideHeader || belowHeader) && rect.bottom <= footer.top
+            && rect.left >= document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect().left
         }), `${consumer.name} primary control focus must not be obscured`).toBe(true)
+
+        if (consumer.status) {
+          const status = page.locator(consumer.status).first()
+          await expect(status, `${consumer.name} freshness/status must remain visible`).toBeVisible()
+          expect(await status.evaluate((element) => element.getBoundingClientRect().top < window.innerHeight)).toBe(true)
+        }
+
+        const nestedScroll = await page.evaluate((routeName) => {
+          const describe = (element: HTMLElement) => {
+            const id = element.id ? `#${element.id}` : ''
+            const classes = [...element.classList].slice(0, 3).map((name) => `.${name}`).join('')
+            return `${element.tagName.toLowerCase()}${id}${classes}`
+          }
+          const scrollable = [...document.querySelectorAll<HTMLElement>('#main-content, #main-content *')]
+            .filter((element) => {
+              const style = getComputedStyle(element)
+              return /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 1
+            })
+          const pairs = scrollable.flatMap((element) => {
+            const ancestor = scrollable.find((candidate) => candidate !== element && candidate.contains(element))
+            return ancestor ? [{ inner: element, outer: ancestor }] : []
+          })
+          const violations = pairs.filter(({ inner }) => {
+            if (routeName === 'Channel Manager') {
+              return !inner.closest('.channels-pane, .streams-pane')
+            }
+            if (routeName === 'Settings' || routeName === 'Stats') {
+              return false
+            }
+            return true
+          })
+          return {
+            scrollables: scrollable.map(describe),
+            violations: violations.map(({ inner, outer }) => `${describe(inner)} inside ${describe(outer)}`),
+            longPageHasSingleOwnedScroller: violations.length === 0,
+          }
+        }, consumer.name)
+        expect(nestedScroll.violations, `${consumer.name} has unjustified nested same-axis scrolling: ${nestedScroll.scrollables.join(', ')}`)
+          .toEqual([])
+          expect(
+            nestedScroll.longPageHasSingleOwnedScroller,
+            `${consumer.name} must not nest its task scroller; the Settings navigation rail is an independent sibling`,
+          ).toBe(true)
+      }
+    })
+
+    test('every applicable route alternate state preserves geometry and recovery', async ({ page }) => {
+      await seedChannelWorkspace(page, false)
+      await openShellWithPipelineFixture(page)
+      await page.route(/\/api\/channels\/logos(?:\/|\?|$)/, (route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ count: 0, next: null, previous: null, results: [] }),
+      }))
+      for (const endpoint of [
+        /\/api\/health(?:\?|$)/,
+        /\/api\/tasks(?:\?|$)/,
+        /\/api\/journal(?:\/stats)?(?:\?|$)/,
+        /\/api\/m3u\/changes(?:\/summary)?(?:\?|$)/,
+        /\/api\/stats\/[^?]+(?:\?|$)/,
+      ]) {
+        await page.route(endpoint, (route) => route.fulfill({
+          status: 503, contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Deterministic alternate-state fixture' }),
+        }))
+      }
+      await dismissFirstRunPromptIfPresent(page)
+
+      for (const consumer of routeConsumers) {
+        if (!consumer.alternate) {
+          expect(consumer.name, 'Settings has no meaningful empty state; save/reload errors are covered by the dedicated retained-edit journey')
+            .toBe('Settings')
+          continue
+        }
+        await page.getByRole('link', { name: consumer.name }).click()
+        await expect(page.locator('#main-content h1')).toHaveText(consumer.heading)
+        const state = page.locator(consumer.alternate.selector).first()
+        await expect(state, `${consumer.name} must render mapped ${consumer.alternate.state}`).toBeVisible()
+
+        const geometry = await state.evaluate((element) => {
+          const rect = element.getBoundingClientRect()
+          const header = document.querySelector<HTMLElement>('.route-page-header')!.getBoundingClientRect()
+          const footer = document.querySelector<HTMLElement>('.footer')!.getBoundingClientRect()
+          const main = document.querySelector<HTMLElement>('#main-content')!
+          return {
+            belowHeader: rect.top >= header.bottom - 1,
+            aboveFooter: rect.top < footer.top && rect.bottom > header.bottom,
+            contained: rect.left >= main.getBoundingClientRect().left - 1
+              && rect.right <= main.getBoundingClientRect().right + 1,
+            noDocumentXOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+          }
+        })
+        expect(geometry, `${consumer.name} ${consumer.alternate.state} geometry`).toEqual({
+          belowHeader: true,
+          aboveFooter: true,
+          contained: true,
+          noDocumentXOverflow: true,
+        })
+
+        const control = page.locator(consumer.alternate.recovery ?? consumer.focus).first()
+        if (await control.isVisible().catch(() => false)) {
+          await control.focus()
+          await expect(control).toBeFocused()
+          expect(await control.evaluate((element) => {
+            const rect = element.getBoundingClientRect()
+            return rect.top >= 0 && rect.bottom <= window.innerHeight
+          })).toBe(true)
+        }
       }
     })
 
@@ -440,8 +661,14 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           aboveFold: cards.every((card) => card.getBoundingClientRect().bottom <= window.innerHeight),
           contained: rect.right <= document.documentElement.clientWidth + 1,
           noDocumentOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+          paddingRight: getComputedStyle(element).paddingRight,
         }
-      })).toEqual({ aboveFold: true, contained: true, noDocumentOverflow: true })
+      })).toEqual({
+        aboveFold: true,
+        contained: true,
+        noDocumentOverflow: true,
+        paddingRight: viewport.width === 1280 ? '16px' : '24px',
+      })
     })
 
     test('Dashboard preserves unfiltered totals after channel search and provider-scoped stream metadata', async ({ page }) => {

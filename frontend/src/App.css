@@ -266,11 +266,6 @@
   color: var(--text-muted);
 }
 
-.dashboard-route {
-  padding: 2rem;
-  overflow: auto;
-}
-
 @media (max-width: 1280px), (max-height: 800px) {
   .main > .route-page-header {
     padding: 0.625rem 1rem;
@@ -280,8 +275,8 @@
     padding-block: 0.25rem;
   }
 
-  .dashboard-route {
-    padding: 1rem;
+  .operator-dashboard {
+    padding: 0 1rem 1rem;
   }
 }
 

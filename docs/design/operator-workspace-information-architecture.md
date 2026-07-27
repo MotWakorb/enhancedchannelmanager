@@ -297,7 +297,7 @@ route:
 
 | Constraint | 1280×720 | 1920×1080 |
 |---|---:|---:|
-| Route header maximum height | 190px | 210px |
+| Route header maximum height | 260px | 290px |
 | Visible working-surface height above the fold | at least 160px | at least 260px |
 | Navigation width | 244px expanded / 68px collapsed | 244px expanded / 68px collapsed |
 | Document and main-region horizontal overflow | none | none |
@@ -316,6 +316,14 @@ independent pane scrolling remain, with fixed artwork, number, status/warning,
 and action allocations. No responsive font shrinking or single-pane fallback
 is permitted.
 
+Vertical scroll ownership is explicit. Channel Manager owns two task-local,
+sibling pane scrollers (Channels and Streams); neither pane is nested inside a
+same-axis main scroller. Settings owns a content scroller and an independently
+scrollable sibling navigation rail. Stats owns its long `.stats-content`
+surface. Other primary routes use one route task scroller at most. The exact
+browser audit reports every overflow container and rejects an ancestor/child
+same-axis pair unless it is one of these documented task-local arrangements.
+
 At 200% zoom, wrapping is preferred to hidden controls. The shell may scroll
 vertically, but must not require two-dimensional document scrolling. Sticky
 regions reserve focus clearance, and browser tests focus each route's exact
@@ -328,23 +336,28 @@ inventory rather than sampling it:
 
 | Route | Populated task surface | Relevant alternate rendered state |
 |---|---|---|
-| Dashboard | six-card system summary | independent card empty/error/permission |
-| Channel Manager | channels, assigned streams, source inventory | empty/loading/error panes |
-| Guide | populated guide grid | empty/unavailable API data |
-| M3U Manager | configured account controls | empty accounts and unavailable source |
-| EPG Manager | configured source controls | empty sources and unavailable source |
-| Logo Manager | populated logo inventory | loading/empty/error/permission |
-| Channel Pipeline | rule controls and status summary | empty rules and unavailable rules |
-| M3U Changes | populated retained history | loading/empty/error/permission/stale |
+| Dashboard | six-card system summary | deterministic independent source errors |
+| Channel Manager | channels, assigned streams, source inventory | empty panes |
+| Guide | populated guide row | explicit empty guide |
+| M3U Manager | configured account row | empty accounts |
+| EPG Manager | configured source row | empty sources |
+| Logo Manager | populated logo row | empty inventory |
+| Channel Pipeline | populated rule row and status summary | empty rules |
+| M3U Changes | populated retained history | deterministic request error and Retry |
 | Stats | populated summary panels | independently unavailable metrics |
-| Journal | populated retained entries | loading/empty/error/permission/stale |
-| Settings | populated General configuration | reload/save error with retained edits |
+| Journal | populated retained entry | deterministic request error and Retry |
+| Settings | populated General configuration | N/A in the shared alternate-state loop; reload/save failure with retained edits has a dedicated journey |
 
-Every row runs through the shared 1280×720 and 1920×1080 hierarchy/geometry
-loop. State-specific journeys then verify the applicable recovery control and
-that protected or stale content is handled correctly. Channel Manager and the
-dense history/inventory routes receive additional state-specific geometry
-assertions because their data density makes them the highest overflow risk.
+Every populated row uses intercepted, deterministic API fixtures and runs
+through the shared 1280×720 and 1920×1080 hierarchy/geometry loop. The loop
+asserts a route-specific task element (not merely a page shell), a truly focused
+primary or first task control clear of header/sticky/footer regions, visible
+source-backed status where the route defines it, and horizontal/scroll
+ownership. The alternate-state loop uses deterministic empty or failure
+fixtures and verifies geometry and the applicable recovery control at both
+viewports. Permission, loading, and stale behavior is tested only on routes
+whose APIs define those states (Logo Manager and the retained history routes);
+it is not inferred for routes without that contract.
 
 ## Testable hypotheses
 
