@@ -344,15 +344,17 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         hasText: 'A deliberately long source stream identity that must ellipsize before inventory actions',
       })
       await expect(inventoryIdentity).toBeVisible()
+      await expect(page.locator('.streams-pane .drag-handle')).toHaveCount(0)
+      await expect(page.locator('.streams-pane .group-drag-handle')).toHaveCount(0)
+      await expect(page.locator('.channels-pane .group-drag-handle')).toHaveCount(0)
       const previewAction = page.locator('.streams-pane').getByRole('button', { name: 'Preview stream in browser' })
       await previewAction.click()
       await page.getByRole('button', { name: 'Close', exact: true }).first().click()
       const copyAction = page.locator('.streams-pane').getByRole('button', { name: 'Copy stream URL' })
       await copyAction.focus()
       await copyAction.press('Enter')
-      await copyAction.focus()
-      await page.keyboard.press('Shift+Tab')
       const inventoryVlc = page.locator('.streams-pane').getByRole('button', { name: 'Open in VLC' })
+      await inventoryVlc.focus()
       await expect(inventoryVlc).toBeFocused()
       await expect(inventoryVlc).toHaveCSS('opacity', '1')
       const inventoryPreview = page.locator('.streams-pane').getByRole('button', { name: 'Preview stream in browser' })
@@ -383,8 +385,39 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         })).toEqual({ number: 0, identity: 0, streams: 0 })
       }
       await expectChannelColumnsAligned()
+      await expect(page.locator('.channels-pane .channel-drag-handle')).toHaveCount(0)
       await page.getByRole('button', { name: 'Edit Mode' }).click()
       await expectChannelColumnsAligned()
+      await expect(page.getByLabel('Drag channel group Sports to reorder')).toBeVisible()
+      await expect(page.getByLabel(/^Drag channel A deliberately long channel identity .* to reorder$/)).toBeVisible()
+      await expect(page.getByLabel('Drag stream group Provider Sports to Channels pane to create channels')).toBeVisible()
+      await expect(page.getByLabel(/Drag inventory stream .* to assign it to a channel/)).toBeVisible()
+
+      await page.getByRole('checkbox', { name: /Select channel A deliberately long channel identity/ }).click()
+      const selectionBar = page.getByRole('toolbar', { name: 'Selection actions' })
+      await expect(selectionBar).toBeVisible()
+      await expect(selectionBar.getByRole('status', { name: '1 channel selected' })).toBeVisible()
+      expect(await selectionBar.getByRole('button').allTextContents()).toEqual([
+        'deleteDelete',
+        'speedProbe',
+        'manage_searchFind Duplicates',
+        'tagRenumber',
+        'live_tvAssign EPG',
+        'more_vertMore',
+        'closeClear',
+      ])
+      await expect(selectionBar.getByRole('button', { name: 'Merge' })).toHaveCount(0)
+      const selectionMore = selectionBar.getByRole('button', { name: 'More selection actions' })
+      await selectionMore.focus()
+      await selectionMore.press('Enter')
+      const selectionMenu = page.getByRole('menu', { name: 'More selection actions' })
+      await expect(selectionMenu).toBeVisible()
+      await expect(selectionMenu.getByRole('menuitem', { name: /Move to group/ })).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(selectionMenu).toHaveCount(0)
+      await expect(selectionMore).toBeFocused()
+      await selectionBar.getByRole('button', { name: 'Clear selection' }).click()
+      await expect(selectionBar).toHaveCount(0)
       await moreActions.focus()
       await moreActions.press('Enter')
       const editPaneMenu = page.getByRole('menu', { name: 'Channel pane actions' })
@@ -417,6 +450,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(editPaneMenu).toHaveCount(0)
       await expect(moreActions).toBeFocused()
       await page.getByRole('button', { name: 'Done' }).click()
+      await expect(page.locator('.channels-pane .channel-drag-handle')).toHaveCount(0)
+      await expect(page.locator('.channels-pane .group-drag-handle')).toHaveCount(0)
+      await expect(page.locator('.streams-pane .drag-handle')).toHaveCount(0)
+      await expect(page.locator('.streams-pane .group-drag-handle')).toHaveCount(0)
       const channelActions = page.getByRole('button', { name: 'Channel actions' })
       await channelActions.focus()
       await channelActions.press('Enter')

@@ -93,13 +93,17 @@ export const StreamListItem = memo(function StreamListItem({
 
   return (
     <div ref={setNodeRef} style={style} className="inline-stream-item">
-      <span
-        className={`stream-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...(isEditMode ? { ...attributes, ...listeners } : {})}
-        title={isEditMode ? 'Drag to reorder' : 'Enter Edit Mode to reorder streams'}
-      >
-        ⋮⋮
-      </span>
+      {isEditMode && (
+        <span
+          className="stream-drag-handle"
+          {...attributes}
+          {...listeners}
+          aria-label={`Drag assigned stream ${stream.name} to reorder`}
+          title={`Drag assigned stream ${stream.name} to reorder`}
+        >
+          ⋮⋮
+        </span>
+      )}
       {stream.logo_url && (
         <img
           src={stream.logo_url}

@@ -434,13 +434,25 @@ export const ChannelListItem = memo(function ChannelListItem({
           </span>
         </button>
       )}
-      <span
-        className={`channel-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...(isEditMode ? { ...attributes, ...listeners } : {})}
-        title={isEditMode ? (multiSelectCount > 1 && isMultiSelected ? `Drag ${multiSelectCount} channels` : 'Drag to reorder') : 'Enter Edit Mode to reorder channels'}
-      >
-        ⋮⋮
-      </span>
+      {isEditMode && (
+        <span
+          className="channel-drag-handle"
+          {...attributes}
+          {...listeners}
+          aria-label={
+            multiSelectCount > 1 && isMultiSelected
+              ? `Drag ${multiSelectCount} selected channels to reorder`
+              : `Drag channel ${channel.name} to reorder`
+          }
+          title={
+            multiSelectCount > 1 && isMultiSelected
+              ? `Drag ${multiSelectCount} selected channels to reorder`
+              : `Drag channel ${channel.name} to reorder`
+          }
+        >
+          ⋮⋮
+        </span>
+      )}
       <span
         className="channel-expand-icon"
         onClick={(e) => {

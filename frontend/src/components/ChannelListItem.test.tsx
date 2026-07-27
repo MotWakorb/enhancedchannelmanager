@@ -512,6 +512,21 @@ describe('ChannelListItem — channel actions menu', () => {
   });
 });
 
+describe('ChannelListItem — Edit Mode reorder affordance (enhancedchannelmanager-2896r.13)', () => {
+  it('keeps the channel drag handle out of the DOM outside Edit Mode', () => {
+    const { container } = renderRow({ isEditMode: false });
+    expect(container.querySelector('.channel-drag-handle')).not.toBeInTheDocument();
+  });
+
+  it('uses the approved row affordance with accessible drag instructions in Edit Mode', () => {
+    const { container } = renderRow({ isEditMode: true });
+    const handle = container.querySelector('.channel-drag-handle');
+    expect(handle).toHaveTextContent('⋮⋮');
+    expect(handle).toHaveAttribute('aria-label', 'Drag channel ESPN HD to reorder');
+    expect(handle).toHaveAttribute('title', 'Drag channel ESPN HD to reorder');
+  });
+});
+
 describe('ChannelListItem — catch-up badge (bead enhancedchannelmanager-sy1sz)', () => {
   const baseChannel: Channel = {
     id: 42,

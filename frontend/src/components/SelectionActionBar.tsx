@@ -408,7 +408,14 @@ export function SelectionActionBar({
 
   return createPortal(
     <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
-      <span className="selection-action-bar-count" data-testid="selection-bar-count">
+      <span
+        className="selection-action-bar-count"
+        data-testid="selection-bar-count"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-label={`${selectedCount} ${selectedCount === 1 ? 'channel' : 'channels'} selected`}
+      >
         {selectedCount} selected
       </span>
       <button

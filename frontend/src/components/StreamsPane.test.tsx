@@ -177,6 +177,28 @@ describe('StreamsPane category headers', () => {
 });
 
 describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896r.12)', () => {
+  it('renders supported group and row handles only in Edit Mode with accessible instructions', async () => {
+    const user = userEvent.setup();
+    const normal = renderPane({ onBulkCreateFromGroup: vi.fn(), isEditMode: false });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    expect(normal.container.querySelector('.group-drag-handle')).not.toBeInTheDocument();
+    expect(normal.container.querySelector('.drag-handle')).not.toBeInTheDocument();
+    normal.unmount();
+
+    const edit = renderPane({ onBulkCreateFromGroup: vi.fn(), isEditMode: true });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    expect(edit.container.querySelector('.group-drag-handle')).toHaveAttribute(
+      'aria-label',
+      'Drag stream group CA | Documentary to Channels pane to create channels',
+    );
+    expect(edit.container.querySelector('.group-drag-handle .material-icons')).toHaveTextContent('drag_indicator');
+    expect(edit.container.querySelector('.drag-handle')).toHaveAttribute(
+      'aria-label',
+      'Drag inventory stream CA Documentary Stream 1 to assign it to a channel',
+    );
+    expect(edit.container.querySelector('.drag-handle')).toHaveTextContent('⋮⋮');
+  });
+
   it('keeps stable artwork, flexible identity, then fixed actions and renders no health noise', async () => {
     const user = userEvent.setup();
     renderPane({

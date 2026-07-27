@@ -6,7 +6,7 @@
  * sections, keyboard navigation, and the Escape-clears-selection contract.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SelectionActionBar } from './SelectionActionBar';
 
@@ -59,6 +59,7 @@ describe('SelectionActionBar', () => {
     expect(screen.getByRole('button', { name: /Renumber/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Assign EPG/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Merge/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: '1 channel selected' })).toBeInTheDocument();
   });
 
   it('shows Merge once two or more channels are selected', () => {
@@ -66,6 +67,35 @@ describe('SelectionActionBar', () => {
 
     expect(screen.getByTestId('selection-bar-count')).toHaveTextContent('2 selected');
     expect(screen.getByRole('button', { name: /Merge/ })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: '2 channels selected' })).toBeInTheDocument();
+  });
+
+  it('uses the exact approved primary order, icons, and tooltips while loading', () => {
+    renderBar({ selectedCount: 2, probing: true, assigningEPG: true });
+    const toolbar = screen.getByRole('toolbar', { name: 'Selection actions' });
+    const buttons = within(toolbar).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      'deleteDelete',
+      'syncProbing…',
+      'manage_searchFind Duplicates',
+      'tagRenumber',
+      'syncAssign EPG',
+      'call_mergeMerge',
+      'more_vertMore',
+      'closeClear',
+    ]);
+    expect(buttons.map((button) => button.getAttribute('title'))).toEqual([
+      'Delete selected channels',
+      'Probe streams of selected channels',
+      'Find duplicate channels in selection',
+      'Renumber selected channels',
+      'Assign EPG to selected channels',
+      'Merge selected channels into one',
+      'More selection actions',
+      'Clear selection (Esc)',
+    ]);
+    expect(buttons[1]).toBeDisabled();
+    expect(buttons[4]).toBeDisabled();
   });
 
   it('renders nothing when the selection is empty', () => {
@@ -415,7 +445,7 @@ describe('SelectionActionBar', () => {
       renderBar({ groups: [{ id: 1, name: 'Sports HD' }, { id: 2, name: 'News' }, { id: 3, name: 'Kids Sport' }] });
       await openMoveSubmenu(user);
       const input = screen.getByRole('textbox', { name: 'Filter groups' });
-      const status = screen.getByRole('status');
+      const status = within(screen.getByRole('dialog', { name: 'Move to group' })).getByRole('status');
 
       await user.type(input, 'sport');
       expect(status).toHaveTextContent('2 groups found');

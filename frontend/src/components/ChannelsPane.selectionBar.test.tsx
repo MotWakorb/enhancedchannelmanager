@@ -101,6 +101,29 @@ function renderPane({
 }
 
 describe('ChannelsPane selection action bar integration', () => {
+  it('keeps group reorder affordances out of normal mode and uses the approved accessible Edit Mode icon', () => {
+    const groupedChannels = [
+      { ...makeChannel(1, 'Alpha'), channel_group_id: 10 },
+      { ...makeChannel(2, 'Beta'), channel_group_id: 10 },
+    ];
+    const normal = renderPane({
+      isEditMode: false,
+      paneOverrides: { channels: groupedChannels, selectedGroups: [10] },
+    });
+    expect(normal.container.querySelector('.group-drag-handle')).not.toBeInTheDocument();
+    normal.unmount();
+
+    const edit = renderPane({
+      isEditMode: true,
+      paneOverrides: { channels: groupedChannels, selectedGroups: [10] },
+    });
+    const handle = edit.container.querySelector('.group-drag-handle');
+    expect(handle).toHaveAttribute('aria-label', 'Drag channel group News to reorder');
+    expect(handle).toHaveAttribute('title', 'Drag channel group News to reorder');
+    expect(handle?.querySelector('.material-icons')).toHaveTextContent('drag_indicator');
+    expect(handle?.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('renders the floating bar when channels are selected in edit mode', () => {
     renderPane({ selectedChannelIds: new Set([1, 2]) });
 

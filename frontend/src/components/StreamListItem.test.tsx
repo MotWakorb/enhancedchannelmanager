@@ -164,6 +164,19 @@ describe('StreamListItem — catch-up badge (bead enhancedchannelmanager-sy1sz)'
 });
 
 describe('StreamListItem — assigned stream row contract (enhancedchannelmanager-2896r.12)', () => {
+  it('keeps the assigned-stream drag handle out of the DOM outside Edit Mode', () => {
+    const { container } = renderItem({ isEditMode: false });
+    expect(container.querySelector('.stream-drag-handle')).not.toBeInTheDocument();
+  });
+
+  it('uses the approved row affordance with accessible drag instructions in Edit Mode', () => {
+    const { container } = renderItem({ isEditMode: true });
+    const handle = container.querySelector('.stream-drag-handle');
+    expect(handle).toHaveTextContent('⋮⋮');
+    expect(handle).toHaveAttribute('aria-label', 'Drag assigned stream ESPN Feed to reorder');
+    expect(handle).toHaveAttribute('title', 'Drag assigned stream ESPN Feed to reorder');
+  });
+
   it('uses only the stream artwork, hides a broken image, and invents no fallback slot', () => {
     const { container, rerender } = renderItem();
     expect(container.querySelector('.stream-logo-small')).not.toBeInTheDocument();

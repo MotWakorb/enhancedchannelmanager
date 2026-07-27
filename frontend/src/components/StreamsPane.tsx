@@ -1907,7 +1907,8 @@ export function StreamsPane({
                     {isEditMode && onBulkCreateFromGroup && (
                       <span
                         className="group-drag-handle"
-                        title="Drag to Channels pane to bulk create"
+                        aria-label={`Drag stream group ${group.name} to Channels pane to create channels`}
+                        title={`Drag stream group ${group.name} to Channels pane to create channels`}
                         draggable={true}
                         onDragStart={(e) => {
                           e.stopPropagation();
@@ -2025,6 +2026,8 @@ export function StreamsPane({
                           {isEditMode && (
                             <span
                               className="drag-handle"
+                              aria-label={`Drag inventory stream ${stream.name} to assign it to a channel`}
+                              title={`Drag inventory stream ${stream.name} to assign it to a channel`}
                               draggable={true}
                               onDragStart={(e) => handleDragStart(e, stream)}
                               onDragEnd={() => clearStreamDragData()}

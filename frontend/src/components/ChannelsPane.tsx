@@ -848,9 +848,10 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         <span
           className="group-drag-handle"
           {...dragHandleProps}
-          title="Drag to reorder group"
+          aria-label={`Drag channel group ${groupName} to reorder`}
+          title={`Drag channel group ${groupName} to reorder`}
         >
-          ⋮⋮
+          <span className="material-icons" aria-hidden="true">drag_indicator</span>
         </span>
       )}
       {/* Expand/collapse toggle, restructured to a sibling <button> (round-2
