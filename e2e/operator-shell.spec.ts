@@ -80,6 +80,7 @@ async function openShellWithPipelineFixture(
   page: Page,
   rulesStatus = 200,
   providers: Array<Record<string, unknown>> = [],
+  epgSources: Array<Record<string, unknown>> = [],
 ) {
   await page.route(/\/api\/settings(?:\/|\?|$)/, (route) => route.fulfill({
     status: 200,
@@ -99,7 +100,7 @@ async function openShellWithPipelineFixture(
   await page.route(/\/api\/m3u\/server-groups(?:\/|\?|$)/, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
   await page.route(/\/api\/epg\/sources(?:\/|\?|$)/, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(epgSources) }))
   await page.route(/\/api\/channels\/logos(?:\/|\?|$)/, (route) =>
     route.fulfill({
       status: 200,
@@ -136,7 +137,8 @@ async function seedChannelWorkspace(page: Page, populated: boolean) {
     channel_group_id: 7,
     streams: [501],
     logo_id: null,
-    tvg_id: null,
+    tvg_id: 'espn.us',
+    epg_data_id: 88,
   }
   const stream = {
     id: 501,
@@ -175,6 +177,16 @@ async function seedChannelWorkspace(page: Page, populated: boolean) {
       previous: null,
       results: populated ? [stream] : [],
     }),
+  }))
+  await page.route(/\/api\/epg\/sources(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(populated ? [{ id: 5, name: 'Schedules Direct' }] : []),
+  }))
+  await page.route(/\/api\/epg\/data(?:\?|$)/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(populated ? [{ id: 88, tvg_id: 'espn.us', name: 'ESPN', epg_source: 5, icon_url: null }] : []),
   }))
 }
 
@@ -232,7 +244,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
 
     test('Channel Manager keeps the deterministic two-pane workspace usable with both navigation widths', async ({ page }, testInfo) => {
       await seedChannelWorkspace(page, true)
-      await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
+      await openShellWithPipelineFixture(
+        page,
+        200,
+        [{ id: 3, name: 'Fixture Provider' }],
+        [{ id: 5, name: 'Schedules Direct' }],
+      )
       await dismissFirstRunPromptIfPresent(page)
 
       await expect(page.locator('#main-content h1')).toHaveText('OPERATIONS / CHANNEL MANAGER')
@@ -301,6 +318,19 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await copyAction.press('Enter')
 
       await page.locator('.channels-pane').getByRole('button', { name: /Sports/ }).click()
+      await expect(page.locator('.channel-column-headers')).toHaveText(/NumberChannelGuideStreams/)
+      await expect(page.locator('.channel-number-col')).toHaveText('101')
+      await expect(page.locator('.channel-number-col')).not.toContainText('#')
+      await expect(page.getByText('Schedules Direct – ESPN')).toBeVisible()
+      await expect(page.getByLabel('1 stream; healthy')).toBeVisible()
+      const channelActions = page.getByRole('button', { name: 'Channel actions' })
+      await channelActions.focus()
+      await channelActions.press('Enter')
+      await expect(page.getByRole('menu', { name: 'Channel actions' })).toBeVisible()
+      await expect(page.getByRole('menuitem', { name: 'Probe Channel' })).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('menu', { name: 'Channel actions' })).toHaveCount(0)
+      await expect(channelActions).toBeFocused()
       const channelIdentity = page.getByText('A deliberately long channel identity that must remain inside the Channels pane')
       await channelIdentity.click()
       await expect(page.locator('.inline-stream-name').filter({ hasText: 'A deliberately long source stream identity' })).toBeVisible()

@@ -52,6 +52,7 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
 import { MergeChannelsModal } from './MergeChannelsModal';
 import { SelectionActionBar } from './SelectionActionBar';
+import { resolveChannelArtwork } from './channelRowPresentation';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -2173,14 +2174,8 @@ export function ChannelsPane({
 
   // Helper to get logo URL for a channel - uses logoMap for O(1) lookup
   const getChannelLogoUrl = useCallback((channel: Channel): string | null => {
-    // For staged channels (during edit mode), use the temporary logo URL
-    if (channel._stagedLogoUrl) {
-      return channel._stagedLogoUrl;
-    }
-    if (!channel.logo_id) return null;
-    const logo = logoMap.get(channel.logo_id);
-    return logo?.cache_url || logo?.url || null;
-  }, [logoMap]);
+    return resolveChannelArtwork(channel, logoMap, isEditMode);
+  }, [isEditMode, logoMap]);
 
   // Handle confirming channel deletion
   const handleConfirmDelete = async () => {
@@ -7120,6 +7115,12 @@ export function ChannelsPane({
         onDragLeave={handlePaneDragLeave}
         onDrop={handlePaneDrop}
       >
+        <div className={`channel-column-headers ${isEditMode ? 'edit-mode' : ''}`} aria-hidden="true">
+          <span className="channel-column-number">Number</span>
+          <span className="channel-column-name">Channel</span>
+          <span className="channel-column-guide">Guide</span>
+          <span className="channel-column-streams">Streams</span>
+        </div>
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (

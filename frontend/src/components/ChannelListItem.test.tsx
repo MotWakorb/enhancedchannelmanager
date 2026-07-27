@@ -4,15 +4,15 @@
  * Focus: bd-eio04.13 — per-channel would-normalize indicator.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { ChannelListItem } from './ChannelListItem';
 import type { Channel } from '../types';
 
-function renderRow(overrides: Partial<React.ComponentProps<typeof ChannelListItem>> = {}) {
-  const channel: Channel = {
+function makeChannel(): Channel {
+  return {
     id: 42,
     channel_number: 7,
     name: 'ESPN HD',
@@ -28,9 +28,11 @@ function renderRow(overrides: Partial<React.ComponentProps<typeof ChannelListIte
     auto_created_by: null,
     auto_created_by_name: null,
   };
+}
 
-  const props: React.ComponentProps<typeof ChannelListItem> = {
-    channel,
+function makeRowProps(): React.ComponentProps<typeof ChannelListItem> {
+  return {
+    channel: makeChannel(),
     isSelected: false,
     isMultiSelected: false,
     isExpanded: false,
@@ -59,9 +61,11 @@ function renderRow(overrides: Partial<React.ComponentProps<typeof ChannelListIte
     onStreamDrop: vi.fn(),
     onDelete: vi.fn(),
     onEditChannel: vi.fn(),
-    ...overrides,
   };
+}
 
+function renderRow(overrides: Partial<React.ComponentProps<typeof ChannelListItem>> = {}) {
+  const props = { ...makeRowProps(), ...overrides };
   return render(
     <DndContext>
       <SortableContext items={[42]}>
@@ -137,16 +141,16 @@ describe('ChannelListItem — applied TVG ID / name subtitle', () => {
     expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
   });
 
-  it('renders TVG ID and TVG name joined by a separator', () => {
+  it('keeps TVG ID in the tooltip rather than repeating it in the visible guide subtitle', () => {
     renderRow({ tvgId: 'espn.us', tvgName: 'ESPN' });
     const subtitle = screen.getByTestId('channel-tvg-info-42');
-    expect(subtitle).toHaveTextContent('espn.us · ESPN');
+    expect(subtitle).toHaveTextContent(/^ESPN$/);
     expect(subtitle).toHaveAttribute('title', 'TVG ID: espn.us · TVG Name: ESPN');
   });
 
-  it('renders TVG ID alone when no EPG name is linked', () => {
+  it('does not render identifier-only text when no guide name is linked', () => {
     renderRow({ tvgId: 'espn.us' });
-    expect(screen.getByTestId('channel-tvg-info-42')).toHaveTextContent(/^espn\.us$/);
+    expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
   });
 
   it('renders TVG name alone when only the EPG link provides it', () => {
@@ -165,10 +169,10 @@ describe('ChannelListItem — applied TVG ID / name subtitle', () => {
     expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
   });
 
-  it('renders the EPG source name first, before TVG ID and TVG name', () => {
+  it('renders the canonical provider – tvg-name subtitle', () => {
     renderRow({ tvgId: 'espn.us', tvgName: 'ESPN', epgSourceName: 'Gracenote' });
     const subtitle = screen.getByTestId('channel-tvg-info-42');
-    expect(subtitle).toHaveTextContent('Gracenote · espn.us · ESPN');
+    expect(subtitle).toHaveTextContent('Gracenote – ESPN');
     expect(subtitle).toHaveAttribute(
       'title',
       'EPG: Gracenote · TVG ID: espn.us · TVG Name: ESPN'
@@ -178,7 +182,7 @@ describe('ChannelListItem — applied TVG ID / name subtitle', () => {
   it('omits the EPG source name when it does not resolve, keeping the two-part rendering', () => {
     renderRow({ tvgId: 'espn.us', tvgName: 'ESPN', epgSourceName: null });
     const subtitle = screen.getByTestId('channel-tvg-info-42');
-    expect(subtitle).toHaveTextContent('espn.us · ESPN');
+    expect(subtitle).toHaveTextContent(/^ESPN$/);
     expect(subtitle).toHaveAttribute('title', 'TVG ID: espn.us · TVG Name: ESPN');
   });
 });
@@ -233,6 +237,60 @@ describe('ChannelListItem — resolution capability pills', () => {
     // Subtitle hides during editing, but capability pills are not name-gated.
     expect(screen.queryByTestId('channel-tvg-info-42')).not.toBeInTheDocument();
     expect(screen.getByTestId('channel-capabilities-42')).toBeInTheDocument();
+  });
+});
+
+describe('ChannelListItem — canonical identity and compact health summary', () => {
+  it('renders number and channel name in separate aligned fields without a hash prefix', () => {
+    renderRow();
+    expect(document.querySelector('.channel-number-col')).toHaveTextContent(/^7$/);
+    expect(document.querySelector('.channel-name')).toHaveTextContent(/^ESPN HD$/);
+    expect(document.querySelector('.channel-number-col')).not.toHaveTextContent('#');
+  });
+
+  it('shows the missing-logo placeholder only when no artwork URL exists and hides broken artwork', () => {
+    const { rerender } = renderRow();
+    expect(document.querySelector('.channel-logo-placeholder .material-icons')).toHaveTextContent('image');
+    rerender(
+      <DndContext><SortableContext items={[42]}>
+        <ChannelListItem {...({
+          ...makeRowProps(),
+          logoUrl: '/artwork.png',
+        })} />
+      </SortableContext></DndContext>,
+    );
+    const image = document.querySelector('.channel-logo') as HTMLImageElement;
+    expect(image).toBeInTheDocument();
+    expect(document.querySelector('.channel-logo-placeholder')).not.toBeInTheDocument();
+    fireEvent.error(image);
+    expect(image).toHaveStyle({ display: 'none' });
+  });
+
+  it.each([
+    ['no streams', {}, 'warning', 'No streams assigned'],
+    ['failed probe', { hasFailedStreams: true }, 'error', '1 stream; failed probe'],
+    ['stale', { hasStaleStreams: true, staleStreamCount: 1 }, 'history', '1 stream; stale'],
+    ['black screen', { hasBlackScreenStreams: true }, 'videocam_off', '1 stream; black screen'],
+    ['low FPS', { hasLowFpsStreams: true }, 'slow_motion_video', '1 stream; low FPS'],
+    ['healthy', {}, 'lan', '1 stream; healthy'],
+  ])('renders one non-color-only summary for %s', (_name, flags, icon, label) => {
+    const streams = _name === 'no streams' ? [] : [1];
+    renderRow({ channel: { ...makeChannel(), streams }, ...flags });
+    const summary = screen.getByLabelText(label);
+    expect(summary.querySelectorAll('.material-icons')).toHaveLength(1);
+    expect(summary.querySelector('.material-icons')).toHaveTextContent(icon);
+    expect(summary).toHaveTextContent(String(streams.length));
+  });
+
+  it('applies deterministic precedence failed > stale > black screen > low FPS', () => {
+    renderRow({
+      channel: { ...makeChannel(), streams: [1, 2] },
+      hasFailedStreams: true,
+      hasStaleStreams: true,
+      hasBlackScreenStreams: true,
+      hasLowFpsStreams: true,
+    });
+    expect(screen.getByLabelText('2 streams; failed probe').querySelector('.material-icons')).toHaveTextContent('error');
   });
 });
 
@@ -358,6 +416,29 @@ describe('ChannelListItem — keyboard-operable row selector (bead enhancedchann
     renderRow({ isEditMode: true, isMultiSelected: false });
     const selector = screen.getByRole('checkbox', { name: 'Select channel ESPN HD' });
     expect(selector.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
+  });
+});
+
+describe('ChannelListItem — channel actions menu', () => {
+  it('opens from the keyboard, uses iconized menuitems, and Escape closes with focus return', async () => {
+    const user = userEvent.setup();
+    renderRow({
+      channel: { ...makeChannel(), streams: [1] },
+      isEditMode: true,
+      onProbeChannel: vi.fn(),
+      onPreviewChannel: vi.fn(),
+    });
+    const trigger = screen.getByRole('button', { name: 'Channel actions' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const menu = screen.getByRole('menu', { name: 'Channel actions' });
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.length).toBeGreaterThan(2);
+    expect(items.every((item) => item.querySelector('.material-icons'))).toBe(true);
+    expect(items[0]).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });
 

@@ -140,7 +140,32 @@ const ChannelMenu = memo(function ChannelMenu({
       // Position above the button instead of below
       el.style.top = `${Math.max(0, menuPosition.top - rect.height - (btnRef.current?.getBoundingClientRect().height ?? 0) - 4)}px`;
     }
+    el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
   }, [menuOpen, menuPosition]);
+
+  const closeMenu = (returnFocus = false) => {
+    setMenuOpen(false);
+    if (returnFocus) btnRef.current?.focus();
+  };
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = [...(dropdownRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu(true);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
+  };
 
   const hasStreams = channel.streams && channel.streams.length > 0;
   const hasAnyItem = hasStreams || channelUrl || isEditMode;
@@ -154,7 +179,7 @@ const ChannelMenu = memo(function ChannelMenu({
         onClick={(e) => {
           e.stopPropagation();
           if (menuOpen) {
-            setMenuOpen(false);
+            closeMenu();
           } else {
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
             setMenuPosition({ top: rect.bottom + 2, left: rect.right });
@@ -169,13 +194,18 @@ const ChannelMenu = memo(function ChannelMenu({
       {menuOpen && menuPosition && createPortal(
         <div
           className="channel-menu-dropdown"
+          role="menu"
+          aria-label="Channel actions"
           ref={dropdownRef}
           style={{ top: menuPosition.top, left: menuPosition.left }}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={handleMenuKeyDown}
         >
           {onProbeChannel && hasStreams && (
             <button
               className={`channel-menu-item ${isProbing ? 'loading' : ''}`}
+              role="menuitem"
+              title={isProbing ? 'Probing channel streams' : 'Probe channel streams'}
               onClick={() => { setMenuOpen(false); onProbeChannel(); }}
               disabled={isProbing}
             >
@@ -188,6 +218,8 @@ const ChannelMenu = memo(function ChannelMenu({
           {onPreviewChannel && hasStreams && (
             <button
               className="channel-menu-item"
+              role="menuitem"
+              title="Preview channel"
               onClick={() => { setMenuOpen(false); onPreviewChannel(); }}
             >
               <span className="material-icons">visibility</span>
@@ -197,6 +229,8 @@ const ChannelMenu = memo(function ChannelMenu({
           {channelUrl && (
             <button
               className="channel-menu-item"
+              role="menuitem"
+              title="Open channel in VLC"
               onClick={() => { setMenuOpen(false); openInVLC(channelUrl, channel.name); }}
             >
               <span className="material-icons">play_circle</span>
@@ -206,6 +240,8 @@ const ChannelMenu = memo(function ChannelMenu({
           {onCopyChannelUrl && (
             <button
               className="channel-menu-item"
+              role="menuitem"
+              title="Copy channel URL"
               onClick={() => { setMenuOpen(false); onCopyChannelUrl(); }}
             >
               <span className="material-icons">content_copy</span>
@@ -217,6 +253,8 @@ const ChannelMenu = memo(function ChannelMenu({
               <div className="channel-menu-divider" />
               <button
                 className="channel-menu-item"
+                role="menuitem"
+                title="Edit channel"
                 onClick={() => { setMenuOpen(false); onEditChannel(); }}
               >
                 <span className="material-icons">edit</span>
@@ -224,6 +262,8 @@ const ChannelMenu = memo(function ChannelMenu({
               </button>
               <button
                 className="channel-menu-item danger"
+                role="menuitem"
+                title="Delete channel"
                 onClick={() => { setMenuOpen(false); onDelete(); }}
               >
                 <span className="material-icons">delete</span>
@@ -317,16 +357,37 @@ export const ChannelListItem = memo(function ChannelListItem({
     }
   };
 
-  const showTvgInfo = Boolean((tvgId || tvgName) && !isEditingName);
+  const showTvgInfo = Boolean(tvgName && !isEditingName);
   const hasCapabilities = capabilities.length > 0;
   const showLine2 = showTvgInfo || hasCapabilities;
 
   const streamCount = channel.streams.length;
-  const streamCountLabel = `${streamCount} stream${streamCount !== 1 ? 's' : ''}`;
-  // Healthy channels (streams present, no probe problem) show a neutral
-  // sources icon; problem states keep their existing status icon below.
-  const showNeutralStreamsIcon =
-    streamCount > 0 && !hasFailedStreams && !hasBlackScreenStreams && !hasLowFpsStreams && !hasStaleStreams;
+  const streamCountText = `${streamCount} stream${streamCount !== 1 ? 's' : ''}`;
+  const health = streamCount === 0
+    ? { key: 'no-streams', icon: 'warning', label: 'No streams assigned', detail: 'No streams assigned' }
+    : hasFailedStreams
+      ? { key: 'failed', icon: 'error', label: `${streamCountText}; failed probe`, detail: 'One or more streams failed probe' }
+      : hasStaleStreams
+        ? {
+            key: 'stale',
+            icon: 'history',
+            label: `${streamCountText}; stale`,
+            detail: `${staleStreamCount > 0 ? staleStreamCount : 'One or more'} stream${staleStreamCount === 1 ? '' : 's'} no longer listed by provider (stale)`,
+          }
+        : hasBlackScreenStreams
+          ? { key: 'black-screen', icon: 'videocam_off', label: `${streamCountText}; black screen`, detail: 'One or more streams detected as black screen' }
+          : hasLowFpsStreams
+            ? { key: 'low-fps', icon: 'slow_motion_video', label: `${streamCountText}; low FPS`, detail: 'One or more streams have low FPS' }
+            : { key: 'healthy', icon: 'lan', label: `${streamCountText}; healthy`, detail: `${streamCountText}; healthy` };
+  const healthIconClass = health.key === 'no-streams'
+    ? 'warning-icon'
+    : health.key === 'healthy'
+      ? 'streams-count-icon'
+      : health.key === 'failed'
+        ? 'failed-stream-icon'
+        : health.key === 'stale'
+          ? 'stale-stream-icon'
+          : `${health.key}-icon`;
 
   return (
     <div
@@ -484,7 +545,7 @@ export const ChannelListItem = memo(function ChannelListItem({
                 title={[epgSourceName && `EPG: ${epgSourceName}`, tvgId && `TVG ID: ${tvgId}`, tvgName && `TVG Name: ${tvgName}`].filter(Boolean).join(' · ')}
                 data-testid={`channel-tvg-info-${channel.id}`}
               >
-                {[epgSourceName, tvgId, tvgName].filter(Boolean).join(' · ')}
+                {epgSourceName ? `${epgSourceName} – ${tvgName}` : tvgName}
               </span>
             )}
             {hasCapabilities && (
@@ -500,30 +561,15 @@ export const ChannelListItem = memo(function ChannelListItem({
         )}
       </div>
       <span
-        className={`channel-streams-count ${channel.streams.length === 0 ? 'no-streams' : ''} ${hasFailedStreams ? 'has-failed' : hasStaleStreams ? 'has-stale' : hasBlackScreenStreams ? 'has-black-screen' : hasLowFpsStreams ? 'has-low-fps' : ''}`}
-        title={streamCountLabel}
+        className={`channel-streams-count ${health.key === 'no-streams' ? 'no-streams' : ''} ${health.key !== 'healthy' && health.key !== 'no-streams' ? `has-${health.key}` : ''}`}
+        title={health.detail}
+        aria-label={health.label}
       >
-        {channel.streams.length === 0 && <span className="material-icons warning-icon">warning</span>}
-        {hasFailedStreams && channel.streams.length > 0 && (
-          <span className="material-icons failed-stream-icon" title="One or more streams failed probe">error</span>
-        )}
-        {!hasFailedStreams && hasStaleStreams && channel.streams.length > 0 && (
-          <span
-            className="material-icons stale-stream-icon"
-            title={`${staleStreamCount > 0 ? staleStreamCount : 'One or more'} stream${staleStreamCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
-          >
-            history
-          </span>
-        )}
-        {!hasFailedStreams && !hasStaleStreams && hasBlackScreenStreams && channel.streams.length > 0 && (
-          <span className="material-icons black-screen-icon" title="One or more streams detected as black screen">videocam_off</span>
-        )}
-        {!hasFailedStreams && !hasStaleStreams && !hasBlackScreenStreams && hasLowFpsStreams && channel.streams.length > 0 && (
-          <span className="material-icons low-fps-icon" title="One or more streams have low FPS">slow_motion_video</span>
-        )}
-        {showNeutralStreamsIcon && (
-          <span className="material-icons streams-count-icon">lan</span>
-        )}
+        <span
+          className={`material-icons ${healthIconClass}`}
+          title={health.detail}
+          aria-hidden="true"
+        >{health.icon}</span>
         {channel.streams.length}
       </span>
       <ChannelMenu
