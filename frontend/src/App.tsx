@@ -141,6 +141,10 @@ function App() {
 
   // Streams state
   const [streams, setStreams] = useState<Stream[]>([]);
+  // Read the latest committed inventory inside stable async callbacks. Using
+  // `streams` directly there captures the render that created the callback,
+  // so a later group failure could miss rows loaded by an earlier group.
+  const streamsSnapshotRef = useRef<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
 
@@ -1181,7 +1185,7 @@ function App() {
     setStreamSourceStates((current) => ({
       ...current,
       [sourceKey]: {
-        ...(current[sourceKey] ?? { hasSnapshot: streams.length > 0 }),
+        ...(current[sourceKey] ?? { hasSnapshot: streamsSnapshotRef.current.length > 0 }),
         state: 'loading',
       },
     }));
@@ -1194,6 +1198,7 @@ function App() {
         channelGroup: query.groupFilter ?? undefined,
         signal,
       });
+      streamsSnapshotRef.current = response.results;
       setStreams(response.results);
       setStreamMatchingTotal(response.count);
       loadedStreamGroupsRef.current.clear();
@@ -1244,6 +1249,9 @@ function App() {
     groupName: string,
     force = false,
     search = streamFilters.search,
+    provider = streamFilters.selectedProviders.length === 1
+      ? streamFilters.selectedProviders[0]
+      : streamFilters.providerFilter,
   ) => {
     // Skip if this group's streams are already loaded
     if (!force && loadedStreamGroupsRef.current.has(groupName)) {
@@ -1251,12 +1259,17 @@ function App() {
     }
 
     const sourceKey = `group:${groupName}`;
-    const query = { groupName, search };
-    streamRetryOperations.current[sourceKey] = () => loadStreamGroup(query.groupName, true, query.search);
+    const query = { groupName, search, provider };
+    streamRetryOperations.current[sourceKey] = () => loadStreamGroup(
+      query.groupName,
+      true,
+      query.search,
+      query.provider,
+    );
     setStreamSourceStates((current) => ({
       ...current,
       [sourceKey]: {
-        ...(current[sourceKey] ?? { hasSnapshot: streams.length > 0 }),
+        ...(current[sourceKey] ?? { hasSnapshot: streamsSnapshotRef.current.length > 0 }),
         state: 'loading',
       },
     }));
@@ -1276,6 +1289,7 @@ function App() {
           pageSize: 500,
           channelGroup: groupName,
           search: query.search || undefined,
+          m3uAccount: query.provider ?? undefined,
         });
         allGroupStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -1286,7 +1300,9 @@ function App() {
       setStreams(prevStreams => {
         const existingIds = new Set(prevStreams.map(s => s.id));
         const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
-        return [...prevStreams, ...newStreams];
+        const nextStreams = [...prevStreams, ...newStreams];
+        streamsSnapshotRef.current = nextStreams;
+        return nextStreams;
       });
       rememberSeenStreams(allGroupStreams);
       setStreamSourceStates((current) => ({
@@ -1307,7 +1323,12 @@ function App() {
         }));
       }
     }
-  }, [streamFilters.search, rememberSeenStreams]);
+  }, [
+    streamFilters.search,
+    streamFilters.providerFilter,
+    streamFilters.selectedProviders,
+    rememberSeenStreams,
+  ]);
 
   // Reload channels when search changes
   useEffect(() => {

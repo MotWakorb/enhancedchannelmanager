@@ -450,6 +450,66 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.locator('.streams-pane')).toHaveCount(0)
   })
 
+  test('Channel Manager retains group A while exact-query retry recovers failed group B', async ({ page }) => {
+    await seedChannelWorkspace(page, false)
+    await page.route(/\/api\/stream-groups(?:\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { name: 'Provider Group A', count: 1 },
+        { name: 'Provider Group B', count: 1 },
+      ]),
+    }))
+    let groupBAttempts = 0
+    const seenGroupBQueries: string[] = []
+    await page.route(/\/api\/streams(?:\?|$)/, (route) => {
+      const url = new URL(route.request().url())
+      const group = url.searchParams.get('channel_group_name')
+      if (!group) return route.fallback()
+      const result = {
+        id: group === 'Provider Group A' ? 701 : 702,
+        name: `${group} retained stream`,
+        url: `https://example.invalid/${group}`,
+        m3u_account: 3,
+        channel_group: null,
+        channel_group_name: group,
+        is_custom: false,
+      }
+      if (group === 'Provider Group B') {
+        groupBAttempts += 1
+        seenGroupBQueries.push(url.search)
+        if (groupBAttempts === 1) {
+          return route.fulfill({
+            status: 503,
+            contentType: 'application/json',
+            body: JSON.stringify({ detail: 'Group B unavailable' }),
+          })
+        }
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ count: 1, next: null, previous: null, results: [result] }),
+      })
+    })
+    await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
+    await page.locator('.streams-pane').getByRole('button', { name: /All Providers/ }).click()
+    await page.getByRole('checkbox', { name: 'Fixture Provider' }).check()
+    await page.getByRole('button', { name: /^Other/ }).click()
+    await page.getByRole('button', { name: /Provider Group A/ }).click()
+    await expect(page.getByText('Provider Group A retained stream')).toBeVisible()
+    await page.getByRole('button', { name: /Provider Group B/ }).click()
+    await expect(page.getByText('Streams unavailable — showing previously loaded data')).toBeVisible()
+    await expect(page.getByText('Provider Group A retained stream')).toBeVisible()
+    await page.getByRole('button', { name: 'Retry loading streams' }).click()
+    await expect(page.getByText('Provider Group B retained stream')).toBeVisible()
+    expect(groupBAttempts).toBe(2)
+    for (const query of seenGroupBQueries) {
+      expect(query).toContain('channel_group_name=Provider+Group+B')
+      expect(query).toContain('m3u_account=3')
+    }
+  })
+
   test('Channel Manager gives a named scoped error and recovers through Retry', async ({ page }) => {
     await seedChannelWorkspace(page, false)
     let attempts = 0
