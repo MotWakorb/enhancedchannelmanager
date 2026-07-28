@@ -260,10 +260,21 @@
   min-height: 18rem;
 }
 
+/* The route header is a band, not a pane: it has its own background and its
+   own bottom border, and it is the only `.page-header` in the app that pays
+   for its own padding (the shared rule's `margin-bottom` is zeroed here).
+   Its block padding is therefore read off the chrome above it rather than
+   picked. The 45px top bar is `--header-band-padding-block: 0.5rem` around a
+   28px control; the route header carries content rather than chrome, so it
+   takes one step more of the spacing scale — 0.75rem (--space-6). At the
+   1rem it had before, 32px of block padding wrapped 45.5px of text and the
+   band read as mostly empty (bead enhancedchannelmanager-sl7dx).
+   The inline 1.5rem is the pane gutter and is unrelated to the vertical
+   budget; it stays aligned with the content beneath. */
 .main > .route-page-header {
   flex: 0 0 auto;
   margin: 0;
-  padding: 1rem 1.5rem;
+  padding: 0.75rem 1.5rem;
   border-bottom: 1px solid var(--border-primary);
   background: var(--bg-secondary);
 }
@@ -289,8 +300,10 @@
 }
 
 @media (max-width: 1280px), (max-height: 800px) {
+  /* At the breakpoint written to recover working height the band drops to
+     the chrome value itself — the same 0.5rem the top bar uses. */
   .main > .route-page-header {
-    padding: 0.625rem 1rem;
+    padding: 0.5rem 1rem;
   }
 
   .operator-dashboard {

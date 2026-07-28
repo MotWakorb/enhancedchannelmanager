@@ -14,13 +14,20 @@
    Priorities" report (bead enhancedchannelmanager-sccol): the status box
    ended at 1245.31 and the Save Priorities button began at 1245.31. A gap
    guarantees separation whatever the row does. */
+/* `row-gap` is the whole of the separation between wrapped header lines —
+   the actions cluster when it drops, a controls toolbar, the meta row. It is
+   0.5rem at every width (bead enhancedchannelmanager-sl7dx): the compact
+   breakpoint already ran at 0.5rem and shipped, and a header whose lines are
+   a 30px button row and a filter toolbar does not need more air between them
+   than the 24px `column-gap` already puts beside them. Holding one value here
+   is also what lets the breakpoint stop restating it. */
 .page-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   flex-wrap: wrap;
   column-gap: 1.5rem;
-  row-gap: 0.75rem;
+  row-gap: 0.5rem;
   margin-bottom: 1.5rem;
 }
 
@@ -104,7 +111,13 @@
 /* The meta row: everything in the header that is read rather than operated.
    Full width under the identity + actions row, left-aligned with the title.
    `baseline` keeps the status text and the link text on one optical line
-   even when a route puts a taller stat cluster in the status slot. */
+   even when a route puts a taller stat cluster in the status slot.
+   No `margin-top`: `flex-basis: 100%` already makes this its own flex line,
+   so the header's `row-gap` separates it exactly as it separates every other
+   wrapped line. The 0.25rem it used to add on top of that gap made this one
+   line cost more than the others for no reason anybody could name, and the
+   compact breakpoint had to zero it again to undo the compounding (bead
+   enhancedchannelmanager-sl7dx). */
 .page-header-meta {
   display: flex;
   align-items: baseline;
@@ -113,15 +126,16 @@
   row-gap: 0.5rem;
   flex-basis: 100%;
   min-width: 0;
-  margin-top: 0.25rem;
 }
 
 /* An empty meta row is not free. `flex-basis: 100%` makes it its own flex
-   line, so a zero-height row still spends the header's `row-gap` (12px) plus
-   its own `margin-top` (4px) — 16px of blank band under the title. That was
-   already the case on every route that fills neither slot (Dashboard, Channel
-   Manager, Guide) and became the common case once the M3U/EPG source counters
-   were removed (bead enhancedchannelmanager-tygwm).
+   line, so a zero-height row still spends the header's `row-gap` — 8px of
+   blank band under the title, and 16px before bead
+   enhancedchannelmanager-sl7dx, when the gap was 12px and this row carried a
+   4px `margin-top` of its own on top of it. That was already the case on
+   every route that fills neither slot (Dashboard, Channel Manager, Guide) and
+   became the common case once the M3U/EPG source counters were removed
+   (bead enhancedchannelmanager-tygwm).
    PageHeader cannot decide this in JS: the route header's status is a portal
    target (App.tsx `route-page-status-outlet`), so whether a tab has filled it
    is only known to the DOM. `:empty` on the outlet is where that fact lives.
@@ -161,12 +175,14 @@
  * chrome and collapsing explanatory copy to one recoverable line; the full
  * text remains in the DOM and in its native title tooltip. Actions, status,
  * and controls continue in DOM order and wrap instead of being hidden.
+ *
+ * The header `row-gap` and the meta row's `margin-top` used to be restated
+ * here. Both now hold one value at every width (bead
+ * enhancedchannelmanager-sl7dx), so this block no longer has to undo the
+ * base rule — what is left is the copy collapse and the tighter wrap gaps,
+ * which are genuinely breakpoint behaviour.
  */
 @media (max-width: 1280px), (max-height: 800px) {
-  .route-page-header.page-header {
-    row-gap: 0.5rem;
-  }
-
   .route-page-header .header-description {
     max-width: 72ch;
     overflow: hidden;
@@ -175,7 +191,6 @@
   }
 
   .route-page-header .page-header-meta {
-    margin-top: 0;
     row-gap: 0.25rem;
   }
 

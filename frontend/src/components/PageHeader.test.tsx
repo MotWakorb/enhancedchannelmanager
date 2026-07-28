@@ -217,6 +217,47 @@ describe('PageHeader', () => {
     expect(bare).toContain('margin-bottom: 0.5rem;');
   });
 
+  // Bead enhancedchannelmanager-sl7dx. The route header is a chrome band: it
+  // is the only `.page-header` that sets its own padding, and at `1rem` it
+  // spent 32px of block padding around 45.5px of text. The app's other band —
+  // the 45px top bar — is built from `--header-band-padding-block: 0.5rem`
+  // around a 28px control, so the route header now sits exactly one step of
+  // the spacing scale above the chrome idiom (0.75rem) and drops to the chrome
+  // value itself at the breakpoint written to recover working height.
+  it('pads the route header band one step above the chrome band, not a bare 1rem', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/App.css'), 'utf8');
+    const band = /^\.main > \.route-page-header \{$[^}]*\}/m.exec(app)?.[0];
+    expect(band).toBeDefined();
+    expect(band).toContain('padding: 0.75rem 1.5rem;');
+
+    const compact = /^@media \(max-width: 1280px\), \(max-height: 800px\) \{[\s\S]*?^\}/m.exec(app)?.[0];
+    expect(compact).toBeDefined();
+    expect(compact).toMatch(/\.main > \.route-page-header \{\s*padding: 0\.5rem 1rem;/);
+  });
+
+  // Bead enhancedchannelmanager-sl7dx. A wrapped header line (the actions
+  // cluster, a controls toolbar, the meta row) is separated by the header's
+  // own `row-gap` and by nothing else. The meta row used to add a 0.25rem
+  // `margin-top` on top of that gap, so its separation was 16px where every
+  // other wrapped line got 12px — and the compact breakpoint then had to
+  // restate both values to undo the compounding. One gap, one place.
+  it('spaces wrapped header lines with one row-gap and no compounding meta margin', () => {
+    const header = readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8');
+
+    const row = /^\.page-header \{$[^}]*\}/m.exec(header)?.[0];
+    expect(row).toBeDefined();
+    expect(row).toContain('row-gap: 0.5rem;');
+
+    const meta = /^\.page-header-meta \{$[^}]*\}/m.exec(header)?.[0];
+    expect(meta).toBeDefined();
+    expect(meta).not.toMatch(/margin-top/);
+
+    const compact = /^@media \(max-width: 1280px\), \(max-height: 800px\) \{[\s\S]*?^\}/m.exec(header)?.[0];
+    expect(compact).toBeDefined();
+    expect(compact).not.toMatch(/\.route-page-header\.page-header \{/);
+    expect(compact).not.toMatch(/margin-top/);
+  });
+
   it('renders a heading-only header with no description, actions or meta row', () => {
     const { container } = render(<PageHeader className="page-header-heading-only" title="EPG Sources" />);
 

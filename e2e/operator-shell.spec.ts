@@ -1227,8 +1227,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
             noMainXOverflow: main.scrollWidth <= main.clientWidth + 1,
           }
         })
+        // This is a working-height budget — chrome must not eat the work area —
+        // not a spacing pin; the header's exact padding and row-gap are pinned
+        // against the stylesheets in PageHeader.test.tsx. Bead
+        // enhancedchannelmanager-sl7dx moved both ceilings down by exactly what
+        // the worst-case route (M3U Changes) reclaimed at each viewport, 20px at
+        // 1920x1080 and 4px at 1280x720, so the budget keeps the same 24.78px /
+        // 18.78px of headroom it has always carried rather than silently
+        // loosening by the width of the reclaim.
         expect(budget.headerHeight, `${consumer.name} route chrome must preserve working height`).toBeLessThanOrEqual(
-          viewport.height === 720 ? 260 : 290,
+          viewport.height === 720 ? 256 : 270,
         )
         expect(budget.descriptionRecoverable).toBe(true)
         if (viewport.height === 720) expect(budget.descriptionSingleLine).toBe(true)
