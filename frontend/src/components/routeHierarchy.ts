@@ -50,11 +50,17 @@ export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
     [{ href: '#settings/channel-defaults', label: 'Channel default settings' }],
   ),
   guide: route('OPERATIONS', 'guide', 'Review scheduled programming across the active channel lineup.'),
+  // No related-settings link. `#settings/linked-accounts` is a standing Settings
+  // destination in its own right — it has a navigation entry of its own, and the
+  // per-account case is covered by the account list's own "Manage Links" action —
+  // so the header link was a third path to a page that was never at risk of being
+  // orphaned (bead enhancedchannelmanager-hmr0e). Dropping it also leaves the
+  // header's meta row with no occupant, which is what lets PageHeader.css collapse
+  // it here for the first time.
   'm3u-manager': route(
     'OPERATIONS',
     'm3u-manager',
     'Configure and maintain provider playlists and their account connections.',
-    [{ href: '#settings/linked-accounts', label: 'Linked account settings' }],
   ),
   'epg-manager': route('OPERATIONS', 'epg-manager', 'Configure the programme-guide sources used to enrich channels.'),
   'logo-manager': route('OPERATIONS', 'logo-manager', 'Organize and maintain artwork used throughout the channel lineup.'),

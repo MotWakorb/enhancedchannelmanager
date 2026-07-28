@@ -125,7 +125,10 @@
    PageHeader cannot decide this in JS: the route header's status is a portal
    target (App.tsx `route-page-status-outlet`), so whether a tab has filled it
    is only known to the DOM. `:empty` on the outlet is where that fact lives.
-   Scoped to leave the row standing whenever it has a related link. */
+   Scoped to leave the row standing whenever it has a related link — which is
+   why M3U Manager, the one route still declaring one, kept its 16px band until
+   that link was dropped (bead enhancedchannelmanager-hmr0e). Channel Manager,
+   Channel Pipeline and M3U Changes still declare links and still stand. */
 .page-header-meta:has(> .page-header-status > .route-page-status-outlet:empty):not(:has(> .page-header-related-links)) {
   display: none;
 }

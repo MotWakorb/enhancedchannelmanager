@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PageHeader } from './PageHeader';
-import { isPlainPrimaryActivation } from './routeHierarchy';
+import { isPlainPrimaryActivation, ROUTE_HIERARCHY } from './routeHierarchy';
 
 describe('PageHeader', () => {
   it('renders the primary page hierarchy with one semantic h1', () => {
@@ -70,20 +70,26 @@ describe('PageHeader', () => {
   // Save Priorities on either side. The header now separates what is
   // operated (row one) from what is read (the meta row), so the status
   // travels with the related links.
+  //
+  // Posed on M3U Changes rather than M3U Manager: M3U Manager no longer declares
+  // a related-settings link (bead enhancedchannelmanager-hmr0e), and a test that
+  // hands PageHeader a link the route does not have pins a composition nothing
+  // renders. M3U Changes still fills both meta slots, so the ordering it asserts
+  // is one the app actually produces.
   it('orders primary action, controls, then a meta row of status and contextual links', () => {
     render(
       <PageHeader
-        title="M3U Manager"
-        actions={<button type="button">Add M3U Account</button>}
+        title="M3U Changes"
+        actions={<button type="button">Refresh</button>}
         status={<span>Refreshing provider data…</span>}
         controls={<label>View <select><option>All accounts</option></select></label>}
-        relatedLinks={[{ href: '#settings/linked-accounts', label: 'Linked account settings' }]}
+        relatedLinks={[{ href: '#settings/m3u-digest', label: 'M3U digest settings' }]}
       />,
     );
-    const action = screen.getByRole('button', { name: 'Add M3U Account' });
+    const action = screen.getByRole('button', { name: 'Refresh' });
     const status = screen.getByText('Refreshing provider data…');
     const controls = screen.getByRole('combobox', { name: 'View' });
-    const link = screen.getByRole('link', { name: 'Linked account settings' });
+    const link = screen.getByRole('link', { name: 'M3U digest settings' });
     for (const [before, after] of [[action, controls], [controls, status], [status, link]]) {
       expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
@@ -168,6 +174,35 @@ describe('PageHeader', () => {
     expect(collapse).toContain('.route-page-status-outlet:empty');
     expect(collapse).toContain(':not(:has(> .page-header-related-links))');
     expect(collapse).toContain('display: none;');
+  });
+
+  // Bead enhancedchannelmanager-hmr0e. tygwm's collapse was scoped to stand down
+  // wherever the row still held a related link, and M3U Manager was the one route
+  // keeping one — so the route the collapse was written for was the one route it
+  // never reached. Rather than re-assert the selector text, compose the header the
+  // way App.tsx composes it per route (status is the portal outlet div; the links
+  // come from ROUTE_HIERARCHY) and run the stylesheet's own selector against the
+  // rendered DOM. That fails if either the route data or the selector moves, and
+  // Channel Manager is carried alongside as the negative: it still has a link, so
+  // its row must keep standing.
+  it.each([
+    ['m3u-manager', true],
+    ['channel-manager', false],
+  ] as const)('collapses the empty %s meta row: %s', (tab, collapses) => {
+    const header = readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8');
+    const selector = /^(\.page-header-meta:has\([^{]*?)\s*\{/m.exec(header)?.[1];
+    expect(selector).toBeDefined();
+
+    const { container } = render(
+      <PageHeader
+        title={tab}
+        status={<div className="route-page-status-outlet" />}
+        relatedLinks={ROUTE_HIERARCHY[tab].settingsLinks}
+      />,
+    );
+
+    expect(container.querySelector('.page-header-meta')).not.toBeNull();
+    expect(container.querySelector(selector as string) !== null).toBe(collapses);
   });
 
   // Bead enhancedchannelmanager-7dxx0. A PageHeader carrying only a heading

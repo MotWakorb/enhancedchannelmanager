@@ -25,10 +25,17 @@ describe('primary route hierarchy', () => {
     const links = Object.values(ROUTE_HIERARCHY).flatMap((route) => route.settingsLinks ?? []);
     expect(links.map((link) => link.href)).toEqual([
       '#settings/channel-defaults',
-      '#settings/linked-accounts',
       '#settings/channel-pipeline',
       '#settings/m3u-digest',
     ]);
+    // Bead enhancedchannelmanager-hmr0e removed M3U Manager's
+    // `#settings/linked-accounts` link. Pinned by route rather than left to the
+    // list above, so a re-add has to argue with a named expectation instead of
+    // quietly extending an array: Linked Accounts carries its own Settings
+    // navigation entry and the account list's own "Manage Links" action, so the
+    // header link was a third path to a page that was never at risk of being
+    // orphaned.
+    expect(ROUTE_HIERARCHY['m3u-manager'].settingsLinks).toBeUndefined();
   });
 
   it.each([
