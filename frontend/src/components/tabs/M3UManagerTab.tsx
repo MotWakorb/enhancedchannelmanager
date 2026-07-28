@@ -850,7 +850,7 @@ export function M3UManagerTab({
           <SourceLoadStatus
             state={sourceLoadState}
             sourceName="provider accounts"
-            successText={`${accounts.length} provider accounts`}
+            successText=""
           />
         </RouteHeaderSlot>
         <div className="tab-loading">
@@ -891,19 +891,29 @@ export function M3UManagerTab({
           Add M3U Account
         </button>
       </RouteHeaderSlot>
-      <RouteHeaderSlot name="status">
-        {anyRefreshing
-          ? <span>Provider refresh in progress</span>
-          : (
-            <SourceLoadStatus
-              state={sourceLoadState}
-              sourceName="provider accounts"
-              successText={`${accounts.length} provider account${accounts.length === 1 ? '' : 's'}`}
-              stale={sourceLoadState === 'error'}
-              onRetry={loadData}
-            />
-          )}
-      </RouteHeaderSlot>
+      {/* A healthy, loaded M3U Manager says nothing here. The slot used to
+          carry "N provider accounts"; the accounts are listed directly below
+          it, so the count restated what the page already showed (bead
+          enhancedchannelmanager-tygwm). What remains is only the states the
+          list itself cannot express: a refresh in flight, and a stale list
+          behind a failed reload with its scoped Retry. Rendering the slot
+          conditionally rather than rendering an empty one keeps the header's
+          meta row collapsible — see PageHeader.css. */}
+      {(anyRefreshing || sourceLoadState !== 'success') && (
+        <RouteHeaderSlot name="status">
+          {anyRefreshing
+            ? <span>Provider refresh in progress</span>
+            : (
+              <SourceLoadStatus
+                state={sourceLoadState}
+                sourceName="provider accounts"
+                successText=""
+                stale={sourceLoadState === 'error'}
+                onRetry={loadData}
+              />
+            )}
+        </RouteHeaderSlot>
+      )}
       <RouteHeaderSlot name="controls">
         <DenseToolbar
           label="M3U account controls"

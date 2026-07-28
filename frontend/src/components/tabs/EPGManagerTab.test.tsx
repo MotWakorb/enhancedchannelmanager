@@ -151,7 +151,12 @@ describe('EPGManagerTab — source lifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading EPG sources' }));
 
     expect(await screen.findByText('Recovered EPG')).toBeVisible();
-    expect(screen.getByText('1 EPG source')).toBeVisible();
+    // Same removal as M3U Manager (bead enhancedchannelmanager-tygwm): the
+    // healthy header no longer restates the source count, so recovery is
+    // proven by the failure status and its Retry going away.
+    expect(screen.queryByRole('status', { name: 'EPG sources unavailable' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry loading EPG sources' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d+ EPG sources?/)).not.toBeInTheDocument();
     expect(api.getEPGSources).toHaveBeenCalledTimes(2);
   });
 

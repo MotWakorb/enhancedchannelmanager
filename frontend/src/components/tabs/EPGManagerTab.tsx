@@ -1090,7 +1090,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
           <SourceLoadStatus
             state={sourceLoadState}
             sourceName="EPG sources"
-            successText="0 EPG sources"
+            successText=""
           />
         </RouteHeaderSlot>
         <div className="tab-loading">
@@ -1133,19 +1133,27 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
           Add Standard EPG
         </button>
       </RouteHeaderSlot>
-      <RouteHeaderSlot name="status">
-        {refreshingAll
-          ? <span>EPG refresh in progress</span>
-          : (
-            <SourceLoadStatus
-              state={sourceLoadState}
-              sourceName="EPG sources"
-              successText={`${sources.length} EPG source${sources.length === 1 ? '' : 's'}`}
-              stale={sourceLoadState === 'error'}
-              onRetry={loadSources}
-            />
-          )}
-      </RouteHeaderSlot>
+      {/* A healthy, loaded EPG Manager says nothing here — see the matching
+          comment in M3UManagerTab.tsx. "N EPG sources" restated the list
+          directly beneath it (bead enhancedchannelmanager-tygwm); the refresh
+          and stale-with-Retry states stay because the list cannot show them.
+          EPG Manager has no related links, so this is also the route that
+          leaves the header's meta row genuinely empty. */}
+      {(refreshingAll || sourceLoadState !== 'success') && (
+        <RouteHeaderSlot name="status">
+          {refreshingAll
+            ? <span>EPG refresh in progress</span>
+            : (
+              <SourceLoadStatus
+                state={sourceLoadState}
+                sourceName="EPG sources"
+                successText=""
+                stale={sourceLoadState === 'error'}
+                onRetry={loadSources}
+              />
+            )}
+        </RouteHeaderSlot>
+      )}
       <RouteHeaderSlot name="controls">
         <DenseToolbar
           label="EPG source controls"

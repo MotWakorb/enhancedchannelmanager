@@ -33,6 +33,7 @@ the number lives in one place.
 
 | Role | Token prefix | Size | Weight | Line-height | Other | Used for |
 |-|-|-|-|-|-|-|
+| Page title | `--type-page-title-*` | 20px (`--text-3xl`) | 700 | 1.3 | uppercase (from the string, not CSS) | the route title, e.g. `OPERATIONS / M3U MANAGER` |
 | Metric | `--type-metric-*` | 20px (`--text-3xl`) | 600 | 1.2 | — | the headline number on a stat/summary tile |
 | Section | `--type-section-*` | 15px | 600 | 1.3 | — | a heading inside a page |
 | Body | `--type-body-*` | 13px | 400 | 1.5 | — | running text, buttons, inputs, page descriptions |
@@ -47,6 +48,13 @@ rather than adding primitives nothing else consumes.
 
 Micro deliberately defines no line-height: micro labels take the line box of
 whatever they sit in.
+
+Page title and metric are both 20px. They are separate roles because they
+separate on weight and character: the title is 700 and uppercase, the metric
+is 600 and numeric, and the two never sit on the same line — the title is the
+first line of the route header, the metric is inside a tile in the pane below.
+Sizing them from one role would tie a later change to one of them to the
+other.
 
 ### Icon sizes
 
@@ -69,9 +77,14 @@ thing it labels (a status word is green or red; a column header is
 
 ### What is *not* in this scale
 
-The rail, the top band and the route page title are chrome and are frozen
-outside it: rail nav label 14px / rail icon 20px / rail width 244px, header
-band 45px with 28px controls, route page title 24px / 700.
+The rail and the top band are chrome and are frozen outside it: rail nav
+label 14px / rail icon 20px / rail width 244px, header band 45px with 28px
+controls.
+
+The route page title used to be listed here too, frozen at 24px / 700. Bead
+`enhancedchannelmanager-tygwm` moved it onto the scale at 20px — it sits
+inside the content column, above the pane it names, and at 24px it was larger
+than anything it introduced.
 
 ### Rollout status
 
@@ -83,7 +96,10 @@ remapped onto it: **M3U Manager** and **EPG Manager** (bead
 already apply everywhere. `.header-title h2` — the PageHeader section
 heading — joined them on the section role (bead
 `enhancedchannelmanager-meh0a`); it too applies everywhere, though every
-current render site happens to be on EPG Manager.
+current render site happens to be on EPG Manager. `.page-header
+.header-title h1` — the route title — joined on the page-title role (bead
+`enhancedchannelmanager-tygwm`) and applies to every route, not just the two
+remapped pages.
 
 Every other page still writes bare font sizes. Until the sweep finishes,
 "never write a bare `font-size`" is not yet a rule here; when you touch a

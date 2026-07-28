@@ -268,9 +268,19 @@
      instead of a raw size. Values are preset "P1" (bead
      enhancedchannelmanager-f4yc7). Each role points at the --text-* primitive
      that already carries its number; 15px and 13px have no primitive, so they
-     are written literally. The rail, the top band and the route title are
-     chrome, not content — they are deliberately outside this scale.
+     are written literally. The rail and the top band are chrome, not content —
+     they are deliberately outside this scale.
      See docs/css_guidelines.md § Typography. */
+
+  /* The route page title, e.g. "OPERATIONS / M3U MANAGER" — 20px.
+     Joined the scale in bead enhancedchannelmanager-tygwm. It had been frozen
+     outside it at 24px, written as a bare `1.5rem` in PageHeader.css, and read
+     oversized against a pane whose largest content type is the 20px metric.
+     Uppercase is not a token: the heading string arrives already uppercased
+     from routeHierarchy.ts, so no rule has to reassert it. */
+  --type-page-title-size: var(--text-3xl);
+  --type-page-title-weight: 700;
+  --type-page-title-line-height: 1.3;
 
   /* Headline number on a stat/summary tile — 20px */
   --type-metric-size: var(--text-3xl);

@@ -26,15 +26,17 @@
 
 /* The route title. `headingLevel={1}` is passed by exactly one caller — the
    shared route header in App.tsx — so this rule governs the route title and
-   nothing else. Size and weight stay at 24px/700; only the line box tightens,
-   from the inherited 1.5 (36px) to 1.3 (31.2px), which gives the header band
-   back ~5px without touching the type scale (bead
-   enhancedchannelmanager-qlc4h, on top of 57pp3/eupzi). */
+   nothing else. It is now the page-title role of the P1 scale rather than a
+   bare 24px: 20px/700/1.3 (bead enhancedchannelmanager-tygwm, superseding the
+   line-height-only tightening from qlc4h). The weight is written out because
+   the role owns it — relying on the UA's `h1 { font-weight: bold }` left the
+   700 undeclared and therefore invisible to anyone reading the scale. */
 .page-header .header-title h1 {
   margin: 0 0 0.25rem;
   color: var(--text-primary);
-  font-size: 1.5rem;
-  line-height: 1.3;
+  font-size: var(--type-page-title-size);
+  font-weight: var(--type-page-title-weight);
+  line-height: var(--type-page-title-line-height);
 }
 
 /* Route-header controls are compact (bead enhancedchannelmanager-sccol).
@@ -96,6 +98,20 @@
   flex-basis: 100%;
   min-width: 0;
   margin-top: 0.25rem;
+}
+
+/* An empty meta row is not free. `flex-basis: 100%` makes it its own flex
+   line, so a zero-height row still spends the header's `row-gap` (12px) plus
+   its own `margin-top` (4px) — 16px of blank band under the title. That was
+   already the case on every route that fills neither slot (Dashboard, Channel
+   Manager, Guide) and became the common case once the M3U/EPG source counters
+   were removed (bead enhancedchannelmanager-tygwm).
+   PageHeader cannot decide this in JS: the route header's status is a portal
+   target (App.tsx `route-page-status-outlet`), so whether a tab has filled it
+   is only known to the DOM. `:empty` on the outlet is where that fact lives.
+   Scoped to leave the row standing whenever it has a related link. */
+.page-header-meta:has(> .page-header-status > .route-page-status-outlet:empty):not(:has(> .page-header-related-links)) {
+  display: none;
 }
 
 .page-header-status {

@@ -94,7 +94,13 @@ describe('M3UManagerTab', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Retry loading provider accounts' }));
 
       expect(await screen.findByText('Recovered Provider')).toBeVisible();
-      expect(screen.getByText('1 provider account')).toBeVisible();
+      // Recovery used to be asserted through "1 provider account" in the route
+      // header. That count is gone (bead enhancedchannelmanager-tygwm) — it
+      // restated the list right below it — so recovery is now proven by the
+      // failure status and its Retry disappearing and the account rendering.
+      expect(screen.queryByRole('status', { name: 'Provider accounts unavailable' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry loading provider accounts' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/\d+ provider accounts?/)).not.toBeInTheDocument();
       expect(api.getM3UAccounts).toHaveBeenCalledTimes(2);
     });
 

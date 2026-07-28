@@ -2736,8 +2736,14 @@ test.describe('operator shell navigation behavior', () => {
 
     providerMode = 'healthy'
     await retry.click()
-    await expect(page.getByRole('status', { name: 'Provider accounts loaded' })).toBeVisible()
-    await expect(page.locator('.route-page-header').getByText('0 provider accounts', { exact: true })).toBeVisible()
+    // A recovered M3U Manager says nothing in its status slot: the route
+    // header used to confirm recovery with "0 provider accounts", and that
+    // count was removed in bead enhancedchannelmanager-tygwm. Recovery is now
+    // the failure status and its Retry clearing, and the header returning to
+    // its healthy primary action.
+    await expect(page.getByRole('status', { name: 'Provider accounts unavailable' })).toHaveCount(0)
+    await expect(retry).toHaveCount(0)
+    await expect(page.locator('.route-page-header').getByText(/\d+ provider accounts?/)).toHaveCount(0)
     await expect(page.locator('.route-page-header').getByRole('button', { name: 'Add M3U Account' })).toBeVisible()
   })
 

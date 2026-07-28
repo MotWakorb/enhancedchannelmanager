@@ -124,7 +124,7 @@ describe('PageHeader', () => {
   // would make these assertions vacuous (same reason as the TabNavigation
   // keyframe test). Bead enhancedchannelmanager-meh0a — the h2 used to be
   // `font-size: 1.5rem`, the same 24px as the route title one row above it.
-  it('sizes the section heading on the section role and leaves the route title at 24px', () => {
+  it('sizes the section heading and the route title from their roles, never a bare size', () => {
     const shared = readFileSync(resolve(process.cwd(), 'src/shared/common.css'), 'utf8');
     const sectionHeading = /^\.header-title h2 \{$[^}]*\}/m.exec(shared)?.[0];
     expect(sectionHeading).toBeDefined();
@@ -133,11 +133,40 @@ describe('PageHeader', () => {
     expect(sectionHeading).toContain('line-height: var(--type-section-line-height);');
     expect(sectionHeading).not.toMatch(/font-size:\s*\d/);
 
-    // The route title is chrome, frozen outside the P1 scale.
+    // Bead enhancedchannelmanager-tygwm: the route title was `font-size:
+    // 1.5rem` here, frozen outside the scale. It is now the page-title role
+    // (20px/700/1.3) — asserted through the token names, so a future value
+    // change lands in index.css alone and this test does not have to move.
     const routeTitle = /^\.page-header \.header-title h1 \{$[^}]*\}/m
       .exec(readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8'))?.[0];
     expect(routeTitle).toBeDefined();
-    expect(routeTitle).toContain('font-size: 1.5rem;');
-    expect(routeTitle).toContain('line-height: 1.3;');
+    expect(routeTitle).toContain('font-size: var(--type-page-title-size);');
+    expect(routeTitle).toContain('font-weight: var(--type-page-title-weight);');
+    expect(routeTitle).toContain('line-height: var(--type-page-title-line-height);');
+    expect(routeTitle).not.toMatch(/font-size:\s*\d/);
+  });
+
+  // The role's numbers live in index.css, so pin them there rather than
+  // leaving "20px" asserted nowhere. --text-3xl is the shared 20px primitive
+  // that the metric role already consumes.
+  it('presets the page-title role at 20px/700/1.3', () => {
+    const tokens = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+    expect(tokens).toContain('--text-3xl: 1.25rem;');
+    expect(tokens).toContain('--type-page-title-size: var(--text-3xl);');
+    expect(tokens).toContain('--type-page-title-weight: 700;');
+    expect(tokens).toContain('--type-page-title-line-height: 1.3;');
+  });
+
+  // Bead enhancedchannelmanager-tygwm. The meta row is a full-width flex line,
+  // so an empty one still costs the header row-gap plus its own margin-top.
+  // Every route renders the status outlet (App.tsx portals into it), so the
+  // collapse can only be decided in CSS, against the outlet being :empty.
+  it('collapses the meta row when the status outlet is empty and there are no related links', () => {
+    const header = readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8');
+    const collapse = /^\.page-header-meta:has\([^{]*\{[^}]*\}/m.exec(header)?.[0];
+    expect(collapse).toBeDefined();
+    expect(collapse).toContain('.route-page-status-outlet:empty');
+    expect(collapse).toContain(':not(:has(> .page-header-related-links))');
+    expect(collapse).toContain('display: none;');
   });
 });
