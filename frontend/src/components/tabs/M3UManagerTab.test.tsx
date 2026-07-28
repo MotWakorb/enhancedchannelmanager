@@ -245,6 +245,74 @@ describe('M3UManagerTab', () => {
 
       expect(screen.queryByLabelText(/provider supports catch-up/i)).not.toBeInTheDocument();
     });
+
+    // Bead enhancedchannelmanager-sccol: the badge moved off the account-name
+    // line onto the meta line beside the connection-type chip. Pinned by
+    // structure, not by pixel — the point of the move is that the two chips
+    // answer the same question, so they must share a container.
+    it('sits on the meta line beside the connection-type chip, not on the name line', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([
+        makeAccount({ id: 1, name: 'Catchup Provider' }),
+      ]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+      vi.mocked(api.getProviderCatchupStatus).mockResolvedValue({
+        '1': { has_catchup: true, catchup_days: 5 },
+      });
+
+      renderWithProviders(<M3UManagerTab />);
+      const badge = await screen.findByLabelText('Provider supports catch-up — up to 5 days');
+
+      expect(badge.closest('.account-details')).not.toBeNull();
+      expect(badge.closest('.account-name')).toBeNull();
+      expect(badge.closest('.account-details'))
+        .toBe(screen.getByText('Standard M3U').closest('.account-details'));
+    });
+  });
+
+  // Bead enhancedchannelmanager-sccol. The inference itself is unit-tested in
+  // utils/hdhomerun.test.ts; these pin that the row actually consults it and
+  // that a generic standard playlist is left alone.
+  describe('Connection-type chip', () => {
+    async function renderWithAccount(overrides: Partial<M3UAccount>) {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount(overrides)]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText(overrides.name as string)).toBeInTheDocument());
+    }
+
+    it('reads HDHomeRun for a tuner lineup URL', async () => {
+      await renderWithAccount({
+        name: 'HD Homerun',
+        account_type: 'STD',
+        server_url: 'http://192.168.1.105/lineup.m3u',
+      });
+
+      const chip = screen.getByText('HDHomeRun');
+      expect(chip).toHaveClass('account-type', 'hdhr');
+      expect(screen.queryByText('Standard M3U')).not.toBeInTheDocument();
+    });
+
+    it('leaves a generic standard playlist as Standard M3U', async () => {
+      await renderWithAccount({
+        name: 'Generic Playlist',
+        account_type: 'STD',
+        server_url: 'http://provider.example/hdhomerun/playlist.m3u',
+      });
+
+      expect(screen.getByText('Standard M3U')).toHaveClass('account-type', 'std');
+      expect(screen.queryByText('HDHomeRun')).not.toBeInTheDocument();
+    });
+
+    it('leaves an XtreamCodes account alone whatever its URL says', async () => {
+      await renderWithAccount({
+        name: 'XC Provider',
+        account_type: 'XC',
+        server_url: 'http://192.168.1.105:5004/lineup.m3u',
+      });
+
+      expect(screen.getByText('XtreamCodes')).toHaveClass('account-type', 'xc');
+      expect(screen.queryByText('HDHomeRun')).not.toBeInTheDocument();
+    });
   });
 
   describe('Stream Profiles management (bead hq3de.j)', () => {

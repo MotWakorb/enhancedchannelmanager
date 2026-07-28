@@ -20,6 +20,7 @@ import type { OverflowMenuItem } from '../OverflowMenu';
 import { DenseToolbar } from '../DenseToolbar';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
+import { isHDHomerunAccount } from '../../utils/hdhomerun';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -120,9 +121,16 @@ function M3UAccountRow({
     }
   };
 
-  const getAccountTypeLabel = (type: M3UAccount['account_type']) => {
-    return type === 'XC' ? 'XtreamCodes' : 'Standard M3U';
-  };
+  // Connection type shown on the meta line. HDHomeRun has no stored account
+  // type — a tuner is a plain `STD` account pointed at the device's lineup
+  // endpoint — so it is inferred from the URL by the shared helper in
+  // utils/hdhomerun (bead enhancedchannelmanager-sccol). The returned key
+  // doubles as the chip's modifier class.
+  const accountTypeChip = isHDHomerunAccount(account)
+    ? { key: 'hdhr', label: 'HDHomeRun' }
+    : account.account_type === 'XC'
+      ? { key: 'xc', label: 'XtreamCodes' }
+      : { key: 'std', label: 'Standard M3U' };
 
   // Count enabled groups and auto-sync groups
   const enabledGroupCount = account.channel_groups.filter(g => g.enabled).length;
@@ -158,6 +166,17 @@ function M3UAccountRow({
               <span className="profile-count">{account.profiles.length - 1}</span>
             </span>
           )}
+        </div>
+        <div className="account-details">
+          <span className={`account-type ${accountTypeChip.key}`}>
+            {accountTypeChip.label}
+          </span>
+          {/* Sits beside the connection type, not up on the name line: both
+              chips answer "what kind of feed is this" (bead
+              enhancedchannelmanager-sccol). The badge carries its own
+              title/aria-label, so it still reads as "Provider supports
+              catch-up ..." rather than borrowing context from the account
+              name it used to sit next to. */}
           <CatchupBadge
             isCatchup={hasCatchup}
             catchupDays={catchupDays}
@@ -167,11 +186,6 @@ function M3UAccountRow({
                 : 'Provider supports catch-up'
             }
           />
-        </div>
-        <div className="account-details">
-          <span className={`account-type ${account.account_type.toLowerCase()}`}>
-            {getAccountTypeLabel(account.account_type)}
-          </span>
           {account.server_url && !hideM3uUrls && (
             <span className="account-url" title={account.server_url}>
               {account.server_url}

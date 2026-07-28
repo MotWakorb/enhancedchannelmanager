@@ -61,7 +61,14 @@ describe('PageHeader', () => {
     expect(fireEvent.click(screen.getByRole('link', { name: 'Channel default settings' }))).toBe(false);
   });
 
-  it('orders primary action, source-backed status, controls, then contextual links', () => {
+  // Order changed in bead enhancedchannelmanager-sccol. It used to be
+  // action -> status -> controls -> links (bead 57pp3), which put the status
+  // between the two interactive clusters; with no column-gap on the header
+  // row that rendered as "6 provider accounts" touching Add M3U Account and
+  // Save Priorities on either side. The header now separates what is
+  // operated (row one) from what is read (the meta row), so the status
+  // travels with the related links.
+  it('orders primary action, controls, then a meta row of status and contextual links', () => {
     render(
       <PageHeader
         title="M3U Manager"
@@ -75,9 +82,14 @@ describe('PageHeader', () => {
     const status = screen.getByText('Refreshing provider data…');
     const controls = screen.getByRole('combobox', { name: 'View' });
     const link = screen.getByRole('link', { name: 'Linked account settings' });
-    for (const [before, after] of [[action, status], [status, controls], [controls, link]]) {
+    for (const [before, after] of [[action, controls], [controls, status], [status, link]]) {
       expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+    // Status and links share one meta row rather than being separate flex
+    // items of the header row, which is what makes the collision structurally
+    // impossible rather than merely spaced apart.
+    expect(status.closest('.page-header-meta')).not.toBeNull();
+    expect(status.closest('.page-header-meta')).toBe(link.closest('.page-header-meta'));
   });
 
   it('exposes distinct hierarchy slots instead of an opaque toolbar cluster', () => {

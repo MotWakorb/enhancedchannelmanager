@@ -63,6 +63,24 @@
   padding: 0.75rem 1rem;
 }
 
+/* A column header is aligned the way its cells are, or the column reads as
+   crooked. `.account-groups` centres its pill in the 130px Groups cell, but
+   the `Groups` label sat at that cell's left edge — 39px left of the pill's
+   centre — which is what made the pill look off-centre even though it is
+   centred to the pixel. `.col-priority` already carried `text-align:center`
+   for the same reason; `.col-status` (centred cell) and `.col-actions`
+   (right-aligned cell) were simply missing theirs.
+   Bead enhancedchannelmanager-sccol. */
+.m3u-manager-tab .list-header .col-status,
+.m3u-manager-tab .list-header .col-groups,
+.m3u-manager-tab .list-header .col-priority {
+  text-align: center;
+}
+
+.m3u-manager-tab .list-header .col-actions {
+  text-align: right;
+}
+
 .m3u-account-row {
   display: grid;
   grid-template-columns: 100px 1fr 130px 140px 70px 160px 180px;
@@ -154,10 +172,19 @@
   line-height: 1;
 }
 
+/* Wraps. Between the 1100px stacking breakpoint and roughly 1400px the `1fr`
+   Account column is only ~78px wide, and this line carries a chip, a
+   catch-up badge that is deliberately `flex-shrink: 0` (CatchupBadge.css)
+   and a URL. Without wrapping the badge simply spills past the cell and
+   lands on top of the Groups pill. Bead enhancedchannelmanager-sccol —
+   moving the badge onto this line is what made the spill land inside the
+   next column rather than in the gutter, so the wrap ships with it. */
 .account-details {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
   font-size: var(--type-meta-size);
   font-weight: var(--type-meta-weight);
   line-height: var(--type-meta-line-height);
@@ -179,6 +206,28 @@
 .account-type.std {
   background-color: rgba(59, 130, 246, 0.2);
   color: #60a5fa;
+}
+
+/* HDHomeRun is not a stored account type — it is a `STD` account whose URL
+   points at a tuner's lineup endpoint, inferred in utils/hdhomerun.ts. Teal
+   keeps it distinct from `.std`'s blue at a glance, since the two are the
+   same underlying account type (bead enhancedchannelmanager-sccol).
+
+   Two tones, because one does not survive both themes: teal-400 measures
+   5.79:1 on the dark row and 7.94:1 in high contrast, but only 1.44:1 once
+   the light theme puts a near-white row behind the same 20%-alpha fill.
+   teal-800 on a lighter fill measures 5.80:1 there. (`.xc` and `.std` are
+   single-tone and have the same problem — XtreamCodes measures 2.70:1 in
+   light, 3.28:1 in dark — but that is pre-existing and out of this bead's
+   scope; noted for the backlog.) */
+.account-type.hdhr {
+  background-color: rgba(20, 184, 166, 0.2);
+  color: #2dd4bf;
+}
+
+[data-theme="light"] .account-type.hdhr {
+  background-color: rgba(13, 148, 136, 0.16);
+  color: #115e59;
 }
 
 .account-url {
@@ -209,10 +258,21 @@
   gap: 0.25rem;
 }
 
-.group-count {
+/* The pill's whole appearance is declared here. It used to be split: this
+   rule set the type, and the background/padding/radius arrived from the
+   bare `.group-count` rule in ChannelsPane.css — a different page's
+   stylesheet, at equal specificity, so which font-size won depended on
+   lazy-chunk visit order. Same leak shape as `.list-header` (bd-qlc4h) and
+   `.status-label` (bd-f4yc7); scoping it to this tab makes the pill
+   deterministic and stops it drifting when ChannelsPane changes.
+   Bead enhancedchannelmanager-sccol. */
+.m3u-manager-tab .group-count {
   font-size: var(--type-body-size);
   line-height: var(--type-body-line-height);
   color: var(--text-secondary);
+  background-color: var(--border-primary);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-md);
 }
 
 .auto-sync-count {
@@ -247,10 +307,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.col-priority {
-  text-align: center;
 }
 
 .priority-input {
