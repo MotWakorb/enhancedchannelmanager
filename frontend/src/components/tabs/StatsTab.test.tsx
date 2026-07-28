@@ -18,7 +18,7 @@
  * assert on the chart SVG.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StatsTab } from './StatsTab';
 import * as api from '../../services/api';
@@ -469,10 +469,19 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
     };
   }
 
+  // enhancedchannelmanager-2896r.21 folded this strip onto the route header's
+  // breadcrumb row, where a one-line budget forced the two page-total labels
+  // down to "Active" / "Clients". The full wording moved to their `title`, so
+  // PAGE_TOTAL_LABELS is what the DOM says and PAGE_TOTAL_TITLES is what the
+  // operator reads on hover — both are asserted so the abbreviation can't
+  // quietly become the only description.
+  const PAGE_TOTAL_LABELS = ['Active', 'Clients'];
+  const PAGE_TOTAL_TITLES = ['Active channels', 'Connected clients'];
+
   function readBadgeCounts(container: HTMLElement) {
     // Each `.summary-stat` block has a `.stat-label` + `.stat-value`.
-    // The first two (Active Channels, Connected Clients) are page
-    // totals — every other badge is one provider OR the Unknown bucket.
+    // The first two (Active, Clients) are page totals — every other
+    // badge is one provider OR the Unknown bucket.
     const blocks = container.querySelectorAll('.summary-stat');
     const out: Record<string, string> = {};
     for (const block of Array.from(blocks)) {
@@ -510,8 +519,16 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
       expect(container.querySelector('.unknown-bucket')).toBeInTheDocument();
     });
 
+    // The page totals still carry their full meaning on hover even though the
+    // visible labels are abbreviated for the header row.
+    expect(
+      Array.from(container.querySelectorAll('.summary-stat'))
+        .slice(0, 2)
+        .map((el) => el.getAttribute('title')),
+    ).toEqual(PAGE_TOTAL_TITLES);
+
     const badges = readBadgeCounts(container);
-    expect(badges['Active Channels']).toBe('3');
+    expect(badges['Active']).toBe('3');
     expect(badges['Infinity']).toBe('2/10');
     expect(badges['Unknown']).toBe('1');
     // Invariant: Infinity (2) + OtherProvider (0) + Unknown (1) == 3.
@@ -519,7 +536,7 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
       parseCurrent(badges['Infinity'] ?? '0') +
       parseCurrent(badges['OtherProvider'] ?? '0') +
       parseCurrent(badges['Unknown'] ?? '0');
-    expect(providerSum).toBe(parseCurrent(badges['Active Channels'] ?? '0'));
+    expect(providerSum).toBe(parseCurrent(badges['Active'] ?? '0'));
   });
 
   it('does not render the Unknown bucket when every active channel is attributed', async () => {
@@ -539,13 +556,13 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
 
     expect(container.querySelector('.unknown-bucket')).toBeNull();
     const badges = readBadgeCounts(container);
-    expect(badges['Active Channels']).toBe('2');
+    expect(badges['Active']).toBe('2');
     expect(badges['Infinity']).toBe('1/10');
     expect(badges['OtherProvider']).toBe('1/4');
     const providerSum =
       parseCurrent(badges['Infinity'] ?? '0') +
       parseCurrent(badges['OtherProvider'] ?? '0');
-    expect(providerSum).toBe(parseCurrent(badges['Active Channels'] ?? '0'));
+    expect(providerSum).toBe(parseCurrent(badges['Active'] ?? '0'));
   });
 
   it('routes channels attributed to an unknown account id (side-load gap) into the Unknown bucket', async () => {
@@ -568,9 +585,31 @@ describe('StatsTab — provider badge sum invariant (bd-lhxfu)', () => {
     });
 
     const badges = readBadgeCounts(container);
-    expect(badges['Active Channels']).toBe('2');
+    expect(badges['Active']).toBe('2');
     expect(badges['Infinity']).toBe('1/10');
     expect(badges['Unknown']).toBe('1');
+  });
+
+  it('keeps the page-total labels distinct from the provider badges', async () => {
+    // Guards the abbreviation itself: "Active"/"Clients" must remain the only
+    // non-provider entries, otherwise the provider-tile filters used by the
+    // condensed-table tests (and by anyone reading the strip) silently break.
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 1,
+      channels: [badgeChannel({ channel_id: 'uuid-1', m3u_account_id: 6 })],
+    } as unknown as ChannelStatsResponse);
+
+    const { container } = render(<StatsTab />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.summary-stat')).toBeInTheDocument();
+    });
+
+    const labels = Array.from(container.querySelectorAll('.summary-stat')).map(
+      (el) => el.querySelector('.stat-label')?.textContent?.trim(),
+    );
+    expect(labels.slice(0, 2)).toEqual(PAGE_TOTAL_LABELS);
+    expect(labels.slice(2)).toEqual(['Infinity', 'OtherProvider']);
   });
 });
 
@@ -1559,11 +1598,20 @@ describe('StatsTab — scroll-containment DOM structure (bd-tkcmu)', () => {
 });
 
 // bead 09x38.15 item 9: ~10 sections stack inside .stats-content with no way
-// to jump between them but scrolling. A "Jump to section" dropdown (reusing
-// the OverflowMenu portal-dropdown idiom) lists only sections actually
-// present in the DOM and scrolls to them on click.
+// to jump between them but scrolling.
+//
+// The original implementation was a "Jump to section" OverflowMenu carrying a
+// hand-maintained item list. enhancedchannelmanager-2896r.21 deleted it: the
+// shared StickySectionNav ("On this page") already covers this route, so the
+// menu was a second control for the same job — and one that had to be kept in
+// sync with the JSX by hand. The nav derives its entries from the sections
+// actually mounted in `.stats-content`, so the "only offer sections that exist"
+// contract these specs pin is now structural rather than hand-maintained.
 describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
+  // The nav scrolls its own container (never the document — see
+  // StickySectionNav), and jsdom does not implement Element.scrollTo.
   beforeEach(() => {
+    Element.prototype.scrollTo = vi.fn();
     Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(api.getChannelStats).mockResolvedValue({
       count: 0,
@@ -1576,30 +1624,30 @@ describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
   });
 
   it('always lists the always-mounted panels, but omits conditional sections with no data', async () => {
-    const user = userEvent.setup();
     render(<StatsTab />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /jump to section/i })).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole('button', { name: /jump to section/i }));
+    const nav = await screen.findByRole('navigation', { name: 'On this page' });
 
-    expect(screen.getByRole('menuitem', { name: /bandwidth in\/out/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /enhanced statistics/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /popularity rankings/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /watch history/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /user watch time/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /providers/i })).toBeInTheDocument();
+    for (const label of [
+      'Bandwidth In/Out',
+      'Enhanced Statistics',
+      'Popularity Rankings',
+      'Watch History',
+      'User Watch Time',
+      'Providers',
+      'Provider Stream Usage',
+    ]) {
+      expect(within(nav).getByRole('button', { name: label })).toBeInTheDocument();
+    }
 
     // No active channels / events / top-watched / bandwidth summary data
     // seeded — those sections don't render, so they must not appear either.
-    expect(screen.queryByRole('menuitem', { name: /^active channels$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /recent events/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /top watched channels/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: /^bandwidth usage$/i })).not.toBeInTheDocument();
+    for (const label of ['Active Channels', 'Recent Events', 'Top Watched Channels', 'Bandwidth Usage']) {
+      expect(within(nav).queryByRole('button', { name: label })).not.toBeInTheDocument();
+    }
   });
 
-  it('lists Active Channels once channel-stats data is present, and clicking it scrolls to the section', async () => {
+  it('lists Active Channels once channel-stats data is present, and clicking it scrolls the content container', async () => {
     vi.mocked(api.getChannelStats).mockResolvedValue({
       count: 1,
       channels: [{ channel_id: 'abc', channel_name: 'ESPN', channel_number: 1, state: 'streaming', client_count: 0, clients: [] }],
@@ -1610,10 +1658,17 @@ describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
     await waitFor(() => {
       expect(container.querySelector('#stats-section-active-channels')).toBeInTheDocument();
     });
-    await user.click(screen.getByRole('button', { name: /jump to section/i }));
-    await user.click(screen.getByRole('menuitem', { name: /^active channels$/i }));
+    const nav = await screen.findByRole('navigation', { name: 'On this page' });
+    const jump = await within(nav).findByRole('button', { name: 'Active Channels' });
 
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    const statsContent = container.querySelector('.stats-content') as HTMLElement;
+    const scrollTo = vi.fn();
+    statsContent.scrollTo = scrollTo;
+    await user.click(jump);
+
+    // The scroll is confined to .stats-content: the fixed shell must not move.
+    expect(scrollTo).toHaveBeenCalled();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 });
 
@@ -1868,15 +1923,14 @@ describe('StatsTab — condensed Live Stats provider table (bd-49obj)', () => {
     for (let i = 1; i <= 11; i++) {
       expect(table).toHaveTextContent(`Provider ${i}`);
     }
-    // Tile badges for individual providers are NOT rendered in this mode
-    // (Active Channels / Connected Clients tiles still are — those aren't
-    // providers).
-    const providerTiles = Array.from(container.querySelectorAll('.summary-stat')).filter(
-      (el) => !['Active Channels', 'Connected Clients'].includes(
-        el.querySelector('.stat-label')?.textContent?.trim() ?? '',
-      ),
+    // Tile badges for individual providers are NOT rendered in this mode.
+    // The two page-total tiles still are — those aren't providers. Their
+    // labels were shortened to "Active"/"Clients" by 2896r.21 when the strip
+    // moved onto the route header's breadcrumb row.
+    const tileLabels = Array.from(container.querySelectorAll('.summary-stat')).map(
+      (el) => el.querySelector('.stat-label')?.textContent?.trim() ?? '',
     );
-    expect(providerTiles).toHaveLength(0);
+    expect(tileLabels).toEqual(['Active', 'Clients']);
 
     // Each provider shows its current/max connection count in the table.
     expect(table).toHaveTextContent('1/10');

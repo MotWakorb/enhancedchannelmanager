@@ -17,7 +17,6 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { CustomSelect } from '../CustomSelect';
-import { OverflowMenu, type OverflowMenuItem } from '../OverflowMenu';
 import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
@@ -32,6 +31,8 @@ import './StatsTab.css';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { StickySectionNav } from '../StickySectionNav';
+import { OverflowScroller } from '../OverflowScroller';
+import { formatConnections, describeConnections } from './statsConnections';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -707,40 +708,6 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
-  // Section jump nav (bead 09x38.15 item 9): ~10 sections stack inside
-  // .stats-content with no way to jump between them but scrolling. The
-  // first four are conditionally rendered (only when their data is
-  // non-empty); the rest are always-mounted child panels. Only list a
-  // conditional section when it will actually be in the DOM to scroll to.
-  const statsSectionNavItems: OverflowMenuItem[] = useMemo(() => {
-    const scrollToSection = (id: string) => () => {
-      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
-    const items: OverflowMenuItem[] = [];
-    if (activeChannels > 0) {
-      items.push({ label: 'Active Channels', icon: 'live_tv', onClick: scrollToSection('stats-section-active-channels') });
-    }
-    if (streamingEvents.length > 0) {
-      items.push({ label: 'Recent Events', icon: 'event_note', onClick: scrollToSection('stats-section-recent-events') });
-    }
-    if (topWatchedChannels.length > 0) {
-      items.push({ label: 'Top Watched Channels', icon: 'trending_up', onClick: scrollToSection('stats-section-top-watched') });
-    }
-    if (bandwidthStats) {
-      items.push({ label: 'Bandwidth Usage', icon: 'data_usage', onClick: scrollToSection('stats-section-bandwidth-usage') });
-    }
-    items.push(
-      { label: 'Bandwidth In/Out', icon: 'swap_vert', onClick: scrollToSection('stats-section-bandwidth-panel') },
-      { label: 'Enhanced Statistics', icon: 'insights', onClick: scrollToSection('stats-section-enhanced') },
-      { label: 'Popularity Rankings', icon: 'star', onClick: scrollToSection('stats-section-popularity') },
-      { label: 'Watch History', icon: 'history', onClick: scrollToSection('stats-section-watch-history') },
-      { label: 'User Watch Time', icon: 'person', onClick: scrollToSection('stats-section-user-watch-time') },
-      { label: 'Providers', icon: 'cloud_queue', onClick: scrollToSection('stats-section-providers') },
-      { label: 'Provider Stream Usage', icon: 'table_rows', onClick: scrollToSection('stats-section-provider-stream-usage') },
-    );
-    return items;
-  }, [activeChannels, streamingEvents.length, topWatchedChannels.length, bandwidthStats]);
-
   // bd-ox5q8: M3U account name lookup for the Active Channels stream
   // badge. Backend's /api/stats/channels enrichment surfaces each row's
   // ``m3u_account_id`` (when the live resolver attributes the active
@@ -920,19 +887,19 @@ export function StatsTab() {
       {/* Header */}
       <div className="stats-header">
         <RouteHeaderSlot name="status"><div className="header-left">
-          {channelStats ? <div className="header-summary">
-            <div className="summary-stat">
+          {channelStats ? <OverflowScroller label="live counts" className="summary-scroller"><div className="header-summary">
+            <div className="summary-stat" title="Active channels">
               <span className="material-icons">live_tv</span>
               <div>
                 <div className="stat-value">{activeChannels}</div>
-                <div className="stat-label">Active Channels</div>
+                <div className="stat-label">Active</div>
               </div>
             </div>
-            <div className="summary-stat">
+            <div className="summary-stat" title="Connected clients">
               <span className="material-icons">people</span>
               <div>
                 <div className="stat-value">{totalClients}</div>
-                <div className="stat-label">Connected Clients</div>
+                <div className="stat-label">Clients</div>
               </div>
             </div>
             {/* bd-49obj / GH-481: below the condensed threshold, keep the
@@ -950,19 +917,21 @@ export function StatsTab() {
                 <div
                   key={m3u.id}
                   className={isUnknown ? 'summary-stat unknown-bucket' : 'summary-stat'}
-                  title={isUnknown ? 'Live streams whose upstream provider could not be attributed by the resolver. See SLO-8 (provider attribution rate).' : undefined}
+                  title={isUnknown
+                    ? 'Live streams whose upstream provider could not be attributed by the resolver. See SLO-8 (provider attribution rate).'
+                    : describeConnections(m3u.name, m3u.current, m3u.max)}
                 >
                   <span className="material-icons">{isUnknown ? 'help_outline' : 'cloud_queue'}</span>
                   <div>
                     <div className="stat-value">
-                      {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                      {formatConnections(m3u.current, m3u.max)}
                     </div>
                     <div className="stat-label">{m3u.name}</div>
                   </div>
                 </div>
               );
             })}
-          </div> : <SourceLoadStatus state="error" sourceName="statistics" successText="" />}
+          </div></OverflowScroller> : <SourceLoadStatus state="error" sourceName="statistics" successText="" />}
 
           {/* Condensed provider table (bd-49obj / GH-481): with many
               providers, per-provider tile badges wrap into several rows and
@@ -991,7 +960,7 @@ export function StatsTab() {
                           {m3u.name}
                         </td>
                         <td className="provider-live-table-count">
-                          {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                          {formatConnections(m3u.current, m3u.max)}
                         </td>
                       </tr>
                     );
@@ -1004,7 +973,17 @@ export function StatsTab() {
             <span className={`material-icons ${refreshing ? 'spinning' : ''}`}>
               {refreshing ? 'sync' : 'schedule'}
             </span>
-            {refreshInterval > 0 ? `Auto-refresh: ${refreshInterval}s` : 'Manual refresh'}
+            <span className="refresh-label">Auto refresh</span>
+            <CustomSelect
+              className="refresh-select"
+              ariaLabel="Auto refresh interval"
+              value={String(refreshInterval)}
+              onChange={(val) => setRefreshInterval(Number(val))}
+              options={REFRESH_OPTIONS.map(opt => ({
+                value: String(opt.value),
+                label: opt.label,
+              }))}
+            />
           </div>
         </div></RouteHeaderSlot>
 
@@ -1018,19 +997,6 @@ export function StatsTab() {
             Refresh
           </button>
         </RouteHeaderSlot>
-        <RouteHeaderSlot name="controls"><div className="header-actions">
-          <CustomSelect
-            className="refresh-select"
-            value={String(refreshInterval)}
-            onChange={(val) => setRefreshInterval(Number(val))}
-            options={REFRESH_OPTIONS.map(opt => ({
-              value: String(opt.value),
-              label: opt.label,
-            }))}
-          />
-
-          <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
-        </div></RouteHeaderSlot>
       </div>
 
       {/* Error state */}
