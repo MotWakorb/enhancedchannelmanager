@@ -1,4 +1,6 @@
 import { createRef } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PageHeader } from './PageHeader';
@@ -116,5 +118,26 @@ describe('PageHeader', () => {
     render(<PageHeader title="M3U Manager" status={<span>Refresh complete</span>} statusLive />);
     expect(screen.getByText('Refresh complete').closest('[data-page-header-slot]'))
       .toHaveAttribute('aria-live', 'polite');
+  });
+
+  // Read from disk: vitest stubs CSS imports, so getComputedStyle in jsdom
+  // would make these assertions vacuous (same reason as the TabNavigation
+  // keyframe test). Bead enhancedchannelmanager-meh0a — the h2 used to be
+  // `font-size: 1.5rem`, the same 24px as the route title one row above it.
+  it('sizes the section heading on the section role and leaves the route title at 24px', () => {
+    const shared = readFileSync(resolve(process.cwd(), 'src/shared/common.css'), 'utf8');
+    const sectionHeading = /^\.header-title h2 \{$[^}]*\}/m.exec(shared)?.[0];
+    expect(sectionHeading).toBeDefined();
+    expect(sectionHeading).toContain('font-size: var(--type-section-size);');
+    expect(sectionHeading).toContain('font-weight: var(--type-section-weight);');
+    expect(sectionHeading).toContain('line-height: var(--type-section-line-height);');
+    expect(sectionHeading).not.toMatch(/font-size:\s*\d/);
+
+    // The route title is chrome, frozen outside the P1 scale.
+    const routeTitle = /^\.page-header \.header-title h1 \{$[^}]*\}/m
+      .exec(readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8'))?.[0];
+    expect(routeTitle).toBeDefined();
+    expect(routeTitle).toContain('font-size: 1.5rem;');
+    expect(routeTitle).toContain('line-height: 1.3;');
   });
 });

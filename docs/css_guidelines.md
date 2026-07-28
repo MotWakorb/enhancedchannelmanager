@@ -80,7 +80,10 @@ remapped onto it: **M3U Manager** and **EPG Manager** (bead
 `enhancedchannelmanager-f4yc7`). The shared classes those pages depend on —
 `.btn-primary` / `.btn-secondary` / `.btn-danger`, `.header-description`,
 `.list-header`, `.badge-sm`, `.micro-label` — moved with them and therefore
-already apply everywhere.
+already apply everywhere. `.header-title h2` — the PageHeader section
+heading — joined them on the section role (bead
+`enhancedchannelmanager-meh0a`); it too applies everywhere, though every
+current render site happens to be on EPG Manager.
 
 Every other page still writes bare font sizes. Until the sweep finishes,
 "never write a bare `font-size`" is not yet a rule here; when you touch a

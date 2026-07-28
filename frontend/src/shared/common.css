@@ -872,9 +872,23 @@
   min-width: 0;
 }
 
+/* A section heading inside a page, not a second page title. `.header-title`
+   is rendered only by PageHeader, and PageHeader emits an h2 for every
+   caller that does not pass `headingLevel={1}` — so this rule governs the
+   section headings and the route title is untouched (it is `.page-header
+   .header-title h1` in PageHeader.css, still 24px/700/1.3).
+   At 1.5rem this was the same 24px as the route title one row above it,
+   which is why "Dummy EPG Profiles" read as a second page title once the P1
+   pilot shrank everything under it. The section role is the P1 answer to
+   exactly this text and had no consumer until now; `.header-description`
+   directly below already takes the body role, so the pair now reads as one
+   scale rather than a 24px heading over 13px copy. Bead
+   enhancedchannelmanager-meh0a. */
 .header-title h2 {
   margin: 0 0 0.25rem 0;
-  font-size: 1.5rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
