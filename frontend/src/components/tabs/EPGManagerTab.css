@@ -30,28 +30,30 @@
   min-width: 0;
 }
 
-.list-header {
-  display: grid;
+/* Layout only. shared/common.css § LIST HEADERS owns every `.list-header`
+   appearance property (background, border, font-size/weight, colour, case,
+   tracking); this rule adds the column layout that has to line up with
+   `.epg-source-row` and nothing else (bead enhancedchannelmanager-qlc4h).
+   It is scoped to `.epg-sources-list` because a bare `.list-header` here is
+   not file-local: each tab is a lazily-imported chunk, so its stylesheet is
+   appended in visit order, and an equal-specificity bare rule from any tab
+   visited later wins on every other tab. Measured before this change, this
+   file's seven-column template was the one Logo Manager and Journal were
+   rendering with after a visit to EPG Manager. */
+.epg-sources-list .list-header {
   grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   align-items: center;
   min-width: 900px;
   white-space: nowrap;
 }
 
-.list-header span[title] {
+.epg-sources-list .list-header span[title] {
   cursor: help;
 }
 
-.list-header span,
+.epg-sources-list .list-header span,
 .epg-source-row > div,
 .epg-source-row > span {
   min-width: 0;
@@ -271,7 +273,7 @@
 
 /* Responsive */
 @media (max-width: 900px) {
-  .list-header {
+  .epg-sources-list .list-header {
     display: none;
   }
 

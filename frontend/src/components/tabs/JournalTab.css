@@ -149,18 +149,16 @@
   overflow-y: auto;
 }
 
-.list-header {
-  display: grid;
+/* Layout only. shared/common.css § LIST HEADERS owns every `.list-header`
+   appearance property, and its gap/padding already match this list; what is
+   left here is the column template, the horizontal-scroll floor and the
+   sticky behaviour (bead enhancedchannelmanager-qlc4h). Scoped to
+   `.entries-list` because a bare `.list-header` here is not file-local: each
+   tab is a lazily-imported chunk, so its stylesheet is appended in visit
+   order, and an equal-specificity bare rule from any tab visited later wins
+   on every other tab. */
+.entries-list .list-header {
   grid-template-columns: 140px 120px 110px 180px 1fr 90px 40px;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   min-width: 800px;
   position: sticky;
   top: 0;
@@ -518,7 +516,7 @@
     min-width: 100px;
   }
 
-  .list-header {
+  .entries-list .list-header {
     display: none;
   }
 

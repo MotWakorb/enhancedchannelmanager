@@ -16,10 +16,17 @@
   margin-bottom: 1.5rem;
 }
 
+/* The route title. `headingLevel={1}` is passed by exactly one caller — the
+   shared route header in App.tsx — so this rule governs the route title and
+   nothing else. Size and weight stay at 24px/700; only the line box tightens,
+   from the inherited 1.5 (36px) to 1.3 (31.2px), which gives the header band
+   back ~5px without touching the type scale (bead
+   enhancedchannelmanager-qlc4h, on top of 57pp3/eupzi). */
 .page-header .header-title h1 {
   margin: 0 0 0.25rem;
   color: var(--text-primary);
   font-size: 1.5rem;
+  line-height: 1.3;
 }
 
 .page-header-related-links {
