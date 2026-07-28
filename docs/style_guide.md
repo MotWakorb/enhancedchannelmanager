@@ -601,6 +601,10 @@ that intersect with general code style.
   `common.css`. Reuse the shared class.
 - Component CSS files include a header comment listing which shared
   classes they consume — see `docs/css_guidelines.md` for the format.
+- Content-pane text sizes come from the typography role tokens
+  (`--type-body-*`, `--type-meta-*`, …) rather than raw numbers. The roles,
+  the icon scale, and which pages have been moved onto them so far are in
+  [`docs/css_guidelines.md` § Typography](css_guidelines.md#typography).
 
 **Theme variables — critical rules:**
 

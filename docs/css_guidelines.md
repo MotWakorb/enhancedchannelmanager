@@ -24,6 +24,68 @@ CSS is organized in layers. Always use the highest-level shared class available 
 
 **Never duplicate a style that already exists in common.css.** Before writing new CSS, check if a shared class already covers it.
 
+## Typography
+
+The content pane has a shared type scale, expressed as role tokens in
+`frontend/src/index.css` (second `:root` block, group "Typography Roles").
+A role names the *kind* of text, not its size, so a rule picks a role and
+the number lives in one place.
+
+| Role | Token prefix | Size | Weight | Line-height | Other | Used for |
+|-|-|-|-|-|-|-|
+| Metric | `--type-metric-*` | 20px (`--text-3xl`) | 600 | 1.2 | — | the headline number on a stat/summary tile |
+| Section | `--type-section-*` | 15px | 600 | 1.3 | — | a heading inside a page |
+| Body | `--type-body-*` | 13px | 400 | 1.5 | — | running text, buttons, inputs, page descriptions |
+| Item title | `--type-item-title-*` | 13px | 600 | 1.4 | — | the name of a row in a list |
+| Meta | `--type-meta-*` | 11px (`--text-xs`) | 400 | 1.5 | — | supporting detail under an item title: type, URL, counts, timestamps |
+| Micro | `--type-micro-*` | 10px (`--text-2xs`) | 700 | — | uppercase, tracking `0.08em` | column headers, the status word under a glyph |
+| Badge | `--type-badge-*` | 10px (`--text-2xs`) | 500 | 1.4 | — | text inside a chip or pill |
+
+Each role token points at the `--text-*` primitive that already carries its
+number. 15px and 13px have no primitive, so those two are written literally
+rather than adding primitives nothing else consumes.
+
+Micro deliberately defines no line-height: micro labels take the line box of
+whatever they sit in.
+
+### Icon sizes
+
+| Token | Value | Used for |
+|-|-|-|
+| `--icon-status` | 18px | the status glyph in a list row, and inline notice icons |
+| `--icon-action` | 16px | row action buttons, small inline indicators |
+
+Rail icons are chrome, not content, and keep their own 20px.
+
+### Colour
+
+Bind meta and micro text to `--text-secondary`. Do **not** use `--text-muted`
+for them: in the light theme `--text-muted` measures 2.61:1 against
+`--bg-secondary`, below the WCAG AA 4.5:1 floor.
+
+`.micro-label` itself sets no colour — a micro label takes the colour of the
+thing it labels (a status word is green or red; a column header is
+`--text-secondary`, set on `.list-header`).
+
+### What is *not* in this scale
+
+The rail, the top band and the route page title are chrome and are frozen
+outside it: rail nav label 14px / rail icon 20px / rail width 244px, header
+band 45px with 28px controls, route page title 24px / 700.
+
+### Rollout status
+
+**In progress.** The scale is defined globally, but only two pages have been
+remapped onto it: **M3U Manager** and **EPG Manager** (bead
+`enhancedchannelmanager-f4yc7`). The shared classes those pages depend on —
+`.btn-primary` / `.btn-secondary` / `.btn-danger`, `.header-description`,
+`.list-header`, `.badge-sm`, `.micro-label` — moved with them and therefore
+already apply everywhere.
+
+Every other page still writes bare font sizes. Until the sweep finishes,
+"never write a bare `font-size`" is not yet a rule here; when you touch a
+page that has been remapped, use the roles.
+
 ## Common CSS Classes (shared/common.css)
 
 ### Buttons
@@ -66,6 +128,12 @@ CSS is organized in layers. Always use the highest-level shared class available 
 
 ### Status Indicators
 - `.status-success` / `.status-error` / `.status-pending` / `.status-disabled` / `.status-idle`
+
+### Micro Labels
+- `.micro-label` — the tracked uppercase label idiom (column headers, the status
+  word under a glyph). Sets size/weight/case/tracking from the micro role and
+  nothing else; supply the colour from context. `.list-header` picks up the same
+  rule, so a list header needs no extra class.
 
 ### Other
 - `.search-box` — icon + input search field

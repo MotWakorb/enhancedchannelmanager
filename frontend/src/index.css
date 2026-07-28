@@ -263,6 +263,57 @@
   --text-3xl: 1.25rem;
   --text-4xl: 1.5rem;
 
+  /* Typography Roles — content pane
+     One role per kind of text a page body contains, so a rule picks a role
+     instead of a raw size. Values are preset "P1" (bead
+     enhancedchannelmanager-f4yc7). Each role points at the --text-* primitive
+     that already carries its number; 15px and 13px have no primitive, so they
+     are written literally. The rail, the top band and the route title are
+     chrome, not content — they are deliberately outside this scale.
+     See docs/css_guidelines.md § Typography. */
+
+  /* Headline number on a stat/summary tile — 20px */
+  --type-metric-size: var(--text-3xl);
+  --type-metric-weight: 600;
+  --type-metric-line-height: 1.2;
+
+  /* Section heading inside a page — 15px */
+  --type-section-size: 0.9375rem;
+  --type-section-weight: 600;
+  --type-section-line-height: 1.3;
+
+  /* Default running text in a pane — 13px */
+  --type-body-size: 0.8125rem;
+  --type-body-weight: 400;
+  --type-body-line-height: 1.5;
+
+  /* The name of a row in a list — 13px */
+  --type-item-title-size: 0.8125rem;
+  --type-item-title-weight: 600;
+  --type-item-title-line-height: 1.4;
+
+  /* Supporting detail under an item title — 11px */
+  --type-meta-size: var(--text-xs);
+  --type-meta-weight: 400;
+  --type-meta-line-height: 1.5;
+
+  /* Tracked uppercase label: column headers, status words — 10px.
+     P1 sets no line-height for this role; micro labels take the line box of
+     whatever they sit in. */
+  --type-micro-size: var(--text-2xs);
+  --type-micro-weight: 700;
+  --type-micro-tracking: 0.08em;
+
+  /* Text inside a chip/pill — 10px */
+  --type-badge-size: var(--text-2xs);
+  --type-badge-weight: 500;
+  --type-badge-line-height: 1.4;
+
+  /* Icon Size Scale
+     Two content-pane icon sizes. Rail icons stay at their own 20px. */
+  --icon-status: 18px;
+  --icon-action: 16px;
+
   /* Box Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);

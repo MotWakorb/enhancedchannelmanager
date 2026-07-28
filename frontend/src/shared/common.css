@@ -16,6 +16,8 @@
  * 9. Miscellaneous Patterns
  * ...
  * 22. Badges
+ * 23. Type Badges
+ * 24. Micro Labels
  *
  * CSS Variables are defined in index.css - do not duplicate here.
  */
@@ -82,7 +84,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -111,7 +113,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--border-primary);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -140,7 +142,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--error);
   color: white;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -878,7 +880,9 @@
 
 .header-description {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -943,17 +947,17 @@
 /* List/table header styles
    Extracted from: EPGManagerTab.css, LogoManagerTab.css, JournalTab.css, M3UManagerTab.css */
 
+/* A list header is an instance of the micro-label idiom: § 24 owns its
+   size, weight, case and tracking for every `.list-header` in the app, so
+   this rule keeps only the things that are specific to a header strip —
+   the grid, the padding, the field and the rule under it. */
 .list-header {
   display: grid;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   background-color: var(--input-bg);
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.7rem;
-  font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 
@@ -1274,7 +1278,10 @@
 .badge-info    { background: var(--info-bg);     color: var(--info-text); }
 
 /* Size variants */
-.badge-sm { padding: var(--space-1, 0.125rem) var(--space-3, 0.375rem); font-size: 0.65rem; }
+.badge-sm {
+  padding: var(--space-1, 0.125rem) var(--space-3, 0.375rem);
+  font-size: var(--type-badge-size);
+}
 
 /* Shape variants */
 .badge-pill { border-radius: var(--radius-full, 9999px); }
@@ -1300,3 +1307,27 @@
 }
 
 .type-badge .material-icons { font-size: 14px; }
+
+
+/* =============================================================================
+   24. MICRO LABELS
+   ============================================================================= */
+
+/* The tracked uppercase label idiom — list/table column headers, the word
+   under a status glyph, small section captions. Before bead
+   enhancedchannelmanager-f4yc7 the same idiom was written four different
+   ways (0.7rem/600/0.05em, 0.7rem/500/0.02em twice, 0.75rem/600/0.05em);
+   this is the single treatment they all resolve to.
+   `.list-header` is listed here rather than repeating the declarations in
+   § 15 so there is exactly one place the micro role is spelled out.
+   Deliberately no `color`: a micro label takes the colour of what it labels
+   (a status word is green or red; a column header is --text-secondary, set
+   on `.list-header` itself). Never colour one with --text-muted — in the
+   light theme that measures 2.61:1 on --bg-secondary. */
+.micro-label,
+.list-header {
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+}

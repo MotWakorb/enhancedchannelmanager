@@ -162,7 +162,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         <span className={`material-icons ${isRefreshing ? 'spinning' : ''}`}>
           {getStatusIcon(source.status)}
         </span>
-        <span className="status-label">{getStatusLabel(source.status)}</span>
+        <span className="status-label micro-label">{getStatusLabel(source.status)}</span>
         {isRefreshing && (
           <span className="status-hint">See Dispatcharr for progress</span>
         )}

@@ -135,7 +135,7 @@ function M3UAccountRow({
         <span className={`material-icons ${isRefreshing ? 'spinning' : ''}`}>
           {getStatusIcon(account.status)}
         </span>
-        <span className="status-label">{getStatusLabel(account.status)}</span>
+        <span className="status-label micro-label">{getStatusLabel(account.status)}</span>
       </div>
 
       <div className="account-info">

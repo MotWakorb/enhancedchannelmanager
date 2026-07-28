@@ -120,7 +120,13 @@ pre.tls-settings-error {
   grid-column: 1 / -1;
 }
 
-.status-label {
+/* Scoped to its own grid, not left bare. `.status-label` is a generic name
+   also used by the M3U and EPG source rows, and this tab is a lazily
+   imported chunk whose stylesheet is appended in visit order — a bare rule
+   here wins on every page visited afterwards. Same leak shape as the
+   `.list-header` one repaired in bead enhancedchannelmanager-qlc4h; scoping
+   is specificity-only and changes nothing this tab renders. */
+.tls-status-grid .status-label {
   font-size: 0.75rem;
   color: var(--text-secondary);
   text-transform: uppercase;
