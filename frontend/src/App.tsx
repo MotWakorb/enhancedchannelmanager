@@ -2559,7 +2559,6 @@ function App() {
     <div className="app">
       <SkipToMainContent />
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <span className="header-context">Operator workspace</span>
         {/* Reading order (bead 57pp3): the two status indicators sit left of the
             action icons, upgrade-first, so the row reads "what changed" ->
             "what is running" -> the controls that act on it. */}

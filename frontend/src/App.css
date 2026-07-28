@@ -1,4 +1,14 @@
+/* The top band spans both grid columns: the sidebar's brand block on the left
+   and the header on the right read as one continuous strip, so both take their
+   height from the same three values. They live on .app rather than on .header
+   because .sidebar-brand is in the other column and has to see them too
+   (bead eupzi). */
 .app {
+  --header-control-height: 28px;
+  --header-band-padding-block: 0.5rem;
+  --header-band-height: calc(
+    var(--header-control-height) + 2 * var(--header-band-padding-block) + 1px
+  );
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
@@ -12,23 +22,19 @@
    every control in .header-actions is pinned to (bead 57pp3) — before it,
    the children ranged 26px-42px and the tallest one alone set the row.
    28px + 2x0.5rem padding + 1px border = a 45px bar, down from 75px.
-   28px clears the 24x24 WCAG 2.2 target-size minimum. */
+   28px clears the 24x24 WCAG 2.2 target-size minimum.
+   The bar holds nothing but .header-actions (bead eupzi dropped the
+   "Operator workspace" label), so the cluster is pushed to the trailing
+   edge rather than spread with space-between. */
 .header {
-  --header-control-height: 28px;
   grid-column: 2;
   grid-row: 1;
   background-color: var(--bg-tertiary);
-  padding: 0.5rem 1rem;
+  padding: var(--header-band-padding-block) 1rem;
   border-bottom: 1px solid var(--border-primary);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-
-.header-context {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
-  font-weight: 600;
+  justify-content: flex-end;
 }
 
 .skip-link {

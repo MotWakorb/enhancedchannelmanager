@@ -1,14 +1,31 @@
 .primary-sidebar {
   grid-column: 1;
   grid-row: 1 / -1;
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 244px;
   min-width: 0;
   overflow: hidden;
   background: var(--bg-tertiary);
-  border-right: 1px solid var(--border-primary);
   transition: width 150ms ease;
+}
+
+/* The sidebar/content divider starts below the top band, not at the top of the
+   page (bead eupzi): the brand block and the header are one continuous strip,
+   so nothing may cut between them. It is an overlay rather than a border on
+   .primary-navigation because the nav is remounted and slid in on every
+   drill-in, which would take the divider with it for the length of the
+   animation. As an overlay it also leaves the sidebar's 244px untouched. */
+.primary-sidebar::after {
+  content: '';
+  position: absolute;
+  top: var(--header-band-height);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-primary);
+  pointer-events: none;
 }
 
 .primary-sidebar.is-collapsed {
@@ -16,28 +33,74 @@
   contain: inline-size;
 }
 
+/* Exactly as tall as the header, border included, so the two form one level
+   band. Both heights derive from --header-band-height on .app. */
 .sidebar-brand {
   display: flex;
   align-items: center;
   gap: 0.625rem;
-  min-height: 72px;
+  flex: 0 0 var(--header-band-height);
   padding: 0 0.875rem;
-  border-bottom: 1px solid var(--border-primary);
   overflow: hidden;
 }
 
-.sidebar-logo {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  object-fit: contain;
+.sidebar-brand-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
+.sidebar-brand-toggle:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-secondary);
+}
+
+.sidebar-brand-toggle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Sized off the same token as every header control so the mark keeps pace with
+   the band it sits in (bead eupzi). The mark plus the toggle's 3px padding and
+   1px border is 36px, and its 2px focus ring at 2px offset reaches 44px — both
+   inside the 45px band, which a 38px mark was not. */
+.sidebar-logo {
+  width: var(--header-control-height);
+  height: var(--header-control-height);
+  flex: 0 0 var(--header-control-height);
+  display: block;
+}
+
+/* Brand mark colours. The schedule is drawn in ink so it sits with the sidebar's
+   own text, and the middle row takes the accent — which is what reveals the C in
+   the outer path and the M in the middle arm. The accent must therefore differ
+   clearly from the ink in every theme, including high contrast. */
+.ecm-logo-ink { fill: var(--ecm-logo-ink, rgba(255, 255, 255, 0.95)); }
+
+.ecm-logo-accent {
+  fill: var(--ecm-logo-accent, #818cf8);
+  stroke: var(--ecm-logo-accent, #818cf8);
+}
+
+.ecm-logo-accent-soft {
+  fill: var(--ecm-logo-accent, #818cf8);
+  opacity: 0.45;
+}
+
+/* The wordmark is an SVG, so it takes its colour from `currentColor` and needs
+   no font sizing here — its proportions live in the viewBox. `flex: 0 0 auto`
+   keeps the brand row from squeezing it as the sidebar animates. */
 .sidebar-product-name {
+  flex: 0 0 auto;
   min-width: 0;
-  font-size: 0.875rem;
-  font-weight: 650;
-  line-height: 1.2;
+  color: var(--ecm-logo-ink, var(--text-primary));
 }
 
 .primary-navigation {
@@ -68,8 +131,79 @@
   list-style: none;
 }
 
-.navigation-destination,
-.navigation-collapse {
+/* Drill-in swipe. Transform only — never opacity: the sidebar is inside the
+   audited axe scope, and axe samples mid-animation, which is how the header
+   update badge reached 4.28:1 while measuring clean at rest. A pure slide
+   cannot change any computed colour. */
+@keyframes nav-slide-from-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes nav-slide-from-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.primary-navigation.nav-slide-forward {
+  animation: nav-slide-from-right 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.primary-navigation.nav-slide-back {
+  animation: nav-slide-from-left 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-navigation.nav-slide-forward,
+  .primary-navigation.nav-slide-back {
+    animation: none;
+  }
+}
+
+.navigation-back {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.navigation-back:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.navigation-back:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.navigation-back .material-icons {
+  flex: 0 0 20px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.primary-sidebar.is-collapsed .navigation-back {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
+  overflow-x: clip;
+}
+
+.navigation-destination {
   width: 100%;
   min-height: 40px;
   display: flex;
@@ -88,8 +222,7 @@
   white-space: nowrap;
 }
 
-.navigation-destination:hover:not([aria-disabled="true"]),
-.navigation-collapse:hover {
+.navigation-destination:hover:not([aria-disabled="true"]) {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
@@ -107,42 +240,29 @@
 
 .navigation-destination[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
-.navigation-destination:focus-visible,
-.navigation-collapse:focus-visible {
+.navigation-destination:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
 }
 
-.navigation-destination .material-icons,
-.navigation-collapse .material-icons {
+.navigation-destination .material-icons {
   flex: 0 0 20px;
   font-size: 20px;
   text-align: center;
 }
 
-.navigation-label,
-.navigation-collapse-label {
+.navigation-label {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.navigation-collapse {
-  flex: 0 0 auto;
-  margin: 0.5rem;
-  width: calc(100% - 1rem);
-  border-top: 1px solid var(--border-primary);
-  border-radius: 0;
-}
-
 .primary-sidebar.is-collapsed .sidebar-product-name,
 .primary-sidebar.is-collapsed .navigation-group h2,
-.primary-sidebar.is-collapsed .navigation-label,
-.primary-sidebar.is-collapsed .navigation-collapse-label { display: none; }
+.primary-sidebar.is-collapsed .navigation-label { display: none; }
 
 .primary-sidebar.is-collapsed .sidebar-brand { justify-content: center; padding: 0; }
 
-.primary-sidebar.is-collapsed .navigation-destination,
-.primary-sidebar.is-collapsed .navigation-collapse {
+.primary-sidebar.is-collapsed .navigation-destination {
   justify-content: center;
   gap: 0;
   padding-inline: 0;
