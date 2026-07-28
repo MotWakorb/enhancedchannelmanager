@@ -34,6 +34,8 @@ import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
 import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
 import type { SettingsPage } from './hooks/useHashRoute';
+import { useAuth } from './hooks/useAuth';
+import { settingsSectionHeading } from './components/settingsSections';
 import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
 import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
 import type { WorkspaceSource } from './components/workspaceLoadState';
@@ -307,6 +309,8 @@ function App() {
 
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
+  // Gates the administration-only entries in the sidebar's Settings drill-in.
+  const { user } = useAuth();
   const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
@@ -2519,6 +2523,36 @@ function App() {
     )
   );
 
+  // Header service indicator. Replaces the removed footer status line: an API
+  // error outranks a stale successful health payload, and any health status the
+  // backend does not report as healthy surfaces verbatim rather than as "Online".
+  const serviceStatus: { tone: 'online' | 'degraded' | 'offline' | 'pending'; label: string; detail: string } = error
+    ? { tone: 'offline', label: 'Offline', detail: `API error: ${error}` }
+    : !health
+      ? { tone: 'pending', label: 'Connecting', detail: 'Checking ECM service status' }
+      : /^(ok|okay|healthy|up|running)$/i.test(health.status ?? '')
+        ? { tone: 'online', label: 'Online', detail: `${health.service || 'ECM'} · ${health.status}` }
+        : { tone: 'degraded', label: health.status || 'Degraded', detail: `${health.service || 'ECM'} · ${health.status || 'status unavailable'}` };
+
+  // Settings carries a third breadcrumb crumb for the active section, e.g.
+  // SYSTEM / SETTINGS / GENERAL SETTINGS, with that section's own descriptive
+  // line beneath it. The section's heading block was removed from the content
+  // pane, so this header is now its only rendering.
+  const routeHeading = activeTab === 'settings'
+    ? (() => {
+      const section = settingsSectionHeading(settingsPage ?? 'general');
+      return {
+        group: `${ROUTE_HIERARCHY.settings.group} / ${ROUTE_TITLES.settings.toUpperCase()}`,
+        title: section.title.toUpperCase(),
+        description: section.description ?? ROUTE_HIERARCHY.settings.purpose,
+      };
+    })()
+    : {
+      group: ROUTE_HIERARCHY[activeTab].group,
+      title: ROUTE_TITLES[activeTab].toUpperCase(),
+      description: ROUTE_HIERARCHY[activeTab].purpose,
+    };
+
   return (
     <NotificationProvider position="top-right">
     <BackupDestinationPromptProvider>
@@ -2526,7 +2560,32 @@ function App() {
       <SkipToMainContent />
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
         <span className="header-context">Operator workspace</span>
+        {/* Reading order (bead 57pp3): the two status indicators sit left of the
+            action icons, upgrade-first, so the row reads "what changed" ->
+            "what is running" -> the controls that act on it. */}
         <div className="header-actions">
+          {updateInfo?.updateAvailable && (
+            <a
+              href={updateInfo.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="header-update-available"
+              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
+            >
+              <span className="material-icons" aria-hidden="true">system_update_alt</span>
+              <span>Update available</span>
+            </a>
+          )}
+          <span
+            className={`service-status service-status-${serviceStatus.tone}`}
+            role="status"
+            title={serviceStatus.detail}
+          >
+            <span className="service-status-dot" aria-hidden="true" />
+            <span className="service-status-sr">ECM service status: </span>
+            <span className="service-status-label">{serviceStatus.label}</span>
+            <span className="service-status-version">v{packageJson.version}</span>
+          </span>
           <a
             href="https://github.com/MotWakorb/enhancedchannelmanager/blob/main/USER_GUIDE.md"
             target="_blank"
@@ -2543,7 +2602,9 @@ function App() {
             className="header-icon-link"
             title="GitHub Repository"
           >
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            {/* Sized by .header-icon-link svg in App.css so the mark tracks the
+                Material icons beside it from a single source of truth. */}
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836a9.59 9.59 0 012.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
             </svg>
           </a>
@@ -2557,6 +2618,9 @@ function App() {
         onTabChange={handleTabChange}
         disabled={isCommitting}
         editModeActive={isEditMode}
+        settingsPage={settingsPage}
+        onSettingsPageChange={(page) => handleRouteChange('settings', page)}
+        isAdmin={Boolean(user?.is_admin)}
       />
 
       <EditModeExitDialog
@@ -2595,9 +2659,9 @@ function App() {
           className="route-page-header"
           headingLevel={1}
           headingRef={routeHeadingRef}
-          group={ROUTE_HIERARCHY[activeTab].group}
-          title={ROUTE_TITLES[activeTab].toUpperCase()}
-          description={ROUTE_HIERARCHY[activeTab].purpose}
+          group={routeHeading.group}
+          title={routeHeading.title}
+          description={routeHeading.description}
           actions={(
             <>
               {channelManagerPageAction}
@@ -2888,31 +2952,6 @@ function App() {
         </Suspense>
         </RouteHeaderTargetProvider>
       </main>
-
-      <footer className="footer">
-        <div className="footer-left">
-          {error && <span className="error">API Error: {error}</span>}
-          {health && (
-            <span className="status">
-              API: {health.status} | Service: {health.service}
-            </span>
-          )}
-        </div>
-        <div className="footer-right">
-          <span className="version">v{packageJson.version}</span>
-          {updateInfo?.updateAvailable && (
-            <a
-              href={updateInfo.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="update-available"
-              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
-            >
-              New Update Available!
-            </a>
-          )}
-        </div>
-      </footer>
 
       <VLCProtocolHelperModal
         isOpen={showVLCHelperModal}
