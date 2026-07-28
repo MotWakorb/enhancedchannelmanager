@@ -95,11 +95,20 @@ remapped onto it: **M3U Manager** and **EPG Manager** (bead
 `.list-header`, `.badge-sm`, `.micro-label` — moved with them and therefore
 already apply everywhere. `.header-title h2` — the PageHeader section
 heading — joined them on the section role (bead
-`enhancedchannelmanager-meh0a`); it too applies everywhere, though every
-current render site happens to be on EPG Manager. `.page-header
+`enhancedchannelmanager-meh0a`); it too applies everywhere. Its render sites
+are EPG Manager's "Dummy EPG Profiles" and "Dummy EPG Sources (Legacy)" plus
+the two headings that name the pilot pages' own tables — "EPG Sources" and
+"M3U Accounts" (bead `enhancedchannelmanager-7dxx0`). `.page-header
 .header-title h1` — the route title — joined on the page-title role (bead
 `enhancedchannelmanager-tygwm`) and applies to every route, not just the two
 remapped pages.
+
+A section heading is rendered by `PageHeader`, never hand-rolled. When the
+header carries nothing but its heading — naming the list directly beneath it
+— pass `className="page-header-heading-only"`, which trades the default
+1.5rem bottom margin for 0.5rem so the heading sits closer to the list it
+labels (24px above / 12px below, against the tabs' 1.5rem padding) than to
+the route header above it.
 
 Every other page still writes bare font sizes. Until the sweep finishes,
 "never write a bare `font-size`" is not yet a rule here; when you touch a

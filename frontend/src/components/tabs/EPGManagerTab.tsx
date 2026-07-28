@@ -1180,6 +1180,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         />
       </RouteHeaderSlot>
 
+      {/* The pane used to open on an unlabelled table — route title,
+          description, then straight into the list, while the section below it
+          was labelled "Dummy EPG Profiles" (bead
+          enhancedchannelmanager-7dxx0). Rendered through PageHeader rather
+          than a local h2 so it takes the same section role
+          (`.header-title h2`, 15px/600/1.3) as that heading, automatically.
+          Unconditional: the heading names the section, not the rows, and
+          keeping it over the empty state also stops the outline skipping from
+          the route h1 to the empty state's h3. */}
+      <PageHeader className="page-header-heading-only" title="EPG Sources" />
+
       {sources.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">schedule</span>

@@ -171,6 +171,52 @@ describe('EPGManagerTab — source lifecycle', () => {
   });
 });
 
+describe('EPGManagerTab — standard sources section heading', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  // Bead enhancedchannelmanager-7dxx0. The page opened on an unlabelled
+  // table: route title, description, then straight into the sources list —
+  // while the section below it was labelled "Dummy EPG Profiles". The
+  // heading is rendered by PageHeader, so asserting it sits inside
+  // `.header-title` is what pins it to the shared section role
+  // (15px/600/1.3, asserted from disk in PageHeader.test.tsx) rather than a
+  // hand-rolled h2 with per-page typography.
+  it('labels the sources table with a section heading rendered above it', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru XMLTV', source_type: 'xmltv' }),
+    ]);
+
+    render(<EPGManagerTab />);
+
+    const list = (await screen.findByText('Guru XMLTV')).closest('.epg-sources-list');
+    expect(list).not.toBeNull();
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'EPG Sources' });
+    expect(heading.closest('.header-title')).not.toBeNull();
+    expect(
+      heading.compareDocumentPosition(list as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  // The heading is not conditional on there being rows. Beyond keeping the
+  // pane's structure stable between states, it repairs an outline that
+  // skipped h1 -> h3: the empty state's "No EPG Sources" is an h3 and the
+  // route title is the page's only h1.
+  it('keeps the heading over the empty state so the outline never skips a level', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([]);
+
+    render(<EPGManagerTab />);
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'EPG Sources' });
+    const emptyState = screen.getByRole('heading', { level: 3, name: 'No EPG Sources' });
+    expect(
+      heading.compareDocumentPosition(emptyState) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+});
+
 describe('getTiedPriorities', () => {
   it('returns priorities shared by two or more sources', () => {
     const sources = [

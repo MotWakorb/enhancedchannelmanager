@@ -169,4 +169,25 @@ describe('PageHeader', () => {
     expect(collapse).toContain(':not(:has(> .page-header-related-links))');
     expect(collapse).toContain('display: none;');
   });
+
+  // Bead enhancedchannelmanager-7dxx0. A PageHeader carrying only a heading
+  // is the label for the list underneath it, so it sits closer to that list
+  // than to whatever is above — the default 1.5rem is sized for a header with
+  // copy and a toolbar in it. Pinned here, in the shared rule, because a
+  // per-tab margin is exactly the drift this sweep removes.
+  it('tightens a heading-only header onto the list it labels', () => {
+    const header = readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8');
+    const bare = /^\.page-header\.page-header-heading-only \{$[^}]*\}/m.exec(header)?.[0];
+    expect(bare).toBeDefined();
+    expect(bare).toContain('margin-bottom: 0.5rem;');
+  });
+
+  it('renders a heading-only header with no description, actions or meta row', () => {
+    const { container } = render(<PageHeader className="page-header-heading-only" title="EPG Sources" />);
+
+    expect(screen.getByRole('heading', { level: 2, name: 'EPG Sources' })).toBeInTheDocument();
+    expect(container.querySelector('.header-description')).toBeNull();
+    expect(container.querySelector('.header-actions')).toBeNull();
+    expect(container.querySelector('.page-header-meta')).toBeNull();
+  });
 });

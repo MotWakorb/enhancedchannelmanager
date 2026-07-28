@@ -12,6 +12,7 @@ import { M3ULinkedAccountsModal } from '../M3ULinkedAccountsModal';
 import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { CatchupBadge } from '../CatchupBadge';
+import { PageHeader } from '../PageHeader';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
@@ -949,6 +950,16 @@ export function M3UManagerTab({
           </>}
         />
       </RouteHeaderSlot>
+
+      {/* The pane used to open on an unlabelled table — route title,
+          description, then straight into the accounts list (bead
+          enhancedchannelmanager-7dxx0). Rendered through PageHeader rather
+          than a local h2 so it takes the same section role
+          (`.header-title h2`, 15px/600/1.3) as EPG Manager's headings,
+          automatically. Unconditional: the heading names the section, not the
+          rows, and keeping it over the empty state also stops the outline
+          skipping from the route h1 to the empty state's h3. */}
+      <PageHeader className="page-header-heading-only" title="M3U Accounts" />
 
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">

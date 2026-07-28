@@ -116,6 +116,48 @@ describe('M3UManagerTab', () => {
     });
   });
 
+  // Bead enhancedchannelmanager-7dxx0. The pane opened on an unlabelled
+  // table — route title, description, then straight into the accounts list.
+  // The heading is rendered by PageHeader, so asserting it sits inside
+  // `.header-title` is what pins it to the shared section role (15px/600/1.3,
+  // asserted from disk in PageHeader.test.tsx) rather than a hand-rolled h2
+  // carrying its own typography.
+  describe('accounts section heading (bead enhancedchannelmanager-7dxx0)', () => {
+    it('labels the accounts table with a section heading rendered above it', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount()]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Standard Playlist')).toBeInTheDocument());
+
+      const list = screen.getByText('Standard Playlist').closest('.m3u-accounts-list');
+      expect(list).not.toBeNull();
+
+      const heading = screen.getByRole('heading', { level: 2, name: 'M3U Accounts' });
+      expect(heading.closest('.header-title')).not.toBeNull();
+      expect(
+        heading.compareDocumentPosition(list as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    // The heading is not conditional on there being rows. Beyond keeping the
+    // pane's structure stable between states, it repairs an outline that
+    // skipped h1 -> h3: the empty state's "No M3U Accounts" is an h3 and the
+    // route title is the page's only h1.
+    it('keeps the heading over the empty state so the outline never skips a level', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+
+      const heading = await screen.findByRole('heading', { level: 2, name: 'M3U Accounts' });
+      const emptyState = screen.getByRole('heading', { level: 3, name: 'No M3U Accounts' });
+      expect(
+        heading.compareDocumentPosition(emptyState) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+  });
+
   describe('Server Groups management (bead hq3de.c)', () => {
     it('opens and closes the Server Groups modal from the toolbar', async () => {
       vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount()]);

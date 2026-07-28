@@ -24,6 +24,22 @@
   margin-bottom: 1.5rem;
 }
 
+/* A PageHeader that carries nothing but its heading — no description, no
+   actions, no meta row — used to name the list rendered directly beneath it
+   (bead enhancedchannelmanager-7dxx0: EPG Manager's "EPG Sources", M3U
+   Manager's "M3U Accounts").
+   The default 1.5rem bottom margin is sized for a header with copy and a
+   toolbar in it. On a bare heading it inverts proximity: the tabs pad
+   1.5rem, so the heading would sit 24px below the route header and 28px
+   above the table it names (24px here plus the h2's own 0.25rem), reading as
+   a label for the gap rather than for the list. 0.5rem puts 12px under the
+   heading against 24px over it, so the heading binds to its table.
+   One shared rule rather than a per-tab margin: this is exactly the drift
+   the P1 sweep exists to remove. */
+.page-header.page-header-heading-only {
+  margin-bottom: 0.5rem;
+}
+
 /* The route title. `headingLevel={1}` is passed by exactly one caller — the
    shared route header in App.tsx — so this rule governs the route title and
    nothing else. It is now the page-title role of the P1 scale rather than a
