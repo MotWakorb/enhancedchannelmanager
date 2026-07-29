@@ -79,11 +79,11 @@
   cursor: pointer;
 }
 
-.conflict-channel-name {
-  font-weight: 500;
-  color: var(--text-primary);
-  font-size: 0.9375rem;
-}
+/* `.conflict-channel-name` is owned by ChannelsPane.css, which declares it
+   bare in the same eager bundle and is emitted later. Its `var(--text-secondary)`
+   has always won here, and the weight and size this rule contributed are now
+   folded into that rule, so this row is unchanged
+   (bead enhancedchannelmanager-87o0c). */
 
 /* ID display styling */
 .conflict-ids {

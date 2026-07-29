@@ -11,11 +11,30 @@
   color: var(--accent-primary);
 }
 
-/* Profiles List */
-.profiles-list {
+/* Profiles List
+   Scoped to this modal's root, not bare. ChannelProfilesListModal.css:68
+   declares the same class in the EAGER bundle, so it reaches this modal from
+   first paint; this file rides the M3U Manager lazy chunk, appended after it
+   and never removed, so the `gap: 1rem` below was leaking the other way — one
+   visit to M3U Manager put a 1rem gap on the Channel Profiles list and on
+   StreamsPane's bulk-create profile picker (StreamsPane.tsx:2691) for the
+   rest of the session. `.m3u-profile-modal` is this modal's own root
+   (M3UProfileModal.tsx:174) and encloses the list (M3UProfileModal.tsx:202);
+   `:where()` contributes zero specificity, so the rule keeps its 0-1-0.
+
+   `flex: 1` and `overflow-y: auto` are carried over deliberately: this list
+   has always had them, but only because ChannelProfilesListModal's eager copy
+   was donating them. That copy has to stay bare — StreamsPane's picker
+   depends on it and sits under no shared ancestor — so declaring them here
+   makes this modal self-contained instead of silently borrowing from an
+   unrelated modal. Same rendered box, no hidden dependency
+   (bead enhancedchannelmanager-mktnb). */
+:where(.m3u-profile-modal) .profiles-list {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .profiles-header {
@@ -44,7 +63,24 @@
   gap: 0.75rem;
 }
 
-.profile-card {
+/* Scoped to this modal's root, not bare. CloudTargetsCard.css:45 declares the
+   same class as a plain block card (`border-radius: 0.5rem`, `overflow:
+   hidden`, a bottom margin, and no flex row — its `.profile-card-header`
+   owns the row). That file rides the Settings lazy chunk and this one rides
+   M3U Manager's; both are appended after the eager bundle and never removed,
+   so the two cards traded box treatments depending on which of the two tabs
+   the operator had opened last — divergent `border-radius`, and this rule's
+   `display: flex` / `padding: 1rem` turning every cloud-target card into a
+   padded flex row it was never authored as. `.m3u-profile-modal` is this
+   modal's own root (M3UProfileModal.tsx:174) and encloses the cards
+   (M3UProfileModal.tsx:219). The whole family is scoped, not just the base
+   rule: `:hover` was recolouring the cloud-target cards' border and
+   background too, and leaving a bare modifier behind is how a half-scoped
+   family turns back into a leak. `:where()` contributes zero specificity, so
+   `.profile-card.inactive` and `.profile-card.default` stay 0-2-0 and still
+   beat the base rule exactly as before
+   (bead enhancedchannelmanager-mktnb). */
+:where(.m3u-profile-modal) .profile-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -55,16 +91,16 @@
   transition: border-color 0.15s, background-color 0.15s;
 }
 
-.profile-card:hover {
+:where(.m3u-profile-modal) .profile-card:hover {
   border-color: var(--border-secondary);
   background-color: var(--bg-primary);
 }
 
-.profile-card.inactive {
+:where(.m3u-profile-modal) .profile-card.inactive {
   opacity: 0.6;
 }
 
-.profile-card.default {
+:where(.m3u-profile-modal) .profile-card.default {
   border-color: var(--accent-primary);
   background-color: rgba(var(--accent-primary-rgb, 99, 102, 241), 0.05);
 }
@@ -148,11 +184,26 @@
   color: var(--text-muted);
 }
 
-/* Profile Actions */
-.profile-actions {
+/* Profile Actions
+   Scoped to this modal's root, not bare. ChannelProfilesListModal.css:148
+   declares the same class in the EAGER bundle at `gap: 0.25rem`; this file
+   rides the M3U Manager lazy chunk, appended after it and never removed, so
+   the two modals' action rows diverged on `gap` by visit order — one visit to
+   M3U Manager also put `align-items: center` on the Channel Profiles rows.
+   `.m3u-profile-modal` is this modal's own root (M3UProfileModal.tsx:174) and
+   encloses the row (M3UProfileModal.tsx:250); `:where()` contributes zero
+   specificity, so the rule keeps its 0-1-0.
+
+   `justify-content: flex-end` and `flex-shrink: 0` are carried over
+   deliberately: this row has always had them, from the eager copy, which is
+   now scoped to its own modal. Declaring them here keeps the rendered box
+   identical (bead enhancedchannelmanager-mktnb). */
+:where(.m3u-profile-modal) .profile-actions {
   display: flex;
   gap: 0.375rem;
   align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .m3u-profile-modal .action-btn {

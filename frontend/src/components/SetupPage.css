@@ -91,7 +91,13 @@
   cursor: not-allowed;
 }
 
+/* Sole owner of `.setup-hint`, shared with SettingsModal.tsx. SettingsModal.css
+   declared it bare too; this file is emitted later in the eager bundle so it
+   won colour, size and margin, and `display: block` was the only thing that
+   survived from there — folded in below so that copy could go
+   (bead enhancedchannelmanager-87o0c). */
 .setup-hint {
+  display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 0.25rem;

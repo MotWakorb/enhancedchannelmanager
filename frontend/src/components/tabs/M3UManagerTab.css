@@ -344,15 +344,12 @@
   line-height: var(--type-meta-line-height);
 }
 
-/* --text-secondary, not --text-muted: in the light theme --text-muted
-   measures 2.61:1 on --bg-secondary, below the AA floor. */
-.updated-label {
-  color: var(--text-secondary);
-}
-
-.updated-time {
-  color: var(--text-secondary);
-}
+/* `.updated-label` and `.updated-time` are owned by shared/common.css § 29
+   UPDATED TIMESTAMP. This file and EPGManagerTab.css:249,253 declared them
+   bare and byte-identical in two different lazy chunks, so each tab owned the
+   other's timestamp colour for the rest of the session — latent today because
+   the values matched, and a defect the moment either page recoloured its own
+   (bead enhancedchannelmanager-mktnb). */
 
 /* Account Actions */
 .account-actions {

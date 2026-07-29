@@ -122,9 +122,8 @@
   cursor: default;
 }
 
-.setup-hint {
-  display: block;
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  margin-top: 0.25rem;
-}
+/* `.setup-hint` is owned by SetupPage.css, which declares it bare in the same
+   eager bundle and is emitted later — so its `var(--text-muted)` has always
+   won here and the `var(--text-secondary)` authored below never rendered.
+   `display: block` was this rule's only live contribution and is folded in
+   there (bead enhancedchannelmanager-87o0c). */

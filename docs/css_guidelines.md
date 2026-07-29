@@ -318,6 +318,14 @@ number.
 - `.group-name` — item-title role, truncating
 - `.group-count` — meta role; draw your own pill around it if you want one
 
+### Updated Timestamp (§ 29)
+- `.updated-label` / `.updated-time` — the "Updated: &lt;when&gt;" pair in a list
+  row. Colour only; the size and line-height come from the page's own wrapper
+  (`.source-updated` on EPG Manager, `.account-updated` on M3U Manager), which
+  sets the meta role on the pair. Hoisted from those two pages, which declared
+  the same colour bare in two different lazy chunks
+  (bead `enhancedchannelmanager-mktnb`).
+
 ### Other
 - `.visually-hidden` — WCAG screen-reader-only utility (§ 2)
 - `.file-info` / `.file-name` / `.file-size` — the picked-file chip (§ 17)

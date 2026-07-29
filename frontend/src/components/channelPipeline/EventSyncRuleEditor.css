@@ -384,25 +384,9 @@
   font-size: 12px;
   padding: 4px 10px;
 }
-.rule-active-window {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.rule-active-window legend {
-  margin-bottom: 0.35rem;
-  font-weight: 600;
-}
-
-.rule-active-window-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-@media (max-width: 640px) {
-  .rule-active-window-fields {
-    grid-template-columns: 1fr;
-  }
-}
+/* The active-window fieldset — `.rule-active-window`, its `legend`,
+   `.rule-active-window-fields` and the 640px single-column variant — is owned
+   by RuleBuilder.css. This file's four copies were byte-identical to it and
+   both files ship in the ChannelPipelineTab chunk, so they always load
+   together and this editor renders exactly as before
+   (bead enhancedchannelmanager-87o0c). */

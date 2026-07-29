@@ -131,13 +131,11 @@
   font-style: italic;
 }
 
-.preview-more {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-muted, #666);
-  background: var(--bg-secondary, #252540);
-  text-align: center;
-}
+/* `.preview-more` is owned by shared/common.css § 17 PREVIEW LISTS. This copy
+   and StreamsPane.css's were both bare and eager; StreamsPane won padding,
+   size and colour, and only the background and centring here survived. The
+   merged result — which is what this modal was already showing — is now the
+   single rule in common.css (bead enhancedchannelmanager-87o0c). */
 
 /* Validation Errors */
 .csv-validation-errors {

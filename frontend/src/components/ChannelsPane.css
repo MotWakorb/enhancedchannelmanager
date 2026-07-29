@@ -58,18 +58,13 @@
   }
 }
 
-.pane-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-primary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  transition: background-color 0.2s, border-color 0.2s;
-  height: 56px;
-  box-sizing: border-box;
-  min-width: 0;
-  gap: 0.5rem;
-}
+/* `.pane-header` is owned by shared/common.css § 14 PANE HEADERS. This copy
+   and StreamsPane.css's were both bare and eager, and common.css is emitted
+   last in the eager bundle, so its box won; only the height, `box-sizing`,
+   `min-width`, `gap` and the transition below survived from the panes, and all
+   of them are now in common.css. `.pane-header.edit-mode` stays here — it is
+   higher specificity and this pane's alone
+   (bead enhancedchannelmanager-87o0c). */
 
 .pane-header.edit-mode {
   border-bottom-color: var(--border-secondary);
@@ -155,13 +150,10 @@
    `.enter-edit-mode-btn` a few lines below (bead
    enhancedchannelmanager-6z299.5). */
 
-.pane-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  flex-shrink: 0;
-}
+/* `.pane-header-actions` is owned by shared/common.css § 14. This bare eager
+   copy lost display/align-items/gap to it at identical values and contributed
+   only `min-width` and `flex-shrink`, both now folded in there
+   (bead enhancedchannelmanager-87o0c). */
 
 .pane-item-count {
   display: inline-flex;
@@ -640,15 +632,12 @@
   color: var(--button-primary-bg);
 }
 
-.pane-content {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  min-width: 0;
-  min-height: 0;
-  padding: 0.5rem;
-  transition: background-color 0.2s, border-color 0.2s;
-}
+/* `.pane-content` is owned by shared/common.css § 14. This bare eager copy
+   lost flex/overflow-y/padding to it at identical values; `overflow-x`, the
+   two `min-*: 0` guards and the transition were its only live contribution and
+   are now folded in there. `.pane-content.stream-group-drop-target` stays —
+   higher specificity, this pane's alone
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Stream group drop target styling */
 .pane-content.stream-group-drop-target {
@@ -790,15 +779,13 @@
   color: var(--accent-primary);
 }
 
-.group-drag-handle {
-  color: var(--drag-handle-color);
-  cursor: grab;
-  padding: 0 0.25rem;
-  margin-right: 0.25rem;
-  user-select: none;
-  font-size: 1.2rem;
-  transition: color 0.15s;
-}
+/* `.group-drag-handle` is owned by StreamsPane.css, which declared it bare in
+   the same eager bundle and is emitted later — so its flex box and
+   `padding: 0` were already what this pane's handle rendered, and the
+   `padding: 0 0.25rem` here never applied. `user-select` and the 1.2rem size
+   were this rule's only live contribution and have moved there. The `:active`
+   rule below stays: higher specificity, and StreamsPane's equivalent is keyed
+   off its own group header (bead enhancedchannelmanager-87o0c). */
 
 .group-drag-handle:active {
   cursor: grabbing;
@@ -2173,18 +2160,13 @@
 }
 
 /* Modal styles */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
+/* `.modal-overlay` and `.modal-btn` are owned by ModalBase.css. Both copies
+   here were bare and eager and emitted after ModalBase, so they were setting
+   the backdrop and the button geometry for every modal in the app, not just
+   this pane's. ModalBase's `--modal-overlay-bg` and `.modal-btn` now carry the
+   values that were rendering (0.7 backdrop, 0.5rem 1rem / 4px button), so the
+   deletions move nothing. `z-index: 1000` here was identical to
+   ModalBase's `var(--z-overlay)` (bead enhancedchannelmanager-87o0c). */
 
 .modal-content {
   background-color: var(--input-bg);
@@ -2238,14 +2220,6 @@
   margin-top: 1.5rem;
 }
 
-.modal-btn {
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
 .modal-btn.cancel {
   background-color: var(--bg-hover);
   border: 1px solid var(--border-secondary);
@@ -2266,10 +2240,9 @@
   background-color: var(--button-primary-bg);
 }
 
-.modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* `.modal-btn:disabled` was byte-identical to ModalBase.css's and, being the
+   later of the two eager copies, simply reasserted it
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Collapsible Sections in Create Channel Modal */
 .modal-form .collapsible-section {
@@ -2554,12 +2527,13 @@
   color: var(--text-primary);
 }
 
-.conflict-options {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
+/* This bare `.conflict-options` rule had no render site in ChannelsPane.tsx —
+   the class is emitted by StreamsPane.tsx and BulkEPGAssignModal.tsx. Being
+   eager and later than BulkEPGAssignModal.css, it was nonetheless winning
+   their gap and adding a bottom margin neither asked for. Its two live values
+   (`gap: 0.75rem`, `margin-bottom: 1rem`) moved into BulkEPGAssignModal.css's
+   rule, which is now the single owner, so both render sites are unchanged
+   (bead enhancedchannelmanager-87o0c). */
 
 .conflict-option-btn {
   display: flex;
@@ -3065,11 +3039,12 @@
   object-fit: contain;
 }
 
-.logo-option-none {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  text-align: center;
-}
+/* `.logo-option-none` moved to ModalBase.css, next to the
+   `.dropdown-option` family it shares a rule with there. This copy was bare
+   and eager and emitted after ModalBase, so its colour and size were winning
+   while ModalBase supplied the rest of the box — a merge that rendered in
+   EditChannelModal and AutoSyncSettingsModal, neither of which is this file's
+   surface (bead enhancedchannelmanager-87o0c). */
 
 .logo-search-input {
   width: 100%;
@@ -4719,12 +4694,11 @@
   font-weight: 600;
 }
 
-.preview-name {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* `.preview-name` is owned by StreamsPane.css, which declares it bare in the
+   same eager bundle and is emitted later, so it already won all four
+   properties this copy declared, at identical values — and this pane's renumber
+   previews have always also picked up StreamsPane's 0.85rem and text colour
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Mass Renumber Modal */
 .mass-renumber-dialog {
@@ -4852,11 +4826,19 @@
   font-weight: 600;
 }
 
+/* Sole owner of `.conflict-channel-name`. GracenoteConflictModal.css declared
+   it bare in the same eager bundle; this file is emitted later, so it won the
+   colour and that modal's row was already rendering
+   `var(--text-secondary)` — its weight and 0.9375rem size are the only things
+   that survived from there, and they are folded in below so its copy could go
+   (bead enhancedchannelmanager-87o0c). */
 .conflict-channel-name {
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 500;
+  font-size: 0.9375rem;
 }
 
 .mass-renumber-preview {

@@ -263,14 +263,26 @@
 
 /* .form-group and .form-hint are defined in shared/common.css */
 
-.form-row {
+/* Scoped to the route root, not bare. `.form-row` was declared bare in three
+   chunks: here (twice — see the Email Settings copy below), in
+   M3UAccountModal.css:48 as a `display: flex` inline row, and in
+   RuleBuilder.css as a flex row that the Channel Pipeline page did not
+   actually render. Every tab chunk is appended after the eager bundle and
+   never removed, so this two-column grid and the M3U account modal's inline
+   row each rendered whichever of the two the operator had opened last.
+   `.settings-tab` is this route's root (SettingsTab.tsx:5835) and encloses
+   every `.form-row` on the page (SettingsTab.tsx:3476,3509,3535, rendered via
+   `renderEmailSettingsPage` into `.settings-content-main`). `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and only its
+   match set narrows (bead enhancedchannelmanager-mktnb). */
+:where(.settings-tab) .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
 }
 
 @media (max-width: 600px) {
-  .form-row {
+  :where(.settings-tab) .form-row {
     grid-template-columns: 1fr;
   }
 }
@@ -1051,8 +1063,13 @@
    Email Settings Page
    ======================================== */
 
-/* Form rows for side-by-side inputs */
-.form-row {
+/* Form rows for side-by-side inputs.
+   Scoped to `.settings-tab` for the same reason as the copy further up this
+   file — see its comment. This is the later of the two Settings declarations,
+   so it is the one that wins for every `.form-row` on the page today; scoping
+   both keeps that unchanged and only stops them reaching the M3U account
+   modal (bead enhancedchannelmanager-mktnb). */
+:where(.settings-tab) .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
@@ -1060,7 +1077,7 @@
 }
 
 @media (max-width: 768px) {
-  .form-row {
+  :where(.settings-tab) .form-row {
     grid-template-columns: 1fr;
   }
 }

@@ -125,20 +125,35 @@
    sizes — so the hint under a form field changed size depending on which
    page had been opened first (bead enhancedchannelmanager-6z299). */
 
-/* Form Row */
-.form-row {
-  display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
-}
+/* `.form-row` and `.form-row .form-field` used to be declared here, bare.
+   NOTHING in the Channel Pipeline chunk renders `.form-row` — no file under
+   `components/channelPipeline/` puts that class on an element — so the rules
+   matched nothing on their own page and existed only to donate
+   `display: flex; gap: 24px; flex-wrap: wrap` to the three OTHER chunks that
+   do render it: SettingsTab.css:305,1094 (Email Settings, authored as a
+   two-column `display: grid`) and M3UAccountModal.css:48. After one visit to
+   Channel Pipeline this chunk is appended after both, so the Email Settings
+   grid collapsed to a flex row for the rest of the session. `.form-row
+   .form-field` matched nothing at all: `.form-field` exists only in this
+   chunk, `.form-row` only in the other two, so the descendant pair never
+   co-occurred. Deleted rather than scoped — there is no render to preserve
+   (bead enhancedchannelmanager-mktnb). */
 
-.form-row .form-field {
-  flex: 1;
-  min-width: 150px;
-}
-
-/* Checkbox Group */
-.checkbox-group {
+/* Checkbox Group
+   Scoped to the route root, not bare. `.checkbox-group` is a shared class
+   owned by shared/common.css § 20 (column, gap 0.5rem); this is the Channel
+   Pipeline variant (wrapping rows, 8px/24px gap, 8px vertical padding). Bare,
+   it rode this lazy chunk — appended after common.css and never removed — so
+   one visit to Channel Pipeline re-gapped and re-padded every checkbox group
+   in the app for the rest of the session (StreamsPane's bulk-create profile
+   list, ScheduleEditor, Settings). `.channel-pipeline-tab` is the route root
+   (ChannelPipelineTab.tsx:882,896) and encloses all three consumers of this
+   rule — RuleBuilder.tsx:800+, EventSyncRuleEditor.tsx:1477 and
+   BulkRuleSettingsModal.tsx:191 are rendered inside it, and `ModalOverlay`
+   renders inline rather than through a portal, so the modals stay under it.
+   `:where()` contributes zero specificity, so this rule keeps the 0-1-0 it
+   had and only its match set narrows (bead enhancedchannelmanager-mktnb). */
+:where(.channel-pipeline-tab) .checkbox-group {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 24px;
@@ -408,14 +423,11 @@
 
 /* Responsive */
 @media (max-width: 600px) {
-  .form-row {
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .form-row .form-field {
-    min-width: 100%;
-  }
+  /* The `.form-row` / `.form-row .form-field` narrow-viewport overrides that
+     used to live here went with their unconditional rules above — same
+     reason: no Channel Pipeline element carries `.form-row`, so under 600px
+     they only reached Settings' and M3UAccountModal's rows
+     (bead enhancedchannelmanager-mktnb). */
 
   .rule-builder-footer {
     flex-direction: column-reverse;
@@ -466,10 +478,11 @@
   cursor: not-allowed;
 }
 
-.norm-group-disabled {
-  opacity: 0.5;
-  font-style: italic;
-}
+/* `.norm-group-disabled` deleted here and in BulkRuleSettingsModal.css: no TSX
+   in the tree emits the class, so neither copy had a render site. The two were
+   colliding inside the ChannelPipelineTab chunk (0.5 here vs 0.6 there) but
+   the collision was invisible because nothing wore the class
+   (bead enhancedchannelmanager-87o0c). */
 
 .norm-hint {
   display: inline-flex;

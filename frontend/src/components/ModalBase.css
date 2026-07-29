@@ -33,9 +33,19 @@
    CSS VARIABLES - Override these in your theme for customization
    ============================================================================= */
 
+/* WHY SEVERAL DEFAULTS BELOW ARE NOT THE ORIGINALLY AUTHORED ONES
+   (bead enhancedchannelmanager-87o0c):
+   ChannelsPane.css and StreamsPane.css each carried their own bare
+   `.modal-overlay` / `.modal-header` / `.modal-body` / `.modal-footer` rules.
+   Both files are eager and both are emitted AFTER this one, so for every modal
+   in the app — not just the panes' — their values were the ones that rendered
+   and these tokens were dead. The pane copies are now deleted and this file
+   owns the chassis outright; the five tokens marked "was <x>" below were
+   re-pointed to the value that was actually rendering, so the conversion moves
+   zero pixels. Measured in a browser with every route's chunk installed. */
 .modal-overlay {
   /* Overlay */
-  --modal-overlay-bg: rgba(0, 0, 0, 0.6);
+  --modal-overlay-bg: rgba(0, 0, 0, 0.7); /* was 0.6; the panes' 0.7 rendered */
   --modal-overlay-backdrop-blur: 2px;
 
   /* Container */
@@ -46,18 +56,23 @@
 
   /* Header */
   --modal-header-bg: var(--bg-secondary, #252540);
-  --modal-header-border: var(--border-color, #3a3a5a);
-  --modal-header-padding: 0.5rem;
+  /* was var(--border-color, #3a3a5a) — `--border-color` is defined nowhere, so
+     that resolved to a fixed #3a3a5a in every theme. StreamsPane's copy won
+     with the theme-aware token, which is what renders. */
+  --modal-header-border: var(--border-primary);
+  --modal-header-padding: 1rem 1.25rem; /* was 0.5rem; StreamsPane's rendered */
   --modal-title-color: var(--text-primary, #ffffff);
   --modal-title-size: 1.1rem;
 
   /* Body */
-  --modal-body-padding: 1rem;
+  --modal-body-padding: 1.25rem; /* was 1rem; StreamsPane's rendered */
   --modal-body-max-height: 70vh;
 
   /* Footer */
   --modal-footer-bg: var(--bg-secondary, #252540);
-  --modal-footer-border: var(--border-color, #3a3a5a);
+  /* was var(--border-color, #3a3a5a) — see --modal-header-border above. */
+  --modal-footer-border: var(--border-primary);
+  /* padding and gap already matched StreamsPane's copy, so they are unchanged. */
   --modal-footer-padding: 1rem 1.25rem;
   --modal-footer-gap: 0.75rem;
 
@@ -367,18 +382,25 @@
    BUTTONS - Modal-specific button styles
    ============================================================================= */
 
+/* ChannelsPane.css carried a bare `.modal-btn` too. Both files are eager and
+   it is emitted after this one, so its padding, radius and single-property
+   transition were what every modal button in the app rendered, while this
+   rule's display/gap/weight/border survived alongside. Its copy is deleted and
+   the three contended values re-pointed here, so the button is unchanged and
+   one file owns the class. `4px` is `--radius-md`, the token ChannelsPane's
+   literal matched (bead enhancedchannelmanager-87o0c). */
 .modal-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.625rem 1rem;
+  padding: 0.5rem 1rem;
   font-size: 0.9rem;
   font-weight: 500;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
+  transition: background-color 0.15s;
 }
 
 .modal-btn:disabled {
@@ -482,16 +504,17 @@
     max-width: 100%;
   }
 
-  .modal-header {
-    padding: 0.875rem 1rem;
-  }
-
-  .modal-body {
-    padding: 1rem;
-  }
-
+  /* The narrow-viewport `padding` overrides for `.modal-header`, `.modal-body`
+     and `.modal-footer` are gone. They never rendered: a media query adds no
+     specificity, and StreamsPane.css's bare copies of those three classes were
+     emitted after this whole file, so at every width the modal chrome used
+     StreamsPane's 1rem 1.25rem / 1.25rem / 1rem 1.25rem. Now that this file
+     owns the chassis (see the token block at the top), leaving them here would
+     have brought them to life and shrunk every modal's chrome below 600px —
+     a change, not a reconciliation. Deleted to keep the fix render-neutral;
+     restoring a real mobile padding is a separate, deliberate change
+     (bead enhancedchannelmanager-87o0c). `flex-wrap` below DID render and stays. */
   .modal-footer {
-    padding: 0.875rem 1rem;
     flex-wrap: wrap;
   }
 
@@ -768,6 +791,20 @@
 
 .dropdown-option-item {
   padding: 0.5rem 0.75rem;
+}
+
+/* The "No Logo" cell is the muted, centred variant of the row above. These
+   three came from a bare `.logo-option-none` in ChannelsPane.css — eager, and
+   emitted after this file, so it won colour and size while this rule's flex
+   box, padding, radius and cursor survived. Kept as a separate rule rather
+   than folded into the group selector above, because `.dropdown-option` and
+   `.dropdown-option-item` never took these values and must not start
+   (bead enhancedchannelmanager-87o0c). ChannelsPane.tsx renders no logo picker
+   of its own; the render sites are EditChannelModal and AutoSyncSettingsModal. */
+.logo-option-none {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-align: center;
 }
 
 .dropdown-option:hover,

@@ -965,7 +965,17 @@
   font-family: monospace;
 }
 
-.details-grid {
+/* Scoped to the route root, not bare. Three lazy chunks declared
+   `.details-grid` with three different `grid-template-columns` — this file's
+   auto-fit track, JournalTab.css:420's `1fr 1fr` and M3UChangesTab.css:407's
+   `1fr 1fr` — and a tab chunk is appended after the eager bundle and never
+   removed, so the expanded-row detail grid on all three pages rendered
+   whichever column track the last-visited tab had authored. `.stats-tab` is
+   this route's root (StatsTab.tsx:874,887) and encloses the grid
+   (StatsTab.tsx:1395); `:where()` contributes zero specificity, so the rule
+   keeps its 0-1-0 and only its match set narrows
+   (bead enhancedchannelmanager-mktnb). */
+:where(.stats-tab) .details-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 1rem;

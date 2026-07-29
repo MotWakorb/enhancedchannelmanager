@@ -19,7 +19,19 @@
   background-color: var(--bg-primary);
 }
 
-.group-item {
+/* Scoped to this modal's root, not bare. PrintGuideModal.css:26 declares the
+   same class as a bordered, rounded card with `align-items: center` and
+   `justify-content: space-between`; this file rides the Settings lazy chunk
+   and that one rides Guide's, both appended after the eager bundle and never
+   removed, so the two modals' rows swapped box treatments depending on which
+   of Settings and Guide the operator had opened last — a divergent
+   `align-items` plus cross-donated background, border, border-radius one way
+   and border-bottom, cursor the other. `.delete-orphaned-modal` is this
+   modal's own root (DeleteOrphanedGroupsModal.tsx:56) and encloses the rows
+   (DeleteOrphanedGroupsModal.tsx:93); `:where()` contributes zero
+   specificity, so each rule keeps the specificity it had and only its match
+   set narrows (bead enhancedchannelmanager-mktnb). */
+:where(.delete-orphaned-modal) .group-item {
   display: flex;
   align-items: flex-start;
   padding: 0.75rem;
@@ -28,15 +40,23 @@
   transition: background-color 0.2s;
 }
 
-.group-item:last-child {
+:where(.delete-orphaned-modal) .group-item:last-child {
   border-bottom: none;
 }
 
-.group-item:hover {
+:where(.delete-orphaned-modal) .group-item:hover {
   background-color: var(--bg-secondary);
 }
 
-.group-item input[type="checkbox"] {
+/* Scoped with the rest of the family. PrintGuideModal's row also nests a
+   checkbox under `.group-item` (PrintGuideModal.tsx:358), and its own
+   `.group-checkbox-area input[type="checkbox"]` rule sets no margins — so
+   while the Settings chunk was loaded this rule was donating a 0.75rem right
+   and 0.25rem top margin to that modal's checkbox on top of the 0.75rem flex
+   gap it is already given, and taking it away again for operators who had not
+   opened Settings. Scoping restores the Print Guide row to what its own
+   author wrote (bead enhancedchannelmanager-mktnb). */
+:where(.delete-orphaned-modal) .group-item input[type="checkbox"] {
   margin-right: 0.75rem;
   margin-top: 0.25rem;
   cursor: pointer;
@@ -52,8 +72,12 @@
    16px, so the same group row rendered at a different size depending on
    which page you had opened (bead enhancedchannelmanager-6z299). */
 /* `label.group-item`, not `.group-item`: PrintGuideModal.css declares the
-   same two class names on a <div> row, and both files are in the eager
-   bundle, so a bare descendant rule here would reach that modal's rows too. */
+   same two class names on a <div> row, so a bare descendant rule here would
+   reach that modal's rows too. (The original note here said "both files are
+   in the eager bundle" — they are not: this file rides the Settings lazy
+   chunk and PrintGuideModal.css rides Guide's. The tag qualifier is still the
+   right guard, but the reason it was needed is chunk order, not eager
+   co-residence — bead enhancedchannelmanager-mktnb.) */
 label.group-item .group-name {
   margin-bottom: 0.25rem;
 }

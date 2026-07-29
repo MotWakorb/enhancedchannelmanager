@@ -7,17 +7,12 @@
   overflow: hidden;
 }
 
-.pane-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-primary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 56px;
-  box-sizing: border-box;
-  min-width: 0;
-  gap: 0.5rem;
-}
+/* `.pane-header` is owned by shared/common.css § 14 PANE HEADERS. This copy
+   was eager and bare, as was ChannelsPane.css's, so common.css — emitted last
+   in the eager bundle — already won the box while this rule contributed only
+   the strip height, `box-sizing`, `min-width` and `gap`. Those four moved to
+   common.css unchanged; the `padding: 1rem` here never rendered
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Typography is owned by shared/common.css § 14 PANE HEADERS. The 1.1rem
    this file declared never rendered: common.css is emitted last inside the
@@ -334,6 +329,12 @@
   cursor: grabbing;
 }
 
+/* Sole owner of `.group-drag-handle`. ChannelsPane.css declared it bare too;
+   both files are eager and this one is emitted later, so it won every property
+   they shared and ChannelsPane's handle already rendered this box. The two
+   properties only ChannelsPane declared — `user-select` and the 1.2rem size —
+   are folded in below so its copy could be deleted without moving a pixel
+   (bead enhancedchannelmanager-87o0c). */
 .group-drag-handle {
   display: flex;
   align-items: center;
@@ -345,6 +346,8 @@
   padding: 0;
   border: 0;
   background: none;
+  user-select: none;
+  font-size: 1.2rem;
 }
 
 .group-drag-handle .material-icons {
@@ -360,13 +363,10 @@
   color: var(--drag-handle-hover);
 }
 
-.drag-handle {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-}
+/* `.drag-handle` is owned by shared/common.css § 10 DRAG HANDLES. This bare
+   copy's button reset moved there verbatim; only `color: inherit` was
+   contended and common.css already won it, so nothing here rendered that the
+   fold does not reproduce (bead enhancedchannelmanager-87o0c). */
 
 .group-drag-handle:focus-visible,
 .drag-handle:focus-visible {
@@ -728,10 +728,11 @@ button.group-selection-checkbox {
 }
 
 /* Filter dropdown - base styles in shared/common.css */
-/* Component-specific overrides */
-.filter-dropdown-menu {
-  background-color: var(--input-bg);
-}
+/* This file's `.filter-dropdown-menu { background-color: var(--input-bg) }`
+   was not an override at all: it was bare and eager, and common.css is emitted
+   after it, so `var(--bg-secondary)` has always won. Deleted rather than
+   scoped — reviving it would repaint the menu
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Remapped in place rather than pointed at `.empty-inline`, because this
    class is also rendered by GroupMultiSelectDropdown.tsx — a different chunk
@@ -789,19 +790,12 @@ button.group-selection-checkbox {
   color: var(--accent-primary);
 }
 
-/* Modal Overlay */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-overlay);
-}
+/* The modal chassis — `.modal-overlay`, `.modal-header`, `.modal-body`,
+   `.modal-footer` — is owned by ModalBase.css. This file's bare copies were
+   eager and emitted after ModalBase, so they were setting the chrome for every
+   modal in the app, not just this pane's bulk-create modal. The values they
+   won are now ModalBase's token defaults, so deleting them here changes
+   nothing on screen (bead enhancedchannelmanager-87o0c). */
 
 /* Bulk Create Modal */
 .bulk-create-modal {
@@ -816,14 +810,6 @@ button.group-selection-checkbox {
   box-shadow: var(--shadow-xl);
 }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border-primary);
-}
-
 .modal-header h3 {
   margin: 0;
   font-size: 1.1rem;
@@ -831,12 +817,6 @@ button.group-selection-checkbox {
 }
 
 /* modal-close-btn styles are in ModalBase.css */
-
-.modal-body {
-  padding: 1.25rem;
-  overflow-y: auto;
-  flex: 1;
-}
 
 /* Multi-group option */
 .multi-group-option {
@@ -920,20 +900,12 @@ button.group-selection-checkbox {
   color: var(--text-secondary);
 }
 
-.radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.radio-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  color: var(--button-text);
-  font-size: 0.9rem;
-}
+/* `.radio-group` and `.radio-option` are owned by shared/common.css § 20. Both
+   copies here were bare and eager, and common.css is emitted after this file:
+   it won `.radio-group` outright (the 0.75rem gap never rendered — 0.5rem
+   did), and on `.radio-option` only this file's colour and size survived.
+   Those two moved to common.css, so the rows are unchanged
+   (bead enhancedchannelmanager-87o0c). */
 
 .radio-option input[type="radio"] {
   width: 16px;
@@ -1096,25 +1068,14 @@ button.group-selection-checkbox {
   font-weight: 500;
 }
 
-.preview-list {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.preview-item {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--input-bg);
-}
-
-.preview-item:last-child {
-  border-bottom: none;
-}
+/* `.preview-list`, `.preview-item` and `.preview-item:last-child` are owned by
+   shared/common.css § 17 PREVIEW LISTS. All three copies here were bare and
+   eager, and common.css is emitted after this file, so it already won every
+   property they declared — these rules rendered nothing. In particular the
+   180px `max-height` authored here has never been the live value; the list has
+   always been common.css's 300px. Deleted rather than revived, because
+   reviving it would be a change nobody has seen
+   (bead enhancedchannelmanager-87o0c). */
 
 .preview-number {
   font-size: 0.85rem;
@@ -1253,16 +1214,11 @@ button.group-selection-checkbox {
   color: var(--text-primary);
 }
 
-.checkbox-option {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  cursor: pointer;
-  color: var(--button-text);
-  font-size: 0.9rem;
-}
+/* `.checkbox-option` is owned by shared/common.css § 20. This bare eager copy
+   lost display/align-items/gap/cursor to common.css (identical values) and
+   contributed the wrap, padding, colour and size on top — a merge every
+   checkbox row in the app was already rendering, including the pipeline tab's.
+   All four moved to common.css (bead enhancedchannelmanager-87o0c). */
 
 .checkbox-option input[type="checkbox"] {
   width: 16px;
@@ -1279,9 +1235,10 @@ button.group-selection-checkbox {
   width: 1rem;
 }
 
-.collapsible-title {
-  color: var(--button-text);
-}
+/* `.collapsible-title` is owned by shared/common.css § 9. The
+   `color: var(--button-text)` this file declared was bare and eager and
+   common.css is emitted after it, so `var(--text-primary)` has always been the
+   rendered colour (bead enhancedchannelmanager-87o0c). */
 
 .collapsible-content {
   overflow: visible;
@@ -1398,12 +1355,11 @@ button.group-selection-checkbox {
    background at all. It now gets SettingsTab's valid `--accent-15`
    (bead enhancedchannelmanager-6z299). */
 
-.preview-more {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
+/* `.preview-more` moved to shared/common.css § 17 PREVIEW LISTS. It was
+   declared bare here and in CSVImportModal.css, both eager; this file won
+   padding, size and colour and CSVImportModal's background and centring
+   survived on top, so both render sites were showing a merge. The merged rule
+   is now in common.css verbatim (bead enhancedchannelmanager-87o0c). */
 
 .preview-group {
   margin-bottom: 0.75rem;
@@ -1423,13 +1379,8 @@ button.group-selection-checkbox {
   margin-bottom: 0.25rem;
 }
 
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border-top: 1px solid var(--border-primary);
-}
+/* `.modal-footer` is owned by ModalBase.css — see the chassis note above the
+   bulk-create modal. */
 
 /* .btn-cancel is defined in shared/common.css */
 

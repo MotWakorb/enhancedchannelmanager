@@ -827,12 +827,22 @@
 /* Drag handle styles
    Extracted from: EPGManagerTab.css, ChannelsPane.css, StreamsPane.css, ChannelDetail.css */
 
+/* The `<button>` reset (padding/border/background/font) came from a second
+   `.drag-handle` rule in StreamsPane.css. Both files are eager, both rules
+   were bare, so every `.drag-handle` in the app — StreamsPane's, the pipeline
+   tab's, EPGManagerTab's — already rendered this merge; only `color: inherit`
+   was contended there and this file won it. Folded in so one file owns the
+   class (bead enhancedchannelmanager-87o0c). */
 .drag-handle {
   cursor: grab;
   color: var(--drag-handle-color);
   transition: color 0.15s;
   display: flex;
   align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
 }
 
 .drag-handle:hover {
@@ -1205,6 +1215,14 @@
 /* Pane header styles
    Extracted from: ChannelsPane.css, StreamsPane.css */
 
+/* ChannelsPane.css and StreamsPane.css each carried a bare `.pane-header`
+   too. All three are eager and this file is emitted last, so its box (the
+   0.75rem 1rem padding, the secondary background) has been the live one all
+   along; the panes contributed only the properties this rule never declared —
+   the 56px strip height, `box-sizing`, `min-width`, `gap`, and ChannelsPane's
+   edit-mode transition. Those are folded in here so one file owns the class.
+   The panes' `padding: 1rem` stays discarded: it is not what renders today
+   (bead enhancedchannelmanager-87o0c). */
 .pane-header {
   display: flex;
   justify-content: space-between;
@@ -1212,6 +1230,11 @@
   padding: 0.75rem 1rem;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
+  height: 56px;
+  box-sizing: border-box;
+  min-width: 0;
+  gap: 0.5rem;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 /* Micro role, not section. A pane header caption is the same tracked
@@ -1231,18 +1254,33 @@
   color: var(--text-secondary);
 }
 
+/* `min-width` and `flex-shrink` come from ChannelsPane.css's bare copy of this
+   class, which was eager and therefore already applied to the only site that
+   renders it (ChannelsPane.tsx). Folded in, copy deleted
+   (bead enhancedchannelmanager-87o0c). */
 .pane-header-actions {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 /* Pane content area
    Extracted from: ChannelsPane.css, StreamsPane.css */
+/* `overflow-x`, the two `min-*: 0` flex-child guards and the edit-mode
+   transition come from ChannelsPane.css's bare copy. It was eager and bare, so
+   both panes' content areas already rendered this merge; this rule won the
+   three properties they shared (flex/overflow-y/padding) at identical values
+   (bead enhancedchannelmanager-87o0c). */
 .pane-content {
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem;
+  overflow-x: hidden;
+  min-width: 0;
+  min-height: 0;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 
@@ -1316,6 +1354,22 @@
 
 .preview-item.success {
   background-color: var(--success-bg);
+}
+
+/* The "… and N more" tail of a preview list. Promoted here from the two eager
+   files that both declared it bare — CSVImportModal.css and StreamsPane.css —
+   so one file owns the class. Values are exactly what rendered before:
+   StreamsPane won the three properties they shared (padding, font-size,
+   colour) and CSVImportModal's background and centring survived untouched,
+   which is the merge both render sites were already getting
+   (bead enhancedchannelmanager-87o0c). */
+.preview-more {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  text-align: center;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--text-muted);
 }
 
 /* The picked-file chip — filename over size, next to a preview or an upload
@@ -1558,12 +1612,30 @@
   gap: 1rem;
 }
 
+/* `color` and `font-size` come from StreamsPane.css, which declared both of
+   these classes bare in the eager bundle. This file is emitted after it, so it
+   won the four properties they shared and StreamsPane's colour and size
+   survived on top — i.e. every checkbox and radio row in the app, including
+   the pipeline tab's, already rendered this exact merge. Folded in and the
+   StreamsPane copies deleted, so one file owns each class
+   (bead enhancedchannelmanager-87o0c). */
 .checkbox-option,
 .radio-option {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+  color: var(--button-text);
+  font-size: 0.9rem;
+}
+
+/* Checkbox-only half of the same fold: StreamsPane's copy declared these two
+   and its radio copy did not, so only checkbox rows wrapped and carried
+   vertical padding. Kept asymmetric on purpose — matching the radios would be
+   a visible change, not a reconciliation (bead enhancedchannelmanager-87o0c). */
+.checkbox-option {
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
 }
 
 .checkbox-option input,
@@ -1969,4 +2041,31 @@
 .header-stat .material-icons {
   font-size: 16px;
   color: var(--text-muted);
+}
+
+
+/* =============================================================================
+   29. UPDATED TIMESTAMP
+   ============================================================================= */
+
+/* The "Updated: <when>" pair in a list row. Hoisted, not scoped, because the
+   two render sites are structurally the same thing and the two declarations
+   were byte-identical: EPGManagerTab.tsx:191 (`.source-updated`) and
+   M3UManagerTab.tsx:246 (`.account-updated`) both emit
+   `<span class="updated-label">Updated:</span><span class="updated-time">…`,
+   and EPGManagerTab.css:249,253 and M3UManagerTab.css:349,353 both set the
+   same colour. Two lazy chunks, so whichever tab you had visited last owned
+   the other's timestamp colour — harmless while the values matched, a defect
+   the first time either page recoloured only its own copy
+   (bead enhancedchannelmanager-mktnb).
+
+   The size and line-height still come from each page's own `.source-updated`
+   / `.account-updated` wrapper, which sets the meta role on the pair; only
+   the colour is shared.
+
+   --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the WCAG AA 4.5:1 floor. */
+.updated-label,
+.updated-time {
+  color: var(--text-secondary);
 }

@@ -96,22 +96,29 @@
   opacity: 0.6;
 }
 
-.drag-handle {
-  display: flex;
-  align-items: center;
+/* `.drag-handle` is owned by shared/common.css § 10 DRAG HANDLES. This file
+   used to restate that whole rule bare — `display: flex`, `align-items:
+   center`, `cursor: grab`, `color: var(--drag-handle-color)` and `transition:
+   color 0.15s` are byte-identical to common.css:830 — plus `:hover` and
+   `:active` copies byte-identical to common.css:838 and :842. The only thing
+   this page actually adds is centring the glyph in its grid cell, so that is
+   all that is left here. common.css is emitted LAST inside the eager bundle
+   (verified in a build: `.drag-handle` lands at byte 259,429 of 273,289,
+   after StreamsPane.css's own `.drag-handle` reset at 165,668), and this
+   chunk is appended after the eager bundle, so the deleted declarations
+   resolve to exactly the values they resolved to before.
+
+   Bare, they were also the app-wide winners: one visit to EPG Manager
+   permanently added `justify-content: center` to StreamsPane's and Channel
+   Pipeline's drag handles too. `.epg-manager-tab` is this route's root
+   (EPGManagerTab.tsx:1077,1105,1129) and encloses the handle
+   (EPGManagerTab.tsx:145, inside `.epg-source-row` inside
+   `.epg-sources-list`; there is no `DragOverlay` and no portal). `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and still layers
+   over common.css on chunk order exactly as before
+   (bead enhancedchannelmanager-mktnb). */
+:where(.epg-manager-tab) .drag-handle {
   justify-content: center;
-  cursor: grab;
-  color: var(--drag-handle-color);
-  transition: color 0.15s;
-}
-
-.drag-handle:hover {
-  color: var(--drag-handle-hover);
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-  color: var(--drag-handle-hover);
 }
 
 .source-priority {
@@ -244,15 +251,12 @@
   line-height: var(--type-meta-line-height);
 }
 
-/* --text-secondary, not --text-muted: in the light theme --text-muted
-   measures 2.61:1 on --bg-secondary, below the AA floor. */
-.updated-label {
-  color: var(--text-secondary);
-}
-
-.updated-time {
-  color: var(--text-secondary);
-}
+/* `.updated-label` and `.updated-time` are owned by shared/common.css § 29
+   UPDATED TIMESTAMP. This file and M3UManagerTab.css:349,353 declared them
+   bare and byte-identical in two different lazy chunks, so each tab owned the
+   other's timestamp colour for the rest of the session — latent today because
+   the values matched, and a defect the moment either page recoloured its own
+   (bead enhancedchannelmanager-mktnb). */
 
 .source-actions {
   display: flex;

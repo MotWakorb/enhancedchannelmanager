@@ -42,7 +42,21 @@
   opacity: 0.4;
 }
 
-.profile-card {
+/* Scoped to this card's root, not bare. M3UProfileModal.css:47 declares the
+   same class as a padded flex row at `border-radius: var(--radius-xl)`, in
+   the M3U Manager lazy chunk; this file rides Settings'. Both are appended
+   after the eager bundle and never removed, so a cloud-target card rendered
+   as a plain block or as a 1rem-padded flex row — with a different corner
+   radius — depending on which of Settings and M3U Manager the operator had
+   opened last. This rule is the authored one: `.profile-card-header` below
+   owns the row layout, so the card itself is a block on purpose.
+   `.cloud-target-list` is this component's own root
+   (CloudTargetsCard.tsx:125) and encloses the cards
+   (CloudTargetsCard.tsx:146, inside `.profile-list-items`); `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and the
+   `.is-disabled` opacity further down this file still layers over it on file
+   order exactly as before (bead enhancedchannelmanager-mktnb). */
+:where(.cloud-target-list) .profile-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 0.5rem;

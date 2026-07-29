@@ -23,7 +23,20 @@
   gap: 0.5rem;
 }
 
-.group-item {
+/* Scoped to this modal's root, not bare. DeleteOrphanedGroupsModal.css:34
+   declares the same class as a flush, bottom-bordered list row with
+   `align-items: flex-start`; this file rides the Guide lazy chunk and that
+   one rides Settings', both appended after the eager bundle and never
+   removed, so the two modals' rows swapped box treatments depending on which
+   of Guide and Settings the operator had opened last — a divergent
+   `align-items` plus cross-donated border-bottom and cursor one way and
+   background, border, border-radius the other. `.print-guide-modal` is this
+   modal's own root (PrintGuideModal.tsx:303) and encloses the rows
+   (PrintGuideModal.tsx:356); `:where()` contributes zero specificity, so each
+   rule keeps the specificity it had — `.group-item.selected` stays 0-2-0 and
+   still beats the base rule — and only the match set narrows
+   (bead enhancedchannelmanager-mktnb). */
+:where(.print-guide-modal) .group-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -34,7 +47,7 @@
   transition: border-color 0.15s, background-color 0.15s;
 }
 
-.group-item.selected {
+:where(.print-guide-modal) .group-item.selected {
   border-color: var(--accent-primary);
   background-color: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
 }

@@ -181,7 +181,18 @@
 /* CURRENT LOGO (EDIT)   */
 /* ===================== */
 
-.current-logo-preview {
+/* The preview BOX — display, align-items, gap, padding, background,
+   border-radius — is owned by ChannelsPane.css:3277, which is eager and so
+   reaches this modal too; this rule only ever supplied a taller bottom
+   margin. Bare, it was also the app-wide winner for `margin-bottom`: this
+   file rides the Logo Manager lazy chunk, appended after the eager bundle and
+   never removed, so one visit to Logo Manager pushed EditChannelModal's
+   current-logo preview (EditChannelModal.tsx:845) from its authored 0.75rem
+   to 1rem for the rest of the session. `.logo-modal` is this modal's own root
+   (LogoModal.tsx:225) and `:where()` keeps the rule at the 0-1-0 it had, so
+   it still beats ChannelsPane's copy here on chunk order exactly as before
+   (bead enhancedchannelmanager-mktnb). */
+:where(.logo-modal) .current-logo-preview {
   margin-bottom: 1rem;
 }
 

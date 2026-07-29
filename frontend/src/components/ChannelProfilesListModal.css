@@ -64,7 +64,15 @@
   cursor: not-allowed;
 }
 
-/* Profiles List - scrollable */
+/* Profiles List - scrollable.
+   DELIBERATELY BARE — do not scope this to `.channel-profiles-modal`.
+   StreamsPane.tsx:2691 renders `checkbox-group profiles-list` inside the
+   bulk-create panel and takes its `flex: 1` and `overflow-y: auto` (its
+   scrollability) from this rule; `.bulk-create-modal .profiles-list` supplies
+   only display, direction and gap. The two live under no shared ancestor, so
+   there is no scope that covers both. The cross-chunk half of the collision
+   was M3UProfileModal.css:15, which is now scoped to its own modal and no
+   longer donates a 1rem gap here (bead enhancedchannelmanager-mktnb). */
 .profiles-list {
   display: flex;
   flex-direction: column;
@@ -145,7 +153,19 @@
   color: var(--text-primary);
 }
 
-.profile-actions {
+/* Scoped to this modal's root, not bare. This file is in the EAGER bundle and
+   M3UProfileModal.css:152 declares the same class at `gap: 0.375rem` in the
+   M3U Manager lazy chunk, which is appended after it and never removed — so
+   after one visit to M3U Manager this row rendered at that modal's gap and
+   picked up its `align-items: center` too, for the rest of the session.
+   `.channel-profiles-modal` is this modal's own root
+   (ChannelProfilesListModal.tsx:384) and encloses the row
+   (ChannelProfilesListModal.tsx:483); nothing else in the app renders
+   `.profile-actions` (DummyEPGManagerSection uses `dep-profile-actions`), so
+   unlike `.profiles-list` above this one can be scoped on both sides.
+   `:where()` contributes zero specificity, so the rule keeps its 0-1-0
+   (bead enhancedchannelmanager-mktnb). */
+:where(.channel-profiles-modal) .profile-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.25rem;

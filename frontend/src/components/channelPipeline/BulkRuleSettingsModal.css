@@ -41,9 +41,9 @@
   flex-wrap: wrap;
 }
 
-.norm-group-disabled {
-  opacity: 0.6;
-}
+/* `.norm-group-disabled` deleted — see the note in RuleBuilder.css: the class
+   has no render site anywhere in the tree
+   (bead enhancedchannelmanager-87o0c). */
 
 .bulk-rule-settings-modal .sort-config-row {
   display: flex;

@@ -39,7 +39,8 @@
  * tradeoff against reading the built output.
  *
  * ---------------------------------------------------------------------------
- * TWO TIERS, TWO BASELINES — deliberate, see bead enhancedchannelmanager-6z299.6
+ * THREE TIERS, TWO AXES — deliberate, see beads enhancedchannelmanager-6z299.6
+ * (tiers 1-2) and enhancedchannelmanager-mklhu (tier 3)
  *
  * TIER 1 (typography): unbaselined. Every violation is reported. It is RED on
  * purpose while the P1 type-scale consolidation burns it down, and its count
@@ -58,10 +59,71 @@
  *   - any baseline entry whose CHUNK SET moved    (partly fixed, or spread)
  * so the list cannot rot and cannot silently grow.
  *
- * WHEN EITHER FAILS: do not scope-and-move-on and do not add a baseline entry
- * for new work. Delete the page copy and let the shared layer own the class
- * (leaving the pointer comment behind), or scope the page copy to a page-root
- * ancestor so it can no longer leak. See docs/css_guidelines.md § Load order.
+ * TIER 3 (same chunk, either property set): baselined against
+ * `KNOWN_SAME_CHUNK_MERGES`. Added by bead enhancedchannelmanager-mklhu.
+ *
+ * Tiers 1 and 2 both key collisions on CHUNK IDENTITY — they fire when a bare
+ * selector is declared in two DIFFERENT chunks. That is exactly right for the
+ * visit-order defect above, and BLIND BY CONSTRUCTION to the case where both
+ * files are in the SAME chunk. The eager bundle is one chunk carrying
+ * index.css, common.css, App.css, ChannelsPane.css, StreamsPane.css,
+ * ModalBase.css and ~35 more, so "same chunk" covers most of the tree.
+ *
+ * That blind spot shipped a P1. `ChannelProfilesListModal.css` and
+ * `ChannelsPane.css` both declared `.channel-item`; both eager; ChannelsPane is
+ * emitted later, so its `display: grid` beat the modal's `display: flex` while
+ * the modal's `gap` survived, and Manage Channels rendered channel names inside
+ * a 32px grid track. Tiers 1 and 2 were green the whole time. Fixed in 266356ff.
+ *
+ * So TIER 3 keys on BYTE ORDER WITHIN A CHUNK instead — see
+ * `deriveEmissionRank()` for the model and for how it was validated against two
+ * real builds. It reports a selector declared by TWO OR MORE FILES of one
+ * chunk, classified by `classifySameChunkGroup()`:
+ *   - PARTIAL  the rendered element draws from more than one file. This is the
+ *              `.channel-item` shape: a merge of two authors' intentions that
+ *              neither wrote. 17 when this tier landed, 0 today — bead
+ *              enhancedchannelmanager-87o0c reconciled them.
+ *   - SHADOW   the last-emitted file wins every contended property, so the
+ *              earlier copy is dead weight. Harmless today, and one deleted
+ *              property away from PARTIAL — tracked, not ignored, because the
+ *              commit that adds the duplicate and the commit that makes it
+ *              render wrong are usually different commits, and only tracking
+ *              both puts the failure on the one that introduced it. 14 when
+ *              this tier landed, 0 today (same bead).
+ *   - DISJOINT the files declare non-overlapping properties, so nothing
+ *              contends. NOT reported, for the same reason TIER 2 requires a
+ *              shared property. 5 today.
+ * A shape flip in either direction fails the check, as does a moved chunk.
+ *
+ * TIER 3 also closes tiers 1/2's largest known gap: it expands shorthands, so
+ * `padding` and `padding-left` contend. That was measured before adopting —
+ * see `SHORTHAND_SLOTS` — and costs zero extra reported selectors.
+ *
+ * WHAT TIER 3 STILL CANNOT SEE, measured rather than guessed:
+ *   - `deriveChunks()` collapses everything statically reachable from the entry
+ *     into one EAGER bucket, but the real build splits off any module that the
+ *     entry AND every lazy root reach: today that is Toast.css + ToastContainer
+ *     .css, emitted as NotificationContext-*.css and <link>ed BEFORE index-*.css.
+ *     Those two files therefore sit in a different stylesheet from the rest of
+ *     EAGER, and a collision between them and (say) common.css would be labelled
+ *     same-chunk here. It would still be a real, deterministic override in the
+ *     same direction — the emission rank and the <link> order agree — so the
+ *     verdict is right and only the word "chunk" is loose. Neither file
+ *     participates in any collision today. Unifying the two chunk models is
+ *     follow-up work, not a correctness hole in the reported set.
+ *   - Properties outside TIER1+TIER2's lists (transition, transform, ...) are
+ *     invisible, so a group whose ONLY surviving contribution from the earlier
+ *     file is such a property is classified SHADOW rather than PARTIAL.
+ *   - Two rules in ONE file are skipped: that is the author's own ordering, not
+ *     a collision between two authors.
+ *   - Scoping a rule makes it a different key and therefore invisible, exactly
+ *     as in tiers 1 and 2. That is the intended fix, not a gap.
+ *
+ * WHEN ANY OF THE THREE FAILS: do not scope-and-move-on and do not add a
+ * baseline entry for new work. Delete the page copy and let the shared layer
+ * own the class (leaving the pointer comment behind), or scope the page copy to
+ * a page-root ancestor so it can no longer leak. See docs/css_guidelines.md
+ * § Load order.
  *
  * NOTE ON `postcss`: declared as an explicit devDependency of
  * frontend/package.json (previously resolved only transitively through
@@ -236,6 +298,59 @@ function deriveChunks(): Map<string, string> {
   return chunks;
 }
 
+/**
+ * Emission order of each CSS file WITHIN its chunk (0 = emitted first).
+ *
+ * Vite's `vite:css-post` renderChunk concatenates `styles.get(id)` while
+ * iterating `Object.keys(chunk.modules)` — i.e. the chunk's modules in bundler
+ * EXECUTION order. Execution order is a post-order DFS from the static entry
+ * (each module's own static imports first, in source order, then the module
+ * itself), followed by every dynamic-import target in discovery order. That is
+ * what this function reimplements; `deriveChunks()` already parses the same
+ * edges, so this only re-walks them.
+ *
+ * VALIDATED AGAINST TWO REAL BUILDS (2026-07-29, vite 8.0.16 / rolldown):
+ * for every CSS file, the byte span of the class tokens that only that file
+ * declares was located inside the built stylesheet, and the files were ordered
+ * by the median hit. Across 15 built stylesheets and 108 adjacent comparisons
+ * there were ZERO inversions against this model — on `newui` HEAD and again on
+ * 266356ff^. The eager cascade was treated as one sequence in the order
+ * index.html <link>s it, which is how the browser applies it.
+ *
+ * WHY IT MATTERS: within one stylesheet the later declaration wins outright.
+ * Two files declaring the same bare selector therefore produce a deterministic
+ * result — but one nobody wrote, and one that depends on an emission order no
+ * source file states. See TIER 3.
+ */
+function deriveEmissionRank(chunks: Map<string, string>): Map<string, number> {
+  const ordered: string[] = [];
+  const visited = new Set<string>();
+  const dynamicEntries = new Set<string>();
+  const analyse = (mod: string): void => {
+    if (visited.has(mod)) return;
+    visited.add(mod);
+    const e = edges(mod);
+    for (const dep of e.statik) analyse(dep);
+    for (const d of e.dynamic) dynamicEntries.add(d);
+    ordered.push(mod);
+  };
+  analyse(ENTRY);
+  // A Set iterated with for..of picks up entries appended during iteration,
+  // which is exactly how Rollup drains its dynamic-entry queue.
+  for (const entry of dynamicEntries) analyse(entry);
+
+  const nextRank = new Map<string, number>();
+  const rank = new Map<string, number>();
+  for (const mod of ordered) {
+    const chunk = chunks.get(mod);
+    if (chunk === undefined || chunk === 'UNREACHED') continue;
+    const n = nextRank.get(chunk) ?? 0;
+    rank.set(mod, n);
+    nextRank.set(chunk, n + 1);
+  }
+  return rank;
+}
+
 // --- CSS declarations -------------------------------------------------------
 
 interface Decl {
@@ -250,20 +365,156 @@ interface Decl {
 /** Whitespace/combinator normalisation so `.a>.b` and `.a > .b` are one key. */
 const normalize = (sel: string): string => sel.replace(/\s*([>+~])\s*/g, ' $1 ').replace(/\s+/g, ' ').trim();
 
+// --- tier 3 model -----------------------------------------------------------
+
+/** One rule declaring covered properties, positioned in its chunk's cascade. */
+interface SameChunkSite {
+  file: string;
+  line: number;
+  /** Emission rank of `file` within its chunk. Lower = earlier = loses. */
+  rank: number;
+  decls: Array<{ prop: string; value: string; important: boolean }>;
+}
+
+interface SameChunkGroup {
+  chunk: string;
+  selector: string;
+  sites: SameChunkSite[];
+}
+
 /**
- * Index every reachable CSS file once, into one map per tier. Both tiers key
- * on (at-rule context, normalised selector); a rule lands in a tier's map only
- * if it declares at least one property that tier covers.
+ * TIER 3 covers TIER 1's and TIER 2's properties together. The two are split
+ * upstream because they are burned down by different work, not because a
+ * merged box is less of a defect when the merge is a font size: an element
+ * whose weight comes from one file and whose colour comes from another is the
+ * same failure either way. Splitting them here would only let a two-property
+ * merge hide by straddling the boundary.
  */
-function buildIndex(): { typography: Map<string, Decl[]>; layout: Map<string, Decl[]> } {
+const TIER3_PROPS = new Set([...TYPOGRAPHY, ...LAYOUT_VISUAL]);
+
+/**
+ * Longhand slots each shorthand writes, restricted to properties this file
+ * covers. Named as the largest gap in TIER 1/TIER 2, which compare literal
+ * property names and so read `padding` vs `padding-left` as no collision.
+ *
+ * MEASURED BEFORE ADOPTING, on `newui` HEAD and on 266356ff^: expanding
+ * shorthands adds ZERO reported selectors on either tree — every same-chunk
+ * group containing a shorthand/longhand pair was already reported through some
+ * literal property. So there is no false-positive budget being spent, and two
+ * things are bought: the reported `contended` list becomes truthful (at
+ * 266356ff^ it is what surfaces `gap` vs `column-gap` on `.channel-item`), and
+ * a page can no longer evade this tier by writing `padding-left` against a
+ * shared `padding`.
+ *
+ * `border-radius` is deliberately absent from `border`: it is not part of the
+ * `border` shorthand and is not reset by it.
+ */
+const SHORTHAND_SLOTS: Record<string, string[]> = {
+  padding: ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
+  'padding-inline': ['padding-left', 'padding-right'],
+  'padding-block': ['padding-top', 'padding-bottom'],
+  margin: ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+  'margin-inline': ['margin-left', 'margin-right'],
+  'margin-block': ['margin-top', 'margin-bottom'],
+  border: ['border-width', 'border-style', 'border-color', 'border-top', 'border-right', 'border-bottom', 'border-left'],
+  'border-width': ['border-top', 'border-right', 'border-bottom', 'border-left'],
+  'border-style': ['border-top', 'border-right', 'border-bottom', 'border-left'],
+  'border-color': ['border-top', 'border-right', 'border-bottom', 'border-left'],
+  background: ['background-color', 'background-image'],
+  flex: ['flex-grow', 'flex-shrink', 'flex-basis'],
+  gap: ['row-gap', 'column-gap'],
+  overflow: ['overflow-x', 'overflow-y'],
+  'grid-area': ['grid-row', 'grid-column'],
+};
+
+const slotsOf = (prop: string): string[] => {
+  const expanded = SHORTHAND_SLOTS[prop];
+  return expanded ? [prop, ...expanded] : [prop];
+};
+
+type SameChunkShape = 'PARTIAL' | 'SHADOW' | 'DISJOINT';
+
+/**
+ * Resolve one chunk's cascade for a single selector and name the shape.
+ *
+ *   PARTIAL   the surviving declarations come from MORE THAN ONE file, so the
+ *             element renders a merge of two authors' intentions that neither
+ *             wrote. This is the shape that produced the `.channel-item` P1.
+ *   SHADOW    contention exists but the last-emitted file wins every contended
+ *             slot, so the earlier copy is dead weight. Deterministic and
+ *             harmless TODAY — and one deleted property away from PARTIAL,
+ *             which is why it is tracked rather than ignored (see TIER 3).
+ *   DISJOINT  the files declare non-overlapping properties, so nothing
+ *             contends and both apply exactly as written. Not reported, for
+ *             the same reason TIER 2 requires a shared property.
+ *
+ * Specificity is not consulted because the key IS the normalised selector, so
+ * every site in a group has identical specificity by construction. Within one
+ * origin at equal specificity the cascade is: `!important` beats normal, and
+ * among equals the later declaration wins — which is what the winner map does.
+ */
+function classifySameChunkGroup(sites: SameChunkSite[]): {
+  shape: SameChunkShape;
+  contended: string[];
+  divergent: string[];
+} {
+  const ordered = [...sites].sort((a, b) => a.rank - b.rank || a.line - b.line);
+  const winner = new Map<string, { file: string; important: boolean }>();
+  const writers = new Map<string, Set<string>>();
+  const values = new Map<string, Set<string>>();
+
+  for (const site of ordered) {
+    for (const d of site.decls) {
+      if (!values.has(d.prop)) values.set(d.prop, new Set());
+      values.get(d.prop)!.add(d.value);
+      for (const slot of slotsOf(d.prop)) {
+        const held = winner.get(slot);
+        if (!held || d.important || !held.important) winner.set(slot, { file: site.file, important: d.important });
+        if (!writers.has(slot)) writers.set(slot, new Set());
+        writers.get(slot)!.add(site.file);
+      }
+    }
+  }
+
+  // Report the property names authors actually wrote, not the expanded slots.
+  const contended = [...new Set(ordered.flatMap((s) => s.decls.map((d) => d.prop)))]
+    .filter((prop) => slotsOf(prop).some((slot) => (writers.get(slot)?.size ?? 0) > 1))
+    .sort();
+  if (contended.length === 0) return { shape: 'DISJOINT', contended: [], divergent: [] };
+
+  const survivors = new Set([...winner.values()].map((w) => w.file));
+  return {
+    shape: survivors.size > 1 ? 'PARTIAL' : 'SHADOW',
+    contended,
+    divergent: contended.filter((prop) => (values.get(prop)?.size ?? 0) > 1),
+  };
+}
+
+/**
+ * Index every reachable CSS file once, into one map per tier. All three tiers
+ * key on (at-rule context, normalised selector); a rule lands in a tier's map
+ * only if it declares at least one property that tier covers. TIER 3 keys on
+ * (chunk, at-rule context, normalised selector) because its question is asked
+ * inside one chunk, not across chunks.
+ */
+function buildIndex(): {
+  typography: Map<string, Decl[]>;
+  layout: Map<string, Decl[]>;
+  sameChunk: Map<string, SameChunkGroup>;
+} {
   const typography = new Map<string, Decl[]>();
   const layout = new Map<string, Decl[]>();
+  const sameChunk = new Map<string, SameChunkGroup>();
   const typoProps = new Set(TYPOGRAPHY);
   const layoutProps = new Set(LAYOUT_VISUAL);
 
-  for (const [cssFile, chunk] of deriveChunks()) {
+  const chunks = deriveChunks();
+  const emissionRank = deriveEmissionRank(chunks);
+
+  for (const [cssFile, chunk] of chunks) {
     if (chunk === 'UNREACHED') continue; // no module imports it, so it never loads
     const root = parse(fs.readFileSync(cssFile, 'utf8'), { from: cssFile });
+    const rank = emissionRank.get(cssFile) ?? 0;
     root.walkRules((rule: Rule) => {
       const decls = rule.nodes.filter((n): n is Declaration => n.type === 'decl');
       if (decls.length === 0) return;
@@ -290,9 +541,24 @@ function buildIndex(): { typography: Map<string, Decl[]>; layout: Map<string, De
           into.get(key)!.push({ ...decl, chunk });
         }
       }
+
+      const tier3 = decls.filter((d) => TIER3_PROPS.has(d.prop.toLowerCase()));
+      if (tier3.length === 0) return;
+      const site: SameChunkSite = {
+        file: path.relative(SRC, cssFile),
+        line: rule.source?.start?.line ?? 0,
+        rank,
+        decls: tier3.map((d) => ({ prop: d.prop.toLowerCase(), value: d.value.trim(), important: !!d.important })),
+      };
+      for (const sel of rule.selectors) {
+        const selector = [...ctx, normalize(sel)].join(' :: ');
+        const key = `${chunk} :: ${selector}`;
+        if (!sameChunk.has(key)) sameChunk.set(key, { chunk, selector, sites: [] });
+        sameChunk.get(key)!.sites.push(site);
+      }
     });
   }
-  return { typography, layout };
+  return { typography, layout, sameChunk };
 }
 
 let indexCache: ReturnType<typeof buildIndex> | null = null;
@@ -350,23 +616,6 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
   { selector: '.btn-danger', chunks: ['ChannelPipelineTab', 'EAGER'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:173 | RuleBuilder.css:387 — same family as the .btn-primary/.btn-secondary deletions at RuleBuilder.css:385,395' },
   { selector: '.search-box', chunks: ['EAGER', 'SettingsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:882 | TagEngineSection.css:23 — divergent padding, border' },
   { selector: '.status-disabled', chunks: ['EAGER', 'SettingsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:477 | CloudTargetsCard.css:125 — § 4.2 retokenises the common.css side; the CloudTargetsCard copy must go with it' },
-
-  // --- NEEDS-TRIAGE: found by this tier, owned by no wave (see UNTRIAGED_BUDGET) ---
-  { selector: '.checkbox-group', chunks: ['ChannelPipelineTab', 'EAGER'], bead: 'NEEDS-TRIAGE', where: 'common.css:1497 | RuleBuilder.css:141 — divergent gap' },
-  { selector: '.current-logo-preview', chunks: ['EAGER', 'LogoManagerTab'], bead: 'NEEDS-TRIAGE', where: 'LogoModal.css:184 | ChannelsPane.css:3253 — divergent margin-bottom' },
-  { selector: '.details-grid', chunks: ['JournalTab', 'M3UChangesTab', 'StatsTab'], bead: 'NEEDS-TRIAGE', where: 'StatsTab.css:860 | JournalTab.css:370 | M3UChangesTab.css:376 — divergent grid-template-columns' },
-  { selector: '.drag-handle', chunks: ['EAGER', 'EPGManagerTab'], bead: 'NEEDS-TRIAGE', where: 'common.css:780 | EPGManagerTab.css:99 | StreamsPane.css:344 — divergent color' },
-  { selector: '.drag-handle:active', chunks: ['EAGER', 'EPGManagerTab'], bead: 'NEEDS-TRIAGE', where: 'common.css:792 | EPGManagerTab.css:112' },
-  { selector: '.drag-handle:hover', chunks: ['EAGER', 'EPGManagerTab'], bead: 'NEEDS-TRIAGE', where: 'common.css:788 | EPGManagerTab.css:108' },
-  { selector: '.form-row', chunks: ['ChannelPipelineTab', 'M3UManagerTab', 'SettingsTab'], bead: 'NEEDS-TRIAGE', where: 'RuleBuilder.css:129 | SettingsTab.css:294,1034 | M3UAccountModal.css:48 — divergent display AND gap' },
-  { selector: '.group-item', chunks: ['GuideTab', 'SettingsTab'], bead: 'NEEDS-TRIAGE', where: 'DeleteOrphanedGroupsModal.css:22 | PrintGuideModal.css:23 — divergent align-items' },
-  { selector: '.profile-actions', chunks: ['EAGER', 'M3UManagerTab'], bead: 'NEEDS-TRIAGE', where: 'M3UProfileModal.css:140 | ChannelProfilesListModal.css:148 — divergent gap' },
-  { selector: '.profile-card', chunks: ['M3UManagerTab', 'SettingsTab'], bead: 'NEEDS-TRIAGE', where: 'CloudTargetsCard.css:42 | M3UProfileModal.css:47 — divergent border-radius' },
-  { selector: '.profiles-list', chunks: ['EAGER', 'M3UManagerTab'], bead: 'NEEDS-TRIAGE', where: 'M3UProfileModal.css:15 | ChannelProfilesListModal.css:68' },
-  { selector: '.radio-group', chunks: ['EAGER', 'M3UManagerTab'], bead: 'NEEDS-TRIAGE', where: 'common.css:1497 | M3UAccountModal.css:15 | StreamsPane.css:899 — divergent gap' },
-  { selector: '.updated-label', chunks: ['EPGManagerTab', 'M3UManagerTab'], bead: 'NEEDS-TRIAGE', where: 'EPGManagerTab.css:249 | M3UManagerTab.css:349' },
-  { selector: '.updated-time', chunks: ['EPGManagerTab', 'M3UManagerTab'], bead: 'NEEDS-TRIAGE', where: 'EPGManagerTab.css:253 | M3UManagerTab.css:353' },
-  { selector: '@media (max-width: 900px) :: .details-grid', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'NEEDS-TRIAGE', where: 'JournalTab.css:449 | M3UChangesTab.css:489' },
 ];
 
 /**
@@ -374,7 +623,50 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
  * commit that files the bead; raising it is how the allowlist rots, so the
  * assertion refuses.
  */
-const UNTRIAGED_BUDGET = 15;
+const UNTRIAGED_BUDGET = 0;
+
+// --- tier 3 baseline --------------------------------------------------------
+
+interface SameChunkBaselineEntry {
+  /** Chunk the collision happens inside. Drift here fails the check. */
+  chunk: string;
+  /** Exactly the key this file reports: `[@at-rule ... :: ]<normalised selector>`. */
+  selector: string;
+  /** PARTIAL or SHADOW. A shape flip fails the check — see below. */
+  shape: 'PARTIAL' | 'SHADOW';
+  /** The bead that deletes this entry. Never blank. */
+  bead: string;
+  /** Sites + what contends, so a reader does not have to re-run the audit. */
+  where: string;
+}
+
+/**
+ * EMPTY, and it stays empty. This tier was born with 31 pre-existing same-chunk
+ * collisions (17 PARTIAL, 14 SHADOW, measured 2026-07-29 on branch `newui`);
+ * bead enhancedchannelmanager-87o0c reconciled all 31 and deleted their lines,
+ * so every remaining same-chunk group in the tree is DISJOINT and unreported.
+ *
+ * `where` is documentation, not an assertion — line numbers move under
+ * unrelated edits and asserting on them would make this list fail for reasons
+ * that are not defects. `chunk`, `selector` and `shape` are the asserted
+ * identity.
+ *
+ * TO REMOVE A LINE: reconcile the collision (delete the duplicate copy, or
+ * scope one of them to a page-root ancestor). The check then fails with "no
+ * longer collides" and you delete the line — the same workflow as TIER 2.
+ *
+ * DO NOT ADD A LINE for new work. A new same-chunk collision is the defect
+ * this tier exists to stop, and there is no longer a backlog to hide in.
+ */
+const KNOWN_SAME_CHUNK_MERGES: SameChunkBaselineEntry[] = [];
+
+/**
+ * Ratchet on TIER 3's untriaged bucket, mirroring UNTRIAGED_BUDGET. It has been
+ * zero since the tier was added — every entry the baseline ever held named its
+ * owning bead — so a `NEEDS-TRIAGE` entry fails immediately rather than
+ * accumulating. It may only be LOWERED, and it is already at the floor.
+ */
+const SAME_CHUNK_UNTRIAGED_BUDGET = 0;
 
 // --- shared reporting -------------------------------------------------------
 
@@ -382,6 +674,13 @@ const chunksOf = (decls: Decl[]): string[] => [...new Set(decls.map((d) => d.chu
 
 const describeSites = (decls: Decl[]): string =>
   decls.map((d) => `      [${d.chunk}] ${d.file}:${d.line}  (${d.props.join(', ')})`).join('\n');
+
+/** TIER 3 sites, in cascade order — the last line printed is the one that wins. */
+const describeSameChunkSites = (sites: SameChunkSite[]): string =>
+  [...sites]
+    .sort((a, b) => a.rank - b.rank || a.line - b.line)
+    .map((s) => `      emitted #${String(s.rank).padStart(2)}  ${s.file}:${s.line}  {${s.decls.map((d) => `${d.prop}: ${d.value}${d.important ? ' !important' : ''}`).join('; ')}}`)
+    .join('\n');
 
 /**
  * Properties this selector declares in more than one chunk, split by whether
@@ -499,11 +798,235 @@ describe('shared classes are not redeclared across bundle chunks', () => {
     expect(problems).toEqual([]);
   }, 60_000);
 
+  it('TIER 3 (same-chunk emission order): no NEW selector is declared by two files inside one chunk', () => {
+    const current = new Map<string, { group: SameChunkGroup; shape: SameChunkShape; contended: string[]; divergent: string[] }>();
+    for (const [key, group] of cssIndex().sameChunk) {
+      // Two rules in ONE file are that author's own deliberate ordering, not a
+      // collision between two authors. Require at least two files.
+      if (new Set(group.sites.map((s) => s.file)).size < 2) continue;
+      const verdict = classifySameChunkGroup(group.sites);
+      if (verdict.shape === 'DISJOINT') continue;
+      current.set(key, { group, ...verdict });
+    }
+
+    const baseline = new Map(KNOWN_SAME_CHUNK_MERGES.map((e) => [`${e.chunk} :: ${e.selector}`, e]));
+    expect(baseline.size, 'KNOWN_SAME_CHUNK_MERGES has duplicate chunk+selector entries').toBe(KNOWN_SAME_CHUNK_MERGES.length);
+    for (const entry of KNOWN_SAME_CHUNK_MERGES) {
+      expect(entry.bead, `KNOWN_SAME_CHUNK_MERGES entry "${entry.chunk} :: ${entry.selector}" has no owning bead`).toBeTruthy();
+    }
+    const untriaged = KNOWN_SAME_CHUNK_MERGES.filter((e) => e.bead === 'NEEDS-TRIAGE').length;
+    expect(
+      untriaged,
+      `${untriaged} untriaged TIER 3 baseline entries but SAME_CHUNK_UNTRIAGED_BUDGET is ${SAME_CHUNK_UNTRIAGED_BUDGET}. ` +
+        `The budget may only be LOWERED — file a bead and name it on the entry instead of raising it.`
+    ).toBeLessThanOrEqual(SAME_CHUNK_UNTRIAGED_BUDGET);
+
+    const problems: string[] = [];
+
+    // 1. New collisions. This is the regression this tier exists to catch.
+    for (const [key, hit] of [...current].sort(([a], [b]) => a.localeCompare(b))) {
+      if (baseline.has(key)) continue;
+      problems.push(
+        `  NEW ${hit.shape}  ${key}\n` +
+          `      contended: ${hit.contended.join(', ')}` +
+          `${hit.divergent.length ? `   DIVERGENT VALUES: ${hit.divergent.join(', ')}` : '   (same values today — still a merge the moment either copy changes)'}\n` +
+          describeSameChunkSites(hit.group.sites)
+      );
+    }
+
+    // 2. Shape flips. SHADOW -> PARTIAL means an edit just turned dead weight
+    //    into a live merge; PARTIAL -> SHADOW means it was half-fixed. Either
+    //    way the entry no longer describes what is in the tree.
+    for (const entry of KNOWN_SAME_CHUNK_MERGES) {
+      const hit = current.get(`${entry.chunk} :: ${entry.selector}`);
+      if (!hit || hit.shape === entry.shape) continue;
+      problems.push(
+        `  SHAPE CHANGED  ${entry.chunk} :: ${entry.selector}\n` +
+          `      baseline: ${entry.shape}\n` +
+          `      now:      ${hit.shape}  (contended: ${hit.contended.join(', ')})\n` +
+          `      Finish the reconciliation and delete the entry, or update "shape" deliberately (${entry.bead}).\n` +
+          describeSameChunkSites(hit.group.sites)
+      );
+    }
+
+    // 3. Stale entries. An allowlist nobody prunes is how a guard rots. `chunk`
+    //    is part of the key, so a collision that MOVED to another chunk surfaces
+    //    here as stale AND above as new; say so, or the reader is told to delete
+    //    a line describing a collision that still exists somewhere else.
+    for (const entry of KNOWN_SAME_CHUNK_MERGES) {
+      if (current.has(`${entry.chunk} :: ${entry.selector}`)) continue;
+      const movedTo = [...current.values()].filter((h) => h.group.selector === entry.selector).map((h) => h.group.chunk);
+      problems.push(
+        `  STALE ENTRY  ${entry.chunk} :: ${entry.selector}\n` +
+          (movedTo.length
+            ? `      No longer collides in ${entry.chunk}, but still collides in ${movedTo.join(', ')} — the ` +
+              `collision MOVED. Finish the fix, or retarget this entry's "chunk" deliberately (${entry.bead}).`
+            : `      No longer collides — delete this line from KNOWN_SAME_CHUNK_MERGES (${entry.bead}).`)
+      );
+    }
+
+    if (problems.length > 0) {
+      throw new Error(
+        `${problems.length} same-chunk problem(s). Two files in ONE bundle chunk declare the same bare ` +
+          `selector, so the later-emitted file silently overrides the earlier one on every property they ` +
+          `share — deterministically, but in an order no source file states. This is the class that ` +
+          `shipped .channel-item as a flex row wearing ChannelsPane's display:grid. Fix by deleting the ` +
+          `duplicate copy (leave a pointer comment) or scoping one to a page-root ancestor. See the file ` +
+          `header and docs/css_guidelines.md § Load order.\n${problems.join('\n')}`
+      );
+    }
+
+    expect(problems).toEqual([]);
+  }, 60_000);
+
   it('vite.config.ts still uses default code-splitting, so the chunk model holds', () => {
     // deriveChunks() reimplements Rollup's DEFAULT splitting. A `manualChunks`
     // entry would silently move CSS between chunks and make every result above
     // wrong while the test still reported green.
     const viteConfig = fs.readFileSync(path.resolve(process.cwd(), 'vite.config.ts'), 'utf8');
     expect(viteConfig, 'vite.config.ts declares manualChunks — update deriveChunks() to model it').not.toMatch(/manualChunks/);
+  });
+
+  it('vite.config.ts declares no chunk-grouping override, so TIER 3 emission order holds', () => {
+    // TIER 3 needs more than "chunk membership is default": it needs the ORDER
+    // of files inside a chunk to be plain execution order. vite 8 bundles with
+    // rolldown, whose grouping and ordering knobs are named differently from
+    // Rollup's `manualChunks` — so the check above does not cover them.
+    const viteConfig = fs.readFileSync(path.resolve(process.cwd(), 'vite.config.ts'), 'utf8');
+    for (const knob of ['advancedChunks', 'rolldownOptions', 'codeSplitting', 'chunkModulesOrder', 'preserveModules']) {
+      expect(
+        viteConfig,
+        `vite.config.ts declares ${knob} — it can reorder or regroup a chunk's modules, which invalidates deriveEmissionRank()`
+      ).not.toContain(knob);
+    }
+  });
+});
+
+/**
+ * Self-tests for TIER 3's cascade resolver.
+ *
+ * The tree-driven assertion above can only exercise the shapes that happen to
+ * exist in the tree today; `!important` in particular is declared 47 times in
+ * this codebase but never inside a same-chunk multi-file group, so the branch
+ * that handles it would otherwise ship untested. These cases pin the semantics
+ * directly — a guard whose classifier is wrong reports the wrong severity and
+ * is worse than no guard.
+ */
+describe('classifySameChunkGroup', () => {
+  const site = (
+    file: string,
+    rank: number,
+    decls: Array<[string, string] | [string, string, true]>
+  ): SameChunkSite => ({
+    file,
+    line: 1,
+    rank,
+    decls: decls.map(([prop, value, important]) => ({ prop, value, important: important === true })),
+  });
+
+  it('is PARTIAL when the surviving declarations come from more than one file', () => {
+    // The .channel-item defect in miniature: the later file wins `display`,
+    // the earlier file's `gap` survives, and the box is neither author's.
+    const v = classifySameChunkGroup([
+      site('ChannelProfilesListModal.css', 2, [['display', 'flex'], ['gap', '0.75rem']]),
+      site('ChannelsPane.css', 18, [['display', 'grid']]),
+    ]);
+    expect(v.shape).toBe('PARTIAL');
+    expect(v.contended).toEqual(['display']);
+    expect(v.divergent).toEqual(['display']);
+  });
+
+  it('is SHADOW when the last-emitted file wins every contended slot', () => {
+    const v = classifySameChunkGroup([
+      site('StreamsPane.css', 21, [['max-height', '180px']]),
+      site('shared/common.css', 41, [['max-height', '300px'], ['overflow-y', 'auto']]),
+    ]);
+    expect(v.shape).toBe('SHADOW');
+    expect(v.contended).toEqual(['max-height']);
+    expect(v.divergent).toEqual(['max-height']);
+  });
+
+  it('is DISJOINT when the two files declare non-overlapping properties', () => {
+    const v = classifySameChunkGroup([
+      site('StreamsPane.css', 21, [['overflow', 'visible']]),
+      site('shared/common.css', 41, [['padding', '0.75rem']]),
+    ]);
+    expect(v.shape).toBe('DISJOINT');
+    expect(v.contended).toEqual([]);
+  });
+
+  it('reports identical values as a collision, because it is one edit from a merge', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['display', 'flex'], ['gap', '0.5rem']]),
+      site('b.css', 2, [['display', 'flex']]),
+    ]);
+    expect(v.shape).toBe('PARTIAL');
+    expect(v.divergent).toEqual([]);
+  });
+
+  it('resolves emission order, not file order, when ranks disagree with the argument order', () => {
+    const later = site('later.css', 9, [['color', 'blue']]);
+    const earlier = site('earlier.css', 1, [['color', 'red'], ['padding', '1rem']]);
+    expect(classifySameChunkGroup([later, earlier]).shape).toBe('PARTIAL');
+    // Flip which file is emitted last: now the survivor set is a single file.
+    const shadowing = site('later.css', 9, [['color', 'blue'], ['padding', '2rem']]);
+    expect(classifySameChunkGroup([shadowing, earlier]).shape).toBe('SHADOW');
+  });
+
+  it('treats several rules in one file as a single author', () => {
+    // A file overriding itself further down is its own deliberate ordering; it
+    // must not read as a merge just because the selector appears twice.
+    const v = classifySameChunkGroup([
+      { ...site('a.css', 1, [['color', 'red']]), line: 10 },
+      { ...site('a.css', 1, [['color', 'green']]), line: 90 },
+      site('b.css', 2, [['color', 'blue']]),
+    ]);
+    expect(v.shape).toBe('SHADOW');
+    expect(v.contended).toEqual(['color']);
+  });
+
+  it('sees a shorthand overwriting an earlier longhand as a full shadow', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['padding-left', '8px']]),
+      site('b.css', 2, [['padding', '4px']]),
+    ]);
+    expect(v.shape).toBe('SHADOW');
+    expect(v.contended).toEqual(['padding', 'padding-left']);
+  });
+
+  it('sees a longhand refining an earlier shorthand as a partial merge', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['padding', '4px']]),
+      site('b.css', 2, [['padding-left', '8px']]),
+    ]);
+    expect(v.shape).toBe('PARTIAL');
+    expect(v.contended).toEqual(['padding', 'padding-left']);
+  });
+
+  it('does not treat border-radius as part of the border shorthand', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['border-radius', '4px']]),
+      site('b.css', 2, [['border', '1px solid red']]),
+    ]);
+    expect(v.shape).toBe('DISJOINT');
+  });
+
+  it('lets an earlier !important beat a later normal declaration', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['color', 'red', true]]),
+      site('b.css', 2, [['color', 'blue'], ['padding', '1rem']]),
+    ]);
+    // b.css is emitted later and wins `padding`, but a.css keeps `color`, so
+    // the rendered box still draws from both files.
+    expect(v.shape).toBe('PARTIAL');
+    expect(v.contended).toEqual(['color']);
+  });
+
+  it('lets a later !important beat an earlier !important', () => {
+    const v = classifySameChunkGroup([
+      site('a.css', 1, [['color', 'red', true]]),
+      site('b.css', 2, [['color', 'blue', true]]),
+    ]);
+    expect(v.shape).toBe('SHADOW');
   });
 });

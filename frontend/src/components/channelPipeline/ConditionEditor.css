@@ -258,7 +258,14 @@
   font-size: 18px;
 }
 
-/* Screen reader only */
+/* Screen reader only. Sole owner in the ChannelPipelineTab chunk — ActionEditor
+   .css carried a byte-identical copy, now deleted
+   (bead enhancedchannelmanager-87o0c). NOTE: this class is also emitted by
+   OperatorDashboard.tsx and SettingsTab.tsx, whose chunks declare no `.sr-only`
+   at all, so those two live regions are only visually hidden once the pipeline
+   tab has been visited. Promoting this rule to shared/common.css would fix
+   that, but it is a rendering change, not a reconciliation, so it is reported
+   rather than done. */
 .sr-only {
   position: absolute;
   width: 1px;

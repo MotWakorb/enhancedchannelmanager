@@ -404,7 +404,18 @@
   border-top: 1px solid var(--border-primary);
 }
 
-.details-grid {
+/* Scoped to the route root, not bare. Three lazy chunks declared
+   `.details-grid` with three different `grid-template-columns` — this file's
+   `1fr 1fr`, JournalTab.css:420's `1fr 1fr` plus a 1rem bottom margin, and
+   StatsTab.css:991's `repeat(auto-fit, minmax(180px, 1fr))` — and a tab chunk
+   is appended after the eager bundle and never removed, so the expanded-row
+   detail grid on all three pages rendered whichever column track the
+   last-visited tab had authored. `.m3u-changes-tab` is this route's root
+   (M3UChangesTab.tsx:259) and encloses the grid (M3UChangesTab.tsx:470,
+   inside `.change-details`); `:where()` contributes zero specificity, so the
+   rule keeps its 0-1-0 and only its match set narrows
+   (bead enhancedchannelmanager-mktnb). */
+:where(.m3u-changes-tab) .details-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
@@ -536,7 +547,10 @@
     gap: 0.5rem;
   }
 
-  .details-grid {
+  /* Scoped with its unconditional rule above — JournalTab.css:504 declares
+     the identical narrow-viewport override in a sibling lazy chunk
+     (bead enhancedchannelmanager-mktnb). */
+  :where(.m3u-changes-tab) .details-grid {
     grid-template-columns: 1fr;
   }
 }
