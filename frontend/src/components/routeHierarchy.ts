@@ -49,7 +49,7 @@ export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
     'Build and maintain the channel lineup and its assigned streams.',
     [{ href: '#settings/channel-defaults', label: 'Channel default settings' }],
   ),
-  guide: route('OPERATIONS', 'guide', 'Review scheduled programming across the active channel lineup.'),
+  guide: route('INSIGHTS', 'guide', 'Review scheduled programming across the active channel lineup.'),
   // No related-settings link. `#settings/linked-accounts` is a standing Settings
   // destination in its own right — it has a navigation entry of its own, and the
   // per-account case is covered by the account list's own "Manage Links" action —
@@ -71,7 +71,7 @@ export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
     [{ href: '#settings/channel-pipeline', label: 'Channel Pipeline settings' }],
   ),
   'm3u-changes': route(
-    'AUTOMATION',
+    'INSIGHTS',
     'm3u-changes',
     'Review provider playlist changes before acting on lineup differences.',
     [{ href: '#settings/m3u-digest', label: 'M3U digest settings' }],

@@ -1,43 +1,24 @@
-import { useState } from 'react';
-import ECMLogo from '../assets/ECMLogo.png';
+import { useEffect, useRef, useState } from 'react';
+import { EcmLogo } from './EcmLogo';
+import { EcmWordmark } from './EcmWordmark';
+import { GROUPS } from './navigationGroups';
+import { visibleSettingsSections } from './settingsSections';
+import type { SettingsPage } from '../hooks/useHashRoute';
 import './TabNavigation.css';
 
 export type TabId = 'dashboard' | 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' | 'logo-manager' | 'm3u-changes' | 'channel-pipeline' | 'journal' | 'stats' | 'settings';
-
-interface Destination {
-  id: TabId;
-  label: string;
-  icon: string;
-}
 
 interface TabNavigationProps {
   activeTab: TabId;
   onTabChange: (tab: TabId) => void;
   disabled?: boolean;
   editModeActive?: boolean;
+  settingsPage?: SettingsPage | null;
+  onSettingsPageChange?: (page: SettingsPage) => void;
+  isAdmin?: boolean;
 }
 
 const COLLAPSED_STORAGE_KEY = 'ecm.navigation.collapsed';
-
-const GROUPS: Array<{ label: string; destinations: Destination[] }> = [
-  { label: 'Overview', destinations: [{ id: 'dashboard', label: 'Dashboard', icon: 'dashboard' }] },
-  { label: 'Operations', destinations: [
-    { id: 'channel-manager', label: 'Channel Manager', icon: 'tv' },
-    { id: 'guide', label: 'Guide', icon: 'grid_on' },
-    { id: 'm3u-manager', label: 'M3U Manager', icon: 'playlist_play' },
-    { id: 'epg-manager', label: 'EPG Manager', icon: 'schedule' },
-    { id: 'logo-manager', label: 'Logo Manager', icon: 'image' },
-  ] },
-  { label: 'Automation', destinations: [
-    { id: 'channel-pipeline', label: 'Channel Pipeline', icon: 'auto_fix_high' },
-    { id: 'm3u-changes', label: 'M3U Changes', icon: 'compare_arrows' },
-  ] },
-  { label: 'Insights', destinations: [
-    { id: 'stats', label: 'Stats', icon: 'analytics' },
-    { id: 'journal', label: 'Journal', icon: 'history' },
-  ] },
-  { label: 'System', destinations: [{ id: 'settings', label: 'Settings', icon: 'settings' }] },
-];
 
 function readCollapsedPreference(): boolean {
   try {
@@ -47,8 +28,57 @@ function readCollapsedPreference(): boolean {
   }
 }
 
-export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive }: TabNavigationProps) {
+export function TabNavigation({
+  activeTab,
+  onTabChange,
+  disabled,
+  editModeActive,
+  settingsPage,
+  onSettingsPageChange,
+  isAdmin = false,
+}: TabNavigationProps) {
   const [collapsed, setCollapsed] = useState(readCollapsedPreference);
+  // Entering Settings drills the sidebar into its sections; Back returns to the
+  // groups without leaving the Settings page, so this cannot simply be derived
+  // from activeTab.
+  const [showSettingsSections, setShowSettingsSections] = useState(activeTab === 'settings');
+  // Null on first render so the sidebar does not slide on initial load or on a
+  // Settings deep link; only an actual drill-in/out animates.
+  const [slide, setSlide] = useState<'forward' | 'back' | null>(null);
+  const previousTab = useRef(activeTab);
+
+  const openSettingsSections = () => {
+    setShowSettingsSections(true);
+    setSlide('forward');
+  };
+
+  const closeSettingsSections = () => {
+    setShowSettingsSections(false);
+    setSlide('back');
+  };
+
+  useEffect(() => {
+    if (previousTab.current !== activeTab) {
+      const wasSettings = previousTab.current === 'settings';
+      previousTab.current = activeTab;
+      if (activeTab === 'settings') {
+        openSettingsSections();
+      } else {
+        setShowSettingsSections(false);
+        // Only a Settings exit slides back; other route changes leave the
+        // already-visible groups alone.
+        if (wasSettings) setSlide('back');
+      }
+    }
+  }, [activeTab]);
+
+  // Preserves the Administration grouping the in-page settings list carried.
+  const sections = visibleSettingsSections(isAdmin);
+  const settingsGroups = [
+    { label: 'Settings', sections: sections.filter((section) => !section.adminOnly) },
+    { label: 'Administration', sections: sections.filter((section) => section.adminOnly) },
+  ].filter((group) => group.sections.length > 0);
+  const activeSettingsPage = settingsPage ?? 'general';
 
   const toggleCollapsed = () => {
     setCollapsed((current) => {
@@ -65,10 +95,95 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
   return (
     <aside className={`primary-sidebar ${collapsed ? 'is-collapsed' : ''} ${editModeActive ? 'edit-mode-active' : ''}`}>
       <div className="sidebar-brand">
-        <img src={ECMLogo} alt="" className="sidebar-logo" />
-        <span className="sidebar-product-name">Enhanced Channel Manager</span>
+        {/* The logo is the only collapse control. Exactly one control may carry
+            the "Collapse navigation"/"Expand navigation" phrase: Playwright's
+            getByRole name option matches substrings, so a second control
+            sharing it makes every query for this one ambiguous. */}
+        <button
+          type="button"
+          className="sidebar-brand-toggle"
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+        >
+          <EcmLogo className="sidebar-logo" />
+        </button>
+        <EcmWordmark className="sidebar-product-name" />
       </div>
-      <nav aria-label="Primary" className="primary-navigation tab-navigation">
+      {showSettingsSections ? (
+        // Keyed so React remounts the element on each swap and replays the
+        // slide rather than reconciling the two <nav>s into one node.
+        <nav
+          key="settings-sections"
+          aria-label="Settings sections"
+          className={`primary-navigation settings-navigation ${slide ? `nav-slide-${slide}` : ''}`}
+        >
+          {disabled && <span id="navigation-disabled-reason" className="visually-hidden">Navigation is unavailable while changes are being saved.</span>}
+          <button
+            type="button"
+            className="navigation-back"
+            onClick={closeSettingsSections}
+            // Explicit name: the visible label is inside .navigation-label,
+            // which the collapsed rail hides, leaving no accessible name.
+            aria-label="Back to main navigation"
+            title="Back to main navigation"
+          >
+            <span className="material-icons" aria-hidden="true">arrow_back</span>
+            {/* Visible "Back" fits the 244px rail; the accessible name above
+                contains it, satisfying WCAG 2.5.3 Label in Name. */}
+            <span className="navigation-label">Back</span>
+          </button>
+          {settingsGroups.map((group) => (
+          <section className="navigation-group" key={group.label}>
+            <h2>{group.label}</h2>
+            <ul>
+              {group.sections.map((section) => (
+                <li key={section.id}>
+                  <a
+                    href={disabled ? undefined : `#settings/${section.id}`}
+                    role="link"
+                    tabIndex={0}
+                    data-settings-page={section.id}
+                    className={`navigation-destination settings-nav-item ${activeSettingsPage === section.id ? 'active' : ''}`}
+                    aria-label={section.label}
+                    aria-current={activeSettingsPage === section.id ? 'page' : undefined}
+                    aria-describedby={disabled ? 'navigation-disabled-reason' : undefined}
+                    title={disabled ? `${section.label} — unavailable while changes are being saved` : section.label}
+                    aria-disabled={disabled ? 'true' : undefined}
+                    onClick={(event) => {
+                      if (disabled) {
+                        event.preventDefault();
+                        return;
+                      }
+                      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+                        return;
+                      }
+                      event.preventDefault();
+                      onSettingsPageChange?.(section.id);
+                    }}
+                    onAuxClick={(event) => {
+                      if (disabled) event.preventDefault();
+                    }}
+                    onContextMenu={(event) => {
+                      if (disabled) event.preventDefault();
+                    }}
+                  >
+                    <span className="material-icons" aria-hidden="true">{section.icon}</span>
+                    <span className="navigation-label">{section.label}</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+          ))}
+        </nav>
+      ) : (
+      <nav
+        key="primary-groups"
+        aria-label="Primary"
+        className={`primary-navigation tab-navigation ${slide ? `nav-slide-${slide}` : ''}`}
+      >
         {disabled && <span id="navigation-disabled-reason" className="visually-hidden">Navigation is unavailable while changes are being saved.</span>}
         {GROUPS.map((group) => (
           <section className="navigation-group" key={group.label}>
@@ -96,6 +211,9 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
                         return;
                       }
                       event.preventDefault();
+                      // Re-selecting Settings while already on it must reopen
+                      // the sections; the activeTab effect cannot see that.
+                      if (destination.id === 'settings') openSettingsSections();
                       onTabChange(destination.id);
                     }}
                     onAuxClick={(event) => {
@@ -114,17 +232,7 @@ export function TabNavigation({ activeTab, onTabChange, disabled, editModeActive
           </section>
         ))}
       </nav>
-      <button
-        type="button"
-        className="navigation-collapse"
-        onClick={toggleCollapsed}
-        aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-        aria-expanded={!collapsed}
-        title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-      >
-        <span className="material-icons" aria-hidden="true">{collapsed ? 'chevron_right' : 'chevron_left'}</span>
-        <span className="navigation-collapse-label">Collapse</span>
-      </button>
+      )}
     </aside>
   );
 }

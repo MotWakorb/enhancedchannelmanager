@@ -6,14 +6,41 @@ type SectionItem = { id: string; label: string };
 const slug = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const preferredScrollBehavior = (): ScrollBehavior => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 
+/**
+ * Scrolls `target` into view within `container` and nothing else.
+ *
+ * `scrollIntoView` cannot be constrained to one ancestor — it scrolls every
+ * scrollable ancestor including the document. `overflow: hidden` on <html> only
+ * blocks *user* scrolling, not programmatic scrolling, so on a route whose
+ * content overflows the root box the page itself would slide under the fixed
+ * shell and leave empty space below it. Scrolling the known container directly
+ * is the only way to guarantee the shell stays put.
+ *
+ * `scroll-margin-top` is read off the target so the offset that `scrollIntoView`
+ * used to honour still applies.
+ */
+function scrollWithinContainer(container: HTMLElement, target: HTMLElement, behavior: ScrollBehavior) {
+  if (typeof container.scrollTo !== 'function') return;
+  const margin = Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+  const delta = target.getBoundingClientRect().top - container.getBoundingClientRect().top - margin;
+  container.scrollTo({ top: container.scrollTop + delta, behavior });
+}
+
 export function StickySectionNav({
   containerRef,
   selector,
   routeKey,
+  placement = 'top',
 }: {
   containerRef: RefObject<HTMLElement | null>;
   selector: string;
   routeKey: string;
+  /**
+   * 'top' is the original horizontal sticky bar above the content. 'rail'
+   * moves the list into a sticky right-hand column, which occupies no vertical
+   * space and therefore does not bound the content from above.
+   */
+  placement?: 'top' | 'rail';
 }) {
   const [items, setItems] = useState<SectionItem[]>([]);
   const [activeId, setActiveId] = useState('');
@@ -59,7 +86,8 @@ export function StickySectionNav({
       setActiveId(requested);
       requestAnimationFrame(() => {
         const target = document.getElementById(requested);
-        if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
+        const container = containerRef.current;
+        if (target && container) scrollWithinContainer(container, target, preferredScrollBehavior());
       });
     }
     return () => observer.disconnect();
@@ -78,7 +106,17 @@ export function StickySectionNav({
         const nav = container.querySelector<HTMLElement>('.sticky-section-nav');
         const pending = container.querySelector<HTMLElement>('.settings-pending-actions');
         const focusedRect = focused.getBoundingClientRect();
-        const topBoundary = nav?.getBoundingClientRect().bottom ?? container.getBoundingClientRect().top;
+        // Decide from geometry, not the `placement` prop: the rail reverts to a
+        // top bar below a CSS breakpoint, so the prop alone would misdescribe
+        // the rendered layout. A nav only bounds the control from above when it
+        // actually sits over the same horizontal band.
+        const navRect = nav?.getBoundingClientRect();
+        const navOverlapsHorizontally = navRect
+          && focusedRect.right > navRect.left + 1
+          && focusedRect.left < navRect.right - 1;
+        const topBoundary = navOverlapsHorizontally
+          ? navRect.bottom
+          : container.getBoundingClientRect().top;
         const bottomBoundary = pending?.getBoundingClientRect().top ?? container.getBoundingClientRect().bottom;
         if (focusedRect.top < topBoundary + 8) {
           container.scrollTop -= topBoundary + 8 - focusedRect.top;
@@ -101,9 +139,10 @@ export function StickySectionNav({
     window.history.replaceState(null, '', `${base}?section=${encodeURIComponent(id)}`);
     window.dispatchEvent(new CustomEvent('ecm:route-replaced', { detail: { hash: window.location.hash } }));
     const target = document.getElementById(id);
-    if (typeof target?.scrollIntoView === 'function') target.scrollIntoView({ behavior: preferredScrollBehavior(), block: 'start' });
+    const container = containerRef.current;
+    if (target && container) scrollWithinContainer(container, target, preferredScrollBehavior());
   };
-  return <nav className="sticky-section-nav" aria-label="On this page">
+  return <nav className={`sticky-section-nav placement-${placement}`} aria-label="On this page">
     <span>On this page</span>
     <div>
       {items.map((item) => <button
