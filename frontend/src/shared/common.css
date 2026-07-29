@@ -92,8 +92,45 @@
    shape that leaks: Stats is a lazy chunk, so its `!important` copy silently
    became the app-wide winner the moment anyone opened Stats. One owner now
    (bead enhancedchannelmanager-6z299). The `!important`s are kept because
-   the utility has to beat whatever layout rule is on the element it hides. */
-.visually-hidden {
+   the utility has to beat whatever layout rule is on the element it hides.
+
+   `.sr-only` IS THIS UTILITY UNDER A SECOND NAME, not a sibling of it. Its
+   only declaration lived in ConditionEditor.css and was property-for-property
+   identical to the block below — same nine declarations, same values, same
+   order, differing only by the `!important`s. It ships as an alias rather
+   than a second block because two blocks in one file is the same duplicate
+   shape beads 6z299 and 87o0c spent two passes deleting; and as an alias
+   rather than a rename because the five `.sr-only` call sites live in TSX
+   this bead does not own, and `sr-only` is the better-known ecosystem
+   spelling. Renaming them onto one name is follow-up work, not a fix.
+
+   WHY IT MOVED HERE (bead enhancedchannelmanager-zncyv): ConditionEditor.css
+   ships in the ChannelPipelineTab lazy chunk, but `.sr-only` is rendered by
+   OperatorDashboard.tsx (EAGER) and SettingsTab.tsx (Settings chunk) on
+   `role="status" aria-live="polite"` regions. Neither chunk carried the rule,
+   so until the operator happened to open Channel Pipeline those two
+   announcement regions had NO hiding styles at all — measured live at
+   `position: static; clip: auto; width: 1148px`, i.e. ordinary visible text —
+   and silently became correct for the rest of the session afterwards. Note
+   this is NOT the cross-chunk collision shape the three audit tiers in
+   cssAudits/sharedClassChunkLeak.audit.test.ts detect: there was only ever
+   ONE declaration, so nothing collided. The defect was declaration-site and
+   render-site sitting in different chunks, which those tiers do not model.
+
+   WHY `!important` IS SAFE FOR THE `.sr-only` SITES, measured not assumed:
+   all nine properties are hiding properties, so promoting them can only make
+   an element MORE hidden — a layout rule beating a visually-hidden utility is
+   the bug, never the intent. Of the five call sites, exactly one
+   (ActionEditor.tsx:683) sits under a higher-specificity rule,
+   `.action-field label` (0,1,1 vs 0,1,0). That rule declares only
+   font-size/font-weight/color, which are disjoint from the nine below, so it
+   contends with nothing here: that label measured `font-size: 13px` on a 1x1
+   clipped box before this change and must still measure exactly that after.
+   A site that genuinely needs to override still can, via the higher-
+   specificity + `!important` hatch already used by
+   `.chart-data-table.visually-hidden` in StatsTab.css. */
+.visually-hidden,
+.sr-only {
   position: absolute !important;
   width: 1px !important;
   height: 1px !important;

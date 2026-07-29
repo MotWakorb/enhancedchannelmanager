@@ -482,6 +482,9 @@
   color: var(--text-primary);
 }
 
-/* `.sr-only` is owned by ConditionEditor.css. This copy was byte-identical and
-   both files ship in the ChannelPipelineTab chunk, so they always load
-   together (bead enhancedchannelmanager-87o0c). */
+/* `.sr-only` is owned by shared/common.css § 2 COMMON UTILITIES, as an alias of
+   `.visually-hidden`. This copy was byte-identical to the one in
+   ConditionEditor.css and was deleted first (bead
+   enhancedchannelmanager-87o0c); that surviving copy then moved to the shared
+   layer, because a lazy chunk is the wrong owner for a class two other chunks
+   render (bead enhancedchannelmanager-zncyv). */

@@ -258,22 +258,9 @@
   font-size: 18px;
 }
 
-/* Screen reader only. Sole owner in the ChannelPipelineTab chunk — ActionEditor
-   .css carried a byte-identical copy, now deleted
-   (bead enhancedchannelmanager-87o0c). NOTE: this class is also emitted by
-   OperatorDashboard.tsx and SettingsTab.tsx, whose chunks declare no `.sr-only`
-   at all, so those two live regions are only visually hidden once the pipeline
-   tab has been visited. Promoting this rule to shared/common.css would fix
-   that, but it is a rendering change, not a reconciliation, so it is reported
-   rather than done. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.sr-only` is owned by shared/common.css § 2 COMMON UTILITIES, where it is an
+   alias of `.visually-hidden` (the two were property-for-property identical).
+   It lived here, in the ChannelPipelineTab lazy chunk, while being rendered by
+   OperatorDashboard.tsx and SettingsTab.tsx — so those two `aria-live` regions
+   had no hiding styles at all until the operator happened to open this tab
+   (bead enhancedchannelmanager-zncyv). */

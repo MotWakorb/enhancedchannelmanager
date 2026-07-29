@@ -327,7 +327,13 @@ number.
   (bead `enhancedchannelmanager-mktnb`).
 
 ### Other
-- `.visually-hidden` — WCAG screen-reader-only utility (§ 2)
+- `.visually-hidden` — WCAG screen-reader-only utility (§ 2). `.sr-only` is an
+  alias of it, declared on the same rule: the two were property-for-property
+  identical, and `.sr-only`'s only copy sat in the Channel Pipeline lazy chunk
+  while the Dashboard and Settings `aria-live` regions rendered it, so those
+  announcements were visible text until that tab was opened
+  (bead `enhancedchannelmanager-zncyv`). Use either name; prefer
+  `.visually-hidden` in new markup.
 - `.file-info` / `.file-name` / `.file-size` — the picked-file chip (§ 17)
 - `.search-box` — icon + input search field
 - `.action-btn` — icon-only row action button, 32x32
