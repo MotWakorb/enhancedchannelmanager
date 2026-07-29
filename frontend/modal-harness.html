@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>ECM Modal Harness (dev only)</title>
+    <!--
+      DEV-ONLY MODAL HARNESS — bead enhancedchannelmanager-xhldy.1.
+
+      This page force-renders every dialog in the app with stubbed data so
+      that typography (and later, spacing) can be measured for all of them,
+      including the ones that cannot be reached against a real instance's
+      data.
+
+      It is NOT part of the shipped app and MUST NOT become part of it:
+
+        * `vite.config.ts` (the production build) has a single entry,
+          `index.html`. Vite's default `build.rollupOptions.input` is that
+          one file, so this HTML file and everything it imports is simply
+          not in the production module graph.
+        * The harness is built by a SEPARATE config, `vite.harness.config.ts`,
+          into a SEPARATE, gitignored outDir (`.modal-harness-dist`), which is
+          never copied into the container by `scripts/deploy-frontend.sh`.
+        * `src/devHarness/harnessIsolation.test.ts` fails if any file outside
+          `src/devHarness/` ever imports harness code, or if `vite.config.ts`
+          grows a second entry.
+
+      There is deliberately no error-telemetry bootstrap here (unlike
+      index.html): the harness must never post to /api/client-errors.
+    -->
+  </head>
+  <body>
+    <div id="harness-root"></div>
+    <script type="module" src="/src/devHarness/main.tsx"></script>
+  </body>
+</html>
