@@ -7,7 +7,7 @@
  * shared/common.css. Until then, scope styles to .heatmap-*.
  *
  * Theme variables consumed:
- *   --bg-secondary, --border-primary, --text-secondary, --text-muted.
+ *   --bg-secondary, --border-primary, --text-secondary.
  * No --accent-primary used (per style guide: it flips between themes
  * and breaks contrast on backgrounds).
  */
@@ -40,25 +40,38 @@
   cursor: default;
 }
 
+/* Meta role — already exactly 11px, so this is a literal-to-token swap
+   (bead enhancedchannelmanager-6z299.4). */
 .heatmap-row-label,
 .heatmap-col-label {
   fill: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   font-family: inherit;
   /* Disable user select so dragging across the chart doesn't
      accidentally select label text. */
   user-select: none;
 }
 
+/* Both label rows now take --text-secondary. --text-muted measures 2.61:1 on
+   --bg-secondary in the light theme, and an axis label is text. Losing the
+   row/column distinction is deliberate: they are peers. */
 .heatmap-col-label {
-  fill: var(--text-muted);
+  fill: var(--text-secondary);
 }
 
 .heatmap-empty {
   /* Match the panel-empty / loading-state idiom from
-     EnhancedStatsPanel.css — neutral grey, centered, padded. */
+     EnhancedStatsPanel.css — neutral grey, centered, padded.
+     This declared no font-size, and nothing between it and <html> declares
+     one either (the Providers panel that renders it sets font-size only on
+     named descendants), so the string rendered at the UA default 16px
+     (bead enhancedchannelmanager-6z299.4). */
   padding: 24px;
-  color: var(--text-muted);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary);
   text-align: center;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);

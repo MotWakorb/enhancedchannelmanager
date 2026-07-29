@@ -51,13 +51,25 @@
   align-items: center;
 }
 
-.stat-value {
+/* Scoped to the tile row, not left bare. `.stat-value` / `.stat-label` were
+   declared bare here AND in StatsTab.css, in two different lazy chunks, at
+   different values (24px/600 vs 14px/500; 13px vs 11.2px uppercase) — so
+   Pipeline's frozen-band tiles rendered at Stats' size once you had visited
+   Stats, and vice versa (bead enhancedchannelmanager-6z299.2).
+   `.channel-pipeline-stats` and not `.channel-pipeline-tab`: RouteHeaderSlot
+   portals this row out of the tab root into App's `.route-page-status-outlet`
+   (ChannelPipelineTab.tsx:1011). It is the only ancestor these three tiles
+   have, and it wraps every `.stat-value`/`.stat-label` in the Pipeline chunk.
+   `:where()` keeps the selectors at (0,1,0) — identical to the bare rules —
+   so nothing in this chunk's cascade moves and the band's geometry is
+   unchanged, which is the point of this wave. */
+:where(.channel-pipeline-stats) .stat-value {
   font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.stat-label {
+:where(.channel-pipeline-stats) .stat-label {
   font-size: 13px;
   color: var(--text-muted);
 }
@@ -89,10 +101,16 @@
   margin-bottom: 16px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px. */
 .section-header h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
@@ -126,6 +144,9 @@
   overflow: hidden;
 }
 
+/* Body role, not meta: the body role's definition covers buttons and other
+   interactive controls, and these menu items are buttons. 14px -> 13px
+   (bead enhancedchannelmanager-6z299). */
 .filter-menu button {
   display: block;
   width: 100%;
@@ -135,7 +156,9 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .filter-menu button:hover {
@@ -210,12 +233,39 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* The micro role, spelled out here rather than by adding `.micro-label` to the
+   six `<th>` elements in ChannelPipelineTab.tsx. `.micro-label` (common.css
+   § 24) exists because the same idiom was hand-written four different ways on
+   div-based fake table headers that already carried a class; this is a real
+   `<th>` in a real `<table>`, so one structural selector already reaches
+   exactly the right elements with no markup at all. Adding the class would not
+   even remove this rule — § 24 deliberately sets no `color`, so the colour
+   declaration below would have to stay behind, leaving the treatment split
+   across markup and CSS instead of consolidated. One rule, one place.
+   12px/600/0.5px -> 10px/700/0.08em, and --text-muted -> --text-secondary:
+   --text-muted measures 2.61:1 on --bg-secondary in the light theme, below the
+   AA floor (bead enhancedchannelmanager-6z299). */
 .rules-list th {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  letter-spacing: var(--type-micro-tracking);
+}
+
+/* Body role on the cell itself. The Priority and Matches columns are bare text
+   nodes inside `<td>` with no class of their own (ChannelPipelineTab.tsx:1193,
+   1199), so they inherited 16px from `body` — the same UA-default defect as
+   `.rule-name`, reached by inheritance instead of by an absent declaration.
+   Left alone it would have been made worse by this sweep, not better: with
+   `.rule-name` at 13px the two numeric columns would sit three pixels LARGER
+   than the row's own title. Everything else in a `td` (`.rule-name`,
+   `.rule-description`, `.badge`, `.action-btn`) declares its own size and is
+   unaffected (bead enhancedchannelmanager-6z299). */
+.rules-list td {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .rules-list tbody tr {
@@ -307,15 +357,26 @@
   flex-wrap: nowrap;
 }
 
-/* Rule Name */
+/* Rule Name — item title.
+   Had no font-size at all, so the name of every pipeline rule rendered at the
+   UA default 16px: the same defect the pilot found in `.account-name`
+   (bead enhancedchannelmanager-f4yc7). `.col-name` keeps its 200px min-width —
+   that is a column budget, not a measure derived from these font metrics. */
 .rule-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role. --text-secondary, not --text-muted: in the light theme
+   --text-muted measures 2.61:1 on --bg-secondary, below the AA floor
+   (bead enhancedchannelmanager-6z299). */
 .rule-description {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -328,13 +389,22 @@
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Executions List */
+/* Body role. Declared no font-size, so the "Loading executions..." line
+   rendered at the UA default 16px — larger than every other string in the
+   section it replaces. Same class of defect as `.rule-name` above; it was not
+   on the audit's worst-offender list because it only appears mid-fetch
+   (bead enhancedchannelmanager-6z299). --text-muted -> --text-secondary for
+   the light-theme AA failure. */
 .executions-loading {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 24px;
-  color: var(--text-muted);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary);
 }
 
 .executions-list {
@@ -364,22 +434,39 @@
   flex-wrap: wrap;
 }
 
+/* Badge role, not meta. `.execution-mode` is a chip — padding, background,
+   radius — rendered immediately beside the run's real `.badge` status chip
+   (ChannelPipelineTab.tsx:1329-1333). The badge role is what chip text is for,
+   and it keeps the two adjacent chips the same size instead of the mode chip
+   sitting a step larger than the status it qualifies.
+   --text-muted -> --text-secondary (light-theme AA), bead
+   enhancedchannelmanager-6z299. */
 .execution-mode {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  color: var(--text-secondary);
   padding: 2px 6px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
 }
 
+/* Meta role. The timestamp and the counts summary are the two secondary
+   descriptors of an execution row — the status badge is what identifies it —
+   so they take the same role and stay the same size as each other, as they
+   are today. */
 .execution-date {
-  font-size: 13px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
 .execution-stats {
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 .execution-actions {
@@ -405,8 +492,19 @@
   overflow: hidden;
 }
 
-/* Execution Details */
-.detail-row {
+/* Execution Details — scoped to the tab root.
+   `detail` is the single most over-claimed word in this tree: `.detail-row` was
+   bare here AND in StatsTab.css, and `.detail-label` bare here AND in
+   M3UChangesTab.css, all at divergent values, across three lazy chunks. So the
+   execution log's rows took Stats' 12px flex row (or Stats' took this file's
+   8px padding and border) depending on which tab you had visited last
+   (bead enhancedchannelmanager-6z299.2). Every `.detail-row`/`.detail-label`
+   in this chunk renders inside `.channel-pipeline-tab` — the execution log
+   viewer and the revert dialogs are ordinary in-tree children, not portals
+   (ModalOverlay renders a plain div; only RouteHeaderSlot portals). `:where()`
+   contributes no specificity, so `.error`/`.warning` still beat the base rule
+   exactly as they did and nothing this tab renders moves. */
+:where(.channel-pipeline-tab) .detail-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -414,22 +512,22 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
-.detail-row:last-child {
+:where(.channel-pipeline-tab) .detail-row:last-child {
   border-bottom: none;
 }
 
-.detail-label {
+:where(.channel-pipeline-tab) .detail-label {
   font-weight: 500;
   color: var(--text-secondary);
 }
 
-.detail-row.error {
+:where(.channel-pipeline-tab) .detail-row.error {
   color: var(--error-color, #dc3545);
 }
 
 /* Warning-styled counter row (e.g. Parse Failures > 0, Capped) in the
    event_sync execution summary (enhancedchannelmanager-7wuhd). */
-.detail-row.warning {
+:where(.channel-pipeline-tab) .detail-row.warning {
   color: var(--status-warning, #f59e0b);
 }
 
@@ -476,7 +574,11 @@
   border-color: var(--accent-primary);
 }
 
-.import-error {
+/* Scoped: `.import-error` is a generic name declared bare in a lazy chunk, so
+   it was in line to claim any future `.import-error` elsewhere in the app the
+   moment one appeared (bead enhancedchannelmanager-6z299.2). `:where()` keeps
+   it at (0,1,0). */
+:where(.channel-pipeline-tab) .import-error {
   margin-top: 12px;
   padding: 10px 14px;
   background: rgba(220, 53, 69, 0.1);
@@ -1031,14 +1133,20 @@
 }
 
 /* Legacy-run indicator: shown when has_snapshot=false and mode=execute.
-   Muted icon; not a button — just informational. */
+   Muted icon; not a button — just informational.
+   Content-pane, not modal: this renders inside `.execution-actions` in the
+   executions list (ChannelPipelineTab.tsx:1422), even though it is filed under
+   the snapshot-restore heading with the revert dialogs. Icon size tokenized to
+   --icon-status; it was already 18px, so nothing moves. The --text-muted stays
+   — this is a decorative glyph, not text, and the AA rule exempts those
+   (bead enhancedchannelmanager-6z299). */
 .execution-no-snapshot {
   display: inline-flex;
   align-items: center;
   padding: 4px;
   color: var(--text-muted);
   cursor: default;
-  font-size: 18px;
+  font-size: var(--icon-status);
   opacity: 0.5;
 }
 

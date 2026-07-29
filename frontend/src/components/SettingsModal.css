@@ -1,17 +1,22 @@
 /* Settings Modal - component-specific styles only */
 /* Base modal styles come from ModalBase.css */
 
-/* Test connection button states */
-.btn-test {
+/* Test connection button states
+   The base `.btn-test` now lives in shared/common.css § 3 BUTTONS. This
+   modal wants the quieter surface treatment rather than the primary fill,
+   so its override is scoped to the modal instead of being declared bare —
+   bare, it and SettingsTab.css's copy were two app-wide `.btn-test` rules
+   in different chunks and the winner depended on whether Settings had been
+   opened (bead enhancedchannelmanager-6z299). */
+.settings-modal .btn-test {
   background-color: var(--bg-tertiary, #2a2a4a);
   border: 1px solid var(--border-color, #3a3a5a);
   color: var(--text-primary, #fff);
-  transition: all 0.2s;
   min-width: 120px;
   text-align: center;
 }
 
-.btn-test:hover:not(:disabled) {
+.settings-modal .btn-test:hover:not(:disabled) {
   background-color: var(--bg-secondary, #353555);
   border-color: var(--border-color, #4a4a6a);
 }

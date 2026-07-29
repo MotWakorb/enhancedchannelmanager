@@ -226,8 +226,12 @@
 }
 
 /* Logo Name */
+/* Had no font-size at all, so it rendered at the UA default 16px — the same
+   gap `.account-name` and `.source-name` had before the f4yc7 pilot. */
 .logo-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -243,7 +247,9 @@
 }
 
 .logo-url {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -273,13 +279,15 @@
 }
 
 .copy-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Logo Channel Count */
 .logo-count {
   text-align: center;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -294,39 +302,17 @@
   justify-content: flex-end;
 }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.action-btn:hover:not(:disabled) {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.action-btn.delete:hover:not(:disabled) {
-  background-color: rgba(239, 68, 68, 0.2);
-  color: var(--error);
-}
-
-.action-btn .material-icons {
-  font-size: 18px;
-}
+/* The whole `.action-btn` family is owned by shared/common.css § 18 ACTION
+   BUTTONS, including the 32x32 box this file used to declare — § 18 said
+   `padding: 0.375rem` and all three manager tabs overrode it identically,
+   so the shared rule described a geometry nothing rendered. The tabs' box
+   won and moved into § 18; row heights here are unchanged. The destructive
+   hover tint moved with it and became `--error-bg` rather than the literal
+   `rgba(239, 68, 68, 0.2)` this file hardcoded, so it now follows the theme.
+   Repeating any of it here is what made it chunk-order dependent: these
+   files are lazy chunks appended after common.css, so a bare copy in
+   whichever tab was visited last silently won app-wide (bead
+   enhancedchannelmanager-6z299). */
 
 /* ===================== */
 /* GRID VIEW             */
@@ -390,9 +376,12 @@
   margin-bottom: 0.375rem;
 }
 
+/* The card view's equivalent of `.logo-name` — same role, same values, so the
+   two views read as one list rather than two typefaces of the same data. */
 .card-name span {
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -409,8 +398,9 @@
   padding: 0 0.25rem;
   background-color: var(--border-primary);
   border-radius: var(--radius-xl);
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -491,21 +481,11 @@
   color: var(--text-primary);
 }
 
-.warning-message {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-lg);
-  color: var(--warning);
-  font-size: 0.9rem;
-}
-
-.warning-message .material-icons {
-  font-size: 20px;
-}
+/* `.warning-message` and its glyph are owned by shared/common.css § 8
+   ERROR/WARNING DISPLAYS. Declared bare here, in a lazy chunk, this copy
+   became the app-wide warning banner as soon as anyone opened Logo Manager —
+   including on Settings, where the shared banner is what the markup expects
+   (bead enhancedchannelmanager-6z299). */
 
 /* .btn-danger is defined in shared/common.css */
 
@@ -518,19 +498,18 @@
   border-top: 1px solid var(--border-primary);
   background: var(--bg-secondary);
   flex-shrink: 0;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
-.pagination-left,
-.pagination-center,
-.pagination-right {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.pagination-center {
+/* `.pagination-left/-center/-right` are owned by shared/common.css § 25
+   PAGINATION STRIP. Declared bare here they competed with the Journal and
+   M3U Changes copies across chunks, and the tighter centre gap this footer
+   wants leaked into both of them. Scoped, it stays local
+   (bead enhancedchannelmanager-6z299). */
+.logo-pagination .pagination-center {
   gap: 0.25rem;
 }
 
@@ -559,27 +538,13 @@
 }
 
 .logo-pagination .page-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
-.page-indicator {
-  padding: 0 0.5rem;
-  white-space: nowrap;
-}
-
-.page-size-label {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  white-space: nowrap;
-}
-
-.page-size-label select {
-  padding: 0.25rem 0.375rem;
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
+/* `.page-indicator`, `.page-size-label` and its native select moved to
+   shared/common.css § 25 PAGINATION STRIP alongside Journal's and M3U
+   Changes' equivalents — `.page-indicator` and `.page-info` are the same
+   "Page 3 of 12" string under two names, and the two `.page-size-label`
+   rules disagreed about whether the label was a flex row or a coloured
+   string. The indicator gains 0.25rem of padding a side from the reconciled
+   rule (bead enhancedchannelmanager-6z299). */

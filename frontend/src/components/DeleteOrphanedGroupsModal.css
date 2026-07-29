@@ -46,13 +46,26 @@
   flex: 1;
 }
 
-.group-name {
-  font-weight: 500;
-  color: var(--text-primary);
+/* `.group-name` is owned by shared/common.css § 27 GROUP ROWS. It was
+   declared bare in four files across three chunks at 14px, 15.2px and — in
+   DeleteOrphanedGroupsModal.css, which set no size at all — the UA default
+   16px, so the same group row rendered at a different size depending on
+   which page you had opened (bead enhancedchannelmanager-6z299). */
+/* `label.group-item`, not `.group-item`: PrintGuideModal.css declares the
+   same two class names on a <div> row, and both files are in the eager
+   bundle, so a bare descendant rule here would reach that modal's rows too. */
+label.group-item .group-name {
   margin-bottom: 0.25rem;
 }
 
-.group-details {
+/* Scoped to this modal's root. `.group-details` was declared bare here at
+   13.6px and bare in PrintGuideModal.css at 12.8px, and those two files live in
+   different lazy chunks (Settings vs Guide), so both modals rendered the row's
+   detail line at whichever size the tab you had visited last supplied
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps the selector at
+   (0,1,0) — the bare rule's specificity — so nothing else in this modal moves;
+   only the leak into PrintGuideModal stops. */
+:where(.delete-orphaned-modal) .group-details {
   font-size: 0.85rem;
   color: var(--text-muted);
 }

@@ -60,22 +60,14 @@
   color: var(--text-muted, #666);
 }
 
-.file-info {
-  display: flex;
-  flex-direction: column;
+/* `.file-info`, `.file-name` and `.file-size` are owned by shared/common.css
+   § 17. Both this file and LogoModal.css declared the whole family bare in
+   the eager bundle and disagreed on the filename size (16px here, 14.4px
+   there) and on the size string's colour; only the layout bit that is
+   genuinely local to this dropzone stays
+   (bead enhancedchannelmanager-6z299). */
+.csv-dropzone .file-info {
   align-items: center;
-  gap: 0.25rem;
-}
-
-.file-name {
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--text-primary, #fff);
-}
-
-.file-size {
-  font-size: 0.8rem;
-  color: var(--text-secondary, #888);
 }
 
 /* Preview Table */

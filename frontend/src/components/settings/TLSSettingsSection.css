@@ -20,13 +20,15 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 3rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 pre.tls-settings-error {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -42,21 +44,30 @@ pre.tls-settings-error {
   border-radius: var(--radius-xl);
 }
 
+/* Item title, not section. 15px is size-exact for the section role, but this
+   is the NAME OF A ROW ("HTTPS", "Certificate"), not a heading over a card —
+   the call the f4yc7 pilot made on `.account-name`
+   (bead enhancedchannelmanager-6z299.4). */
 .tls-status-label {
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Badge role. Weight stays 600 and the tracking takes the micro role's
+   0.08em: uppercase at chip size needs both, the same call `.type-badge`
+   makes in shared/common.css § 23. */
 .tls-status-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .tls-status-badge.encrypted {
@@ -71,10 +82,14 @@ pre.tls-settings-error {
   border: 1px solid rgba(234, 179, 8, 0.3);
 }
 
+/* Meta role, and --text-secondary rather than --text-muted: --text-muted
+   measures 2.61:1 on --bg-secondary in the light theme, below the AA floor. */
 .tls-status-fallback {
   margin-left: auto;
-  font-size: 0.8125rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Status Card - follows auth-provider-card pattern (kept for potential future use) */
@@ -85,21 +100,26 @@ pre.tls-settings-error {
   overflow: hidden;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299). */
 .tls-status-card h3 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0;
   padding: 0.75rem 1rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
 }
 
 .tls-status-card h3 .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
@@ -127,14 +147,19 @@ pre.tls-settings-error {
    `.list-header` one repaired in bead enhancedchannelmanager-qlc4h; scoping
    is specificity-only and changes nothing this tab renders. */
 .tls-status-grid .status-label {
-  font-size: 0.75rem;
+  /* Micro role — the uppercase caption over each grid cell's value. */
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body size. Weight stays 500: this is the value a micro label points at, and
+   the medium weight is what separates it from the caption above it. */
 .status-value {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   font-weight: 500;
 }
@@ -144,7 +169,7 @@ pre.tls-settings-error {
 }
 
 .status-value.disabled {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .status-value.valid {
@@ -177,15 +202,16 @@ pre.tls-settings-error {
   gap: 0.5rem;
   margin: 0;
   padding: 0.75rem 1rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
 }
 
 .tls-config-card h3 .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
@@ -216,14 +242,15 @@ pre.tls-settings-error {
 
 .challenge-info .material-icons {
   color: var(--text-secondary);
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
 }
 
 .challenge-info p {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 /* Manual Upload Section */
@@ -254,13 +281,18 @@ pre.tls-settings-error {
   align-items: center;
   gap: 0.5rem;
   margin: 0 0 0.75rem 0;
-  font-size: 0.875rem;
-  font-weight: 500;
+  /* Section role. Card and panel titles across the product rendered at 14,
+     15, 16 and 18px. They are all the same thing — a heading inside a page
+     — so they all take the 15px section role now (PO decision, bead
+     enhancedchannelmanager-6z299). This one was 14px. */
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
 .tls-info-box h4 .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
@@ -271,9 +303,10 @@ pre.tls-settings-error {
 
 .tls-info-box li {
   margin-bottom: 0.5rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 .tls-info-box li:last-child {

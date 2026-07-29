@@ -3280,7 +3280,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </span>
             <div className="email-recipients-list">
               {channelPipelineExcludedTerms.length === 0 ? (
-                <span className="no-recipients">No excluded terms configured</span>
+                <span className="empty-inline">No excluded terms configured</span>
               ) : (
                 channelPipelineExcludedTerms.map((term) => (
                   <span key={term} className="email-recipient-tag">
@@ -3346,7 +3346,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </span>
             <div className="email-recipients-list">
               {channelPipelineExcludedGroups.length === 0 ? (
-                <span className="no-recipients">No excluded groups configured</span>
+                <span className="empty-inline">No excluded groups configured</span>
               ) : (
                 channelPipelineExcludedGroups.map((group) => (
                   <span key={group} className="email-recipient-tag">
@@ -3656,7 +3656,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
         </p>
         {!smtpAlertRecipientsPersisted.methodId && !smtpAlertRecipientsPersisted.recipients.trim() && (
-          <p className="settings-empty-state">
+          <p className="empty-inline">
             No recipients configured. Scheduled task email alerts won&apos;t be delivered until you add at least one recipient.
           </p>
         )}
@@ -4469,7 +4469,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.exclude_group_patterns.length === 0 ? (
-                    <span className="no-recipients">No exclude patterns configured</span>
+                    <span className="empty-inline">No exclude patterns configured</span>
                   ) : (
                     digestSettings.exclude_group_patterns.map((pattern) => (
                       <span key={pattern} className="email-recipient-tag">
@@ -4522,7 +4522,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.exclude_stream_patterns.length === 0 ? (
-                    <span className="no-recipients">No exclude patterns configured</span>
+                    <span className="empty-inline">No exclude patterns configured</span>
                   ) : (
                     digestSettings.exclude_stream_patterns.map((pattern) => (
                       <span key={pattern} className="email-recipient-tag">
@@ -4601,7 +4601,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.email_recipients.length === 0 ? (
-                    <span className="no-recipients">No recipients configured</span>
+                    <span className="empty-inline">No recipients configured</span>
                   ) : (
                     digestSettings.email_recipients.map((email) => (
                       <span key={email} className="email-recipient-tag">

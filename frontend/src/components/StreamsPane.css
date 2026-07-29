@@ -19,15 +19,15 @@
   gap: 0.5rem;
 }
 
+/* Typography is owned by shared/common.css § 14 PANE HEADERS. The 1.1rem
+   this file declared never rendered: common.css is emitted last inside the
+   eager bundle, so its 0.75rem/600 rule has been winning at equal
+   specificity all along. Only the flex row, which this header needs for the
+   badge beside the title, is local (bead enhancedchannelmanager-6z299). */
 .pane-header h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 1.1rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0;
   min-width: 0;
 }
 
@@ -55,7 +55,7 @@
 }
 
 .refresh-streams-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
 /* .spinning is defined in shared/common.css (counter-clockwise) */
@@ -70,7 +70,7 @@
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
@@ -91,7 +91,7 @@
   color: var(--button-primary-text);
   padding: 0.375rem 0.75rem;
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
@@ -102,7 +102,7 @@
 }
 
 .create-channels-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .streams-pane-filters {
@@ -130,7 +130,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -147,7 +147,7 @@
 }
 
 .hide-mapped-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .hide-mapped-label {
@@ -188,10 +188,23 @@
 }
 
 .clear-filters-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
-.search-input,
+/* `.search-input` used to be in this selector list, and in its `:focus`
+   partner below. Both were dead: shared/common.css § 11 declares the same
+   class bare with the same seven properties, and it is emitted last inside
+   the eager bundle (byte ~256,447 against this file's ~158,000), so its
+   values — including a --radius-lg corner where this said --radius-md — have
+   been the live ones all along. Deleted rather than reconciled; § 11 is the
+   owner (bead enhancedchannelmanager-6z299.5).
+
+   `.filter-select` stays declared here, and stays bare. It is a live class in
+   three chunks (this one plus Journal and M3U Changes, whose copies bead
+   6z299.2 scoped), and this eager rule is what draws the box those two tabs'
+   filter triggers sit in. Scoping it would silently restyle the frozen route
+   header band on two pages this wave does not own — flagged on the bead
+   instead. */
 .filter-select {
   width: 100%;
   padding: 0.5rem;
@@ -199,10 +212,9 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
-.search-input:focus,
 .filter-select:focus {
   outline: none;
   border-color: var(--accent-primary);
@@ -254,21 +266,28 @@
   outline-offset: -2px;
 }
 
+/* Chevron glyph, not text — it keeps --text-muted, which the colour rule
+   exempts for decorative glyphs. */
 .stream-category-header .expand-icon {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
   color: var(--text-muted);
 }
 
+/* The name of a row in a list — item title. */
 .stream-category-header .category-name {
   flex: 1;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in light. */
 .stream-category-header .category-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-2xl);
@@ -384,9 +403,10 @@
 
 .keyboard-drag-destinations-title {
   padding: 0.5rem 0.625rem;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
 }
 
@@ -441,28 +461,13 @@ button.group-selection-checkbox {
    matching comment in ChannelsPane.css's .group-toggle-btn. `flex: 1`
    reproduces exactly what `.group-name`'s own `flex: 1` did when it was a
    direct child of `.stream-group-header`. */
-.group-toggle-btn {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  cursor: pointer;
-}
-
-.group-toggle-btn:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
+/* `.group-toggle-btn` and its `:focus-visible` are owned by
+   shared/common.css § 3 BUTTONS. This copy and ChannelsPane.css's were
+   byte-identical — one class with two owners, which is how two copies of a
+   rule drift apart (bead enhancedchannelmanager-6z299.2). */
 
 .group-selection-checkbox .material-icons {
-  font-size: 1.2rem;
+  font-size: var(--icon-status);
 }
 
 .group-selection-checkbox:hover {
@@ -484,16 +489,17 @@ button.group-selection-checkbox {
   width: 1rem;
 }
 
+/* Type and colour for `.group-name` come from shared/common.css § 27 GROUP
+   ROWS. Only `flex: 1`, which this header needs to push the count and the
+   bulk-create button right, is local — the same shape ChannelsPane.css uses
+   (bead enhancedchannelmanager-6z299.5). */
 .stream-group-header .group-name {
   flex: 1;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--button-text);
 }
 
+/* Type and colour for `.group-count` also come from § 27; the pill this pane
+   draws around it is local. */
 .stream-group-header .group-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-2xl);
@@ -506,7 +512,9 @@ button.group-selection-checkbox {
   display: inline-flex;
   align-items: center;
   gap: 0.125rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--warning-text);
   background-color: var(--warning-bg);
   padding: 0.125rem 0.5rem;
@@ -514,8 +522,9 @@ button.group-selection-checkbox {
   cursor: help;
 }
 
+/* Glyph inside a chip — the badge icon, which is the 14px this already was. */
 .group-stale-count .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
 }
 
 .stream-group-items {
@@ -613,7 +622,7 @@ button.group-selection-checkbox {
 }
 
 .selection-checkbox .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 .selection-checkbox:hover {
@@ -676,15 +685,21 @@ button.group-selection-checkbox {
   min-width: 0;
 }
 
+/* The name of a row in a list — item title. */
 .stream-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Supporting detail under the item title — meta. The monospace face stays:
+   it is a URL, and reading it character by character is the point. */
 .stream-url {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin-top: 0.125rem;
   font-family: monospace;
@@ -694,8 +709,10 @@ button.group-selection-checkbox {
 }
 
 .stream-provider {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 0.125rem;
 }
 
@@ -716,12 +733,18 @@ button.group-selection-checkbox {
   background-color: var(--input-bg);
 }
 
+/* Remapped in place rather than pointed at `.empty-inline`, because this
+   class is also rendered by GroupMultiSelectDropdown.tsx — a different chunk
+   — and this eager rule is its only owner. The values are `.empty-inline`'s
+   (shared/common.css § 7) so the two idioms read the same; the italic goes,
+   for the reason recorded there. */
 .filter-dropdown-empty {
   padding: 1rem;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  font-style: italic;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .filter-dropdown-options {
@@ -730,7 +753,8 @@ button.group-selection-checkbox {
 
 .filter-option-name {
   flex: 1;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -761,7 +785,7 @@ button.group-selection-checkbox {
 }
 
 .bulk-create-btn .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
@@ -1367,29 +1391,12 @@ button.group-selection-checkbox {
   color: var(--text-secondary);
 }
 
-.separator-btn {
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-md);
-  background-color: var(--input-bg);
-  color: var(--button-text);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-  min-width: 2rem;
-}
-
-.separator-btn:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border-secondary);
-}
-
-.separator-btn.active {
-  border-color: var(--accent-primary);
-  background-color: var(--accent-primary)22;
-  color: var(--accent-primary);
-}
+/* `.separator-btn` is owned by shared/common.css § 3 BUTTONS. This copy and
+   SettingsTab.css's were byte-identical in the base; the active state here
+   said `background-color: var(--accent-primary)22`, which is not valid CSS
+   and was being dropped by the parser, so the active separator had no
+   background at all. It now gets SettingsTab's valid `--accent-15`
+   (bead enhancedchannelmanager-6z299). */
 
 .preview-more {
   padding: 0.5rem 0.75rem;

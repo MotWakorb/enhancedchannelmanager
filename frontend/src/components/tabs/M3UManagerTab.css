@@ -361,39 +361,17 @@
   justify-content: flex-end;
 }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.action-btn:hover:not(:disabled) {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.action-btn.delete:hover:not(:disabled) {
-  background-color: rgba(239, 68, 68, 0.2);
-  color: var(--error);
-}
-
-.action-btn .material-icons {
-  font-size: var(--icon-action);
-}
+/* The whole `.action-btn` family is owned by shared/common.css § 18 ACTION
+   BUTTONS, including the 32x32 box this file used to declare — § 18 said
+   `padding: 0.375rem` and all three manager tabs overrode it identically,
+   so the shared rule described a geometry nothing rendered. The tabs' box
+   won and moved into § 18; row heights here are unchanged. The destructive
+   hover tint moved with it and became `--error-bg` rather than the literal
+   `rgba(239, 68, 68, 0.2)` this file hardcoded, so it now follows the theme.
+   Repeating any of it here is what made it chunk-order dependent: these
+   files are lazy chunks appended after common.css, so a bare copy in
+   whichever tab was visited last silently won app-wide (bead
+   enhancedchannelmanager-6z299). */
 
 /* Responsive */
 @media (max-width: 1100px) {

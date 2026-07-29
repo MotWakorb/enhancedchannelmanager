@@ -316,9 +316,9 @@ export function LookupTableSection() {
         </div>
 
         {loading ? (
-          <p className="lookup-tables-empty">Loading...</p>
+          <p className="lookup-tables-empty empty-inline">Loading...</p>
         ) : sortedTables.length === 0 ? (
-          <p className="lookup-tables-empty">
+          <p className="lookup-tables-empty empty-inline">
             No lookup tables yet. Create one to map channel callsigns to URLs,
             country codes to names, or any other key/value substitution your
             templates need.

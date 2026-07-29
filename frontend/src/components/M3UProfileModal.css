@@ -76,7 +76,12 @@
   gap: 0.5rem;
 }
 
-.profile-name {
+/* Scoped to this modal's root. `.profile-name` was bare here (M3U chunk) and
+   bare in ChannelProfilesListModal.css:101 (eager), so after one visit to M3U
+   Manager the channel-profiles list took this modal's 16px/600 name treatment
+   for the rest of the session (bead enhancedchannelmanager-6z299.2).
+   `:where()` keeps it at (0,1,0), so this modal renders identically. */
+:where(.m3u-profile-modal) .profile-name {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -109,30 +114,37 @@
   font-size: 0.875rem;
 }
 
-.detail-item {
+/* Scoped to this modal's root — the other half of the `.detail-item` collision
+   scoped in M3UChangesTab.css. Both were bare, in different lazy chunks, with a
+   divergent gap, so an M3U profile's detail chips and an expanded M3U-change
+   row traded spacing depending on visit order
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps every selector at the
+   specificity it had, so the `.pattern`/`.status` modifiers still layer on top
+   exactly as they do now. */
+:where(.m3u-profile-modal) .detail-item {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   color: var(--text-secondary);
 }
 
-.detail-item .material-icons {
+:where(.m3u-profile-modal) .detail-item .material-icons {
   font-size: 16px;
 }
 
-.detail-item.pattern {
+:where(.m3u-profile-modal) .detail-item.pattern {
   cursor: help;
 }
 
-.detail-item.status {
+:where(.m3u-profile-modal) .detail-item.status {
   font-weight: 500;
 }
 
-.detail-item.status.active {
+:where(.m3u-profile-modal) .detail-item.status.active {
   color: var(--success);
 }
 
-.detail-item.status.inactive {
+:where(.m3u-profile-modal) .detail-item.status.inactive {
   color: var(--text-muted);
 }
 
@@ -250,11 +262,11 @@
   cursor: not-allowed;
 }
 
-.field-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-weight: normal;
-}
+/* `.field-hint` is owned by shared/common.css § 26 FIELD MESSAGES. Four
+   files declared it bare and two declared `.field-error` bare, across three
+   different chunks and at three different sizes — so the hint under a form
+   field changed size depending on which page had been opened first
+   (bead enhancedchannelmanager-6z299). */
 
 .form-actions {
   display: flex;

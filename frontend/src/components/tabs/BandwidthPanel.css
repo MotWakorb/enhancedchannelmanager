@@ -32,9 +32,21 @@
   gap: 8px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px.
+   `text-transform` / `letter-spacing` are reset explicitly: until this bead
+   they came from StatsTab.css's bare `.section-title`, so every panel title
+   was rendering 15px/600 UPPERCASE — the section role's size with that
+   rule's case (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-panel .section-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
   margin: 0;
 }
@@ -83,7 +95,7 @@
 }
 
 .bandwidth-panel .direction-icon {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .bandwidth-panel .direction-icon.inbound {
@@ -94,12 +106,17 @@
   color: var(--success);
 }
 
+/* Micro role — every tracked uppercase caption in this panel
+   (`.direction-label`, `.peak-header`, `.stat-label`, `.peak-label`,
+   `.chart-title`, `.ratio-header`) is the same idiom shared/common.css § 24
+   owns, written here at five different sizes
+   (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-panel .direction-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
 }
 
 .bandwidth-panel .summary-stats {
@@ -112,16 +129,27 @@
   text-align: center;
 }
 
+/* Item title, NOT metric. This is a `repeat(3, 1fr)` breakdown nested inside
+   a `repeat(2, 1fr)` card grid — six cells across the panel, the densest
+   figures in Stats. The panel's headline number is `.peak-value` below, which
+   does take the metric role; making both 20px would leave the panel with no
+   focal point (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-panel .stat-value {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Micro role spelled out in full: `letter-spacing` used to arrive from
+   StatsTab.css's `.stat-label`. --text-secondary, not --text-muted, which is
+   2.61:1 on --bg-secondary in the light theme. */
 .bandwidth-panel .stat-label {
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -131,12 +159,12 @@
 }
 
 .bandwidth-panel .peak-header {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
   color: var(--text-secondary);
   margin-bottom: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .bandwidth-panel .peak-grid {
@@ -156,7 +184,7 @@
 }
 
 .bandwidth-panel .peak-icon {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .bandwidth-panel .peak-icon.inbound {
@@ -172,14 +200,20 @@
 }
 
 .bandwidth-panel .peak-label {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
+/* Metric role (16px -> 20px). One figure per card in a `repeat(2, 1fr)` grid
+   beside an 18px glyph — the headline number of the panel
+   (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-panel .peak-value {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--text-primary);
 }
 
@@ -196,11 +230,11 @@
 }
 
 .bandwidth-panel .chart-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
 }
 
 .bandwidth-panel .chart-legend {
@@ -212,7 +246,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -280,14 +316,23 @@
   background: var(--success);
 }
 
+/* The bar chart's axis pair stays at 10px — a day column is ~50px wide and
+   the meta role's 11px would start wrapping "Mon"/"12.4 GB". The label takes
+   micro (uppercase, 700) and the value badge (10px/500), so the label still
+   reads louder than the value exactly as 10px/500 over 9px/400 did, and both
+   land on the scale (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-panel .day-label {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-weight: 500;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .bandwidth-panel .day-value {
-  font-size: 9px;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary);
   text-align: center;
 }
@@ -302,9 +347,11 @@
 }
 
 .bandwidth-panel .ratio-header {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -322,8 +369,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: white;
   min-width: 30px;
 }
@@ -339,8 +387,10 @@
 .bandwidth-panel .ratio-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* States */
@@ -348,8 +398,10 @@
 .bandwidth-panel .empty-state {
   padding: 32px;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .bandwidth-panel .error-message {
@@ -358,7 +410,9 @@
   color: var(--error);
   padding: 10px 14px;
   border-radius: var(--radius-lg);
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 12px;
 }
 

@@ -310,7 +310,7 @@ export function LinkedAccountsSection() {
       <div className="link-account-section">
         <h4>Link Another Account</h4>
         {availableProviders.length === 0 ? (
-          <p className="no-providers-message">
+          <p className="empty-inline">
             All enabled authentication providers are already linked to your account.
           </p>
         ) : (

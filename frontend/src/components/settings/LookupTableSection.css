@@ -1,15 +1,23 @@
 /* Lookup Tables settings section */
 
+/* Content pane. Everything below the "Editor modal" divider is inside a
+   ModalOverlay and is out of scope for the P1 content-pane sweep
+   (bead enhancedchannelmanager-6z299.4). */
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added to
+   the element in LookupTableSection.tsx. Only the padding is local. Same
+   correction as `.alert-methods-empty` and `.team-aliases-empty`: the body
+   role put a second treatment on the inline "nothing here" idiom
+   (the enhancedchannelmanager-6z299.7 cleanup pass). */
 .lookup-tables-empty {
-  color: var(--text-secondary);
-  font-size: 0.875rem;
   padding: 1rem 0;
 }
 
 .lookup-tables-list {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .lookup-tables-list th,
@@ -19,12 +27,14 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Micro role — the same uppercase column-caption idiom as `.list-header` in
+   shared/common.css § 24. */
 .lookup-tables-list th {
   color: var(--text-secondary);
-  font-weight: 500;
-  font-size: 0.75rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .lookup-tables-list th.num,
@@ -40,41 +50,24 @@
   white-space: nowrap;
 }
 
+/* Item title — the name of a row in the table. */
 .lookup-tables-name {
   color: var(--text-primary);
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
 }
 
 .lookup-tables-desc {
   color: var(--text-secondary);
 }
 
-.btn-icon {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  padding: 0.375rem;
-  border-radius: var(--radius-sm, 0.25rem);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-}
-
-.btn-icon:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.btn-icon-danger:hover {
-  color: var(--error, #ef4444);
-  background: rgba(239, 68, 68, 0.1);
-}
-
-.btn-icon .material-icons {
-  font-size: 1.125rem;
-}
+/* `.btn-icon`, `.btn-icon-danger` and the glyph size are owned by
+   shared/common.css § 3 BUTTONS. Three files declared `.btn-icon` bare —
+   this one, TagEngineSection.css and M3ULinkedAccountsModal.css — two of
+   them in the SAME lazy Settings chunk, where whichever imported later
+   silently won, and they disagreed on padding, colour and glyph size
+   (bead enhancedchannelmanager-6z299). */
 
 /* ---------------------------------------------------------------------- */
 /* Editor modal — entries list + bulk import                              */
@@ -195,14 +188,7 @@
   resize: vertical;
 }
 
-.btn-small {
-  padding: 0.25rem 0.625rem;
-  font-size: 0.8125rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.btn-small .material-icons {
-  font-size: 1rem;
-}
+/* `.btn-small` is owned by shared/common.css § 3 BUTTONS — this file's
+   size-modifier version is the one that moved there, because that is how
+   every call site but M3UGroupsModal's two buttons uses it: worn alongside
+   `.btn-primary`/`.btn-secondary` (bead enhancedchannelmanager-6z299). */

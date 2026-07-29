@@ -370,11 +370,11 @@
   max-width: 160px;
 }
 
-/* Field Hint */
-.field-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-}
+/* `.field-hint` is owned by shared/common.css § 26 FIELD MESSAGES. Four
+   files declared it bare and two declared `.field-error` bare, across three
+   different chunks and at three different sizes — so the hint under a form
+   field changed size depending on which page had been opened first
+   (bead enhancedchannelmanager-6z299). */
 
 /* Warning */
 .action-warning {

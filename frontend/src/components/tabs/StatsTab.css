@@ -38,11 +38,12 @@
   row-gap: 0.75rem;
 }
 
-.header-left h2 {
-  margin: 0;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-}
+/* `.header-left h2` deleted, not remapped: this tab renders no <h2> any
+   more — the route title moved into the header band — and the same dead
+   rule sat in JournalTab.css and M3UChangesTab.css. Dead is not harmless when it
+   is bare in a lazy chunk: it competed with the real `.header-title h2` in
+   shared/common.css on every page visited afterwards
+   (bead enhancedchannelmanager-6z299). */
 
 .header-summary {
   display: flex;
@@ -152,21 +153,13 @@
   margin-right: 0.25rem;
 }
 
-/* WCAG-compliant visually-hidden utility — visible to screen readers,
- * removed from visual flow. Same recipe as UserStatsPanel.css /
- * ProvidersPanel.css (each panel scopes its own copy — no shared global
- * class in this codebase). */
-.visually-hidden {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  padding: 0 !important;
-  margin: -1px !important;
-  overflow: hidden !important;
-  clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important;
-  border: 0 !important;
-}
+/* `.visually-hidden` is owned by shared/common.css § 2 COMMON UTILITIES.
+ * Three identical copies of this a11y primitive existed — here, in
+ * TabNavigation.css and in UserStatsPanel.css — declared bare in three
+ * different chunks, so which one applied depended on visit order. The claim
+ * in the comment that used to sit here, that "each panel scopes its own
+ * copy", was not true: none of the three was scoped
+ * (bead enhancedchannelmanager-6z299). */
 
 /* Tables retain their intrinsic column width even after the standard
    visually-hidden dimensions are applied. Block formatting lets overflow
@@ -227,6 +220,9 @@
 }
 
 /* No Streams State */
+/* --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the AA floor
+   (bead enhancedchannelmanager-6z299.4). */
 .no-streams {
   display: flex;
   flex-direction: column;
@@ -234,21 +230,27 @@
   justify-content: center;
   padding: 3rem;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px dashed var(--border-primary);
 }
 
+/* This block is the same idiom as `.empty-state` in shared/common.css § 7, so
+   its illustration glyph takes the same empty-state icon role (48px -> 64px).
+   The glyph is decorative, not text, so it keeps --text-muted-grade opacity
+   rather than a text colour. */
 .no-streams .material-icons {
-  font-size: 48px;
+  font-size: var(--icon-empty);
   margin-bottom: 1rem;
   opacity: 0.5;
 }
 
 .no-streams p {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Active Channels Section */
@@ -258,12 +260,35 @@
   gap: 0.75rem;
 }
 
-.section-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-secondary);
+/* Scoped to the page root. `.section-title` is a name several other chunks also
+   render: `<h3 className="section-title">` in RuleBuilder.tsx (Pipeline) and
+   `<h4 className="section-title">` in ScheduleEditor.tsx, plus the scoped
+   `.rule-section .section-title` and `.schedule-editor .parameters-section
+   .section-title` written for them. Declared bare in the Stats lazy chunk, this
+   rule reached all of those for the rest of the session once Stats had been
+   visited, and supplied whatever their own scoped rules left unset
+   (bead enhancedchannelmanager-6z299.2). Stats' own titles — including
+   PopularityPanel's and WatchHistoryPanel's, which render inside `.stats-tab` —
+   still match. `:where()` keeps this at (0,1,0), so the already-scoped rules
+   still win by specificity exactly as they do today.
+
+   MICRO, not SECTION — a documented deviation from "all panel titles take the
+   section role" (PO decision 3, bead enhancedchannelmanager-6z299). This rule
+   dresses StatsTab's own four dividers ("Active Channels", "Recent Events",
+   "Top Watched Channels", "Bandwidth Usage") as tracked uppercase captions
+   over a hairline rule. That is the `.list-header` idiom, not a card title:
+   at 14px/600/uppercase it was off-scale in both directions, too big for a
+   caption and too shouty for a heading. Micro keeps its character and puts it
+   on the scale. The six panels below carry their own (0,2,0) `.section-title`
+   rules on the section role and are unaffected by the size and weight here —
+   see the note on `text-transform` in each of them
+   (bead enhancedchannelmanager-6z299.4). */
+:where(.stats-tab) .section-title {
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
   margin: 0;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--border-primary);
@@ -310,16 +335,18 @@
 }
 
 .channel-card .channel-number {
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--accent-primary);
   min-width: 4rem;
   flex-shrink: 0;
 }
 
 .channel-card .channel-name {
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   flex: 1;
   min-width: 0;
@@ -328,8 +355,14 @@
   text-overflow: ellipsis;
 }
 
+/* Meta, not badge, despite the name: this is bare truncating text with no
+   chip around it. The three chips under it — `.m3u-source`, `.stream-profile`,
+   `.audio-codec-badge` — do take the badge role
+   (bead enhancedchannelmanager-6z299.4). */
 .stream-name-badge {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -340,7 +373,9 @@
 }
 
 .m3u-source {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.2rem 0.5rem;
   border-radius: var(--radius-md);
   background: var(--bg-tertiary);
@@ -354,7 +389,9 @@
 }
 
 .stream-profile {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.2rem 0.5rem;
   border-radius: var(--radius-md);
   background: var(--button-primary-bg);
@@ -368,14 +405,15 @@
 }
 
 .audio-codec-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.2rem 0.5rem;
   border-radius: var(--radius-md);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   flex-shrink: 0;
   white-space: nowrap;
-  font-weight: 600;
   opacity: 0.9;
 }
 
@@ -383,7 +421,9 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.25rem 0.625rem;
   border-radius: var(--radius-md);
   background: var(--success-bg);
@@ -403,7 +443,7 @@
 }
 
 .channel-state .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .channel-actions {
@@ -420,7 +460,11 @@
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--text-muted);
+  /* --text-secondary, not --text-muted: --text-muted is 2.61:1 on
+     --bg-secondary in the light theme, which fails the 3:1 floor for an
+     interactive glyph as well as the 4.5:1 text floor
+     (bead enhancedchannelmanager-6z299.4). */
+  color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
@@ -436,7 +480,7 @@
 }
 
 .channel-actions button .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Currently Showing (EPG) row */
@@ -450,22 +494,27 @@
 }
 
 .channel-now-playing .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
   color: var(--accent-primary);
   flex-shrink: 0;
 }
 
+/* Tracked uppercase caption — the micro-label idiom shared/common.css § 24
+   owns. --text-secondary, not --text-muted, which is 2.61:1 on
+   --bg-secondary in the light theme (bead enhancedchannelmanager-6z299.4). */
 .channel-now-playing .now-playing-label {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
   flex-shrink: 0;
 }
 
 .channel-now-playing .now-playing-title {
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   min-width: 0;
   white-space: nowrap;
@@ -474,7 +523,9 @@
 }
 
 .channel-now-playing .now-playing-time {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   flex-shrink: 0;
   white-space: nowrap;
@@ -494,16 +545,48 @@
   gap: 0.125rem;
 }
 
-.stat-label {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+/* Scoped to the page root, not left bare. `.stat-label` / `.stat-value` were
+   declared bare here AND in ChannelPipelineTab.css, in two different lazy
+   chunks, at different values — so the active-channel card's quick-stats
+   rendered at Pipeline's 24px/13px once you had visited the Channel Pipeline
+   tab, and vice versa (bead enhancedchannelmanager-6z299.2).
+   `.stats-tab` and not `.channel-stats`, because these bare rules are load
+   bearing beyond this grid: `.enhanced-stats-panel`, `.watch-history-panel`
+   and `.bandwidth-panel` each declare their own `.stat-label` size and colour
+   but NOT `text-transform`/`letter-spacing`, and pick those up from here.
+   `.summary-stat` (the portaled header tiles) is outside `.stats-tab` and is
+   unaffected — its own rules at :93/:99 already declare all four properties.
+   `:where()` is required rather than cosmetic: a plain `.stats-tab .stat-label`
+   would be (0,2,0), tying with those three panel rules, and StatsTab.css is
+   emitted AFTER all three in the built chunk (verified in
+   dist/assets/StatsTab-*.css), so it would start winning and resize every
+   panel. `:where()` keeps it at (0,1,0) — exactly the bare rule's specificity —
+   so the whole intra-chunk cascade is preserved.
+
+   The four panel copies named above now each spell the micro role out in full
+   rather than inheriting `text-transform` / `letter-spacing` from here, so
+   this rule is no longer load bearing beyond `.channel-stats`. It stays
+   scoped anyway: the leak it guards against is about the class name, not the
+   properties (bead enhancedchannelmanager-6z299.4). */
+:where(.stats-tab) .stat-label {
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
 }
 
-.stat-value {
-  font-size: 0.875rem;
-  font-weight: 500;
+/* Item title, NOT metric. These are the per-channel quick figures (uptime,
+   speed, bitrate, buffering) in an auto-fit `minmax(140px, 1fr)` grid with a
+   2px gap under their label — a dense readout, not a headline. The metric
+   role's 20px belongs to the panels' summary tiles: EnhancedStatsPanel's and
+   WatchHistoryPanel's `.stat-value`, PopularityPanel's `.detail-value`,
+   BandwidthPanel's `.peak-value` and `.bandwidth-value` below
+   (bead enhancedchannelmanager-6z299.4). */
+:where(.stats-tab) .stat-value {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
@@ -530,13 +613,15 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
 
 .clients-header .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .client-list {
@@ -552,7 +637,9 @@
   padding: 0.375rem 0.5rem;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .client-info {
@@ -569,6 +656,15 @@
   gap: 0.25rem;
   color: var(--accent, #646cff);
   font-weight: 500;
+}
+
+/* These two glyphs carried `style={{ fontSize: '14px' }}` inline on five
+   call sites in StatsTab.tsx, which no stylesheet could reach — an inline
+   style beats every selector. Same 14px, expressed once as the badge-icon
+   role (bead enhancedchannelmanager-6z299.4). */
+.client-user .material-icons,
+.client-device-ip .material-icons {
+  font-size: var(--icon-badge);
 }
 
 .client-ip {
@@ -589,8 +685,10 @@
   white-space: nowrap;
 }
 
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in the light
+   theme (bead enhancedchannelmanager-6z299.4). */
 .client-ua {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -655,13 +753,19 @@
   gap: 0.5rem;
 }
 
+/* Body, not meta: the body role covers running text, buttons and inputs, and
+   role definition beats closest-current-px — a 12px control goes to the 13px
+   body role, not the 11px meta role
+   (bead enhancedchannelmanager-6z299.4). */
 .events-filter select {
   padding: 0.3rem 0.5rem;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .events-list {
@@ -679,11 +783,15 @@
   padding: 0.5rem 0.75rem;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in the light
+   theme (bead enhancedchannelmanager-6z299.4). */
 .event-time {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   min-width: 70px;
   font-family: monospace;
 }
@@ -694,14 +802,15 @@
   gap: 0.25rem;
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-sm);
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   text-transform: uppercase;
   min-width: 100px;
 }
 
 .event-type .material-icons {
-  font-size: 12px;
+  font-size: var(--icon-badge);
 }
 
 .event-type.start {
@@ -762,8 +871,14 @@
   margin-bottom: 0.5rem;
 }
 
+/* Declared no font-size at all, so the error string rendered at the UA
+   default 16px — the largest text on the page
+   (bead enhancedchannelmanager-6z299.4). */
 .stats-error p {
   margin: 0;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Expanded Channel Details */
@@ -800,12 +915,17 @@
   flex-direction: column;
 }
 
+/* Tracked uppercase caption — the micro-label idiom shared/common.css § 24
+   owns, and --text-secondary rather than --text-muted (2.61:1 on
+   --bg-secondary in the light theme). Same for `.detail-group-title`,
+   `.bandwidth-label` and `.bandwidth-chart .chart-title` below
+   (bead enhancedchannelmanager-6z299.4). */
 .graph-title {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   margin-bottom: 0.5rem;
 }
 
@@ -816,8 +936,10 @@
   justify-content: center;
   gap: 0.5rem;
   flex: 1;
-  color: var(--text-muted);
-  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .graph-waiting .material-icons {
@@ -831,7 +953,9 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
@@ -855,25 +979,36 @@
 }
 
 .detail-group-title {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   margin-bottom: 0.25rem;
 }
 
-.detail-row {
+/* Scoped to the page root. `.detail-row` was bare here and bare in
+   ChannelPipelineTab.css at divergent values (12px flex row vs an 8px-padded,
+   bottom-bordered row), in two different lazy chunks, so each page rendered the
+   other's version depending on visit order (bead
+   enhancedchannelmanager-6z299.2). These rows are ordinary content-pane
+   children of `.stats-tab` (StatsTab.tsx:1397ff). `:where()` keeps all three
+   selectors at the specificity they had. */
+:where(.stats-tab) .detail-row {
   display: flex;
   justify-content: space-between;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
-.detail-row .label {
-  color: var(--text-muted);
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in the light
+   theme (bead enhancedchannelmanager-6z299.4). */
+:where(.stats-tab) .detail-row .label {
+  color: var(--text-secondary);
 }
 
-.detail-row .value {
+:where(.stats-tab) .detail-row .value {
   color: var(--text-primary);
   font-family: monospace;
 }
@@ -906,12 +1041,16 @@
   padding: 0.125rem;
 }
 
+/* Body role: it is a control, and role definition beats closest-current-px
+   (bead enhancedchannelmanager-6z299.4). */
 .top-watched-toggle .toggle-btn {
   padding: 0.25rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -942,16 +1081,23 @@
   border: 1px solid var(--border-primary);
 }
 
+/* Item title, unlike the muted ordinals in EnhancedStatsPanel and
+   PopularityPanel which take the meta role. This one is accent-coloured and
+   deliberately the loudest thing in the row
+   (bead enhancedchannelmanager-6z299.4). */
 .top-watched-rank {
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--accent-primary);
   min-width: 2rem;
 }
 
 .top-watched-name {
   flex: 1;
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -959,8 +1105,10 @@
 }
 
 .top-watched-count {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
 }
 
@@ -1003,16 +1151,24 @@
 }
 
 .bandwidth-label {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   margin-bottom: 0.25rem;
 }
 
+/* Metric role (17.6px -> 20px). These five figures are the headline numbers
+   of the Bandwidth Usage section, one per tile in a `repeat(5, 1fr)` grid
+   that drops to 3 columns at 900px and 2 at 600px. At the 3-column tier a
+   tile is ~160px of content against a monospace value of at most ~9
+   characters, so the larger type still fits with room to spare
+   (bead enhancedchannelmanager-6z299.4). */
 .bandwidth-value {
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--text-primary);
   font-family: monospace;
 }
@@ -1024,10 +1180,12 @@
 }
 
 .bandwidth-chart .chart-title {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   margin-bottom: 0.5rem;
 }
+
+

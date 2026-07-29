@@ -41,6 +41,7 @@ the number lives in one place.
 | Meta | `--type-meta-*` | 11px (`--text-xs`) | 400 | 1.5 | — | supporting detail under an item title: type, URL, counts, timestamps |
 | Micro | `--type-micro-*` | 10px (`--text-2xs`) | 700 | — | uppercase, tracking `0.08em` | column headers, the status word under a glyph |
 | Badge | `--type-badge-*` | 10px (`--text-2xs`) | 500 | 1.4 | — | text inside a chip or pill |
+| Label | `--type-label-*` | 13px | 500 | 1.4 | — | the caption on a form control |
 
 Each role token points at the `--text-*` primitive that already carries its
 number. 15px and 13px have no primitive, so those two are written literally
@@ -56,12 +57,20 @@ first line of the route header, the metric is inside a tile in the pane below.
 Sizing them from one role would tie a later change to one of them to the
 other.
 
+Label and item title are both 13px for the same reason: a field caption reads
+as part of its control, so it takes the button weight (500), while a list-row
+name is the heaviest thing in its row (600). Bead
+`enhancedchannelmanager-6z299` added the label role because `.form-group
+label` — the one shared form treatment — had no role that fitted it.
+
 ### Icon sizes
 
 | Token | Value | Used for |
 |-|-|-|
 | `--icon-status` | 18px | the status glyph in a list row, and inline notice icons |
 | `--icon-action` | 16px | row action buttons, small inline indicators |
+| `--icon-badge` | 14px | a glyph inside a chip or pill |
+| `--icon-empty` | 64px | the illustration glyph in an empty or loading state |
 
 Rail icons are chrome, not content, and keep their own 20px.
 
@@ -75,6 +84,12 @@ for them: in the light theme `--text-muted` measures 2.61:1 against
 thing it labels (a status word is green or red; a column header is
 `--text-secondary`, set on `.list-header`).
 
+Two deliberate exemptions. `::placeholder` rules keep `--text-muted` —
+placeholder contrast is a separate question and was not bundled into the type
+sweep. Purely decorative non-text glyphs keep it too: `.empty-state
+.material-icons` is a 64px illustration, not text, so the 4.5:1 text floor
+does not apply to it.
+
 ### What is *not* in this scale
 
 The rail and the top band are chrome and are frozen outside it: rail nav
@@ -86,10 +101,98 @@ The route page title used to be listed here too, frozen at 24px / 700. Bead
 inside the content column, above the pane it names, and at 24px it was larger
 than anything it introduced.
 
+### Load order
+
+Three facts about how these stylesheets reach the browser. They decide which
+rule actually wins, and none of them is visible from the source alone.
+
+1. **`shared/common.css` is emitted last inside the eager bundle.** Against
+   another eager stylesheet — `index.css`, `App.css`, `ChannelsPane.css`,
+   `StreamsPane.css`, `ChannelManagerTab.css`, `ModalBase.css` and the ~30
+   modals — it wins at equal specificity. That is why `.pane-header h2`
+   renders at the shared 10px and not at the 1.1rem `ChannelsPane.css` and
+   `StreamsPane.css` used to declare: those two rules were dead.
+2. **Every lazily imported tab chunk is appended after the eager bundle, and
+   is never removed.** One visit permanently installs that tab's stylesheet
+   for the rest of the session. So `common.css` *loses* to any bare rule in
+   any tab you have visited — permanently, and on every other page too.
+3. **Channel Manager is eager, so it is a one-way donor.** Its bare classes
+   apply to every page from first paint, and it can never win against a
+   visited tab.
+
+The operational consequence: **moving a class into `common.css` does nothing
+until every page copy of it is deleted.** A half-finished extraction is worse
+than none — the shared rule is dead on the pages that still declare their
+own, live everywhere else, and the diff looks finished. When you delete a
+page copy, leave a comment in its place naming what owns it now, so the next
+person does not "helpfully" put it back.
+
+The same three facts make a *bare* class name in a page stylesheet a bug in
+its own right, independent of typography: two pages that happen to pick the
+same name (`.section-title`, `.stat-item`, `.filter-select`, `.header-stat`)
+silently swap styles depending on which one you opened first. Scope
+page-owned rules to a page ancestor. Four production defects have come from
+this exact shape (`qlc4h`, `f4yc7`, `sccol`, `.action-btn`), and the
+`e2e/css-smoke` suite cannot see any of them, because each of its tests
+visits exactly one route in a fresh browser context.
+
+### Adopting a role
+
+Two rules, derived from the `enhancedchannelmanager-f4yc7` pilot and applied
+sweep-wide. They are house style now.
+
+1. **Plain text takes the role's full triplet** — `font-size`, `font-weight`,
+   `line-height`. **Interactive controls take the role's SIZE token only and
+   keep the weight they were authored with.** A button, an input, a select or
+   a chip has a weight that belongs to the control's affordance, not to the
+   text role; overwriting it makes the control read as body copy. The pilot
+   established this on `.priority-input` and the M3U action buttons — both
+   moved to `--type-body-size` and kept their own `font-weight`.
+2. **Icons are chosen by role, not by nearest pixel.** A glyph in a chip or
+   beside meta text → `--icon-badge`. A glyph in a button, or beside body text
+   or an item title → `--icon-action`. A leading, status or panel-header glyph
+   → `--icon-status`. An empty-state or loading illustration → `--icon-empty`.
+   Do not pick the token whose value is closest to what the glyph renders at
+   today; pick the one that names what the glyph is doing.
+
+### Partial redeclaration
+
+**A rule that redeclares only some of a role's properties silently inherits
+the rest from whatever it was meant to replace.** The result is a hybrid that
+looks deliberate in the diff and is wrong in the browser. This cost more time
+in the P1 sweep than any other single mistake. Four confirmed instances:
+
+| Rule | Declared | Silently kept | Rendered |
+|-|-|-|-|
+| Guide's `.time-slot-header` | `font-size`, `font-weight` | `letter-spacing`, `text-transform` | 12.8px / 600 uppercase with 0.08em tracking — neither the old look nor the micro role |
+| Stats' seven panel `.section-title` rules | size, weight, line-height | `text-transform`, `letter-spacing` from `StatsTab.css`'s bare `.section-title` | 15px / 600 ALL-CAPS |
+| `.catchup-badge__icon`, `.edit-mode-banner-icon`, `.edit-mode-icon` | `font-size` | everything — the rule never applied | 24px, from `index.css`'s base `.material-icons` |
+| `.pending-merges-candidate-id` | `color`, `font-size` in a later rule | `font-weight`, `word-break` from an earlier combined rule | looked fully shadowed; was not |
+
+The rule when you adopt a role: **declare the role's full property set, or
+write a comment naming which properties you are deliberately inheriting and
+from where.** "It inherits the rest" is only acceptable when it is written
+down. The same applies when you scope a colliding selector — scope every
+property the collision covers, not just the ones you came for.
+
+The icon case has its own trap. `index.css` defines the base `.material-icons`
+at 24px, and it is emitted near the *end* of the eager bundle. A single-class
+override in an eager component stylesheet — `.catchup-badge__icon`,
+`.edit-mode-icon` — ties at 0-1-0 and loses on byte order, so the glyph renders
+at 24px while the source appears to say otherwise. **An icon override needs two
+classes of depth**: `.catchup-badge .catchup-badge__icon`, not
+`.catchup-badge__icon`.
+
 ### Rollout status
 
-**In progress.** The scale is defined globally, but only two pages have been
-remapped onto it: **M3U Manager** and **EPG Manager** (bead
+**All ten route pages are remapped.** Dashboard, M3U Manager, EPG Manager,
+Logo Manager, Channel Manager, Channel Pipeline, Guide, Stats, M3U Changes,
+Journal and Settings all take their content-pane type from the roles above.
+(FFmpeg Builder is excluded — deprecated in 0.18.0.) The route header band,
+the rail and the top bar remain frozen chrome outside the scale, per § "What
+is *not* in this scale".
+
+The two pilot pages came first: **M3U Manager** and **EPG Manager** (bead
 `enhancedchannelmanager-f4yc7`). The shared classes those pages depend on —
 `.btn-primary` / `.btn-secondary` / `.btn-danger`, `.header-description`,
 `.list-header`, `.badge-sm`, `.micro-label` — moved with them and therefore
@@ -110,9 +213,39 @@ header carries nothing but its heading — naming the list directly beneath it
 labels (24px above / 12px below, against the tabs' 1.5rem padding) than to
 the route header above it.
 
-Every other page still writes bare font sizes. Until the sweep finishes,
-"never write a bare `font-size`" is not yet a rule here; when you touch a
-page that has been remapped, use the roles.
+**Shared layer consolidated (bead `enhancedchannelmanager-6z299`, wave 0).**
+Before the remaining eight pages could be remapped, the shared layer had to
+actually own the shared classes. That pass moved these onto the roles and
+deleted every page copy of them (see § Load order for why the deletions are
+the load-bearing half):
+
+- `.btn-cancel`, `.btn-test`, `.btn-small`, `.btn-icon`, `.separator-btn`,
+  `.action-btn` (now the canonical 32x32 box), `.form-group label`,
+  `.form-group input/select`, `.form-input`, `.form-hint`, `.search-input`,
+  `.search-box input`, `.filter-dropdown-button`, `.filter-dropdown-option`,
+  `.empty-state h3` / `p`, `.error-banner`, `.error-message`,
+  `.success-message`, `.warning-message`, `.test-result`, `.loading`,
+  `.status-disabled`, `.pane-header h2`, `.badge`, `.type-badge`,
+  `.detail-section h4`, `.visually-hidden`.
+- New shared sections: § 25 Pagination Strip, § 26 Field Messages,
+  § 27 Group Rows, plus `.empty-inline` and the `.file-info` / `.file-name` /
+  `.file-size` chip.
+- All 16 raw icon sizes in `common.css` now use the icon tokens.
+- Card and panel titles moved onto the section role wherever they were
+  spelled out per-page (14/15/16/18px before): `.settings-section-header h3`,
+  `.backup-card-header h3`, `.auth-provider-header h4`, `.tls-status-card h3`,
+  `.tls-config-card h3`, `.tag-group-title h4`, `.link-account-section h4`,
+  `.profile-list-header h3`, `.norm-engine-test-header h4`, Channel
+  Pipeline's `.section-header h3`, `.event-sync-review-header h3` and
+  `.event-sync-exclusions-header h3` (both of which declared no font-size at
+  all and rendered at the UA 16px), and the six Stats panels'
+  `.section-title`.
+
+**Never write a bare `font-size` in a content-pane rule.** That is a rule now,
+not an aspiration — every content-pane page has been through the sweep, so a
+new literal size is a new divergence rather than one of many. Pick a role. If
+no role fits, that is a conversation about the scale, not a licence to write a
+number.
 
 ## Common CSS Classes (shared/common.css)
 
@@ -121,11 +254,19 @@ page that has been remapped, use the roles.
 - `.btn-secondary` — secondary action (uses `--border-primary` bg)
 - `.btn-danger` — destructive action (red)
 - `.btn-cancel` — cancel/dismiss action
+- `.btn-test` — primary-styled button that reports its own result
+- `.btn-small` — **size modifier**, worn alongside `.btn-primary`/
+  `.btn-secondary`; not a standalone button
+- `.btn-icon` — icon-only button; `.btn-icon-danger` / `.btn-icon.delete` for
+  the destructive variant
+- `.separator-btn` — segmented single-character choice
 
 ### Forms
 - `.form-group` — wrapper: `label` + `input/select` with consistent spacing
-- `.form-group label` — block label, 0.875rem, font-weight 500
+- `.form-group label` — block label on the label role (13px / 500)
 - `.form-hint` — small helper text below inputs
+- `.field-hint` / `.field-error` — the hint and validation error under a form
+  control (§ 26)
 - `.form-input` / `.form-select` — standalone inputs outside `.form-group`
 
 ### Loading States
@@ -139,10 +280,13 @@ page that has been remapped, use the roles.
 - All tabs MUST use this for consistency
 
 ### Empty States
-- `.empty-state` — centered, dashed border, 64px icon, h3 + p
+- `.empty-state` — centered, dashed border, `--icon-empty` glyph, h3 + p
+- `.empty-inline` — the one-line "nothing here yet" string inside a list or
+  card, as opposed to the full-page block
 
 ### Error/Warning/Success Banners
 - `.error-banner` — red banner with icon + dismiss button
+- `.error-message` — inline red notice (no dismiss button)
 - `.success-message` — green banner with slide-in animation
 - `.warning-message` — yellow/amber banner
 
@@ -163,9 +307,22 @@ page that has been remapped, use the roles.
   nothing else; supply the colour from context. `.list-header` picks up the same
   rule, so a list header needs no extra class.
 
+### Pagination (§ 25)
+- `.pagination` — the list footer strip; carries the body role, its parts
+  inherit it
+- `.pagination-left` / `-center` / `-right` — its three columns
+- `.page-info` / `.page-indicator` — "Page 3 of 12"
+- `.entries-count`, `.page-size-label`, `.page-size-select`
+
+### Group Rows (§ 27)
+- `.group-name` — item-title role, truncating
+- `.group-count` — meta role; draw your own pill around it if you want one
+
 ### Other
+- `.visually-hidden` — WCAG screen-reader-only utility (§ 2)
+- `.file-info` / `.file-name` / `.file-size` — the picked-file chip (§ 17)
 - `.search-box` — icon + input search field
-- `.action-btn` — small icon-only action buttons
+- `.action-btn` — icon-only row action button, 32x32
 - `.drag-handle` — drag handle with grab cursor
 - `.checkbox-group` / `.checkbox-option` — checkbox lists
 - `.filter-dropdown` — multi-select filter dropdown

@@ -9,7 +9,7 @@
   color: var(--button-text);
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 
@@ -33,21 +33,31 @@
   background-color: rgba(74, 222, 128, 0.3);
 }
 
-.edit-mode-icon {
-  font-size: 18px;
+/* Glyph inside a control, so it takes the action icon rather than the status
+   icon — the same split shared/common.css § 18 applies to `.action-btn`.
+   Two classes deep because the span also carries `material-icons`, whose
+   base 24px rule in index.css is emitted after this file and was winning the
+   0-1-0 tie — the `.catchup-badge__icon` defect from bead
+   enhancedchannelmanager-sccol, here and on the banner icon below. */
+.edit-mode-toggle .edit-mode-icon {
+  font-size: var(--icon-action);
 }
 
-.edit-mode-label {
-  font-weight: 500;
-}
+/* `.edit-mode-label` is owned by App.css:124. That rule is emitted later in
+   the eager bundle (byte ~232,377 vs this file's ~187,482) and declares the
+   same `font-weight: 500` plus a font-size and a colour, so this copy has
+   never rendered. Deleted rather than reconciled; note for whoever owns
+   App.css that its `.edit-mode-label` also styles THIS toggle's label,
+   because both spellings land on the same bare class
+   (bead enhancedchannelmanager-6z299.5). */
 
 .edit-mode-count {
   background-color: var(--success);
   color: var(--success-text);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-xl);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
   min-width: 1.25rem;
   text-align: center;
 }
@@ -75,26 +85,38 @@
   flex-wrap: wrap;
 }
 
-.edit-mode-banner-icon {
-  font-size: 18px;
+/* Status glyph, not a control glyph: it labels the state the banner is
+   announcing rather than sitting inside a button. Two classes deep for the
+   same reason as `.edit-mode-icon` above — the banner glyph has been
+   rendering at the Material default 24px next to 16px text. */
+.edit-mode-banner .edit-mode-banner-icon {
+  font-size: var(--icon-status);
 }
 
+/* Declared no font-size at all, so the banner's headline string rendered at
+   the UA default 16px — the largest text anywhere in the Channel Manager
+   content area, above even a section heading. */
 .edit-mode-banner-text {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
 }
 
 .edit-mode-banner-count {
   color: #c7d2fe;
 }
 
+/* Supporting detail beside the banner headline — meta, not body. */
 .edit-mode-banner-duration {
   color: #818cf8;
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
 }
 
 .edit-mode-banner-warning {
   color: var(--warning);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   font-style: italic;
 }
 
@@ -103,10 +125,13 @@
   gap: 0.5rem;
 }
 
+/* A control, so it takes the body role's size — the body role covers
+   buttons and inputs, and 0.8rem was not on any scale. Weight stays 500,
+   matching `.btn-primary` in shared/common.css § 3. */
 .edit-mode-banner-btn {
   padding: 0.25rem 0.625rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   border: none;

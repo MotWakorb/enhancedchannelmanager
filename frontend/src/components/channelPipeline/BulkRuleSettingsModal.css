@@ -23,7 +23,11 @@
   border-bottom: none;
 }
 
-.bulk-apply-row {
+/* Scoped to this modal's root. `.bulk-apply-row` was declared bare here and
+   bare again in ChannelProfilesListModal.css:257 — a different chunk — so the
+   two rows traded treatments depending on which page you had visited
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps it at (0,1,0). */
+:where(.bulk-rule-settings-modal) .bulk-apply-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;

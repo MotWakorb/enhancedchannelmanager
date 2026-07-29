@@ -511,7 +511,7 @@ export function GuideTab({
             ))
           ) : (
             <div className="no-epg-block">
-              <span className="no-epg-text">No program data</span>
+              <span className="empty-inline">No program data</span>
             </div>
           )}
         </div>
@@ -664,7 +664,12 @@ export function GuideTab({
         {sortedChannels.length === 0 ? (
           <div className="empty-state guide-empty-state" role="status">
             <span className="material-icons" aria-hidden="true">live_tv</span>
-            <h2>No channels to display</h2>
+            {/* h3, not h2: shared/common.css § 7 styles `.empty-state h3`,
+                and this was the only empty state in the app using an h2 —
+                so it fell through to the UA default 24px/bold, larger than
+                the 15px section heading every other empty state renders.
+                Bead enhancedchannelmanager-6z299.3. */}
+            <h3>No channels to display</h3>
             <p>Add or enable channels in Channel Manager, then refresh the guide.</p>
           </div>
         ) : (
@@ -675,7 +680,7 @@ export function GuideTab({
               <div className="timeline-header" ref={timelineHeaderRef}>
                 <div className="timeline-slots" style={{ width: `${timelineWidth}px` }}>
                   {timeSlots.map((slot, idx) => (
-                    <div key={idx} className="time-slot-header">
+                    <div key={idx} className="time-slot-header micro-label">
                       {formatTime(slot)}
                     </div>
                   ))}

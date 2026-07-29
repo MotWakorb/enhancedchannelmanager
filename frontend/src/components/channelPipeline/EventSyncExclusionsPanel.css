@@ -20,13 +20,25 @@
   gap: 12px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one declared no font-size at all, so it rendered at the UA
+   default 16px. */
 .event-sync-exclusions-header h3 {
   margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
+/* Badge role — the same count pill as `.event-sync-review-count`, which this
+   panel deliberately mirrors. 12px/600 -> 10px/500 inside an unchanged 20px
+   box (bead enhancedchannelmanager-6z299). */
 .event-sync-exclusions-count {
   display: inline-flex;
   align-items: center;
@@ -37,10 +49,12 @@
   border-radius: 10px;
   background: var(--accent-primary);
   color: var(--text-on-accent, #fff);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
+/* Body role. Already 13px — tokenization, not a resize. */
 .event-sync-exclusions-notice {
   display: flex;
   align-items: flex-start;
@@ -50,7 +64,9 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .event-sync-exclusions-list {
@@ -78,7 +94,12 @@
   gap: 10px;
 }
 
+/* The "block" glyph declared no font-size, so it inherited the 24px
+   `.material-icons` default from index.css:83 — a third larger than anything
+   else in the card. --icon-status is the size for a state glyph beside text
+   (bead enhancedchannelmanager-6z299). */
 .event-sync-exclusion-icon {
+  font-size: var(--icon-status);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -92,15 +113,23 @@
   min-width: 0;
 }
 
+/* Monospace stays — this is provider data the operator scans, not UI chrome.
+   Size only is tokenized, and it was already 13px, so nothing moves. (The bare
+   `.event-sync-raw-name` in EventSyncPreviewPanel.css:161 is the same 13px;
+   that file is modal-only and out of this sweep's scope, and this rule's
+   (0,2,0) beats it either way.) */
 .event-sync-exclusion-pairing .event-sync-raw-name {
   font-family: var(--font-mono, monospace);
-  font-size: 13px;
+  font-size: var(--type-body-size);
   word-break: break-word;
 }
 
+/* Meta role — "never attach to" is the connector qualifying the two names. */
 .event-sync-exclusion-never {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   font-style: italic;
   white-space: nowrap;
 }
@@ -112,6 +141,7 @@
   flex-wrap: wrap;
 }
 
+/* Badge role — same bordered, rounded chip as `.event-sync-review-chip`. */
 .event-sync-exclusion-chip {
   display: inline-flex;
   align-items: center;
@@ -121,12 +151,17 @@
   border-radius: 10px;
   background: var(--bg-tertiary, var(--bg-primary));
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
+/* Meta role — the operator's free-text note under the pairing. */
 .event-sync-exclusion-note {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   font-style: italic;
 }
 

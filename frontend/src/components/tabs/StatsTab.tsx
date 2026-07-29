@@ -33,6 +33,7 @@ import { SourceLoadStatus } from '../SourceLoadStatus';
 import { StickySectionNav } from '../StickySectionNav';
 import { OverflowScroller } from '../OverflowScroller';
 import { formatConnections, describeConnections } from './statsConnections';
+import { CHART_TICK_META, CHART_TICK_MICRO, CHART_TEXT_FILL } from '../../utils/chartTypography';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -1325,14 +1326,14 @@ export function StatsTab() {
                               <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
                                 <XAxis
                                   dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   interval="preserveStartEnd"
                                 />
                                 <YAxis
                                   domain={[0.8, 1.2]}
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   tickFormatter={(v) => `${v}x`}
@@ -1362,13 +1363,13 @@ export function StatsTab() {
                               <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
                                 <XAxis
                                   dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   interval="preserveStartEnd"
                                 />
                                 <YAxis
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   tickFormatter={(v) => formatBytes(v)}
@@ -1588,7 +1589,7 @@ export function StatsTab() {
                               if (client.emby_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.emby_user_name}
                                     <span
                                       className="badge attribution-source-badge"
@@ -1602,7 +1603,7 @@ export function StatsTab() {
                               if (client.plex_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.plex_user_name}
                                     <span className="badge attribution-source-badge">via Plex</span>
                                   </span>
@@ -1611,7 +1612,7 @@ export function StatsTab() {
                               if (client.jellyfin_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.jellyfin_user_name}
                                     <span className="badge attribution-source-badge">via Jellyfin</span>
                                   </span>
@@ -1622,7 +1623,7 @@ export function StatsTab() {
                               if (client.username || client.user_id) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.username || `User #${client.user_id}`}
                                   </span>
                                 );
@@ -1647,7 +1648,6 @@ export function StatsTab() {
                                 <span className="client-device-ip" data-testid="client-device-ip">
                                   <span
                                     className="material-icons"
-                                    style={{ fontSize: '14px' }}
                                     title="Real client device IP reported by the media server"
                                   >
                                     devices
@@ -1850,13 +1850,13 @@ export function StatsTab() {
                     >
                       <XAxis
                         dataKey="date"
-                        tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL }}
                         axisLine={{ stroke: 'var(--border-primary)' }}
                         tickLine={false}
                       />
                       <YAxis
                         domain={[0, maxBytes * 1.1]}
-                        tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                         axisLine={{ stroke: 'var(--border-primary)' }}
                         tickLine={false}
                         tickFormatter={(v) => formatBytes(v)}

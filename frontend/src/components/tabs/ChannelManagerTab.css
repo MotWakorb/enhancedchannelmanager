@@ -44,12 +44,19 @@
   border-right: 1px solid var(--border-primary);
 }
 
+/* Same caption as `.pane-header h2` — this <h2> renders the word "Channels"
+   or "Streams" in place of a pane that failed to load — so it takes the same
+   micro role that shared/common.css § 14 gives the real pane header. It had
+   drifted to 1.1rem while the header beside it rendered 10px, which made the
+   error state louder than the working pane (bead
+   enhancedchannelmanager-6z299.5). */
 .channel-workspace-state h2 {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 1.1rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .channel-workspace-pane-content {
@@ -72,9 +79,12 @@
   margin: 0.5rem 0.75rem 0;
 }
 
-.channel-workspace-empty {
-  color: var(--text-secondary);
-}
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added
+   to the element in ChannelManagerTab.tsx. This declared no font-size at all,
+   so "No channels are configured." rendered at the UA default 16px — larger
+   than any real row in the pane it was standing in for. Only the margin,
+   which it shares with `.source-load-status` above, is local
+   (bead enhancedchannelmanager-6z299.5). */
 
 .channel-manager-subnav {
   display: flex;
@@ -95,7 +105,9 @@
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
   color: var(--text-secondary, #888);
-  font-size: 0.9rem;
+  /* A control, so the body role — 0.9rem was not on any scale. Weight stays
+     500 to match `.btn-primary` in shared/common.css § 3. */
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
@@ -128,8 +140,10 @@
   padding: 0 0.4rem;
   background: var(--accent, #6366f1);
   color: #fff;
-  font-size: 0.75rem;
-  font-weight: 700;
+  /* Text inside a pill — the badge role. `line-height: 1` stays: the chip is
+     a fixed 1.25rem tall and centres its digits itself. */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
   border-radius: 999px;
   line-height: 1;
 }

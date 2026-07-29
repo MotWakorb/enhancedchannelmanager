@@ -319,10 +319,26 @@
   --type-badge-weight: 500;
   --type-badge-line-height: 1.4;
 
+  /* The caption on a form control — 13px.
+     Distinct from item title, which is the same 13px at 600: a field label
+     sits above an input and reads as part of the control, so it takes the
+     button weight (500) rather than the heavier list-row weight. Added in
+     bead enhancedchannelmanager-6z299 because `.form-group label` was the
+     one shared treatment with no role that fit it. */
+  --type-label-size: 0.8125rem;
+  --type-label-weight: 500;
+  --type-label-line-height: 1.4;
+
   /* Icon Size Scale
-     Two content-pane icon sizes. Rail icons stay at their own 20px. */
+     Content-pane icon sizes. Rail icons stay at their own 20px. */
   --icon-status: 18px;
   --icon-action: 16px;
+  /* Glyph inside a chip — sized to the chip, not to the pointer target. */
+  --icon-badge: 14px;
+  /* The illustration glyph in an empty/loading state. Decorative, so it is
+     the one place --text-muted is still allowed (see § Colour in
+     docs/css_guidelines.md). */
+  --icon-empty: 64px;
 
   /* Box Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);

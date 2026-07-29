@@ -18,13 +18,27 @@
   gap: 12px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one declared no font-size at all, so it rendered at the UA
+   default 16px. */
 .event-sync-review-header h3 {
   margin: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
+/* Badge role — this is a count pill on an accent fill, which is exactly what
+   the badge role is for. 12px/600 -> 10px/500. The 20px box is fixed and
+   unchanged, so the digits just gain a little breathing room inside it and the
+   pill stays vertically centred against the (now 15px) h3 beside it
+   (bead enhancedchannelmanager-6z299). */
 .event-sync-review-count {
   display: inline-flex;
   align-items: center;
@@ -35,10 +49,12 @@
   border-radius: 10px;
   background: var(--accent-primary);
   color: var(--text-on-accent, #fff);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
+/* Body role. Already 13px — this is tokenization, not a resize. */
 .event-sync-review-notice {
   display: flex;
   align-items: flex-start;
@@ -48,12 +64,17 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Contested-pairing caution (bead 8rzkq): rejecting one side may auto-attach
    the sibling — surface it inline on contested cards so the reject is not a
-   surprise. */
+   surprise.
+   Body role: this is a sentence the operator has to read before acting, so it
+   takes the running-text role, not meta. 12.5px -> 13px — the odd half-pixel
+   was the only 12.5px value in the tree (bead enhancedchannelmanager-6z299). */
 .event-sync-review-contested-note {
   display: flex;
   align-items: flex-start;
@@ -64,12 +85,13 @@
   border-radius: 6px;
   background: var(--bg-warning-subtle, var(--bg-secondary));
   color: var(--text-secondary);
-  font-size: 12.5px;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .event-sync-review-contested-note .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   color: var(--text-warning, var(--text-secondary));
 }
@@ -100,14 +122,22 @@
   flex-wrap: wrap;
 }
 
+/* Item title. Had no font-size at all, so the rule name heading every review
+   card rendered at the UA default 16px — the same defect as `.rule-name` and
+   the pilot's `.account-name` (bead enhancedchannelmanager-6z299). */
 .event-sync-review-rule {
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role — the provider qualifies the rule name it sits beside. */
 .event-sync-review-provider {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .event-sync-review-sides {
@@ -123,26 +153,39 @@
   min-width: 0;
 }
 
+/* Micro role. "PRIMARY" / "SECONDARY" over each side of the pairing is the
+   tracked-uppercase caption idiom that common.css § 24 owns; spelled out here
+   rather than adding `.micro-label` in the TSX because this rule also carries
+   the colour, which § 24 deliberately does not set. 11px/0.04em -> 10px/700/
+   0.08em (bead enhancedchannelmanager-6z299). */
 .event-sync-review-side-role {
-  font-size: 11px;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--type-micro-tracking);
   color: var(--text-secondary);
 }
 
+/* The raw provider stream name stays monospace — it is data the operator is
+   pattern-matching against, not UI chrome. Only the size is tokenized, and it
+   was already 13px, so nothing moves. */
 .event-sync-review-raw-name {
   font-family: var(--font-mono, monospace);
-  font-size: 13px;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
+/* Meta role — the parsed title/start-time grid annotates the raw name above
+   it. */
 .event-sync-review-parsed {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 2px 10px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .event-sync-review-parsed dt {
@@ -162,6 +205,7 @@
   flex-wrap: wrap;
 }
 
+/* Badge role — a bordered, fully-rounded evidence chip. */
 .event-sync-review-chip {
   display: inline-flex;
   align-items: center;
@@ -169,13 +213,16 @@
   padding: 2px 8px;
   border: 1px solid var(--border-primary);
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-primary);
   background: var(--bg-tertiary, var(--bg-primary));
 }
 
+/* --icon-badge is the glyph-inside-a-chip size and is already 14px. */
 .event-sync-review-chip .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .event-sync-review-actions {

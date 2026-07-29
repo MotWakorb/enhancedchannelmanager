@@ -128,9 +128,9 @@ export function EventSyncTeamAliasesSection() {
         </span>
 
         {loading ? (
-          <p className="team-aliases-empty">Loading...</p>
+          <p className="team-aliases-empty empty-inline">Loading...</p>
         ) : groups.length === 0 ? (
-          <p className="team-aliases-empty">
+          <p className="team-aliases-empty empty-inline">
             No alias groups configured. The matcher runs on exact/abbreviation
             logic alone until equivalences are added here.
           </p>
@@ -153,7 +153,7 @@ export function EventSyncTeamAliasesSection() {
               </div>
               <div className="email-recipients-list">
                 {group.terms.length === 0 ? (
-                  <span className="no-recipients">
+                  <span className="empty-inline">
                     No terms yet — add at least 2 equivalent spellings
                   </span>
                 ) : (

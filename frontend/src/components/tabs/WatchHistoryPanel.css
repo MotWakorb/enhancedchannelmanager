@@ -19,15 +19,31 @@
   gap: 12px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px.
+   `text-transform` / `letter-spacing` are reset explicitly: until this bead
+   they came from StatsTab.css's bare `.section-title`, so every panel title
+   was rendering 15px/600 UPPERCASE — the section role's size with that
+   rule's case (bead enhancedchannelmanager-6z299.4). */
 .watch-history-panel .section-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
 }
 
+/* Badge role: a count in a tinted, padded, rounded chip
+   (bead enhancedchannelmanager-6z299.4). */
 .watch-history-panel .total-count {
-  font-size: 13px;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary);
   background: var(--bg-tertiary);
   padding: 2px 8px;
@@ -73,14 +89,26 @@
   padding: 8px;
 }
 
+/* A real metric tile: three figures across the summary strip, each centred
+   over its label. Already exactly 20px/600, so this is the literal-to-token
+   swap the metric role was defined for; only the line-height is new, and 1.2
+   is what the browser was already computing for a 20px/600 run
+   (bead enhancedchannelmanager-6z299.4). */
 .watch-history-panel .stat-value {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--text-primary);
 }
 
+/* Micro role spelled out in full: `text-transform` and `letter-spacing` used
+   to arrive from StatsTab.css's `.stat-label`, so this label was rendering
+   uppercase without saying so anywhere in this file. */
 .watch-history-panel .stat-label {
-  font-size: 12px;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
   color: var(--text-secondary);
   margin-top: 4px;
 }
@@ -100,11 +128,16 @@
   gap: 4px;
 }
 
+/* Micro role — the tracked uppercase caption idiom shared/common.css § 24
+   owns. Not the 13px label role: these are stacked above their control in a
+   dense filter bar, which is the micro-label shape, not a form field's
+   caption (bead enhancedchannelmanager-6z299.4). */
 .watch-history-panel .filter-group label {
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
 }
 
 .watch-history-panel .filter-group select,
@@ -114,7 +147,9 @@
   border-radius: var(--radius-md);
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   min-width: 140px;
 }
 
@@ -128,7 +163,9 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -145,18 +182,22 @@
 .watch-history-panel .history-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
+/* Micro role — a column header is the same idiom shared/common.css § 24 owns
+   for `.list-header` (bead enhancedchannelmanager-6z299.4). */
 .watch-history-panel .history-table th {
   text-align: left;
   padding: 10px 12px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-weight: 500;
-  font-size: 11px;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -203,12 +244,16 @@
 }
 
 .watch-history-panel .channel-cell .channel-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
 }
 
 .watch-history-panel .ip-cell .ip-address {
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -220,8 +265,9 @@
   display: inline-block;
   padding: 2px 8px;
   border-radius: var(--radius-md);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
 .watch-history-panel .status-cell .status.watching {
@@ -258,20 +304,25 @@
 }
 
 .watch-history-panel .detail-label {
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
 }
 
 .watch-history-panel .detail-value {
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
 }
 
 .watch-history-panel .detail-value.channel-id {
   font-family: monospace;
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -286,7 +337,9 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -326,10 +379,10 @@
   cursor: not-allowed;
 }
 
-.watch-history-panel .page-info {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
+/* `.page-info` comes from shared/common.css § 25 PAGINATION STRIP, which
+   this panel's `.pagination` above now also draws its type from. The scoped
+   layout stays because this footer centres its controls instead of using the
+   three-column strip (bead enhancedchannelmanager-6z299). */
 
 /* Empty/Loading States */
 .watch-history-panel .empty-state,
@@ -345,5 +398,7 @@
   padding: 10px;
   border-radius: var(--radius-md);
   margin-bottom: 16px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }

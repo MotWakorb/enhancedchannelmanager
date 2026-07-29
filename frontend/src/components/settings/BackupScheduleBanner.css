@@ -22,6 +22,13 @@
   border-left: 4px solid var(--warning);
 }
 
+/* Hero glyph — deliberately NOT remapped. The P1 icon scale has four slots
+   (18/16/14/64) and none of them is a banner hero at 26px, so forcing it onto
+   --icon-status would be sizing by nearest number rather than by role. Kept in
+   lockstep with `.auto-creation-gate-banner`'s icon in
+   channelPipeline/AutoCreationGateBanner.css, which this banner is the twin of
+   — the two must not diverge (bead enhancedchannelmanager-6z299.4). A shared
+   banner/hero icon token is the right fix and is reported, not invented here. */
 .backup-schedule-banner-icon {
   color: var(--warning);
   font-size: 1.625rem;
@@ -37,16 +44,24 @@
   min-width: 0;
 }
 
+/* Section role. This is a heading over a body paragraph inside the page, which
+   is the case PO decision 3 puts on the 15px section role; 16px/700 -> 15px/600
+   (bead enhancedchannelmanager-6z299). Kept above the detail line's 13px so the
+   banner still has a headline. Deliberately identical to
+   `.auto-creation-gate-banner-title`, this banner's twin. */
 .backup-schedule-banner-title {
   color: var(--warning-text);
-  font-weight: 700;
-  font-size: 1rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
+/* Body role — 14px -> 13px. */
 .backup-schedule-banner-detail {
   color: var(--text-secondary);
-  font-size: 0.875rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .backup-schedule-banner-cta {
@@ -56,8 +71,12 @@
   align-self: flex-start;
   margin-top: 0.125rem;
   color: var(--warning-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  /* 600 is retained rather than taking the body role's 400: this is the
+     banner's call to action and the weight is what makes it read as one
+     alongside the 400 detail line above it. */
   font-weight: 600;
-  font-size: 0.875rem;
   text-decoration: underline;
   background: none;
   border: none;
@@ -69,8 +88,9 @@
   text-decoration: none;
 }
 
+/* Glyph inside a control — --icon-action, already 16px. */
 .backup-schedule-banner-cta-icon {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .backup-schedule-banner-dismiss {

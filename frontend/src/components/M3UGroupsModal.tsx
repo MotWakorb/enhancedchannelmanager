@@ -387,8 +387,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
           <div className="toolbar-actions">
             <span className="group-count">{enabledCount} / {groups.length} enabled</span>
             <div className="toolbar-buttons">
-              <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
-              <button className="btn-small" onClick={handleDisableAll}>Disable All</button>
+              <button className="btn-secondary btn-small" onClick={handleEnableAll}>Enable All</button>
+              <button className="btn-secondary btn-small" onClick={handleDisableAll}>Disable All</button>
             </div>
           </div>
         </div>

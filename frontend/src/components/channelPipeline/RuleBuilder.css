@@ -119,18 +119,11 @@
   width: 120px;
 }
 
-.field-error {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--error-color, #dc3545);
-}
-
-.field-hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
+/* `.field-hint` and `.field-error` are owned by shared/common.css § 26
+   FIELD MESSAGES. Four files declared `.field-hint` bare and two declared
+   `.field-error` bare, across three different chunks and at three different
+   sizes — so the hint under a form field changed size depending on which
+   page had been opened first (bead enhancedchannelmanager-6z299). */
 
 /* Form Row */
 .form-row {
@@ -368,8 +361,18 @@
   gap: 12px;
 }
 
-/* Buttons */
-.btn {
+/* Buttons — scoped to this editor.
+   A class literally named `.btn`, declared bare in a leaf rule editor that
+   rides the Channel Pipeline lazy chunk. Nothing else in the tree owns `.btn`
+   today, which is exactly the hazard: the next component to reach for the most
+   obvious button class name in the app would have silently inherited this
+   editor's 10px/20px padding and 14px text, on every page, permanently after
+   one visit to Channel Pipeline (bead enhancedchannelmanager-6z299.2).
+   `.rule-builder` is this component's own root (RuleBuilder.tsx:548) and
+   `:where()` keeps both selectors at the specificity they had, so the
+   `.btn-primary`/`.btn-secondary`/`.btn-danger` treatments from common.css
+   § 3 BUTTONS layer on top exactly as they do now. */
+:where(.rule-builder) .btn {
   padding: 10px 20px;
   border-radius: var(--radius-lg);
   font-size: 14px;
@@ -378,30 +381,18 @@
   transition: all 0.2s;
 }
 
-.btn:disabled {
+:where(.rule-builder) .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.btn-primary {
-  background: var(--button-primary-bg);
-  border: none;
-  color: var(--button-primary-text);
-}
-
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.btn-secondary {
-  background: transparent;
-  border: 1px solid var(--border-primary);
-  color: var(--text-primary);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-}
+/* `.btn-primary` and `.btn-secondary` are owned by shared/common.css § 3
+   BUTTONS. Declared bare here they were not local variants — they were the
+   app-wide winners for anyone who had opened the Channel Pipeline, because
+   this file rides a lazy chunk appended after common.css. `.btn` above still
+   supplies this footer's own geometry; the secondary button picks up the
+   shared filled treatment instead of the transparent one that only existed
+   here (bead enhancedchannelmanager-6z299). */
 
 .btn-danger {
   background: var(--error-color, #dc3545);

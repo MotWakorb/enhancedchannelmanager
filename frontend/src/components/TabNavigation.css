@@ -278,17 +278,11 @@
   overflow-x: clip;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.visually-hidden` is owned by shared/common.css § 2 COMMON UTILITIES.
+   Three identical copies of this a11y primitive existed — here, in
+   StatsTab.css and in UserStatsPanel.css — two of them `!important`
+   throughout, so whichever chunk was appended last decided which one applied
+   (bead enhancedchannelmanager-6z299). */
 
 @media (prefers-reduced-motion: reduce) {
   .primary-sidebar { transition: none; }

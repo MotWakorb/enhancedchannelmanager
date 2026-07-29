@@ -556,7 +556,7 @@ export function ChannelManagerTab({
             />
           )}
           {channelLoad.state === 'success' && channels.length === 0 && channelGroups.length === 0 && (
-            <p className="channel-workspace-empty" role="status">No channels are configured.</p>
+            <p className="channel-workspace-empty empty-inline" role="status">No channels are configured.</p>
           )}
           <ChannelsPane
           channelGroups={channelGroups}
@@ -655,7 +655,7 @@ export function ChannelManagerTab({
             />
           )}
           {streamLoad.state === 'success' && streams.length === 0 && streamGroups.length === 0 && (
-            <p className="channel-workspace-empty" role="status">No source streams are available.</p>
+            <p className="channel-workspace-empty empty-inline" role="status">No source streams are available.</p>
           )}
           <StreamsPane
           streams={streams}

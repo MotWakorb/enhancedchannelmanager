@@ -20,8 +20,10 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 3rem;
-  color: var(--text-muted, #666);
-  font-size: 0.875rem;
+  color: var(--text-secondary, #888);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Card panels for backup/restore sections */
@@ -40,30 +42,41 @@
 }
 
 .backup-card-header .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was already exactly 15px/600. */
 .backup-card-header h3 {
   margin: 0;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary, #fff);
 }
 
+/* Body role. */
 .backup-card-description {
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
   margin-bottom: 1rem;
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 /* "Which one do I need?" chooser guidance (bead 09x38.15 item 7) */
 .backup-chooser-list {
   margin: 0;
   padding-left: 1.25rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
+  /* 1.6 rather than the body role's 1.5 — a bulleted list wants the extra
+     leading, and this is the only place in the file that asks for it. */
   line-height: 1.6;
 }
 
@@ -85,9 +98,10 @@
   border: 1px solid rgba(99, 102, 241, 0.15);
   border-radius: var(--radius-lg);
   margin-bottom: 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--accent-primary, #6366f1);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 .backup-sensitive-warning.warning-level {
@@ -97,7 +111,7 @@
 }
 
 .backup-sensitive-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.0625rem;
 }
@@ -110,7 +124,7 @@
 }
 
 .backup-download-btn .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
 }
 
 /* Section divider between YAML and ZIP sections */
@@ -118,10 +132,13 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  color: var(--text-muted, #666);
-  font-size: 0.75rem;
+  /* Micro role, and --text-secondary rather than --text-muted: --text-muted
+     measures 2.61:1 on --bg-secondary in the light theme, below the AA floor. */
+  color: var(--text-secondary, #888);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .backup-section-divider::before,
@@ -142,13 +159,14 @@
   border: 1px solid rgba(245, 158, 11, 0.2);
   border-radius: var(--radius-lg);
   margin-bottom: 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--warning, #f59e0b);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 .restore-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.0625rem;
 }
@@ -162,15 +180,17 @@
 
 /* Visible label for the full-backup ZIP chooser (bead db8ae) — takes the
    full row above the input inside the wrapping flex container. */
+/* Label role — the visible label over the ZIP chooser. */
 .restore-file-label {
   flex-basis: 100%;
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-primary, #fff);
 }
 
 .restore-file-input input[type="file"] {
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary, #888);
 }
 
@@ -180,7 +200,7 @@
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-md);
   padding: 0.375rem 0.75rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -202,19 +222,23 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--success, #10b981);
   margin-bottom: 0.5rem;
 }
 
 .restore-result-header .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
 }
 
 .restore-result-details {
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
+  /* 1.6 rather than 1.5 — this block is a run of "N channels, N streams"
+     lines and reads better with the extra leading. */
   line-height: 1.6;
 }
 
@@ -230,9 +254,11 @@
   margin-bottom: 0.5rem;
 }
 
+/* Label role — labels the section-selection list below it. */
 .export-section-label {
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary, #888);
 }
 
@@ -244,14 +270,18 @@
 }
 
 .export-count-badge {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   opacity: 0.7;
 }
 
 /* Saved backups list */
+
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added to
+   the element in BackupRestoreSection.tsx. Only the padding is local. Same
+   correction as `.alert-methods-empty` and `.team-aliases-empty`: the body
+   role put a second treatment on the inline "nothing here" idiom
+   (the enhancedchannelmanager-6z299.7 cleanup pass). */
 .saved-backups-empty {
-  font-size: 0.8125rem;
-  color: var(--text-muted, #666);
   padding: 1rem 0;
 }
 
@@ -280,14 +310,16 @@
 }
 
 .saved-backup-info .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
   flex-shrink: 0;
 }
 
+/* Item title — the name of a row in the saved-backups list. */
 .saved-backup-name {
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary, #fff);
   white-space: nowrap;
   overflow: hidden;
@@ -295,8 +327,10 @@
 }
 
 .saved-backup-meta {
-  font-size: 0.6875rem;
-  color: var(--text-muted, #666);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary, #888);
   margin-top: 0.0625rem;
 }
 
@@ -315,7 +349,7 @@
 }
 
 .saved-backup-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .saved-backup-delete:hover:not(:disabled) {
@@ -329,6 +363,8 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary, #888);
 }

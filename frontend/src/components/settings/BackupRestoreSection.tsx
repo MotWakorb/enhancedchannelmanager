@@ -344,7 +344,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
             Loading...
           </div>
         ) : savedBackups.length === 0 ? (
-          <div className="saved-backups-empty">
+          <div className="saved-backups-empty empty-inline">
             No saved backups. Enable the YAML Backup scheduled task to create automatic backups.
           </div>
         ) : (

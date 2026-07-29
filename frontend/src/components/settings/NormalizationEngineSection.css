@@ -27,23 +27,31 @@
   gap: 0.75rem;
 }
 
+/* Status icon role. Was 24px; it now sits beside a 15px heading, and 18px is
+   what every other panel-header glyph in Settings uses. */
 .norm-engine-icon {
-  font-size: 1.5rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
+/* Section role. Card and panel titles across the product rendered at 14, 15,
+   16, 18 and 20px. They are all the same thing — a heading inside a page — so
+   they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299). This one was 20px. */
 .norm-engine-title {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
 .norm-engine-subtitle {
   margin: 0 0 1rem 0;
   color: var(--text-secondary);
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* .loading-state, .error-banner, .empty-state, .spinning → shared/common.css */
@@ -65,17 +73,24 @@
   gap: 0.25rem;
 }
 
+/* Metric + micro — this is the shared metric-tile pattern
+   (shared/common.css § 28) written under private names, so it takes the same
+   two roles rather than moving out of the file. */
 .norm-engine-stat-value {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--accent-primary);
 }
 
+/* --text-secondary, not --text-muted: --text-muted measures 2.61:1 on
+   --bg-secondary in the light theme, below the AA floor. */
 .norm-engine-stat-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 
@@ -120,7 +135,7 @@
   align-items: center;
   justify-content: center;
   cursor: grab;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 0.5rem 0.25rem;
   touch-action: none;
   flex-shrink: 0;
@@ -136,7 +151,7 @@
 }
 
 .norm-engine-group-drag-handle .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-group-header {
@@ -163,8 +178,8 @@
 }
 
 .norm-engine-expand {
-  font-size: 1.25rem;
-  color: var(--text-muted);
+  font-size: var(--icon-status);
+  color: var(--text-secondary);
   transition: transform 0.2s;
 }
 
@@ -180,8 +195,13 @@
   min-width: 0;
 }
 
+/* Item title. Had no font-size at all, so the group's name rendered at the UA
+   default 16px — the same defect the f4yc7 pilot found in `.account-name`
+   (bead enhancedchannelmanager-6z299.4). */
 .norm-engine-group-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -189,15 +209,22 @@
 }
 
 .norm-engine-group-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
+/* Badge role — already 10px; weight stays 600 because it is uppercase, and
+   the tracking takes the micro role's 0.08em for the same reason
+   (`.type-badge`, shared/common.css § 23). */
 .norm-engine-badge {
-  font-size: 0.625rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: var(--type-micro-tracking);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-sm);
   white-space: nowrap;
@@ -217,7 +244,9 @@
 .norm-engine-group-description {
   margin: 0;
   padding: 0.5rem 1rem 0.75rem 2.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-secondary);
 }
@@ -260,15 +289,21 @@
   min-width: 0;
 }
 
+/* Item title — the name of a rule row. */
 .norm-engine-rule-name {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role. The monospace family stays — it is a regex preview — but the
+   size and colour are UI chrome, not content. */
 .norm-engine-rule-pattern {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
 }
 
@@ -276,7 +311,9 @@
 .norm-engine-rule-match-badge {
   display: inline-block;
   margin-left: 0.5rem;
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   font-family: inherit;
   color: var(--accent-primary, #6c8ef5);
   background: color-mix(in srgb, var(--accent-primary, #6c8ef5) 15%, transparent);
@@ -295,7 +332,7 @@
   display: flex;
   align-items: center;
   cursor: grab;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 0.25rem;
   margin-right: 0.25rem;
   border-radius: var(--radius-md);
@@ -312,7 +349,7 @@
 }
 
 .norm-engine-rule-drag-handle .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 /* Dragging state */
@@ -333,7 +370,7 @@
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   transition: all 0.15s;
   width: 100%;
   justify-content: center;
@@ -346,7 +383,7 @@
 }
 
 .norm-engine-add-rule .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Toggle Switch */
@@ -423,7 +460,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -465,7 +502,7 @@
   background: none;
   border: none;
   border-radius: var(--radius-md);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -480,7 +517,7 @@
 }
 
 .norm-engine-btn-icon.small .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-btn-icon.danger:hover {
@@ -519,10 +556,16 @@
   cursor: pointer;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px. */
 .norm-engine-test-header h4 {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
@@ -531,7 +574,7 @@
 }
 
 .norm-engine-test-header .norm-engine-expand {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .norm-engine-test-body {
@@ -572,10 +615,13 @@
   margin-top: 1rem;
 }
 
+/* Item title, not section: the panel's own h4 already carries the section
+   role, so an h5 caption nested inside it has to sit below that. */
 .norm-engine-test-results h5 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-secondary);
 }
 
@@ -592,13 +638,19 @@
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
+/* Meta role. Sentence case is deliberate — "Original:" / "Normalized:" read
+   as inline row labels, not as the uppercase micro caption idiom. */
 .norm-engine-test-original .label,
 .norm-engine-test-normalized .label {
-  color: var(--text-muted);
-  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   min-width: 70px;
 }
 
@@ -617,11 +669,11 @@
   display: flex;
   justify-content: center;
   padding: 0.25rem 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .norm-engine-test-arrow .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-test-transforms {
@@ -634,16 +686,21 @@
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
   padding: 0.125rem 0;
 }
 
 .norm-engine-test-transform .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
 }
 
+/* Everything from here down styles the rule editor, apply-to-channels and
+   import modals — three ModalOverlay instances. Modals are out of scope for
+   the P1 content-pane sweep (bead enhancedchannelmanager-6z299.4). */
 /* Modal */
 .norm-engine-modal-overlay {
   position: fixed;

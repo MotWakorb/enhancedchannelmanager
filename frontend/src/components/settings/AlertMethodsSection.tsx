@@ -102,7 +102,7 @@ export function AlertMethodsSection() {
           Loading alert methods...
         </div>
       ) : methods.length === 0 ? (
-        <div className="alert-methods-empty">
+        <div className="alert-methods-empty empty-inline">
           No alert methods configured yet. Configure SMTP, Discord, or Telegram above to create one.
         </div>
       ) : (

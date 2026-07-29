@@ -28,11 +28,13 @@
   padding: 0.75rem 1rem;
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
+  /* Micro role — the same uppercase column-caption idiom as `.list-header`
+     in shared/common.css § 24 (bead enhancedchannelmanager-6z299.4). */
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .user-list-row {
@@ -41,7 +43,9 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   align-items: center;
 }
 
@@ -67,8 +71,10 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 3rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* User columns */
@@ -82,19 +88,25 @@
   color: var(--text-primary);
 }
 
+/* Meta role, and --text-secondary rather than --text-muted: --text-muted
+   measures 2.61:1 on --bg-secondary in the light theme, below the AA floor. */
 .user-display-name {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
+/* Badge role — the four chips in this file are one family. */
 .user-badge-you {
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.125rem 0.375rem;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  font-weight: 500;
   margin-left: 0.375rem;
 }
 
@@ -108,13 +120,14 @@
 /* Provider badges - follows builtin-badge pattern */
 .user-provider-badge {
   display: inline-block;
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.125rem 0.375rem;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-weight: 500;
 }
 
 .user-provider-local {
@@ -132,12 +145,13 @@
 /* Status badges */
 .user-status-badge {
   display: inline-block;
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
-  font-weight: 500;
   transition: opacity 0.15s ease;
 }
 
@@ -164,10 +178,11 @@
 /* Role badges */
 .user-role-badge {
   display: inline-block;
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
-  font-weight: 500;
 }
 
 .user-role-admin {
@@ -193,7 +208,9 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  /* Body role: a 12px control goes to body (13px), not meta — the body role
+     covers buttons and inputs by definition, not by nearest number. */
+  font-size: var(--type-body-size);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-primary);
   background: var(--input-bg);
@@ -234,7 +251,7 @@
 .user-edit-input {
   width: 100%;
   padding: 0.375rem 0.5rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
@@ -252,7 +269,7 @@
   align-items: center;
   gap: 0.375rem;
   cursor: pointer;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
 .user-checkbox-label input[type="checkbox"] {
@@ -274,7 +291,9 @@
 .user-management-summary {
   display: flex;
   gap: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -285,8 +304,8 @@
 }
 
 .user-management-summary .stat .material-icons {
-  font-size: 1rem;
-  color: var(--text-muted);
+  font-size: var(--icon-action);
+  color: var(--text-secondary);
 }
 
 /* Responsive */

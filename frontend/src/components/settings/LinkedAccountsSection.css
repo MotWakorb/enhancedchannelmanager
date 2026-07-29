@@ -52,8 +52,9 @@
   color: var(--text-secondary);
 }
 
+/* Status icon role — the leading provider glyph in the identity avatar. */
 .identity-icon .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
 }
 
 .identity-details {
@@ -62,24 +63,37 @@
   gap: 0.125rem;
 }
 
+/* Item title, not section. 15px is size-exact for the section role, but this
+   is the NAME OF A ROW, not a heading over a card — the same thing the f4yc7
+   pilot put on the item-title role in `.account-name`. It shrinks 15px → 13px
+   (bead enhancedchannelmanager-6z299.4). */
 .identity-provider {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
-  font-size: 0.9375rem;
   text-transform: capitalize;
 }
 
+/* Body / meta: the three lines of an identity card are name, identifier and
+   linked-on stamp, so they take three distinct roles. */
 .identity-identifier {
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
+/* --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the AA floor. */
 .identity-meta {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Identity Actions */
@@ -98,7 +112,7 @@
   color: var(--error-text, #ef4444);
   border: 1px solid var(--error-border, #ef4444);
   border-radius: var(--radius-lg);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
 }
@@ -113,17 +127,19 @@
 }
 
 .unlink-button .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
+/* Badge role. */
 .only-identity-badge {
   padding: 0.25rem 0.5rem;
   background: var(--warning-bg, rgba(245, 158, 11, 0.1));
   border: 1px solid var(--warning-border, rgba(245, 158, 11, 0.3));
   color: var(--warning-text, #f59e0b);
   border-radius: var(--radius-md);
-  font-size: 0.6875rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
 /* Link New Account Section */
@@ -133,11 +149,16 @@
   border-top: 1px solid var(--border-primary);
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299). */
 .link-account-section h4 {
   margin: 0 0 0.75rem 0;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
-  font-size: 0.9375rem;
-  font-weight: 500;
 }
 
 .available-providers {
@@ -155,7 +176,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
 }
@@ -171,13 +192,11 @@
 }
 
 .link-provider-button .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
 }
 
-.no-providers-message {
-  color: var(--text-muted);
-  font-size: 0.8125rem;
-  font-style: italic;
-}
+/* `.no-providers-message` is one of the six spellings of the small inline
+   "nothing here" string; it now wears `.empty-inline` from
+   shared/common.css instead (bead enhancedchannelmanager-6z299.4). */
 
 /* Link Account Modal - uses ModalBase.css classes */

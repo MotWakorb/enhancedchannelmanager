@@ -44,15 +44,21 @@
   min-width: 0;
 }
 
+/* Item title, not section: this is the name of one radio option in a list,
+   not a heading over a card. Same call as `.theme-label`, `.radio-label` and
+   `.stc-target-name` (bead enhancedchannelmanager-6z299.4). */
 .outbound-policy-title {
-  font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Body role — the option's explanatory sentence. */
 .outbound-policy-detail {
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 

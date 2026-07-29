@@ -5111,7 +5111,7 @@ export function ChannelsPane({
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
-            <div className="empty-group-message">
+            <div className="empty-group-message empty-inline">
               No channels in this group. Drag a channel here or create a new one.
             </div>
           </div>
@@ -5295,9 +5295,9 @@ export function ChannelsPane({
                         onDrop={(e) => handleStreamDrop(e, channel.id)}
                       >
                         {streamsLoading ? (
-                          <div className="inline-streams-loading">Loading streams...</div>
+                          <div className="inline-streams-loading empty-inline">Loading streams...</div>
                         ) : channelStreams.length === 0 ? (
-                          <div className="inline-streams-empty">
+                          <div className="inline-streams-empty empty-inline">
                             No streams assigned. Drag streams here to add.
                           </div>
                         ) : (
@@ -7008,7 +7008,7 @@ export function ChannelsPane({
                     </label>
                   ))}
                 {allGroupsSorted.filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())).length === 0 && (
-                  <div className="group-filter-empty">No groups match "{groupFilterSearch}"</div>
+                  <div className="group-filter-empty empty-inline">No groups match "{groupFilterSearch}"</div>
                 )}
               </div>
             </div>

@@ -47,32 +47,12 @@
   gap: 0.25rem;
 }
 
-.btn-icon {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.btn-icon:hover {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.btn-icon.delete:hover {
-  background-color: var(--error-bg);
-  color: var(--error);
-}
-
-.btn-icon .material-icons {
-  font-size: 18px;
-}
+/* `.btn-icon`, `.btn-icon.delete` and the glyph size are owned by
+   shared/common.css § 3 BUTTONS. Three files declared `.btn-icon` bare —
+   this one, LookupTableSection.css and TagEngineSection.css — the latter two
+   in the SAME lazy Settings chunk, where whichever imported later silently
+   won, and all three disagreed on padding, colour and glyph size
+   (bead enhancedchannelmanager-6z299). */
 
 .link-group-accounts {
   display: flex;

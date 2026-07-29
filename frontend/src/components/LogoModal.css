@@ -101,26 +101,13 @@
   padding: 4px;
 }
 
-.file-info {
+/* `.file-info`, `.file-name` and `.file-size` are owned by shared/common.css
+   § 17. Both this file and CSVImportModal.css declared the whole family bare
+   in the eager bundle and disagreed on the filename size (14.4px here, 16px
+   there) and on the size string's colour; only the layout bit that is
+   genuinely local to this row stays (bead enhancedchannelmanager-6z299). */
+.logo-modal .file-info {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.file-name {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-size {
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }
 
 .clear-file-btn {
@@ -244,7 +231,7 @@
     text-align: center;
   }
 
-  .file-info {
+  .logo-modal .file-info {
     align-items: center;
   }
 }

@@ -352,7 +352,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                         <code>{filter.regex_pattern}</code>
                       </div>
                       <div className="filter-action">
-                        <span className={`action-badge ${filter.exclude ? 'exclude' : 'include'}`}>
+                        <span className={`filter-mode-badge ${filter.exclude ? 'exclude' : 'include'}`}>
                           {filter.exclude ? 'Exclude' : 'Include'}
                         </span>
                       </div>
