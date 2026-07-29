@@ -15,6 +15,7 @@
     "test:e2e:report": "playwright show-report",
     "test:css-smoke": "playwright test e2e/css-smoke.spec.ts",
     "test:css-smoke:update": "playwright test e2e/css-smoke.spec.ts --update-snapshots",
+    "test:css-leak": "playwright test e2e/cross-route-css-leak.spec.ts",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
     "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"
   },
