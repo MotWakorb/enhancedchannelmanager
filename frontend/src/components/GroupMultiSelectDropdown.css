@@ -73,7 +73,8 @@
   font-style: italic;
 }
 
+/* Body role, SIZE only — an empty-state sentence. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .group-multiselect-empty {
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }

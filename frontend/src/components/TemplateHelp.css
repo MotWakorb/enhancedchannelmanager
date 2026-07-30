@@ -14,7 +14,8 @@
   background: transparent;
   border: none;
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  /* Body role, SIZE only. RENDER-NEUTRAL: 0.8125rem was already 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-md, 0.5rem);

@@ -16,7 +16,9 @@
   border-radius: var(--radius-md);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.875rem;
+  /* Body role, SIZE only. OUTER rule — `.user-menu-name` inherits from here.
+     0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
@@ -127,7 +129,8 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.875rem;
+  /* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
   text-align: left;
   transition: background-color 0.15s ease;
 }
@@ -182,9 +185,11 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Modal-title role, SIZE only — this h3 is the dialog's own title. RENDER-
+   NEUTRAL: 1.125rem was already 18px, which is what the role carries (bead enhancedchannelmanager-haf9e). */
 .user-modal-header h3 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--type-modal-title-size);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -228,10 +233,11 @@
   margin-bottom: 0;
 }
 
+/* Label role, SIZE only — the caption on a form control. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .user-modal-field label {
   display: block;
   margin-bottom: 0.375rem;
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -243,7 +249,8 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  /* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
   transition: border-color 0.15s ease;
 }
 
@@ -257,9 +264,11 @@
   cursor: not-allowed;
 }
 
+/* Meta role, SIZE only — matches `.form-hint` in shared/common.css, which is
+   the same thing under a different name. 0.75rem -> 11px (bead enhancedchannelmanager-haf9e). */
 .user-modal-hint {
   margin: 0.375rem 0 0 0;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   color: var(--text-muted);
 }
 
@@ -272,9 +281,10 @@
   background: var(--bg-tertiary);
 }
 
+/* Body role, SIZE only — the 500 weight is the control's. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .user-modal-btn {
   padding: 0.5rem 1rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   border-radius: var(--radius-lg);
   cursor: pointer;

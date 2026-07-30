@@ -624,7 +624,7 @@ export function TagEngineSection() {
                   onChange={(e) => setImportYaml(e.target.value)}
                   placeholder="Paste YAML content here..."
                   rows={12}
-                  style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                  style={{ fontFamily: 'monospace', fontSize: 'var(--type-body-size)' }}
                 />
               </div>
               <label className="modal-checkbox-label">

@@ -5351,7 +5351,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <div className="settings-group" style={{ marginTop: '1rem' }}>
             <div className="settings-section-header" style={{ marginBottom: '0.5rem' }}>
               <span className="material-icons">warning_amber</span>
-              <h3 style={{ fontSize: '0.95rem' }}>Struck Out Streams</h3>
+              <h3 style={{ fontSize: 'var(--type-section-size)' }}>Struck Out Streams</h3>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

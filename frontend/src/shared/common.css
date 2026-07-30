@@ -858,15 +858,23 @@
   color: var(--text-muted);
 }
 
+/* Section role, SIZE only (bead enhancedchannelmanager-haf9e): a collapsible
+   header names the group beneath it, the same job as `.detail-section h4` and
+   `.settings-section-header h3`. The 500 weight is deliberately kept rather
+   than taking the role's 600 — this pass moves sizes only, so a geometry delta
+   is attributable to the size and nothing else. 0.9rem -> 15px. */
 .collapsible-title {
   font-weight: 500;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-section-size);
 }
 
+/* Badge role, SIZE only — this is a filled, padded, rounded chip carrying a
+   count, which is what the badge role names. Weight and colour kept as
+   authored. 0.8rem -> 10px (bead enhancedchannelmanager-haf9e). */
 .collapsible-summary {
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: var(--type-badge-size);
   color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
@@ -1001,6 +1009,10 @@
   min-width: 0;
 }
 
+/* Body role, SIZE only — an input is a control, so it keeps its authored weight.
+   0.9rem -> 13px (bead enhancedchannelmanager-haf9e). This is the single
+   highest-count site in the modal measurement: 12 dialogs rendered it at
+   14.4px. */
 .search-input {
   width: 100%;
   padding: 0.5rem;
@@ -1008,7 +1020,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: border-color 0.15s;
 }
 
@@ -1039,12 +1051,13 @@
   color: var(--text-muted);
 }
 
+/* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .search-box input {
   flex: 1;
   background: none;
   border: none;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -1165,13 +1178,14 @@
   color: var(--text-muted);
 }
 
+/* Body role, SIZE only. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-search input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .filter-dropdown-search input::placeholder {
@@ -1185,10 +1199,14 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Body role, SIZE only — "Select all" / "Clear" are buttons, and the scale puts
+   buttons on body. This one grows: 0.75rem (12px) -> 13px. The alternative was
+   meta (11px), which is the role for supporting DETAIL, not for an action
+   (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-actions button {
   flex: 1;
   padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
@@ -1207,6 +1225,8 @@
   padding: 0.25rem;
 }
 
+/* Body role, SIZE only — a clickable option row in a listbox.
+   0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-option {
   display: flex;
   align-items: center;
@@ -1214,7 +1234,7 @@
   padding: 0.375rem 0.5rem;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
 }
 
@@ -1443,7 +1463,10 @@
   gap: 0.75rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.875rem;
+  /* Body role, SIZE only — a row of running text in an import preview list;
+     its children inherit from here. 0.875rem -> 13px
+     (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
 }
 
 .preview-item:last-child {
@@ -1721,6 +1744,11 @@
    the pipeline tab's, already rendered this exact merge. Folded in and the
    StreamsPane copies deleted, so one file owns each class
    (bead enhancedchannelmanager-87o0c). */
+/* Body role, SIZE only. A checkbox/radio row is an interactive control, so per
+   docs/css_guidelines.md § "Adopting a role" it takes the role's size and keeps
+   the weight it was authored with. This rule is also the OUTER half of a nested
+   pair — `.checkbox-option label` below sizes the caption inside it — so it is
+   converted first. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .checkbox-option,
 .radio-option {
   display: flex;
@@ -1728,7 +1756,7 @@
   gap: 0.5rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 /* Checkbox-only half of the same fold: StreamsPane's copy declared these two
@@ -1748,10 +1776,14 @@
   cursor: pointer;
 }
 
+/* Label role, SIZE only — the caption on a form control, which is exactly what
+   the label role names. Inner half of the pair above; both land on 13px, so the
+   row and its caption now agree where before they were 14.4px over 14px.
+   0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .checkbox-option label,
 .radio-option label {
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
   color: var(--text-primary);
 }
 

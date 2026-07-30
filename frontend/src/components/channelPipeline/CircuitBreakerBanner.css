@@ -92,16 +92,19 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
+/* Modal-title role, SIZE only — the confirm dialog's own title; it already
+   carries the role's 600 weight. 1rem -> 18px (bead enhancedchannelmanager-haf9e). */
 .circuit-breaker-confirm-dialog h3 {
   margin: 0 0 0.75rem;
-  font-size: 1rem;
+  font-size: var(--type-modal-title-size);
   font-weight: 600;
   color: var(--text-primary);
 }
 
+/* Body role, SIZE only — running text. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .circuit-breaker-confirm-dialog p {
   margin: 0 0 1.25rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   line-height: 1.5;
 }
