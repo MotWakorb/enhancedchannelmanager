@@ -2100,43 +2100,6 @@
   color: #f87171;
 }
 
-/* Probe Button - always visible to make it discoverable */
-.probe-stream-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-  opacity: 0.5;
-}
-
-.inline-stream-item:hover .probe-stream-btn {
-  opacity: 1;
-}
-
-.probe-stream-btn:hover:not(:disabled) {
-  color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
-}
-
-.probe-stream-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.probe-stream-btn .material-icons {
-  font-size: var(--icon-action);
-}
-
-.probe-stream-btn.probing .material-icons {
-  animation: spin 1s linear infinite reverse;
-}
-
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Group Probe Button - probes all streams in all channels of a group */
