@@ -28,8 +28,13 @@
   cursor: not-allowed;
 }
 
-.history-icon {
-  font-size: 18px;
+/* Undo/redo glyph. The button carries a count chip rather than a word label,
+   so the glyph is the affordance's own state marker -> --icon-status, which is
+   the 18px this rule already asked for. Scoped through `.history-btn` because
+   bare it tied index.css's base `.material-icons` at 0-1-0, lost on source
+   order and rendered at 24px (bead enhancedchannelmanager-7bsxj). */
+.history-btn .history-icon {
+  font-size: var(--icon-status);
   line-height: 1;
 }
 
@@ -59,8 +64,10 @@
   filter: brightness(1.2);
 }
 
-.save-point-icon {
-  font-size: 18px;
+/* Same shape as `.history-icon` above — 18px declared, 24px rendered until the
+   selector gained a second class (bead enhancedchannelmanager-7bsxj). */
+.history-btn .save-point-icon {
+  font-size: var(--icon-status);
 }
 
 .save-points-dropdown {
@@ -164,9 +171,14 @@
   color: var(--danger-text);
 }
 
-.unsaved-indicator {
+/* The pulsing "unsaved" dot. A bare state glyph carried beside meta text is
+   the --icon-badge role; the authored 12px was a literal off the icon scale
+   and never rendered anyway — the bare selector tied index.css's base
+   `.material-icons` at 0-1-0 and the dot painted at 24px. 24px -> 14px
+   (bead enhancedchannelmanager-7bsxj). */
+.history-toolbar .unsaved-indicator {
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--icon-badge);
   line-height: 1;
   animation: pulse 2s infinite;
 }

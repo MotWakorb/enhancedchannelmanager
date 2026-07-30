@@ -115,12 +115,25 @@
   gap: 0.25rem;
 }
 
+/* Icon-only row actions (test / enable / edit / delete) — the glyph IS the
+   affordance, so --icon-action. `.btn-icon` in common.css already sizes the
+   variants that carry it; the plain `.btn.btn-sm` test button does not, and
+   rendered at index.css's base 24px inside a 28px button
+   (bead enhancedchannelmanager-7bsxj). */
+.profile-card-actions .material-icons {
+  font-size: var(--icon-action);
+}
+
 .is-disabled {
   opacity: 0.6;
 }
 
-/* Status icon role — the leading provider glyph on a target row. */
-.cloud-target-icon {
+/* Status icon role — the leading provider glyph on a target row. Scoped
+   through the card's info block: bare, it tied index.css's base
+   `.material-icons { font-size: 24px }` at 0-1-0 and lost on source order, so
+   the glyph rendered at 24px against a 13px target name
+   (bead enhancedchannelmanager-7bsxj). */
+.profile-card-info .cloud-target-icon {
   font-size: var(--icon-status);
   color: var(--text-secondary);
 }

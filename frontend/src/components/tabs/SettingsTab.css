@@ -1237,3 +1237,13 @@
 .integration-test-result--error {
   color: var(--accent-error);
 }
+
+/* Leading status glyph on a probe-history row (check_circle / error / warning)
+   — the --icon-status role. The row is built from inline styles in
+   SettingsTab.tsx:5110 and the glyph carries no class of its own, so it had no
+   rule and rendered at index.css's base 24px beside 14px text. Scoped through
+   the row so it clears that base rule's 0-1-0
+   (bead enhancedchannelmanager-7bsxj). */
+.probe-history-item .material-icons {
+  font-size: var(--icon-status);
+}

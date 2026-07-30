@@ -5,6 +5,13 @@
   gap: 0.35rem;
 }
 
+/* Inline notice glyph beside a line of status text — the --icon-status role.
+   It had no rule and took index.css's base 24px, which is larger than the
+   sentence it annotates (bead enhancedchannelmanager-7bsxj). */
+.source-load-announcement .material-icons {
+  font-size: var(--icon-status);
+}
+
 .source-load-retry {
   border: 0;
   padding: 0;

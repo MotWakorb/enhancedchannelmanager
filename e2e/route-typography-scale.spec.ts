@@ -220,14 +220,10 @@ const ALLOWLIST: readonly Exception[] = [
     bead: 'enhancedchannelmanager-6z299.8',
     reason: 'Material Icons default; the P1 action-icon role is 16px.',
   },
-  {
-    route: 'logo-manager',
-    selector: '.source-load-announcement .material-icons',
-    sizesPx: [24],
-    bead: 'enhancedchannelmanager-6z299.8',
-    reason: 'Material Icons default on the transient source-load status; P1 status icon is 18px.',
-    dataDependent: true,
-  },
+  // `.source-load-announcement .material-icons` used to sit here. Fixed by
+  // bead enhancedchannelmanager-7bsxj — it now renders at --icon-status, and
+  // this guard is what proved it on the real route rather than in the modal
+  // harness. Entry deleted with the fix, per the staleness check below.
   {
     route: 'logo-manager',
     selector: '.logo-thumbnail .placeholder .material-icons',

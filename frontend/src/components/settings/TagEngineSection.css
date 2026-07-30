@@ -79,6 +79,13 @@
   color: var(--error-text, #ef4444);
 }
 
+/* Icon-only row action — the glyph IS the affordance, so --icon-action. It had
+   no rule and rendered at index.css's base 24px, oversized against the 32px
+   button box it sits in (bead enhancedchannelmanager-7bsxj). */
+.tag-group-wrapper .delete-group-btn .material-icons {
+  font-size: var(--icon-action);
+}
+
 /* Tag Group Card */
 .tag-group-card {
   flex: 1;
@@ -130,6 +137,19 @@
    nothing in the Tag Engine moves. */
 :where(.tag-engine-section) .expand-icon {
   color: var(--text-secondary);
+  font-size: var(--icon-status);
+}
+
+/* ...and the size in that rule never rendered, precisely because `:where()`
+   holds it at (0,1,0): that also ties index.css's base
+   `.material-icons { font-size: 24px }`, which is emitted later, so the glyph
+   painted 24px. The colour was unaffected (nothing else declares it), which is
+   why only the size was wrong. Restated here at (0,3,0) against this section's
+   own markup, so the Tag Engine's chevrons take --icon-status while the
+   deliberately-weak rule above still leaves StreamsPane's and
+   BulkLCNFetchModal's `.expand-icon` precedence untouched
+   (bead enhancedchannelmanager-7bsxj). */
+.tag-engine-section .tag-group-info .expand-icon {
   font-size: var(--icon-status);
 }
 
@@ -520,6 +540,16 @@
 
 :where(.tag-engine-group-modal) .modal-close:hover {
   color: var(--text-primary);
+}
+
+/* This modal spells its close button `.modal-close` rather than ModalBase's
+   `.modal-close-btn` (see the note above), so it misses
+   `.modal-close-btn .material-icons` and the glyph fell through to the base
+   24px. Same role and same value as that rule. Written WITHOUT `:where()` —
+   the size has to outrank the base rule, which is exactly what `:where()`
+   prevents (bead enhancedchannelmanager-7bsxj). */
+.tag-engine-group-modal .modal-close .material-icons {
+  font-size: var(--icon-status);
 }
 
 :where(.tag-engine-group-modal) .modal-body {

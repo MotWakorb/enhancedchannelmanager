@@ -333,6 +333,56 @@ at 24px while the source appears to say otherwise. **An icon override needs two
 classes of depth**: `.catchup-badge .catchup-badge__icon`, not
 `.catchup-badge__icon`.
 
+#### The modal-estate icon sweep, and three ways the trap hides
+
+Bead `enhancedchannelmanager-7bsxj` measured the whole trap across the 82
+force-rendered dialogs: **146 elements at 24px in 30 dialogs, now 30** — 116
+icons moved onto the tokens. The remaining 30 are the 27 `span.stat-value`
+(text, not an icon, tracked separately) and three glyphs that are 24px on
+purpose (`.toast-icon .material-icons`, `.logo-thumbnail .placeholder
+.material-icons`), both of which already carry two classes of depth and win.
+
+The 116 split into two populations, and the split is the useful part:
+**46 elements already had a rule that named the right size and never rendered
+it**, and **70 had no rule at all**. The first population is the dangerous one
+— the source reads correct, review reads correct, and only a rendered
+measurement disagrees. Grep is not a defence here; `getComputedStyle` is.
+
+Three shapes let a size hide even when someone has clearly thought about it:
+
+- **`:where()` de-specifies your own rule out of the fight.** `:where(.tag-
+  engine-section) .expand-icon { font-size: var(--icon-status) }` is (0,1,0) by
+  construction — which is the point when you are trying not to disturb *other*
+  consumers of a colliding class, but it also means it ties the base
+  `.material-icons` and loses. The `color` in the same rule was fine, because
+  nothing else declared it; only the size was wrong. Keep the weak rule for the
+  properties that need to stay weak and restate the *size* in a normally-scoped
+  rule beside it.
+- **Sizing the wrapper does not size the glyph.** `.execution-no-snapshot`
+  carried `font-size: var(--icon-status)` and a comment saying the icon "was
+  already 18px, so nothing moves". The wrapper was 18px; the `.material-icons`
+  child sets its own size and inherits nothing, so the glyph was 24px. A
+  `font-size` on an ancestor is never evidence about a Material Icons child.
+- **Paired selector arms drift apart.** `.modal-header h2, .modal-header
+  .modal-title` sets the title role for both spellings, but the icon rule under
+  it listed only the `.modal-title` arm — so every modal that heads itself with
+  an `<h2>` had a 24px glyph beside an 18px title. When one rule enumerates two
+  equivalent selectors, the rules that qualify it must enumerate both.
+
+**The base rule was deliberately not restructured.** Wrapping it as
+`:where(.material-icons)` would let every single-class override win as written
+and would permanently kill the trap — it is the honest fix and it should
+happen. It was rejected *for this pass* because the blast radius is measured
+and large: **33 single-class `font-size` rules on icon co-classes exist
+app-wide**, all currently dormant, and only 11 of them were in this pass's
+measured scope. The other 22 would have started rendering silently, at values
+authored blind and never once observed (`.drop-icon` 36px,
+`.error-boundary-icon` 40px, three banner icons at 1.625rem), on routes this
+pass does not measure. Turning a measured 146-element change into an
+unmeasured 22-rule change is the same "declared is not rendered" failure
+running the other way. Do it as its own pass, behind its own route-wide
+measurement.
+
 ### Rollout status
 
 **All ten route pages are remapped.** Dashboard, M3U Manager, EPG Manager,

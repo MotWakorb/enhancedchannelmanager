@@ -10,6 +10,7 @@ import { TaskStatusPill } from './TaskStatusPill';
 import { getTaskPillState } from '../utils/taskPillState';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
+import './ScheduledTasksSection.css';
 import '../components/ModalBase.css';
 
 interface ScheduledTasksSectionProps {
@@ -71,17 +72,17 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
 
   const statusIcon = () => {
     if (isRunning || task.status === 'running') {
-      return <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite reverse' }}>sync</span>;
+      return <span className="material-icons task-status-icon" style={{ color: '#3498db', animation: 'spin 1s linear infinite reverse' }}>sync</span>;
     }
     if (!task.enabled) {
-      return <span className="material-icons" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
+      return <span className="material-icons task-status-icon" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
     }
     // vkktd.4: keep the card icon coherent with the status pill — an
     // enabled-but-won't-run task must not show a reassuring green check.
     if (getTaskPillState(task) === 'wontRun') {
-      return <span className="material-icons" style={{ color: 'var(--warning)' }}>warning</span>;
+      return <span className="material-icons task-status-icon" style={{ color: 'var(--warning)' }}>warning</span>;
     }
-    return <span className="material-icons" style={{ color: '#2ecc71' }}>check_circle</span>;
+    return <span className="material-icons task-status-icon" style={{ color: '#2ecc71' }}>check_circle</span>;
   };
 
   return (
@@ -121,7 +122,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
         }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 auto', minWidth: 0 }}>
           {statusIcon()}
-          <div style={{ fontWeight: 600, fontSize: '1rem', minWidth: 0 }}>{task.task_name}</div>
+          <div style={{ fontWeight: 600, fontSize: 'var(--type-item-title-size)', minWidth: 0 }}>{task.task_name}</div>
         </div>
         <div style={{
           display: 'flex',
@@ -155,7 +156,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: 'var(--type-body-size)',
                 }}
               >
                 <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
@@ -174,7 +175,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: 'var(--type-body-size)',
                 }}
               >
                 <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
@@ -195,7 +196,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               border: '1px solid var(--border-color)',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '0.85rem',
+              fontSize: 'var(--type-body-size)',
             }}
           >
             <span className="material-icons" style={{ fontSize: '16px' }}>edit</span>
@@ -214,7 +215,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               border: '1px solid var(--border-color)',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '0.85rem',
+              fontSize: 'var(--type-body-size)',
             }}
           >
             <span className="material-icons" style={{ fontSize: '16px' }}>
@@ -228,7 +229,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
             leaves the title column ~300px, which wrapped longer descriptions to
             as many as eight lines. */}
         {task.task_description && (
-          <div style={{ fontSize: '0.78rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 'var(--type-meta-size)', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
             {task.task_description}
           </div>
         )}
@@ -241,7 +242,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
         gap: '1rem',
         padding: '1rem',
         backgroundColor: 'var(--bg-tertiary)',
-        fontSize: '0.85rem',
+        fontSize: 'var(--type-body-size)',
       }}>
         <div>
           <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Schedule</div>
@@ -252,7 +253,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                 <div>
                   <div>{scheduleInfo.summary}</div>
                   {scheduleInfo.details.length > 0 && (
-                    <div style={{ marginTop: '0.25rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <div style={{ marginTop: '0.25rem', fontSize: 'var(--type-meta-size)', color: 'var(--text-secondary)' }}>
                       {scheduleInfo.details.map((detail, i) => (
                         <div key={i}>{detail}</div>
                       ))}
@@ -335,7 +336,7 @@ function RunNowDialog({ task, onRun, onCancel }: {
               <button
                 type="button"
                 className={`modal-btn modal-btn-${allSelected ? 'primary' : 'secondary'}`}
-                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                style={{ padding: '0.25rem 0.625rem', fontSize: 'var(--type-body-size)' }}
                 onClick={() => setSelectedGroups(groups.map(g => g.id))}
               >
                 Select All
@@ -343,7 +344,7 @@ function RunNowDialog({ task, onRun, onCancel }: {
               <button
                 type="button"
                 className={`modal-btn modal-btn-${noneSelected ? 'primary' : 'secondary'}`}
-                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                style={{ padding: '0.25rem 0.625rem', fontSize: 'var(--type-body-size)' }}
                 onClick={() => setSelectedGroups([])}
               >
                 Select None
@@ -374,8 +375,8 @@ function RunNowDialog({ task, onRun, onCancel }: {
                       onChange={() => toggleGroup(group.id)}
                       style={{ accentColor: 'var(--accent)' }}
                     />
-                    <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{group.name}</span>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>
+                    <span style={{ flex: 1, fontSize: 'var(--type-body-size)', color: 'var(--text-primary)' }}>{group.name}</span>
+                    <span style={{ fontSize: 'var(--type-meta-size)', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>
                   </label>
                 ))}
               </div>

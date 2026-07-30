@@ -25,7 +25,18 @@
   border-color: var(--border-secondary, var(--border-primary));
 }
 
-.user-menu-icon {
+/* Header-band chrome, NOT the content icon scale — 20px is the chrome value,
+   the same one `.header-icon-link .material-icons` in App.css pins for the
+   marks sitting immediately to the left of this trigger, and the same one
+   e2e/frozen-chrome.spec.ts pins on the rail. It stays a literal for that
+   reason; the icon tokens (18/16/14) are a content scale and do not apply.
+
+   The 20px was never reaching the glyph: bare, this tied index.css's base
+   `.material-icons { font-size: 24px }` at 0-1-0 and lost on source order, so
+   the avatar painted 24px and read a size larger than the chrome beside it.
+   Scoped through the trigger to win. 24px -> 20px
+   (bead enhancedchannelmanager-7bsxj). */
+.user-menu-trigger .user-menu-icon {
   font-size: 20px;
   color: var(--text-secondary);
 }
@@ -37,7 +48,11 @@
   white-space: nowrap;
 }
 
-.user-menu-arrow {
+/* Same chrome band, same specificity fix as `.user-menu-icon` above. The caret
+   is deliberately a step below the 20px mark it follows, so this keeps its
+   authored literal rather than taking a content token. 24px -> 18px
+   (bead enhancedchannelmanager-7bsxj). */
+.user-menu-trigger .user-menu-arrow {
   font-size: 18px;
   color: var(--text-secondary);
 }
@@ -185,6 +200,15 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition: background-color 0.15s ease;
+}
+
+/* This modal is hand-rolled rather than built on ModalBase, so it misses
+   `.modal-close-btn .material-icons`. Same role, same value as that rule's
+   `--modal-close-size`: the close affordance is a state/panel glyph at
+   --icon-status. It had no rule at all and rendered at the base 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.user-modal-close .material-icons {
+  font-size: var(--icon-status);
 }
 
 .user-modal-close:hover {

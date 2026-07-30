@@ -1209,7 +1209,8 @@
    Content-pane, not modal: this renders inside `.execution-actions` in the
    executions list (ChannelPipelineTab.tsx:1422), even though it is filed under
    the snapshot-restore heading with the revert dialogs. Icon size tokenized to
-   --icon-status; it was already 18px, so nothing moves. The --text-muted stays
+   --icon-status — on the wrapper only; see the rule below for why that did not
+   reach the glyph. The --text-muted stays
    — this is a decorative glyph, not text, and the AA rule exempts those
    (bead enhancedchannelmanager-6z299). */
 .execution-no-snapshot {
@@ -1220,6 +1221,15 @@
   cursor: default;
   font-size: var(--icon-status);
   opacity: 0.5;
+}
+
+/* The token above sizes the WRAPPER, and the glyph never inherited it: a
+   `.material-icons` child sets its own 24px, so "it was already 18px, so
+   nothing moves" was true of the span and false of the icon inside it. The
+   glyph measured 24px. Sized here, one class of depth below the wrapper, so
+   it wins against index.css's base rule (bead enhancedchannelmanager-7bsxj). */
+.execution-no-snapshot .material-icons {
+  font-size: var(--icon-status);
 }
 
 /* Warning banner inside the revert-confirm modal (§D5 mandatory warning). */
@@ -1243,8 +1253,11 @@
   line-height: var(--type-body-line-height);
 }
 
-/* Status/panel glyph -> --icon-status. 20px -> 18px. */
-.revert-warning-icon {
+/* Status/panel glyph -> --icon-status. 20px -> 18px.
+   Scoped through the banner: bare, it tied index.css's base `.material-icons`
+   at 0-1-0 and lost on source order, so the glyph rendered at 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.revert-warning-banner .revert-warning-icon {
   color: var(--status-warning, #f59e0b);
   font-size: var(--icon-status);
   flex-shrink: 0;

@@ -220,7 +220,16 @@
   gap: 0.5rem;
 }
 
-/* A panel-header glyph beside the title → --icon-status (18px, was 20px). */
+/* A panel-header glyph beside the title → --icon-status (18px, was 20px).
+
+   The `h2` arm was missing while the title rule two rules up carries BOTH
+   `h2` and `.modal-title`, so every modal that heads itself with an <h2>
+   (CSVImportModal, M3UProfileModal, ChannelsPane's renumber dialog, …) had a
+   leading glyph that fell through to index.css's base 24px next to an 18px
+   title. The two selectors are kept in lockstep deliberately — a title arm
+   without a matching icon arm is what produced the defect
+   (bead enhancedchannelmanager-7bsxj). */
+.modal-header h2 .material-icons,
 .modal-header .modal-title .material-icons {
   font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
