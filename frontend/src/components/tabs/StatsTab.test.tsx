@@ -1628,6 +1628,16 @@ describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
 
     const nav = await screen.findByRole('navigation', { name: 'On this page' });
 
+    // The <nav> existing is not the same event as the nav being complete.
+    // StickySectionNav renders as soon as *two* sections are discoverable, and
+    // it only discovers a section once that section exposes a heading (or a
+    // `data-section-label`). BandwidthPanel, PopularityPanel and
+    // WatchHistoryPanel render a heading-less loading branch until their fetch
+    // settles, so their entries land one or more macrotasks after the nav
+    // itself. Asserting synchronously off `findByRole('navigation')` raced that
+    // gap and failed intermittently — bead enhancedchannelmanager-ur9we caught
+    // it with only Enhanced Statistics / User Watch Time / Providers / Provider
+    // Stream Usage listed. Await each entry so the wait is for the settled set.
     for (const label of [
       'Bandwidth In/Out',
       'Enhanced Statistics',
@@ -1637,7 +1647,7 @@ describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
       'Providers',
       'Provider Stream Usage',
     ]) {
-      expect(within(nav).getByRole('button', { name: label })).toBeInTheDocument();
+      expect(await within(nav).findByRole('button', { name: label })).toBeInTheDocument();
     }
 
     // No active channels / events / top-watched / bandwidth summary data
