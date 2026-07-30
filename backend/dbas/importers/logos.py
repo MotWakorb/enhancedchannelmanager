@@ -101,6 +101,7 @@ import base64
 import binascii
 import logging
 import os
+from typing import Awaitable, Callable, Optional
 
 from pydantic import BaseModel, Field
 
@@ -475,6 +476,7 @@ async def import_logos(
     is_dry_run: bool = False,
     clear_existing: bool = False,
     archive_channels: list[dict] | None = None,
+    content_provider: Optional[Callable[[dict], Awaitable[Optional[str]]]] = None,
 ) -> LogoImportResult:
     """Restore the LOGO category: 3-tier match + streaming upload of the misses.
 
@@ -504,6 +506,21 @@ async def import_logos(
             the destination channel id resolved through the CHANNEL remap
             namespace (populated by the channels importer, which runs earlier).
             ``None``/empty -> misses carry an empty channel list.
+        content_provider: OPTIONAL lazy per-logo payload loader (bead
+            ``7ipq2.1`` — the cross-instance sync path). When set, a MISSED
+            logo whose record carries no ``content_b64`` is hydrated by
+            awaiting ``content_provider(record)`` (must return the base64
+            string, or ``None`` on failure) IMMEDIATELY before validation +
+            upload — one logo at a time, so the D8 streaming guarantee holds
+            for plans that are assembled METADATA-ONLY (holding every logo's
+            base64 in the plan at once would defeat D8). The hydrated payload
+            lives on a per-iteration COPY; the caller's record is never
+            mutated (no accumulation). Cheap pre-checks (safe basename,
+            declared-size cap) run BEFORE hydration so a logo that is already
+            rejectable is never read. A provider failure (``None`` / raise) is
+            a per-logo ``VALIDATION_ERROR`` with a path-free message, never a
+            crash. ``None`` (the default, the archive-restore path) leaves
+            behaviour byte-for-byte unchanged.
 
     Returns:
         A :class:`LogoImportResult` with safe aggregate counters.
@@ -584,8 +601,46 @@ async def import_logos(
             )
             continue
 
-        # MISS — this logo must be uploaded. Validate+decode BEFORE upload.
-        data, basename, reason = _validate_logo(archive_logo)
+        # MISS — this logo must be uploaded. Hydrate lazily when the record is
+        # metadata-only (sync path), then validate+decode BEFORE upload. The
+        # cheap pre-checks (basename, declared-size cap) run FIRST so a logo
+        # that is already rejectable is never read from the source; when they
+        # fail, hydration is skipped and _validate_logo below produces the
+        # canonical rejection reason for the un-hydrated record.
+        hydrated = archive_logo
+        if content_provider is not None and not archive_logo.get("content_b64"):
+            declared_size = archive_logo.get("size")
+            precheck_ok = _safe_basename(archive_logo.get("filename")) is not None and not (
+                isinstance(declared_size, int) and declared_size > MAX_LOGO_BYTES
+            )
+            if precheck_ok:
+                try:
+                    payload_b64 = await content_provider(archive_logo)
+                except Exception:  # noqa: BLE001 - per-logo containment, path-free
+                    payload_b64 = None
+                if not payload_b64:
+                    cat.failed += 1
+                    result.rejected += 1
+                    cat.failure_details.append(
+                        FailureDetail(
+                            reason=FailureReason.VALIDATION_ERROR,
+                            label=label,
+                            # Path-free by construction — never the provider's
+                            # exception text (it can echo a filesystem path).
+                            message="logo content could not be read from the source",
+                            source_export_id=source_id,
+                        )
+                    )
+                    logger.warning(
+                        "[DBAS-LOGOS] Rejected logo '%s': source content unavailable.",
+                        label,
+                    )
+                    continue
+                # Per-iteration COPY: the caller's plan record stays
+                # metadata-only (no accumulation across the loop — D8).
+                hydrated = {**archive_logo, "content_b64": payload_b64}
+
+        data, basename, reason = _validate_logo(hydrated)
         if reason is not None:
             cat.failed += 1
             result.rejected += 1
@@ -626,7 +681,7 @@ async def import_logos(
             del data
             continue
 
-        content_type = _safe_content_type(archive_logo)
+        content_type = _safe_content_type(archive_logo, data)
         try:
             created = await client.upload_logo_file(
                 label, basename, data, content_type
@@ -666,13 +721,45 @@ async def import_logos(
     return result
 
 
-def _safe_content_type(archive_logo: dict) -> str:
+# Validated-magic -> content-type map for _safe_content_type's fallback. Keyed
+# by the SAME signatures _MAGIC_PREFIXES accepts (plus the BMP path), so the
+# derived type can only ever describe bytes the magic gate already validated.
+_MAGIC_CONTENT_TYPES: tuple[tuple[bytes, int, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", 0, "image/png"),
+    (b"\xff\xd8\xff", 0, "image/jpeg"),
+    (b"GIF87a", 0, "image/gif"),
+    (b"GIF89a", 0, "image/gif"),
+    (b"WEBP", 8, "image/webp"),
+)
+
+
+def _content_type_from_magic(data: bytes) -> Optional[str]:
+    """Derive the image content-type from ALREADY-VALIDATED magic bytes.
+
+    Called only after :func:`_validate_logo` accepted ``data``, so this is a
+    classification of known-image bytes, not a validation step. Returns ``None``
+    for a magic outside the map (BMP falls back to its own type below).
+    """
+    head = data[:_MAGIC_INSPECT_LEN]
+    for prefix, offset, content_type in _MAGIC_CONTENT_TYPES:
+        if head[offset:offset + len(prefix)] == prefix:
+            return content_type
+    if _bmp_ok(data):
+        return "image/bmp"
+    return None
+
+
+def _safe_content_type(archive_logo: dict, data: bytes = b"") -> str:
     """Return a SAFE content-type for the multipart upload.
 
-    The archive's declared content-type is advisory only (the magic-byte check is
-    the real gate). We pass it through when it looks like an image content-type,
-    else default to ``application/octet-stream`` so we never forward an arbitrary
-    attacker-controlled header value.
+    The archive's declared content-type is advisory only (the magic-byte check
+    is the real gate). We pass it through when it looks like an image
+    content-type. When the record declares no usable type — the sync
+    live-gather records are METADATA-ONLY and carry none (bead 7ipq2.2) — the
+    type is derived from the already-validated magic bytes: a real Dispatcharr
+    0.28.2 upload endpoint REJECTS ``application/octet-stream`` outright
+    ("Unsupported file type"), so the octet-stream fallback is a last resort
+    only when even the magic is outside the map.
     """
     declared = archive_logo.get("content_type")
     if isinstance(declared, str) and declared.lower().startswith("image/"):
@@ -680,6 +767,9 @@ def _safe_content_type(archive_logo: dict) -> str:
         clean = declared.split(";", 1)[0].strip().lower()
         if clean and all(ord(c) >= 0x20 for c in clean):
             return clean
+    derived = _content_type_from_magic(data) if data else None
+    if derived:
+        return derived
     return "application/octet-stream"
 
 

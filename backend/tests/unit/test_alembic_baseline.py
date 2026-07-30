@@ -195,6 +195,110 @@ class TestMigration0039WidenPipelineStatus:
             engine.dispose()
 
 
+class TestMigration0040SyncTargetSyncLogos:
+    """0040 adds the per-target ``sync_logos`` opt-in column (bead 7ipq2.1).
+
+    NOT NULL BOOLEAN with server_default='0' so pre-existing sync_targets rows
+    backfill to False (logos stay opt-in per ADR-013 S9 — the unconditional
+    per-cycle set is unchanged).
+    """
+
+    @staticmethod
+    def _sync_logos_column(engine):
+        from sqlalchemy import inspect as sa_inspect
+
+        for col in sa_inspect(engine).get_columns("sync_targets"):
+            if col["name"] == "sync_logos":
+                return col
+        return None
+
+    def test_upgrade_adds_column_with_false_backfill(self, tmp_path):
+        """After upgrade head the column exists NOT NULL and a pre-existing row
+        reads sync_logos=False (server_default backfill)."""
+        from alembic import command
+        from sqlalchemy.orm import Session
+
+        from export_models import SyncTarget
+
+        db_file = tmp_path / "mig0040_value.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url)
+        try:
+            col = self._sync_logos_column(engine)
+            assert col is not None, "sync_logos column missing after upgrade"
+            assert col["nullable"] is False
+
+            with Session(engine) as session:
+                row = SyncTarget(
+                    name="DR Box", base_url="https://b.example.com",
+                    credentials="{}",
+                )
+                session.add(row)
+                session.commit()
+                row_id = row.id
+
+            with Session(engine) as session:
+                stored = session.get(SyncTarget, row_id)
+                assert stored is not None
+                assert stored.sync_logos is False  # opt-in default OFF
+        finally:
+            engine.dispose()
+
+    def test_downgrade_upgrade_round_trip(self, tmp_path):
+        """0040 reverses (column dropped, target rows preserved) and re-applies."""
+        from alembic import command
+        from sqlalchemy import text as sa_text
+
+        db_file = tmp_path / "mig0040_rt.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url)
+        try:
+            assert self._sync_logos_column(engine) is not None
+            with engine.begin() as conn:
+                conn.execute(sa_text(
+                    "INSERT INTO sync_targets (name, base_url, credentials, "
+                    "enabled, credential_version, insecure, "
+                    "fuzzy_stream_matching, sync_logos, created_at, updated_at) "
+                    "VALUES ('KeepMe', 'https://b.example.com', '{}', 1, 1, 0, "
+                    "0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ))
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0039")
+        engine = create_engine(db_url)
+        try:
+            assert self._sync_logos_column(engine) is None
+            # The target row itself survives the column drop.
+            with engine.connect() as conn:
+                names = {r[0] for r in conn.execute(sa_text(
+                    "SELECT name FROM sync_targets"
+                ))}
+            assert "KeepMe" in names
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "head")
+        engine = create_engine(db_url)
+        try:
+            col = self._sync_logos_column(engine)
+            assert col is not None
+            # Re-applied over the surviving row: backfilled to False.
+            with engine.connect() as conn:
+                row = conn.execute(sa_text(
+                    "SELECT sync_logos FROM sync_targets WHERE name='KeepMe'"
+                )).fetchone()
+            assert row is not None and row[0] == 0
+        finally:
+            engine.dispose()
+
+
 class TestForeignKeyEnforcement:
     """SQLite silently accepts FK violations unless PRAGMA foreign_keys=ON.
 

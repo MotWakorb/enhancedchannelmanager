@@ -94,6 +94,8 @@ class SyncTargetCreate(BaseModel):
     enabled: bool = True
     insecure: bool = False
     fuzzy_stream_matching: bool = False
+    # Opt-in logo replication (bead 7ipq2.1) — default OFF (ADR-013 S9).
+    sync_logos: bool = False
 
     @field_validator("base_url")
     @classmethod
@@ -108,6 +110,7 @@ class SyncTargetUpdate(BaseModel):
     enabled: Optional[bool] = None
     insecure: Optional[bool] = None
     fuzzy_stream_matching: Optional[bool] = None
+    sync_logos: Optional[bool] = None
 
     @field_validator("base_url")
     @classmethod
@@ -131,6 +134,7 @@ class SyncTargetResponse(BaseModel):
     last_outcome: Optional[str] = None
     last_source_fingerprint: Optional[str] = None
     fuzzy_stream_matching: bool
+    sync_logos: bool
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -174,6 +178,41 @@ def _serialize(target: SyncTarget, plaintext_creds: Optional[dict] = None) -> di
 
 
 # ---------------------------------------------------------------------------
+# Per-target sync task lifecycle hooks (7ipq2.3 / ADR-013 S6)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_sync_task_best_effort(target_id: int, target_name: str) -> None:
+    """Register/refresh this target's ``dbas_sync_<id>`` task, best-effort.
+
+    Task registration must never fail the CRUD write that already committed —
+    on failure the target simply has no schedulable task until the next
+    startup reconcile (``register_sync_target_tasks``), and we log loudly.
+    Lazy import: routers load before the tasks package during startup.
+    """
+    try:
+        from tasks.dbas_sync import ensure_sync_target_task
+
+        ensure_sync_target_task(target_id, target_name)
+    except Exception as e:
+        logger.warning(
+            "[SYNC] Failed to register sync task for target %s: %s", target_id, e
+        )
+
+
+def _remove_sync_task_best_effort(target_id: int) -> None:
+    """Unregister a deleted target's task + prune its schedule rows, best-effort."""
+    try:
+        from tasks.dbas_sync import remove_sync_target_task
+
+        remove_sync_target_task(target_id)
+    except Exception as e:
+        logger.warning(
+            "[SYNC] Failed to remove sync task for target %s: %s", target_id, e
+        )
+
+
+# ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
 
@@ -193,6 +232,7 @@ async def create_sync_target(req: SyncTargetCreate, _admin=RequireAdminIfEnabled
             enabled=req.enabled,
             insecure=req.insecure,
             fuzzy_stream_matching=req.fuzzy_stream_matching,
+            sync_logos=req.sync_logos,
         )
         db.add(target)
         db.commit()
@@ -206,6 +246,7 @@ async def create_sync_target(req: SyncTargetCreate, _admin=RequireAdminIfEnabled
             entity_id=target.id,
         )
         logger.info("[SYNC] Created sync target id=%s name=%s", target.id, target.name)
+        _ensure_sync_task_best_effort(target.id, target.name)
         return _serialize(target, plaintext_creds=req.credentials)
     except HTTPException:
         raise
@@ -270,6 +311,8 @@ async def update_sync_target(target_id: int, req: SyncTargetUpdate, _admin=Requi
             target.insecure = req.insecure
         if req.fuzzy_stream_matching is not None:
             target.fuzzy_stream_matching = req.fuzzy_stream_matching
+        if req.sync_logos is not None:
+            target.sync_logos = req.sync_logos
         if req.credentials is not None:
             target.credentials = encrypt_credentials(req.credentials)
 
@@ -284,6 +327,8 @@ async def update_sync_target(target_id: int, req: SyncTargetUpdate, _admin=Requi
             entity_id=target.id,
         )
         logger.info("[SYNC] Updated sync target id=%s", target_id)
+        # A rename must reach the per-target task's display name (same id).
+        _ensure_sync_task_best_effort(target.id, target.name)
         # Mask the just-written plaintext when credentials were supplied; else
         # decrypt-and-mask the stored ciphertext.
         return _serialize(target, plaintext_creds=req.credentials if req.credentials is not None else None)
@@ -318,6 +363,7 @@ async def delete_sync_target(target_id: int, _admin=RequireAdminIfEnabled):
             entity_id=target_id,
         )
         logger.info("[SYNC] Deleted sync target id=%s name=%s", target_id, name)
+        _remove_sync_task_best_effort(target_id)
     except HTTPException:
         raise
     except Exception as e:

@@ -48,7 +48,17 @@ class TestPrivilegedTaskRunGate:
             {"dbas_restore", "dbas_backup", "dbas_sync"}
         )
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    async def test_per_target_sync_prefix_is_privileged(self):
+        """7ipq2.3: sync tasks are registered per target (dbas_sync_<id>), so
+        the gate matches the prefix family too — the outbound-write surface
+        did not stop being privileged because the id grew a suffix."""
+        from routers.tasks import is_privileged_task_id
+
+        assert is_privileged_task_id("dbas_sync_1")
+        assert is_privileged_task_id("dbas_sync_12345")
+        assert not is_privileged_task_id("cleanup")
+
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_non_admin_run_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 
@@ -65,7 +75,7 @@ class TestPrivilegedTaskRunGate:
         # The engine must never have been reached for a refused privileged task.
         engine.run_task.assert_not_called()
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_admin_run_privileged_task_allowed(self, async_client, task_id):
         from main import app
 
@@ -118,7 +128,7 @@ class TestPrivilegedTaskRunGate:
 
 @pytest.mark.asyncio
 class TestPrivilegedTaskCancelGate:
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_non_admin_cancel_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 

@@ -45,15 +45,18 @@ def _run_entrypoint_launch_logic(loop_env_value, extra_env=None):
     script = (BACKEND_DIR / "entrypoint.sh").read_text()
     marker = "ECM_LIMIT_CONCURRENCY="
     tail = script[script.index(marker):]
-    exec_prefix = "exec gosu appuser uvicorn"
+    # ``$ECM_UVICORN`` is resolved at the top of the script (bead
+    # enhancedchannelmanager-0oi96) and so is supplied via the harness env
+    # below; leaving the expansion in place keeps its quoting under test.
+    exec_prefix = 'exec gosu appuser "$ECM_UVICORN"'
     assert exec_prefix in tail, "entrypoint.sh launch line moved — update test"
-    tail = tail.replace(exec_prefix, "dump_argv uvicorn")
+    tail = tail.replace(exec_prefix, 'dump_argv "$ECM_UVICORN"')
     harness = (
         'print_warning() { echo "WARN:$1"; }\n'
         'dump_argv() { for a in "$@"; do printf "ARGV:%s\\n" "$a"; done; }\n'
         + tail
     )
-    env = {"PATH": "/usr/bin:/bin", "ECM_PORT": "6100"}
+    env = {"PATH": "/usr/bin:/bin", "ECM_PORT": "6100", "ECM_UVICORN": "uvicorn"}
     if loop_env_value is not None:
         env["ECM_UVICORN_LOOP"] = loop_env_value
     if extra_env:

@@ -252,6 +252,8 @@ class TestCreateSyncTarget:
         assert body["credentials"] == {"token": "abc123"}
         assert body["enabled"] is True
         assert body["insecure"] is False
+        # Logo sync is OPT-IN (bead 7ipq2.1) — default OFF on create.
+        assert body["sync_logos"] is False
         text = _text(result)
         assert "id=5" in text
         assert "abc123" not in text
@@ -281,6 +283,20 @@ class TestUpdateSyncTarget:
 
         body = client.call_endpoint.call_args.kwargs["body"]
         assert body == {"enabled": False}
+
+    @pytest.mark.asyncio
+    async def test_forwards_sync_logos_opt_in(self):
+        mcp = _sync_mcp()
+        client = AsyncMock()
+        client.call_endpoint.return_value = {"id": 5, "name": "DR Site"}
+
+        with patch("tools.sync_targets.get_ecm_client", return_value=client):
+            await mcp.call_tool(
+                "update_sync_target", {"target_id": 5, "sync_logos": True}
+            )
+
+        body = client.call_endpoint.call_args.kwargs["body"]
+        assert body == {"sync_logos": True}
 
     @pytest.mark.asyncio
     async def test_no_changes_short_circuits(self):

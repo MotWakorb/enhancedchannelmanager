@@ -969,3 +969,78 @@ async def test_epg_wait_skipped_on_dry_run_and_when_nothing_created(tmp_path):
     )
     client2.refresh_epg_source.assert_not_awaited()
     client2.get_epg_source.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Deferred-phase note accuracy (bead 7ipq2.2 — live validation finding)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deferred_note_reflects_what_the_apply_fn_actually_applied(tmp_path):
+    """The 'deferred auto-sync applied' note must count what the apply fn
+    RETURNED (per-account summaries), not what was queued. On the sync path the
+    injected apply fn (``tasks.dbas_sync_engine._no_deferred_apply``, ADR-013
+    S9) suppresses the deferred phase and returns ``[]`` — the live-validation
+    run showed the report still claimed 'deferred auto-sync applied for 1
+    account(s)', a false statement in an operator-facing audit surface."""
+
+    def _creating_step(entity_type, dest_id, defers=None):
+        async def _importer(ctx):
+            cat = ctx.report.category(entity_type)
+            cat.created += 1
+            ctx.ledger.record_created(entity_type, dest_id, "x")
+            return defers
+
+        return ImporterStep(entity_type, _importer)
+
+    async def _suppressing_apply(*, deferred, client):
+        return []  # sync-path posture: drop the deferred settings on the floor
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    out = await run_restore(
+        plan=plan,
+        client=_client(),
+        steps=[
+            _creating_step(
+                EntityType.M3U_ACCOUNT,
+                901,
+                defers=[{"m3u_account_id": 901, "settings": {}}],
+            )
+        ],
+        report=report,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        deferred_apply_fn=_suppressing_apply,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.SUCCESS
+    assert not any("deferred auto-sync applied" in n for n in out.notes)
+
+    # And an apply fn that DID apply reports the applied count.
+    async def _applying_apply(*, deferred, client):
+        return [{"m3u_account_id": e["m3u_account_id"]} for e in deferred]
+
+    report2 = _report()
+    out2 = await run_restore(
+        plan=plan,
+        client=_client(),
+        steps=[
+            _creating_step(
+                EntityType.M3U_ACCOUNT,
+                902,
+                defers=[{"m3u_account_id": 902, "settings": {}}],
+            )
+        ],
+        report=report2,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        deferred_apply_fn=_applying_apply,
+        ledger_dir=tmp_path,
+    )
+    assert any(
+        "deferred auto-sync applied for 1 account(s)" in n for n in out2.notes
+    )

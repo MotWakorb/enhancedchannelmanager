@@ -42,13 +42,18 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | Stream profiles | Profile definitions. |
 | Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. |
 
+### Opt-in per target
+
+| Category | Notes |
+|-|-|
+| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate locally-hosted logo files each cycle. Only logos B is missing are uploaded (matched by id, name, then filename), streamed one file at a time; sync never deletes or bulk-clears B's existing logos. |
+
 ### Never synced
 
 | Category | Why |
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced — it cannot be configured away. |
 | **Credentials** | M3U passwords, EPG passwords, API tokens. Redacted before transmission to avoid streaming live secrets on a recurring schedule. Migrate secrets via encrypted backup. |
-| **Logos** | Excluded from the per-cycle slice in v0.18.1. Will be added in a later release once the cost of streaming logo assets per-interval is measured. |
 
 ---
 
@@ -92,6 +97,8 @@ After a successful apply, the target row shows the last sync timestamp and the o
 
 ECM now runs sync automatically at the configured interval. You can still trigger a manual sync at any time with **Sync now**.
 
+If you have several sync targets, they sync independently and can run at the same time — a slow or unreachable target never delays the others. ECM never runs two syncs against the *same* target at once (a second attempt while one is in progress is refused and simply runs on its next interval), and it caps how many targets sync simultaneously (3 by default; the `ECM_SYNC_MAX_CONCURRENT` environment variable adjusts it — extra targets wait their turn rather than being skipped).
+
 ### The kill switch
 
 The **Enable** toggle on each target is the kill switch. Flipping it off immediately stops all scheduled runs for that target. The target definition (URL, credentials, interval) is preserved. Flip it back on to resume.
@@ -117,6 +124,8 @@ After the initial seeding via encrypted backup, sync keeps B current. You only n
 Sync uses a **source-wins** policy: when a configuration item exists on both A and B with matching identity, A's version is applied to B.
 
 One case surfaces as a conflict rather than a silent overwrite: **a channel with no channel number that ambiguously matches a no-number channel on B** (same name, both with null channel numbers). ECM cannot safely determine whether these are the same channel, so it skips the item and surfaces a `CONFLICT` result in the sync report. Assign channel numbers on A to resolve the ambiguity, then re-sync.
+
+**What "overwritten by A" means in practice** (live-validated): sync converges by *recreate*, not by pruning. If you **delete** an item on B, the next cycle recreates it from A (a deleted channel comes back with its streams re-attached). If you **rename** an item on B, the next cycle recreates A's version alongside it — the renamed copy is now a B-local extra that sync will **not** delete (sync never deletes anything on B). Clean up B-local extras by hand if they matter to you, or avoid editing B directly.
 
 ---
 

@@ -940,3 +940,287 @@ async def test_miss_detail_ignores_channels_referencing_other_logos():
     )
     channels = report.logo_miss_details[0].channels
     assert [(c.channel_id, c.name) for c in channels] == [(505, "ESPN")]
+
+
+# ===========================================================================
+# D. CONTENT PROVIDER — lazy per-logo hydration for the sync path
+#    (bead enhancedchannelmanager-7ipq2.1; ADR-013 S9 exit path / D8 streaming).
+#
+#    Cross-instance sync assembles LOGO records METADATA-ONLY (no content_b64 in
+#    the plan — holding every logo's base64 at once would defeat D8). The
+#    importer accepts an optional async ``content_provider`` that is called
+#    lazily, ONE MISSED LOGO AT A TIME, to fetch that logo's base64 payload just
+#    before validation+upload. The restore path passes no provider and is
+#    byte-for-byte unchanged.
+# ===========================================================================
+
+
+def _metadata_logo(*, src_id=None, name="Logo", filename="logo.png", size=None):
+    """A metadata-only record (NO content_b64) — the sync plan shape."""
+    rec = {"id": src_id, "name": name, "filename": filename}
+    if size is not None:
+        rec["size"] = size
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_provider_hydrates_missed_logo_and_uploads():
+    """A metadata-only miss is hydrated via the provider and uploaded."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+
+    async def _provider(record):
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[_metadata_logo(src_id=7, name="ESPN", filename="espn.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    client.upload_logo_file.assert_awaited_once()
+    # The upload received the DECODED bytes the provider supplied.
+    upload_args = client.upload_logo_file.await_args.args
+    assert upload_args[2] == _PNG
+    assert report.category(EntityType.LOGO).created == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_interleaves_one_logo_at_a_time():
+    """D8: fetch L0 -> upload L0 -> fetch L1 -> upload L1 — never fetch-all-
+    then-upload. The provider and the upload share one event log; a strict
+    alternation proves at most ONE hydrated payload is live at a time."""
+    report, ledger, remap = _ctx()
+    events = []
+
+    async def _provider(record):
+        events.append(("fetch", record["name"]))
+        return _b64(_PNG)
+
+    async def _upload(name, filename, content, content_type):
+        events.append(("upload", name))
+        return {"id": 9100 + len(events), "name": name}
+
+    client = _client(dest_logos=[], upload_side_effect=_upload)
+    await import_logos(
+        archive_logos=[
+            _metadata_logo(src_id=1, name="L0", filename="l0.png"),
+            _metadata_logo(src_id=2, name="L1", filename="l1.png"),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    assert events == [
+        ("fetch", "L0"), ("upload", "L0"), ("fetch", "L1"), ("upload", "L1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provider_never_called_for_matched_logo():
+    """A tier-matched logo is never hydrated — bytes are fetched ONLY for
+    misses (cheaper than restore, which carries bytes for everything)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[{"id": 801, "name": "ESPN"}])
+    calls = []
+
+    async def _provider(record):
+        calls.append(record["name"])
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[_metadata_logo(src_id=7, name="ESPN", filename="espn.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    assert calls == []
+    client.upload_logo_file.assert_not_awaited()
+    assert report.category(EntityType.LOGO).skipped == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_returning_none_is_per_logo_failure():
+    """A provider miss (None) fails THAT logo (VALIDATION_ERROR, path-free
+    message) and the loop continues — the next logo still uploads."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+
+    async def _provider(record):
+        if record["name"] == "Broken":
+            return None
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[
+            _metadata_logo(src_id=1, name="Broken", filename="broken.png"),
+            _metadata_logo(src_id=2, name="Good", filename="good.png"),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    cat = report.category(EntityType.LOGO)
+    assert cat.failed == 1
+    assert cat.created == 1
+    detail = cat.failure_details[0]
+    assert detail.reason == FailureReason.VALIDATION_ERROR
+    assert detail.label == "Broken"
+    assert "read" in detail.message
+    # Path hygiene: no path/url marker in the message.
+    assert "/" not in detail.message and "\\" not in detail.message
+
+
+@pytest.mark.asyncio
+async def test_provider_exception_is_per_logo_failure_not_a_crash():
+    """A provider exception is contained per-logo (never crashes the cycle)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+
+    async def _provider(record):
+        raise OSError("disk read failed under /secret/path/logo.png")
+
+    await import_logos(
+        archive_logos=[_metadata_logo(src_id=1, name="Boom", filename="boom.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    cat = report.category(EntityType.LOGO)
+    assert cat.failed == 1
+    client.upload_logo_file.assert_not_awaited()
+    # The raw OSError text (which can carry a path) must NOT leak.
+    assert "/secret/path" not in cat.failure_details[0].message
+
+
+@pytest.mark.asyncio
+async def test_provider_not_called_when_declared_size_over_cap():
+    """The declared-size pre-check runs BEFORE hydration — we never read a file
+    we already know is over the 50MB cap."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    calls = []
+
+    async def _provider(record):
+        calls.append(record["name"])
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[
+            _metadata_logo(src_id=1, name="TooBig", filename="big.png",
+                           size=MAX_LOGO_BYTES + 1),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    assert calls == []
+    cat = report.category(EntityType.LOGO)
+    assert cat.failed == 1
+    assert "50MB" in cat.failure_details[0].message
+
+
+@pytest.mark.asyncio
+async def test_provider_not_called_for_unsafe_filename():
+    """The basename/traversal guard runs BEFORE hydration."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    calls = []
+
+    async def _provider(record):
+        calls.append(record["name"])
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[
+            _metadata_logo(src_id=1, name="Evil", filename="../../etc/passwd"),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_provider,
+    )
+    assert calls == []
+    assert report.category(EntityType.LOGO).failed == 1
+    client.upload_logo_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_hydration_never_mutates_the_plan_record():
+    """D8 no-accumulation pin: the caller's record dicts stay METADATA-ONLY
+    after the run — hydrated payloads live on per-iteration copies only."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    records = [
+        _metadata_logo(src_id=1, name="L0", filename="l0.png"),
+        _metadata_logo(src_id=2, name="L1", filename="l1.png"),
+    ]
+
+    async def _provider(record):
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=records, client=client, selected=True,
+        report=report, ledger=ledger, remap=remap, content_provider=_provider,
+    )
+    assert client.upload_logo_file.await_count == 2
+    for rec in records:
+        assert "content_b64" not in rec
+
+
+@pytest.mark.asyncio
+async def test_provider_dry_run_validates_but_never_uploads():
+    """Dry-run with a provider still hydrates+validates (the preview's counts
+    match what apply would do) but uploads nothing."""
+    report = RestoreReport(is_dry_run=True)
+    ledger, remap = RollbackLedger(restore_id="t"), IdRemapTable()
+    client = _client(dest_logos=[])
+
+    async def _provider(record):
+        return _b64(_PNG)
+
+    await import_logos(
+        archive_logos=[_metadata_logo(src_id=1, name="L0", filename="l0.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        is_dry_run=True, content_provider=_provider,
+    )
+    client.upload_logo_file.assert_not_awaited()
+    cat = report.category(EntityType.LOGO)
+    assert cat.would_create == 1
+    assert report.logo_misses == 1
+
+
+# ===========================================================================
+# Content-type derivation from validated magic bytes (bead 7ipq2.2 —
+# live-validation finding): sync-gathered logo records are METADATA-ONLY and
+# carry no declared content_type, so the upload fell back to
+# application/octet-stream — which a real Dispatcharr 0.28.2 upload endpoint
+# REJECTS ("Unsupported file type") even though the bytes were a valid PNG.
+# The importer already magic-validates the bytes; the upload content-type is
+# derived from that same validated magic when no usable declared type exists.
+# ===========================================================================
+
+async def test_missing_declared_content_type_derives_from_magic_bytes():
+    """A record with NO content_type key (the sync live-gather shape) uploads
+    with the magic-derived image type, never application/octet-stream."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=7, name="SyncLogo")
+    del logo["content_type"]
+
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+
+    client.upload_logo_file.assert_awaited_once()
+    sent_content_type = client.upload_logo_file.await_args.args[3]
+    assert sent_content_type == "image/png"
+
+
+async def test_declared_image_content_type_still_wins_over_magic():
+    """A usable declared image/* content-type is passed through unchanged
+    (advisory declared type honored; magic only fills the gap)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    logo = _logo(src_id=8, name="DeclaredLogo", content_type="image/x-png")
+
+    await import_logos(
+        archive_logos=[logo], client=client, selected=True,
+        report=report, ledger=ledger, remap=remap,
+    )
+
+    sent_content_type = client.upload_logo_file.await_args.args[3]
+    assert sent_content_type == "image/x-png"

@@ -71,8 +71,31 @@ export function SyncTargetsCard() {
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState<AddForm>(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
-  // Per-target id currently busy with a sync/preview/apply/toggle/delete op.
-  const [busyId, setBusyId] = useState<number | null>(null);
+  // Target ids currently busy with a sync/preview/apply/toggle/delete op.
+  // A SET, not a scalar: with per-target sync tasks (7ipq2.3) two targets can
+  // legitimately be in flight at once, and a scalar marker let starting B
+  // overwrite A's state — B finishing then re-enabled A's row mid-request, so
+  // the next click hit the backend's per-target lock with an avoidable
+  // ALREADY_RUNNING (PR #752 review).
+  const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
+
+  // Functional updates throughout — two concurrent handlers must not clobber
+  // each other's entry by writing a value derived from a stale render.
+  const markBusy = useCallback((id: number) => {
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearBusy = useCallback((id: number) => {
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
   // Targets that have a successful preview pending, so Apply is offered.
   const [previewedIds, setPreviewedIds] = useState<Set<number>>(new Set());
 
@@ -125,7 +148,7 @@ export function SyncTargetsCard() {
 
   const handleToggleEnabled = useCallback(
     async (target: api.SyncTarget) => {
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
         await api.updateSyncTarget(target.id, { enabled: !target.enabled });
         notifications.success(
@@ -139,10 +162,10 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
   const handleDelete = useCallback(
@@ -152,7 +175,7 @@ export function SyncTargetsCard() {
           `It does NOT undo any config already pushed to B.`,
       );
       if (!ok) return;
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
         await api.deleteSyncTarget(target.id);
         notifications.success(`Deleted sync target '${target.name}'`, 'Cross-Instance Sync');
@@ -168,17 +191,22 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
   const handlePreview = useCallback(
     async (target: api.SyncTarget) => {
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        // Per-target task id (7ipq2.3 / ADR-013 S6): each target owns
+        // `dbas_sync_<id>`, so two targets can sync concurrently while the
+        // engine still refuses a second run against the SAME target.
+        // sync_target_id stays in the payload as a self-documenting
+        // cross-check — the backend hard-fails on a mismatch.
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: false,
         });
@@ -200,10 +228,10 @@ export function SyncTargetsCard() {
           'Sync Preview (dry run)',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications],
+    [notifications, markBusy, clearBusy],
   );
 
   const handleApply = useCallback(
@@ -214,9 +242,9 @@ export function SyncTargetsCard() {
           `Credentials are NOT pushed — re-enter them on B.`,
       );
       if (!ok) return;
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: true,
         });
@@ -243,10 +271,10 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
   const updateForm = <K extends keyof AddForm>(key: K, value: AddForm[K]) =>
@@ -290,7 +318,7 @@ export function SyncTargetsCard() {
         <div className="stc-target-list">
           {targets.map((target) => {
             const kind = outcomeKind(target.last_outcome);
-            const busy = busyId === target.id;
+            const busy = busyIds.has(target.id);
             const previewed = previewedIds.has(target.id);
             return (
               <div

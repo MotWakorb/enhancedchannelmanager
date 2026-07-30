@@ -139,6 +139,10 @@ def _sync_target(*, credential_version: int = 1) -> MagicMock:
     target.token_revoked_at = None
     target.credential_version = credential_version
     target.credentials = "encrypted-blob"
+    # Explicit booleans — a bare MagicMock attribute is TRUTHY, which would
+    # silently opt every test into fuzzy matching / logo sync.
+    target.fuzzy_stream_matching = False
+    target.sync_logos = False
     return target
 
 
@@ -823,3 +827,273 @@ async def test_sync_fuzzy_opt_in_attaches_low_confidence(tmp_path):
 
     assert report.category(EntityType.STREAM).updated == 1
     assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)
+
+
+# ---------------------------------------------------------------------------
+# LOGOS sync (bead 7ipq2.1) — per-target OPT-IN (ADR-013 S9: logos are NOT in
+# the unconditional per-cycle set), never destructive, metadata-only plan (D8
+# streaming: bytes hydrate lazily per-logo at import time, misses only).
+# ---------------------------------------------------------------------------
+
+
+def _seed_logo_files(config_dir, files=("cnn.png", "espn.png")):
+    """Create real logo files under <config_dir>/uploads/logos (a valid PNG)."""
+    import base64 as _b64mod
+
+    png = _b64mod.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    logos_dir = config_dir / "uploads" / "logos"
+    logos_dir.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        (logos_dir / name).write_bytes(png)
+    return png
+
+
+def _source_client_with_logos() -> MagicMock:
+    """A source client whose Dispatcharr logo records correlate cnn.png."""
+    client = _source_client()
+    client.get_all_logos_paginated = AsyncMock(
+        return_value=[
+            {"id": 77, "name": "CNN Logo", "url": "http://a/data/logos/cnn.png"},
+        ]
+    )
+    return client
+
+
+def _dest_client_with_logos(*, dest_logos=None) -> AsyncMock:
+    """An empty-config dest-B that answers the logo surface."""
+    client = _dest_client_for_channels()
+    client.get_all_logos_paginated = AsyncMock(return_value=dest_logos or [])
+    counter = {"n": 9000}
+
+    async def _upload(name, filename, content, content_type):
+        counter["n"] += 1
+        return {"id": counter["n"], "name": name}
+
+    client.upload_logo_file = AsyncMock(side_effect=_upload)
+    client.bulk_delete_logos = AsyncMock(return_value={"deleted": 0})
+    return client
+
+
+def test_logo_category_constant_is_opt_in_and_disjoint():
+    """Logos are an OPT-IN category set — never in the unconditional per-cycle
+    set (ADR-013 S9) and never overlapping the never-sync set (D3)."""
+    from tasks.dbas_sync_engine import (
+        SYNC_ALL_CATEGORIES,
+        SYNC_LOGO_CATEGORIES,
+    )
+
+    assert SYNC_LOGO_CATEGORIES == frozenset({"logos"})
+    assert SYNC_LOGO_CATEGORIES.isdisjoint(SYNC_ALL_CATEGORIES)
+    assert SYNC_LOGO_CATEGORIES.isdisjoint(SYNC_NEVER_CATEGORIES)
+
+
+def test_sync_registry_carries_channel_and_logo_steps_once():
+    """kxcjf parity pin: the sync path has ONE registry serving BOTH dry-run
+    and apply (run_sync threads the same steps list either way), and that
+    registry ends CHANNEL -> LOGO (after every config dependency). A future
+    edit cannot add the logo step to one mode and not the other — there is
+    only one list to edit."""
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    steps = sync_config_importer_steps()
+    order = [s.entity_type for s in steps]
+    assert order[-2:] == [EntityType.CHANNEL, EntityType.LOGO]
+    assert order.count(EntityType.LOGO) == 1
+    assert EntityType.USER not in order
+
+
+@pytest.mark.asyncio
+async def test_plan_excludes_logos_unless_opted_in(tmp_path):
+    """Default (include_logos=False): no LOGO category even when source logo
+    files exist — the existing default-plan pin stays true."""
+    _seed_logo_files(tmp_path)
+    with patch.object(backup_mod, "get_client", return_value=_source_client_with_logos()), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan()
+    assert plan.category(EntityType.LOGO) is None
+
+
+@pytest.mark.asyncio
+async def test_plan_opt_in_appends_metadata_only_logo_category_last(tmp_path):
+    """include_logos=True appends the LOGO category LAST, records are
+    METADATA-ONLY (no content_b64 in the plan — the D8 pin) and carry the
+    source-correlation id when the basename joins a Dispatcharr logo record."""
+    _seed_logo_files(tmp_path)
+    with patch.object(backup_mod, "get_client", return_value=_source_client_with_logos()), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    assert plan.categories[-1].entity_type == EntityType.LOGO
+    logo_cat = plan.category(EntityType.LOGO)
+    assert {e["filename"] for e in logo_cat.entities} == {"cnn.png", "espn.png"}
+    for entity in logo_cat.entities:
+        assert "content_b64" not in entity  # D8: never bytes in the plan.
+        assert isinstance(entity.get("size"), int)
+    correlated = next(e for e in logo_cat.entities if e["filename"] == "cnn.png")
+    assert correlated["id"] == 77
+    assert correlated["name"] == "CNN Logo"
+    uncorrelated = next(e for e in logo_cat.entities if e["filename"] == "espn.png")
+    assert "id" not in uncorrelated or uncorrelated.get("id") is None
+    assert uncorrelated["name"] == "espn"  # basename-stem fallback (decoder parity)
+
+
+@pytest.mark.asyncio
+async def test_run_sync_logos_off_by_default_touches_no_logo_surface(tmp_path):
+    """sync_logos=False (default): B's logo surface is never even listed."""
+    _seed_logo_files(tmp_path)
+    src = _source_client_with_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()  # sync_logos=False
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.get_all_logos_paginated.assert_not_called()
+    dest.upload_logo_file.assert_not_called()
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 0 and cat.would_create == 0
+
+
+@pytest.mark.asyncio
+async def test_run_sync_logos_dry_run_counts_misses_zero_uploads(tmp_path):
+    """Opt-in + dry-run: missed logos are counted (would_create) with ZERO
+    uploads and ZERO deletes."""
+    _seed_logo_files(tmp_path)
+    src = _source_client_with_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(target, session=MagicMock(), ledger_dir=tmp_path)
+
+    assert report.is_dry_run is True
+    dest.upload_logo_file.assert_not_called()
+    dest.bulk_delete_logos.assert_not_called()
+    assert report.category(EntityType.LOGO).would_create == 2
+    assert report.logo_misses == 2
+
+
+@pytest.mark.asyncio
+async def test_run_sync_logos_apply_uploads_misses_skips_matches(tmp_path):
+    """Opt-in + apply: a B-side match skips (never re-uploaded); a miss uploads
+    via the streaming path; the destructive bulk-delete NEVER fires on the sync
+    path (code-enforced clear_existing=False)."""
+    png = _seed_logo_files(tmp_path)
+    src = _source_client_with_logos()
+    # B already has the CNN logo (tier-2 name match); espn is a miss.
+    dest = _dest_client_with_logos(
+        dest_logos=[{"id": 8801, "name": "CNN Logo", "url": "http://b/data/logos/cnn.png"}]
+    )
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    dest.upload_logo_file.assert_awaited_once()
+    upload_args = dest.upload_logo_file.await_args.args
+    assert upload_args[1] == "espn.png"
+    assert upload_args[2] == png  # real file bytes travelled the lazy path
+    dest.bulk_delete_logos.assert_not_called()  # NEVER destructive on sync.
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 1
+    assert cat.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# Persisted sync state (bead 7ipq2.2 — live-validation finding): the DBA-ruled
+# sync_targets columns (last_full_sync_at / last_outcome, migration 0024) were
+# never stamped by any code path — the operator status surface stayed NULL
+# forever. run_sync stamps them post-run when it has a session.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_sync_apply_success_stamps_persisted_state(tmp_path):
+    """A realized apply stamps last_outcome; a FULL success also stamps
+    last_full_sync_at. Committed through the caller's session."""
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=session, ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert target.last_outcome == "success"
+    assert target.last_full_sync_at is not None
+    session.commit.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_dry_run_does_not_stamp_persisted_state(tmp_path):
+    """A dry-run is a plan, not a sync — it must NOT stamp last_outcome or
+    last_full_sync_at (the staleness surface would otherwise read a preview
+    as B being kept current)."""
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=False, session=session, ledger_dir=tmp_path,
+        )
+
+    assert report.is_dry_run is True
+    assert target.last_outcome is None
+    assert target.last_full_sync_at is None
+
+
+@pytest.mark.asyncio
+async def test_run_sync_partial_apply_stamps_outcome_but_not_full_sync_time(tmp_path):
+    """A mixed apply stamps last_outcome with the tri-state value but NEVER
+    advances last_full_sync_at — only a FULL success counts as 'B was current
+    as of this time' (mirrors the last-success gauge contract)."""
+    src = _source_client_with_duplicate_channel_groups()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    target.last_outcome = None
+    target.last_full_sync_at = None
+    session = MagicMock()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=session, ledger_dir=tmp_path,
+        )
+
+    # The duplicate-name CONFLICT makes the realized outcome non-SUCCESS.
+    assert report.outcome != RestoreOutcome.SUCCESS
+    assert target.last_outcome == report.outcome.value
+    assert target.last_full_sync_at is None

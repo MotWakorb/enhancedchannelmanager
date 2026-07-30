@@ -139,7 +139,37 @@ _REMAPPABLE_FK_FIELDS = {
 _NON_REMAPPABLE_FK_KEYS = frozenset({"logo_id", "epg_data_id"})
 
 # Archive-source identifiers the destination assigns itself, never forwarded.
-_SOURCE_ID_KEYS = frozenset({"id", "pk"})
+# ``uuid`` is the same class as id/pk: Dispatcharr mints one per channel row;
+# forwarding A's uuid to B would alias two distinct rows under one identity.
+_SOURCE_ID_KEYS = frozenset({"id", "pk", "uuid"})
+
+# Source-side provenance + derived echoes a LIVE channel GET carries that the
+# DBAS archive shape never had (live two-instance validation, bead 7ipq2.2 —
+# field survey of a real Dispatcharr 0.28.2 response is in the bead):
+#
+# * ``auto_created_by`` is an A-LOCAL pk (the auto-creating M3U account). On a
+#   real Dispatcharr-B it made EVERY channel create fail
+#   ``400 {"auto_created_by": ["Invalid pk \"17\" - object does not exist."]}``.
+# * ``auto_created=true`` marks a channel as owned by the destination's own
+#   auto-create lifecycle — Dispatcharr garbage-collects auto-created channels
+#   whose backing stream disappears, which must never happen to a synced
+#   replica row B cannot re-derive.
+# * ``auto_created_by_name`` / ``source_stream`` / ``override`` are read-only
+#   derived echoes; ``effective_*`` (matched by prefix in
+#   :func:`_build_create_payload`) are the resolved-value echoes.
+_SOURCE_PROVENANCE_KEYS = frozenset(
+    {
+        "auto_created",
+        "auto_created_by",
+        "auto_created_by_name",
+        "source_stream",
+        "override",
+    }
+)
+
+# Derived read-only echo prefix on live GET responses (effective_name,
+# effective_channel_number, ...) — dropped by prefix, never sent on a create.
+_DERIVED_ECHO_PREFIX = "effective_"
 
 # Embedded/derived keys that are NOT part of a channel create payload. ``streams``
 # is the stream-attachment SEAM owned by bead 0i2vt.14 — this importer strips it
@@ -160,7 +190,10 @@ _NON_CREATE_KEYS = frozenset(
 # this set — they are rewritten in-place to destination ids (or the channel is
 # skipped if unresolvable) rather than dropped.
 _DROPPED_CREATE_KEYS = (
-    _SOURCE_ID_KEYS | _NON_REMAPPABLE_FK_KEYS | _NON_CREATE_KEYS
+    _SOURCE_ID_KEYS
+    | _NON_REMAPPABLE_FK_KEYS
+    | _NON_CREATE_KEYS
+    | _SOURCE_PROVENANCE_KEYS
 )
 
 
@@ -182,7 +215,9 @@ def _build_create_payload(archive_channel: dict, remap: IdRemapTable) -> dict:
     ``streams`` seam owned by bead 0i2vt.14).
     """
     payload = {
-        k: v for k, v in archive_channel.items() if k not in _DROPPED_CREATE_KEYS
+        k: v
+        for k, v in archive_channel.items()
+        if k not in _DROPPED_CREATE_KEYS and not k.startswith(_DERIVED_ECHO_PREFIX)
     }
     for field, entity_type in _REMAPPABLE_FK_FIELDS.items():
         source_id = archive_channel.get(field)
