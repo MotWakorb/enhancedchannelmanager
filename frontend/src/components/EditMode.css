@@ -147,7 +147,7 @@
   display: flex;
   align-items: center;
   background-color: rgba(248, 113, 113, 0.2);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .edit-mode-banner-btn.discard:hover:not(:disabled) {
@@ -322,7 +322,7 @@
 
 .edit-mode-dialog-btn.danger {
   background-color: rgba(248, 113, 113, 0.2);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .edit-mode-dialog-btn.danger:hover:not(:disabled) {

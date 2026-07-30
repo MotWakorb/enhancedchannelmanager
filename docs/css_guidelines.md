@@ -76,9 +76,12 @@ Rail icons are chrome, not content, and keep their own 20px.
 
 ### Colour
 
-Bind meta and micro text to `--text-secondary`. Do **not** use `--text-muted`
-for them: in the light theme `--text-muted` measures 2.61:1 against
-`--bg-secondary`, below the WCAG AA 4.5:1 floor.
+Bind meta and micro text to `--text-secondary`. `--text-muted` used to measure
+2.61:1 against `--bg-secondary` in the light theme, below the WCAG AA 4.5:1
+floor; bead `enhancedchannelmanager-dlavh` re-toned the light theme's value to
+`#686868` and it now measures 5.11:1 there. The preference for
+`--text-secondary` on meta and micro text stands anyway — see the next
+paragraph for why the two are no longer distinguishable in that theme.
 
 `.micro-label` itself sets no colour — a micro label takes the colour of the
 thing it labels (a status word is green or red; a column header is
@@ -89,6 +92,97 @@ placeholder contrast is a separate question and was not bundled into the type
 sweep. Purely decorative non-text glyphs keep it too: `.empty-state
 .material-icons` is a 64px illustration, not text, so the 4.5:1 text floor
 does not apply to it.
+
+#### Muted is a dark-theme distinction
+
+AA leaves almost no room below `--text-secondary` on a light surface: 4.5:1
+against `--bg-secondary` (#f5f5f5) forbids anything lighter than #707070, and
+against the #ddd chip fill anything lighter than #616161. So in the light
+theme `--text-muted` (#686868) and `--text-secondary` (#616161) are within
+seven RGB units and read as the same colour. The token was not retired,
+because the step is real and passing in the other two themes — dark 4.82 vs
+6.46 on `--bg-secondary`, high contrast 8.52 vs 15.00. **Do not reach for
+`--text-muted` in the light theme expecting it to read as dimmer; it cannot.**
+
+#### Semantic colours have two jobs, and they are not the same colour
+
+`--success`, `--error` and `--warning` are each used both as a foreground
+(status text, status glyphs) and as a solid fill that carries text. Those two
+jobs pull in opposite directions, and a single token can only serve both when
+the theme happens to leave room:
+
+- **Light theme, `--success` and `--error`**: both jobs wanted the value
+  *darker*, so bead `dlavh` darkened the tokens in place (`#22c55e` →
+  `#137035`, `#ef4444` → `#c21111`) and both roles now pass.
+- **Light theme, `--warning`**: the fill carries `#1a1a1a` text at 8.10:1 and
+  must stay light, while as a foreground it measures 1.97:1. It is **not**
+  darkened. Warning-coloured *text* takes `--warning-text`, which exists for
+  exactly that — see `.status-pending` in `shared/common.css`.
+- **Dark and high-contrast, `--error`**: irreconcilable, and therefore split.
+  As text `#ef4444` measured 4.03:1 and wanted to go *lighter*; as a fill under
+  white it measured 3.76:1 (3.41 in high contrast) and wanted to go *darker*.
+  Bead `4l51b` resolved it by giving the token one job — see below.
+
+**`--error` is a fill only.** Bead `enhancedchannelmanager-4l51b` moved all 94
+`color: var(--error)` call sites — text *and* status glyphs — to
+`--danger-text`, then retoned `--error` for the fill alone: `#ef4444 → #dc2626`
+(dark) and `#ff4444 → #d81b1b` (high contrast); light stays `#c21111`, where
+both jobs had already converged. White-on-fill went 3.76 → 4.83 dark and
+3.41 → 5.13 high contrast. In the light theme `--danger-text` was retoned to
+`#c21111` — the same value as `--error` — so that the migration changed no
+rendered light-theme colour at all; the two tokens being identical there is
+deliberate, the same shape as `--text-muted` converging on `--text-secondary`.
+
+The general rule when you need a semantic colour: **`--success` and
+`--warning` are fills and status glyphs, `--error` is a fill only;
+`--danger-text` / `--warning-text` / `--info-text` are the foreground tones,
+and `--danger-text` covers red glyphs as well as red text.** `--success-text`
+is the odd one out — it means "text drawn ON a `--success` fill", not
+"success-coloured text". Reading it the other way put a white glyph on a white
+background at 1.09:1 (`.refresh-indicator.active`, bead `wjbwr`).
+
+The asymmetry is real and is not a tidiness bug: `--success` still does both
+jobs because in all three themes both jobs wanted the same value. Do not
+"harmonise" the three tokens back into one pattern.
+
+Where the two halves of the fix each paid off is worth knowing, because it is
+not symmetric across the themes. At the point `4l51b` started, `--danger-text`
+and `--error` held the *same* value (`#ff4444`) in the high-contrast theme — so
+the call-site migration alone is a no-op there, and every high-contrast gain
+comes from retoning `--error`. In the dark theme both halves contributed. In
+the light theme neither changes a rendered colour; the work there is purely
+making the roles say what they mean.
+
+**One documented exception.**
+`.dashboard-card-status.tone-danger .material-icons` in
+`components/tabs/OperatorDashboard.css` still reads `color: var(--error)`. It
+was not missed: that line arrived with in-flight uncommitted work (bead
+`2896r`) that `4l51b` was instructed not to touch, so migrating it would have
+meant editing someone else's open hunk. It is a Material Icons glyph on
+`--bg-secondary`, so it is measured against the 3:1 non-text floor rather than
+4.5:1, and it still clears it after the retone — 3.14:1 dark (down from 4.03),
+3.86:1 high contrast (down from 6.16), 5.70:1 light (unchanged). It is the one
+place in the app where `color: var(--error)` is not a defect, and it should be
+migrated to `--danger-text` when `2896r` lands.
+
+Two constraints on ever re-toning `--error`. White-on-fill and fill-against-
+page-background are both monotonic in the fill's luminance and pull opposite
+ways, so the AA text floor (4.5:1) and the WCAG 1.4.11 non-text floor (3:1)
+between them leave a window of roughly 0.174–0.183 relative luminance in the
+dark theme. Change one number and you must re-measure the other. And because
+the token no longer carries any foreground, a rule that reaches for
+`color: var(--error)` is now a defect, not a style preference.
+
+#### Theme-conditional colour lives beside the rule it corrects
+
+A chip that hardcodes a Tailwind 400-level ink on an alpha fill of the same hue
+is a dark-theme palette; on a pale row it collapses to 1.4–2.1:1. The house
+pattern is a `[data-theme="light"]` rule immediately after the base rule
+changing **only** the ink, so the fill — and therefore the chip's colour
+coding — is untouched. `.account-type.hdhr` (bead `sccol`) established it;
+`.account-type.xc` / `.std`, the Journal `.category-*` / `.source-*` families
+and `.group-auto-sync-badge` follow it (bead `dlavh`). Record the measured
+ratio before and after in the comment.
 
 ### What is *not* in this scale
 

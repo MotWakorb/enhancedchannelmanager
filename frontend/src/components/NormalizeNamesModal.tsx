@@ -122,7 +122,7 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
             </div>
           ) : error ? (
             <div className="modal-empty-state">
-              <span className="material-icons" style={{ color: 'var(--error)' }}>error</span>
+              <span className="material-icons" style={{ color: 'var(--danger-text)' }}>error</span>
               <p>{error}</p>
             </div>
           ) : normalizations.length === 0 ? (

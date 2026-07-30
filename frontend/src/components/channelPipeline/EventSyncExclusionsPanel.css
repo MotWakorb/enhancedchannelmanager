@@ -47,8 +47,18 @@
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  background: var(--accent-primary);
-  color: var(--text-on-accent, #fff);
+  /* Was `background: var(--accent-primary); color: var(--text-on-accent, #fff)`
+     — two defects stacked into one invisible pill. `--accent-primary` is
+     white in the dark theme and yellow in high contrast (docs/css_guidelines.md
+     § "Theme Variables" forbids it as a background for exactly this reason),
+     and `--text-on-accent` is defined nowhere in the tree, so the colour was
+     always the #fff fallback. White on white measured 1.00:1 dark and white on
+     yellow 1.07:1 high contrast: the count was not low-contrast, it was
+     absent. `--button-primary-bg` / `--button-primary-text` is the documented
+     safe pair and flips with the theme — 8.74 dark / 6.29 light / 19.56 high
+     contrast. Bead enhancedchannelmanager-dlavh. */
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
   line-height: var(--type-badge-line-height);

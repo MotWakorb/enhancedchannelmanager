@@ -29,7 +29,7 @@
 .sync-targets-card .stc-warning-oneway {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.25);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 /* Credentials-not-synced — caution level. */
@@ -145,7 +145,7 @@
 
 .sync-targets-card .stc-badge-failure {
   background: rgba(239, 68, 68, 0.12);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   border-color: rgba(239, 68, 68, 0.3);
 }
 
@@ -195,7 +195,7 @@
 }
 
 .sync-targets-card .stc-delete-btn {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 /* Kill-switch toggle */

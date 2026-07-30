@@ -52,7 +52,7 @@
 }
 
 .dup-merge-failed {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Group list */

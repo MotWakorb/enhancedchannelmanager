@@ -189,7 +189,7 @@
 }
 
 .task-editor-modal .schedule-action-btn.delete {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .task-editor-modal .schedule-action-btn.delete:hover {

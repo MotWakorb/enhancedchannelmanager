@@ -47,8 +47,14 @@
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  background: var(--accent-primary);
-  color: var(--text-on-accent, #fff);
+  /* Byte-identical twin of `.event-sync-exclusions-count` and it carried the
+     same pair of defects: `--accent-primary` as a background (white in dark,
+     yellow in high contrast) under an always-#fff fallback for the undefined
+     `--text-on-accent`. 1.00:1 dark, 1.07:1 high contrast — invisible.
+     Swapped to the documented safe pair: 8.74 / 6.29 / 19.56.
+     Bead enhancedchannelmanager-dlavh. */
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
   line-height: var(--type-badge-line-height);

@@ -1407,7 +1407,7 @@
 
 .modal-icon-btn.danger:hover {
   background-color: var(--error-bg);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 .modal-icon-btn .material-icons {
@@ -1473,7 +1473,7 @@
 .modal-btn-small.disable:hover {
   background-color: var(--error-bg);
   border-color: rgba(239, 68, 68, 0.3);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 

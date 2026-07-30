@@ -188,7 +188,7 @@
 
 .status-error .source-message,
 .epg-source-row:has(.status-error) .source-message {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Had no font-size at all, so it rendered at the UA default 16px. */

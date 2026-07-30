@@ -225,7 +225,7 @@
 }
 
 .brm-result-item.is-error {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 .brm-result-item.is-warning {

@@ -100,7 +100,7 @@
 }
 
 .summary-card.removed .summary-icon {
-  color: var(--error);
+  color: var(--danger-text);
   background-color: var(--error-bg);
 }
 
@@ -134,7 +134,7 @@
 }
 
 .summary-card.removed .summary-value {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .summary-label {

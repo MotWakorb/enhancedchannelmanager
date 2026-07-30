@@ -35,7 +35,7 @@
 .btn-test.btn-test-failed {
   background-color: var(--error-bg);
   border-color: var(--error);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .btn-test.btn-test-failed:hover:not(:disabled) {

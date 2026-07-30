@@ -126,7 +126,7 @@
   background-color: rgba(231, 76, 60, 0.15);
   border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 4px;
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
   line-height: var(--type-badge-line-height);
@@ -369,6 +369,11 @@
   border-color: var(--accent-primary);
 }
 
+/* Off the scale on purpose — see the same rule for `.filter-dropdown-button`
+   in shared/common.css § 12 for the full reasoning (bead
+   enhancedchannelmanager-6z299, completion pass). Short version: a `▼`
+   disclosure caret is a glyph, not text, and no P1 role fits it. The button
+   itself is on `--type-body-size`; only the caret is left literal. */
 .group-filter-button .dropdown-arrow {
   font-size: 0.6rem;
   color: var(--text-secondary);
@@ -827,6 +832,15 @@
   letter-spacing: var(--type-micro-tracking);
 }
 
+/* Cyan-400 on a cyan wash is a dark-theme pairing: 6.14:1 on the dark group
+   row, but 1.63:1 once the light theme puts a near-white row behind the same
+   15%-alpha fill. Re-inked to cyan-800 for light only — the fill and therefore
+   the badge's cyan identity are untouched. 1.63 -> 6.09.
+   Bead enhancedchannelmanager-dlavh. */
+[data-theme="light"] .group-auto-sync-badge {
+  color: #155e75;
+}
+
 .group-empty-badge {
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
@@ -856,6 +870,11 @@
   text-align: center;
 }
 
+/* The `▼︎`/`▶︎` expand caret in a group header (ChannelsPane.tsx:886). Same
+   verdict as the `.dropdown-arrow` family — a disclosure glyph, not text, so
+   no P1 role fits and 0.7rem stays (bead enhancedchannelmanager-6z299,
+   completion pass). Recorded here so the next sweep does not read the literal
+   as an oversight. `.group-name` beside it is on the item-title role. */
 .group-toggle {
   width: 1.25rem;
   font-size: 0.7rem;
@@ -922,7 +941,7 @@
   background-color: rgba(231, 76, 60, 0.15);
   border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 4px;
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
   line-height: var(--type-badge-line-height);
@@ -930,11 +949,11 @@
 
 .group-failed-indicator .material-icons {
   font-size: var(--icon-badge);
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .group-failed-indicator .failed-count {
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .group-range {
@@ -1403,12 +1422,12 @@
 }
 
 .channel-streams-count.has-failed {
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .channel-streams-count .failed-stream-icon {
   font-size: var(--icon-badge);
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .channel-streams-count.has-stale {
@@ -1545,11 +1564,11 @@
 }
 
 .channel-menu-item.danger {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .channel-menu-item.danger .material-icons {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .channel-menu-item.danger:hover {
@@ -1926,7 +1945,7 @@
 
 .remove-stream-btn:hover {
   background-color: var(--error)33;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Base .copy-url-btn, .vlc-btn, and .preview-btn styles are in shared/common.css */
@@ -3278,7 +3297,7 @@
   background-color: transparent;
   border: 1px solid var(--error);
   border-radius: 4px;
-  color: var(--error);
+  color: var(--danger-text);
   font-size: 0.8rem;
   cursor: pointer;
   transition: background-color 0.15s;
@@ -3445,7 +3464,7 @@
   background-color: transparent;
   border: 1px solid var(--error);
   border-radius: 4px;
-  color: var(--error);
+  color: var(--danger-text);
   font-size: 0.8rem;
   cursor: pointer;
   transition: background-color 0.15s;
@@ -4388,7 +4407,7 @@
 
 .group-delete-btn:hover {
   background-color: rgba(248, 113, 113, 0.2);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-delete-btn .material-icons {
@@ -4480,11 +4499,11 @@
 }
 
 .group-menu-item.danger {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-menu-item.danger .material-icons {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-menu-item.danger:hover {

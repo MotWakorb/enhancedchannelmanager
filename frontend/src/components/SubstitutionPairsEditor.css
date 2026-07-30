@@ -90,7 +90,7 @@
   top: 100%;
   left: 0;
   font-size: 0.7rem;
-  color: var(--error);
+  color: var(--danger-text);
   white-space: nowrap;
 }
 
@@ -163,7 +163,7 @@
 }
 
 .sub-pair-delete:hover {
-  color: var(--error);
+  color: var(--danger-text);
   background-color: var(--error-bg);
 }
 

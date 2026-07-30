@@ -394,7 +394,7 @@
 
 .watch-history-panel .error-message {
   background: var(--error-bg);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   padding: 10px;
   border-radius: var(--radius-md);
   margin-bottom: 16px;

@@ -88,8 +88,17 @@ async function captureOperatorReleaseArtifact(
 }
 
 async function expectMainKeyboardTraversal(page: Page) {
-  const collapse = page.getByRole('button', { name: /^(Collapse|Expand) navigation$/ })
-  await collapse.focus()
+  // The collapse toggle is the logo at the top of the sidebar, so it is reached
+  // before the destinations rather than after them.
+  const toggle = page.getByRole('button', { name: /^(Collapse|Expand) navigation$/ })
+  await toggle.focus()
+  await page.keyboard.press('Tab')
+  await expect(page.locator('.primary-sidebar .navigation-destination').first()).toBeFocused()
+
+  // Tabbing past the last sidebar control must land on main's first focusable.
+  const lastSidebarControl = page.locator('.primary-sidebar .navigation-destination').last()
+  await expect(lastSidebarControl).toBeVisible()
+  await lastSidebarControl.focus()
   await page.keyboard.press('Tab')
   await expect(page.getByRole('button', { name: /Edit Mode|Done/ })).toBeFocused()
 
@@ -318,15 +327,15 @@ interface RouteConsumer {
 const routeConsumers: readonly RouteConsumer[] = [
   { name: 'Dashboard', heading: 'OVERVIEW / DASHBOARD', settled: '.operator-dashboard', task: '.operator-dashboard-card', focus: '.operator-dashboard-card a', status: '.operator-dashboard-card', alternate: { state: 'independent source errors', selector: '.operator-dashboard-card' } },
   { name: 'Channel Manager', heading: 'OPERATIONS / CHANNEL MANAGER', settled: '.enter-edit-mode-btn', task: '.channel-wrapper', focus: '.enter-edit-mode-btn', alternate: { state: 'empty panes', selector: '.channel-workspace-empty' } },
-  { name: 'Guide', heading: 'OPERATIONS / GUIDE', settled: 'button[title="Refresh program data"]', task: '.guide-row', focus: 'button[title="Refresh program data"]', alternate: { state: 'empty guide', selector: '.guide-empty-state, .empty-state' } },
+  { name: 'Guide', heading: 'INSIGHTS / GUIDE', settled: 'button[title="Refresh program data"]', task: '.guide-row', focus: 'button[title="Refresh program data"]', alternate: { state: 'empty guide', selector: '.guide-empty-state, .empty-state' } },
   { name: 'M3U Manager', heading: 'OPERATIONS / M3U MANAGER', settled: 'button:has-text("Add M3U Account")', task: '.m3u-account-row', focus: 'button:has-text("Add M3U Account")', status: '.m3u-account-row .status-label', alternate: { state: 'empty accounts', selector: '.empty-state' } },
   { name: 'EPG Manager', heading: 'OPERATIONS / EPG MANAGER', settled: 'button:has-text("Add Standard EPG")', task: '.epg-source-row', focus: 'button:has-text("Add Standard EPG")', status: '.source-updated', alternate: { state: 'empty sources', selector: '.empty-state' } },
   { name: 'Logo Manager', heading: 'OPERATIONS / LOGO MANAGER', settled: 'button:has-text("Add Logo")', task: '.logo-row, .logo-card', focus: 'button:has-text("Add Logo")', status: '.logo-count, .page-header-status', alternate: { state: 'empty logos', selector: '.empty-state' } },
   { name: 'Channel Pipeline', heading: 'AUTOMATION / CHANNEL PIPELINE', settled: 'button[aria-label="Create rule"]', task: '[data-testid="rules-list"] tbody tr', focus: 'button[aria-label="Create rule"]', status: '.channel-pipeline-stats', alternate: { state: 'empty rules', selector: '.empty-state' } },
-  { name: 'M3U Changes', heading: 'AUTOMATION / M3U CHANGES', settled: 'button:has-text("Refresh")', task: '.change-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.summary-cards, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
+  { name: 'M3U Changes', heading: 'INSIGHTS / M3U CHANGES', settled: 'button:has-text("Refresh")', task: '.change-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.summary-cards, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
   { name: 'Stats', heading: 'INSIGHTS / STATS', settled: 'button:has-text("Refresh")', task: '.channel-card', focus: 'button:has-text("Refresh")', status: '.stats-last-updated, .page-header-status', alternate: { state: 'independent metric errors', selector: '.stats-error, .error-state' } },
   { name: 'Journal', heading: 'INSIGHTS / JOURNAL', settled: 'button:has-text("Refresh")', task: '.entry-wrapper, .empty-state, .tab-load-unavailable', focus: 'button:has-text("Refresh")', status: '.header-stats, .page-header-status', alternate: { state: 'request error', selector: '.tab-load-unavailable', recovery: 'button:has-text("Retry")' } },
-  { name: 'Settings', heading: 'SYSTEM / SETTINGS', settled: 'button:has-text("Save Settings")', task: '.settings-section', focus: 'button:has-text("Save Settings")', alternate: null },
+  { name: 'Settings', heading: 'SYSTEM / SETTINGS / GENERAL SETTINGS', settled: 'button:has-text("Save Settings")', task: '.settings-section', focus: 'button:has-text("Save Settings")', alternate: null },
 ]
 
 const primaryRouteRequestBudgets: Readonly<Record<string, number>> = {
@@ -1181,6 +1190,143 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       }
     })
 
+    // The all-routes axe sweep runs in the default theme only, which is how the
+    // light-theme Dashboard freshness failure (enhancedchannelmanager-eo7er)
+    // survived the .9 validation. This walks the Dashboard and the header
+    // service indicator through every theme in both populated and failed states.
+    test('Dashboard and header status meet AA contrast with no serious violations across every theme', async ({ page }) => {
+      await seedChannelWorkspace(page, true, 2)
+      await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'healthy', service: 'ECM', version: '1.0.0', release_channel: 'stable', git_commit: 'fixture' }),
+      }))
+      // Drives the header update notice so it is covered rather than skipped.
+      await page.route(/api\.github\.com\/repos\/.*\/releases\/latest/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ tag_name: 'v99.0.0' }),
+      }))
+      await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_changes: 3, groups_added: 0, groups_removed: 0, streams_added: 2,
+          streams_removed: 1, accounts_affected: [3], since: '2026-07-26T12:00:00Z',
+        }),
+      }))
+      await page.route(/\/api\/tasks(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ tasks: [
+          { task_id: 'cleanup', enabled: true, effective_enabled: true, status: 'failed', last_run: '2026-07-27T02:00:00Z' },
+        ] }),
+      }))
+      await page.route(/\/api\/journal\/stats(?:\?|$)/, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total_entries: 9, by_category: { channel: 5, stream: 4 }, by_action_type: {},
+          date_range: { oldest: '2026-07-20T00:00:00Z', newest: '2026-07-27T02:00:00Z' },
+        }),
+      }))
+
+      await openShellWithPipelineFixture(page, 200, [{ id: 3, name: 'Fixture Provider' }])
+      await dismissFirstRunPromptIfPresent(page)
+      await page.getByRole('link', { name: 'Dashboard' }).click()
+      await expect(page.getByRole('region', { name: 'System summary' })).toBeVisible()
+      await expect(page.locator('.operator-dashboard-card')).toHaveCount(6)
+      await expect(page.locator('.header-update-available')).toBeVisible()
+      // Proves this test's own journal fixture is the one being served, so the
+      // failure override below is known to reach the same handler.
+      await expect(page.getByText('9 entries', { exact: true })).toBeVisible()
+
+      // Normal text at 4.5:1; .dashboard-card-value is >=1.45rem bold large text
+      // but is held to the stricter floor because it always can be.
+      const alwaysPresent = [
+        '.operator-dashboard-intro',
+        '.operator-dashboard-card h3',
+        '.dashboard-card-value',
+        '.dashboard-card-status',
+        '.dashboard-card-freshness',
+        '.dashboard-card-link',
+        '.service-status-label',
+        '.service-status-version',
+        '.header-update-available',
+      ] as const
+
+      for (const state of ['populated', 'partial-failure'] as const) {
+        if (state === 'partial-failure') {
+          // Registered here rather than up front: Playwright matches the most
+          // recently registered handler first, so this reliably overrides the
+          // success fixture above. A single failing card exercises
+          // .dashboard-card-error beside healthy siblings.
+          await page.route(/\/api\/journal\/stats(?:\?|$)/, (route) => route.fulfill({
+            status: 500, contentType: 'application/json', body: '{"detail":"fixture failure"}',
+          }))
+          // A full reload rather than a route round-trip: navigating to the
+          // lazily-loaded Journal chunk does not reliably unmount the Dashboard,
+          // so its cards keep their resolved state and never refetch.
+          await page.reload()
+          await dismissFirstRunPromptIfPresent(page)
+          await page.getByRole('link', { name: 'Dashboard', exact: true }).click()
+          await expect(page.locator('.dashboard-card-error')).toHaveCount(1)
+          await expect(page.locator('.header-update-available')).toBeVisible()
+        }
+
+        for (const theme of ['dark', 'light', 'high-contrast'] as const) {
+          await page.evaluate((selectedTheme) => {
+            document.documentElement.setAttribute('data-theme', selectedTheme)
+          }, theme)
+          await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+          await expectLayoutSettled(page, ['#main-content', '.operator-dashboard-card', '.service-status'])
+
+          const selectors = [
+            ...alwaysPresent,
+            ...(state === 'partial-failure' ? ['.dashboard-card-error p', '.dashboard-card-error button'] : []),
+          ]
+          const contrast = []
+          for (const selector of selectors) {
+            await expect(page.locator(selector).first(), `${selector} must exist`).toBeVisible()
+            const evidence = await computedTextContrast(page, selector)
+            expect(
+              evidence.ratio,
+              `${theme}/${state} ${selector}: ${JSON.stringify(evidence)}`,
+            ).toBeGreaterThanOrEqual(4.5)
+            contrast.push(evidence)
+          }
+
+          const accessibility = await new AxeBuilder({ page })
+            .include('#root')
+            .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+            .analyze()
+          const blocking = accessibility.violations.filter(
+            (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+          )
+          expect(blocking, `${theme}/${state} serious/critical axe violations`).toEqual([])
+
+          const artifactDirectory = resolve(process.cwd(), 'test-results/operator-workspace-final-validation')
+          await mkdir(artifactDirectory, { recursive: true })
+          await writeFile(
+            resolve(
+              artifactDirectory,
+              `dashboard-contrast--${viewport.width}x${viewport.height}--${theme}--${state}.json`,
+            ),
+            `${JSON.stringify({
+              viewport, route: 'Dashboard', state, theme, minimumRatio: 4.5, contrast,
+              axe: accessibility.violations.map((violation) => ({
+                id: violation.id,
+                impact: violation.impact,
+                help: violation.help,
+                nodes: violation.nodes.map((node) => node.target),
+              })),
+            }, null, 2)}\n`,
+          )
+        }
+        await page.evaluate(() => document.documentElement.removeAttribute('data-theme'))
+      }
+    })
+
     test('every primary route preserves the audited vertical working-area budget', async ({ page }) => {
       await seedPrimaryRouteBudgetData(page)
       await openShellWithPipelineFixture(
@@ -1256,10 +1402,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         expect(await focusTarget.evaluate((element) => {
           const rect = element.getBoundingClientRect()
           const header = document.querySelector<HTMLElement>('.route-page-header')!.getBoundingClientRect()
-          const footer = document.querySelector<HTMLElement>('.footer')!.getBoundingClientRect()
           const insideHeader = rect.top >= header.top && rect.bottom <= header.bottom
           const belowHeader = rect.top >= header.bottom
-          return (insideHeader || belowHeader) && rect.bottom <= footer.top
+          // The footer was removed with the header status pill, so the bottom
+          // bound of the work area is now the viewport itself.
+          return (insideHeader || belowHeader) && rect.bottom <= window.innerHeight
             && rect.left >= document.querySelector<HTMLElement>('#main-content')!.getBoundingClientRect().left
         }), `${consumer.name} primary control focus must not be obscured`).toBe(true)
 
@@ -1343,11 +1490,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         const geometry = await state.evaluate((element) => {
           const rect = element.getBoundingClientRect()
           const header = document.querySelector<HTMLElement>('.route-page-header')!.getBoundingClientRect()
-          const footer = document.querySelector<HTMLElement>('.footer')!.getBoundingClientRect()
           const main = document.querySelector<HTMLElement>('#main-content')!
           return {
             belowHeader: rect.top >= header.bottom - 1,
-            aboveFooter: rect.top < footer.top && rect.bottom > header.bottom,
+            withinViewport: rect.top < window.innerHeight && rect.bottom > header.bottom,
             contained: rect.left >= main.getBoundingClientRect().left - 1
               && rect.right <= main.getBoundingClientRect().right + 1,
             noDocumentXOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
@@ -1355,7 +1501,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         })
         expect(geometry, `${consumer.name} ${consumer.alternate.state} geometry`).toEqual({
           belowHeader: true,
-          aboveFooter: true,
+          withinViewport: true,
           contained: true,
           noDocumentXOverflow: true,
         })
@@ -1532,7 +1678,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await expect(separator).toBeVisible()
       await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible()
       await expect(page.getByRole('main')).toHaveAttribute('id', 'main-content')
-      await expect(page.getByRole('contentinfo')).toBeVisible()
+      await expect(page.getByRole('banner')).toBeVisible()
+      // The footer was removed once service status and the update notice moved
+      // into the header, so the shell intentionally exposes no contentinfo.
+      await expect(page.getByRole('contentinfo')).toHaveCount(0)
+      await expect(page.getByRole('status').first()).toBeVisible()
       await expect(page.locator('#main-content h1')).toHaveCount(1)
       const expandedShell = await shellMetrics(page)
       expect(expandedShell).toMatchObject({
@@ -2115,13 +2265,19 @@ for (const viewport of [
           const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect()
           const pending = document.querySelector('.settings-pending-actions')!.getBoundingClientRect()
           const content = document.querySelector<HTMLElement>('.settings-content')!
+          // The section nav must not cover the focused control. Asserting
+          // "below the nav's bottom edge" only holds for the horizontal bar;
+          // the rail sits beside the content and spans its full height, so the
+          // real invariant is that the two rectangles do not intersect.
+          const overlapX = Math.min(focused.right, nav.right) - Math.max(focused.left, nav.left)
+          const overlapY = Math.min(focused.bottom, nav.bottom) - Math.max(focused.top, nav.top)
           return {
             document: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
             content: content.scrollWidth <= content.clientWidth + 1,
-            top: focused.top >= nav.bottom + 7,
+            nav: overlapX <= 1 || overlapY <= 1,
             bottom: focused.bottom <= pending.top - 7,
           }
-        })).toEqual({ document: true, content: true, top: true, bottom: true })
+        })).toEqual({ document: true, content: true, nav: true, bottom: true })
       }
       await expectFocusedControlClear()
 
@@ -2378,13 +2534,42 @@ test.describe('operator shell at 200% equivalent', () => {
 test.describe('operator shell navigation behavior', () => {
   test.use({ serviceWorkers: 'block' })
 
-  test('shows section navigation only for inventoried long Settings pages', async ({ page }) => {
+  // Section navigation is no longer gated by an allow-list: it appears wherever
+  // a page has at least two sections to navigate between, and withholds itself
+  // otherwise.
+  test('shows section navigation on any Settings page with multiple sections', async ({ page }) => {
     await openShellWithPipelineFixture(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.getByRole('link', { name: 'Settings', exact: true }).click()
-    await expect(page.getByRole('navigation', { name: 'On this page' })).toBeVisible()
-    await page.locator('.settings-nav-item').filter({ hasText: 'Normalization' }).click()
-    await expect(page.getByRole('navigation', { name: 'On this page' })).toHaveCount(0)
+
+    const sectionNav = page.getByRole('navigation', { name: 'On this page' })
+    const sectionCount = async () => page.locator(
+      '.settings-content-main .settings-section, .settings-content-main [data-settings-section]',
+    ).count()
+
+    // Assert the rule rather than which pages happen to satisfy it: how many
+    // sections a page renders depends on its fixture data, so hardcoding a
+    // negative case makes the test agree with the fixture instead of the rule.
+    const pages: Array<[string, string]> = [
+      ['General', 'GENERAL SETTINGS'],
+      ['Normalization', 'CHANNEL NORMALIZATION'],
+      ['Tags', 'TAGS'],
+      ['Lookup Tables', 'LOOKUP TABLES'],
+      ['Backup & Restore', 'BACKUP & RESTORE'],
+      ['Scheduled Tasks', 'SCHEDULED TASKS'],
+    ]
+
+    await expect(sectionNav).toBeVisible()
+    for (const [label, crumb] of pages) {
+      await page.locator('.settings-nav-item').filter({ hasText: label }).click()
+      await expect(page.locator('#main-content h1')).toHaveText(`SYSTEM / SETTINGS / ${crumb}`)
+      await expectLayoutSettled(page, ['#main-content', '.settings-content-main'])
+      const sections = await sectionCount()
+      expect(
+        await sectionNav.count() > 0,
+        `${label} renders ${sections} sections, so the nav must be ${sections >= 2 ? 'present' : 'absent'}`,
+      ).toBe(sections >= 2)
+    }
   })
 
   test('audited long pages provide direct section entry and protect pending Settings edits', async ({ page }) => {
@@ -2425,7 +2610,7 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
     page.once('dialog', (dialog) => dialog.dismiss())
     await page.goBack()
-    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / GENERAL SETTINGS')
     await expect(page).toHaveURL(/#settings\?section=settings-general-section-stats-polling$/)
     page.once('dialog', (dialog) => dialog.accept())
     await page.goBack()
@@ -2446,6 +2631,9 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible()
     await page.getByRole('button', { name: 'Cancel changes' }).click()
 
+    // Leaving Settings needs Back first: the sidebar is drilled into the
+    // Settings sections, so the primary destinations are not rendered.
+    await page.getByRole('button', { name: 'Back to main navigation' }).click()
     await page.getByRole('link', { name: 'Stats', exact: true }).click()
     await page.getByRole('navigation', { name: 'On this page' })
       .getByRole('button', { name: 'Enhanced Statistics' }).click()
@@ -2884,7 +3072,7 @@ test.describe('operator shell navigation behavior', () => {
     await page.getByRole('link', { name: 'Channel default settings' }).click()
     await page.getByRole('button', { name: 'Discard' }).click()
     await expect(page).toHaveURL(/#settings\/channel-defaults$/)
-    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
     await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toHaveCount(0)
   })
 
@@ -2902,13 +3090,15 @@ test.describe('operator shell navigation behavior', () => {
 
   test('all primary routes are real links and keyboard reachable', async ({ appPage }) => {
     await dismissFirstRunPromptIfPresent(appPage)
-    const expected = [
+    // Third entry is the trailing breadcrumb crumb where it differs from the
+    // destination name: Settings appends its active section.
+    const expected: Array<[string, string, string?]> = [
       ['Dashboard', '#dashboard'], ['Channel Manager', '#channel-manager'], ['Guide', '#guide'],
       ['M3U Manager', '#m3u-manager'], ['EPG Manager', '#epg-manager'], ['Logo Manager', '#logo-manager'],
       ['Channel Pipeline', '#channel-pipeline'], ['M3U Changes', '#m3u-changes'], ['Stats', '#stats'],
-      ['Journal', '#journal'], ['Settings', '#settings'],
+      ['Journal', '#journal'], ['Settings', '#settings', 'GENERAL SETTINGS'],
     ]
-    for (const [name, hash] of expected) {
+    for (const [name, hash, crumb] of expected) {
       const link = appPage.getByRole('link', { name })
       await expect(link).toHaveAttribute('href', hash)
       await link.focus()
@@ -2916,7 +3106,7 @@ test.describe('operator shell navigation behavior', () => {
       await appPage.keyboard.press('Enter')
       await expect(appPage).toHaveURL(new RegExp(`${hash.replace('#', '#')}$`))
       await expect(appPage.locator('#main-content h1')).toBeFocused()
-      await expect(appPage.locator('#main-content h1')).toHaveText(new RegExp(` / ${name.toUpperCase()}$`))
+      await expect(appPage.locator('#main-content h1')).toHaveText(new RegExp(` / ${crumb ?? name.toUpperCase()}$`))
       await expect(appPage.locator('#main-content h1')).toHaveCount(1)
       await expect(appPage).toHaveTitle(`${name} | Enhanced Channel Manager`)
     }
@@ -2928,7 +3118,7 @@ test.describe('operator shell navigation behavior', () => {
     await expect(link).toHaveAttribute('href', '#settings/channel-defaults')
     await link.click()
     await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
-    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
   })
 
   test('contextual settings navigation cleanly exits an edit session with no staged changes', async ({ page }) => {
@@ -2939,8 +3129,11 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
     await page.getByRole('link', { name: 'Channel default settings' }).click()
     await expect(page).toHaveURL(/#settings\/channel-defaults$/)
-    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS')
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
     await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0)
+    // Contextual links land in Settings with the sidebar drilled in; Back
+    // restores the primary destinations without leaving the Settings route.
+    await page.getByRole('button', { name: 'Back to main navigation' }).click()
     await page.getByRole('link', { name: 'Channel Manager' }).click()
     await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
   })

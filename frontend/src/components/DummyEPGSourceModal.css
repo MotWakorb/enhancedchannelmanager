@@ -148,7 +148,7 @@
 }
 
 .dummy-epg-preview-error {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   font-size: 0.8125rem;
 }
 

@@ -170,7 +170,7 @@
 }
 
 .channel-picker-remove:hover {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .channel-picker-remove .material-icons {

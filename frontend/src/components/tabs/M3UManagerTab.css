@@ -198,14 +198,35 @@
   font-weight: 600;
 }
 
+/* Both chips were single-tone: one dark-tuned Tailwind 400 used in every
+   theme, which is the same trap `.hdhr` below documents. Measured on the
+   20%-alpha fill over the --bg-secondary row:
+
+   .xc   #a855f7 -> 2.70 light / 3.28 dark / 4.34 high contrast — failed all
+         three. Purple-400 is simply not dark enough for a pale fill nor light
+         enough for a dark one.
+   .std  #60a5fa -> 1.87 light / 4.59 dark / 6.27 high contrast — the light
+         theme is the failure, and it is the worst chip in the app.
+
+   The fix moves tone only — both fills are untouched, so the chips keep their
+   colour coding and their weight in the row. Bead
+   enhancedchannelmanager-dlavh. */
 .account-type.xc {
   background-color: rgba(147, 51, 234, 0.2);
-  color: #a855f7;
+  color: #c084fc; /* was #a855f7: 3.28 -> 4.90 dark, 4.34 -> 6.51 high contrast */
 }
 
 .account-type.std {
   background-color: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  color: #60a5fa; /* 4.59 dark / 6.27 high contrast — passes, left alone */
+}
+
+[data-theme="light"] .account-type.xc {
+  color: #6b21a8; /* 2.70 -> 5.95 */
+}
+
+[data-theme="light"] .account-type.std {
+  color: #1e40af; /* 1.87 -> 6.42 */
 }
 
 /* HDHomeRun is not a stored account type — it is a `STD` account whose URL
@@ -216,10 +237,9 @@
    Two tones, because one does not survive both themes: teal-400 measures
    5.79:1 on the dark row and 7.94:1 in high contrast, but only 1.44:1 once
    the light theme puts a near-white row behind the same 20%-alpha fill.
-   teal-800 on a lighter fill measures 5.80:1 there. (`.xc` and `.std` are
-   single-tone and have the same problem — XtreamCodes measures 2.70:1 in
-   light, 3.28:1 in dark — but that is pre-existing and out of this bead's
-   scope; noted for the backlog.) */
+   teal-800 on a lighter fill measures 5.80:1 there. (`.xc` and `.std` had the
+   same single-tone problem; bead enhancedchannelmanager-dlavh fixed them the
+   same way — see the rules above.) */
 .account-type.hdhr {
   background-color: rgba(20, 184, 166, 0.2);
   color: #2dd4bf;
@@ -242,7 +262,7 @@
 .account-message {
   font-size: var(--type-meta-size);
   line-height: var(--type-meta-line-height);
-  color: var(--error);
+  color: var(--danger-text);
   margin-top: 0.25rem;
   overflow: hidden;
   text-overflow: ellipsis;

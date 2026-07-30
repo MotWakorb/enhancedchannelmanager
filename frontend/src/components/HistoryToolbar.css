@@ -161,7 +161,7 @@
 
 .save-point-action.delete:hover {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .unsaved-indicator {

@@ -39,7 +39,7 @@
 
 .mcp-status-offline {
   background: rgba(239, 68, 68, 0.1);
-  color: var(--error);
+  color: var(--danger-text);
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
@@ -165,7 +165,7 @@
 
 .mcp-key-actions .btn-danger {
   background: rgba(239, 68, 68, 0.15);
-  color: var(--error);
+  color: var(--danger-text);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 

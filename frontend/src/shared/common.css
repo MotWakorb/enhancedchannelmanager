@@ -208,6 +208,11 @@
   font-size: var(--icon-status);
 }
 
+/* The canonical --error FILL. Together with .notification-badge (which renders
+   on all 11 routes) this is what --error is toned for: white text on it, at
+   4.83:1 dark / 5.13 high contrast / 6.21 light after bead
+   enhancedchannelmanager-4l51b, up from 3.76 / 3.41 / 6.21. Red TEXT is
+   --danger-text — see .status-error. */
 .btn-danger {
   display: inline-flex;
   align-items: center;
@@ -344,7 +349,7 @@
 .btn-icon-danger:hover,
 .btn-icon.delete:hover {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .btn-icon .material-icons {
@@ -524,12 +529,34 @@
   color: var(--success);
 }
 
+/* --danger-text, not --error. This is the canonical red-status-TEXT rule and
+   it is the shape the whole app now follows: --error is the solid red FILL
+   (see .btn-danger above) and is never a foreground; --danger-text is the red
+   foreground, for status text, error messages and status glyphs alike. Bead
+   enhancedchannelmanager-4l51b moved all 94 `color: var(--error)` call sites
+   here after the two jobs proved irreconcilable in the dark and high-contrast
+   themes — as text --error measured 4.03:1 (dark, on --bg-secondary) and
+   wanted to go lighter, as a fill under white it measured 3.76:1 and wanted to
+   go darker. Now 5.48:1 dark, 5.81 high contrast, 5.70 light (unchanged there:
+   --danger-text was retoned to --error's light value so this theme's numbers
+   did not move). Full derivation in index.css beside each token.
+
+   Note the asymmetry with .status-success above, which keeps --success: green
+   is the token where BOTH jobs wanted the same value in every theme, so it was
+   never split. Do not "tidy" these two into the same shape. */
 .status-error {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* --warning-text, not --warning. --warning is the amber FILL colour and has
+   to stay light enough to carry the #1a1a1a text that sits on it; as a
+   foreground on --bg-secondary it measures 1.97:1 in the light theme.
+   --warning-text is the warning-coloured TEXT token and measures 5.42:1
+   there (9.08 dark, 10.37 high contrast). Same substitution the sweep already
+   made for .status-disabled / .status-idle just below.
+   Bead enhancedchannelmanager-dlavh. */
 .status-pending {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .status-pending .spinning {
@@ -689,7 +716,7 @@
   background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: var(--radius-lg);
-  color: var(--error);
+  color: var(--danger-text);
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);
   line-height: var(--type-body-line-height);
@@ -706,7 +733,7 @@
   margin-left: auto;
   background: none;
   border: none;
-  color: var(--error);
+  color: var(--danger-text);
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0;
@@ -771,7 +798,7 @@
   background-color: rgba(220, 38, 38, 0.15);
   border: 1px solid rgba(220, 38, 38, 0.3);
   border-radius: var(--radius-lg);
-  color: var(--error);
+  color: var(--danger-text);
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);
   line-height: var(--type-body-line-height);
@@ -898,6 +925,24 @@
 
 .drag-handle.disabled:active {
   cursor: not-allowed;
+}
+
+/* The handle glyph. `.drag-handle` sets `font: inherit`, which resets the size
+   for the `⋮⋮` character StreamsPane and ChannelDetail put in the handle but
+   does nothing for a Material Icons child — that has its own `.material-icons`
+   rule in index.css at 24px, and nothing overrode it. So EPG Manager's five
+   `drag_indicator` glyphs and Channel Pipeline's rules-table one both rendered
+   at 24px, the only untokenised icons left on those two routes.
+   `--icon-status` is the drag-handle glyph size everywhere it was already
+   spelled out — `.norm-engine-group-drag-handle`,
+   `.norm-engine-rule-drag-handle`, `.sub-pair-drag` — so this is the existing
+   idiom moved to the one file that owns the class rather than a new choice.
+   Two classes of depth on purpose: a single-class override ties with
+   index.css's base `.material-icons` at 0-1-0 and loses on byte order
+   (§ "Partial redeclaration").
+   Bead enhancedchannelmanager-6z299, completion pass. */
+.drag-handle .material-icons {
+  font-size: var(--icon-status);
 }
 
 
@@ -1041,6 +1086,13 @@
   min-width: 0;
 }
 
+/* Body role, size token only (§ "Adopting a role", rule 1). It was 0.9rem —
+   a rem literal anchored to the root, not an em tracking a parent — so it
+   rendered 14.4px, and the `<span>` holding the selected value inherited that.
+   Channel Manager puts this control in the same filter row as
+   `.group-filter-button`, which the sweep already moved to `--type-body-size`;
+   the two read as a pair and were 1.4px apart.
+   Bead enhancedchannelmanager-6z299, completion pass. */
 .filter-dropdown-button {
   width: 100%;
   padding: 0.5rem;
@@ -1048,7 +1100,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -1065,6 +1117,18 @@
   border-color: var(--accent-primary);
 }
 
+/* Deliberately off the scale, and deliberately not changed by the completion
+   pass of bead enhancedchannelmanager-6z299. This is a `▼` character used as a
+   disclosure caret, not text: no text role fits it (adopting one would mean
+   taking a size and silently inheriting a weight and tracking that mean
+   nothing on a glyph — the § "Partial redeclaration" trap), and the icon
+   tokens start at 14px, which would enlarge the caret by 46%.
+   The real fix is to retire the `▼`-character idiom in favour of
+   `.custom-select-arrow`, which is the app's canonical disclosure indicator
+   and is an 18px Material Icons glyph. Five rules share this shape
+   (`.group-filter-button`, `.source-filter-button`, `.save-points-dropdown`
+   here at 0.6rem, `.searchable-dropdown` at 1.25rem) so that is its own
+   change, not a line in a type sweep. Backlog candidate, not an oversight. */
 .filter-dropdown-button .dropdown-arrow {
   font-size: 0.6rem;
   color: var(--text-secondary);
@@ -1506,7 +1570,7 @@
 .action-btn.danger:hover:not(:disabled),
 .action-btn.delete:hover:not(:disabled) {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Toggle button - green when active, grey when inactive */
@@ -1719,7 +1783,7 @@
 .test-result.error {
   background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* The second of the two 20px strays. A result glyph is a status glyph. */
@@ -1752,7 +1816,7 @@
 
 /* Semantic variants */
 .badge-success { background: var(--success-bg); color: var(--success); }
-.badge-error   { background: var(--error-bg);   color: var(--error); }
+.badge-error   { background: var(--error-bg);   color: var(--danger-text); }
 .badge-warning { background: var(--warning-bg);  color: var(--warning-text, var(--warning)); }
 .badge-info    { background: var(--info-bg);     color: var(--info-text); }
 
@@ -1998,15 +2062,17 @@
   color: var(--text-secondary);
 }
 
-/* Keeps --error rather than taking a text colour from the scale: this is the
-   one field message whose colour is its meaning. */
+/* Keeps a semantic red rather than taking a text colour from the scale: this
+   is the one field message whose colour is its meaning. The token is
+   --danger-text (the red FOREGROUND), not --error (the red FILL) — bead
+   enhancedchannelmanager-4l51b; see .status-error for why. */
 .field-error {
   display: block;
   margin-top: 0.25rem;
   font-size: var(--type-meta-size);
   font-weight: var(--type-meta-weight);
   line-height: var(--type-meta-line-height);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 

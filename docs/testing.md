@@ -163,6 +163,151 @@ npm run test:e2e:debug     # Debug mode with breakpoints
 npm run test:e2e:report    # View test report
 ```
 
+### Rendered-CSS regression guards
+
+Four specs in `e2e/` are not feature tests — they are guards over *rendered*
+CSS, the layer where the project has repeatedly regressed while every unit
+test stayed green. They exist because a computed style in a real browser is
+the only thing that can prove these claims; jsdom cannot, and neither can a
+declaration-level audit.
+
+| Spec | What it pins | Proven red against |
+|-|-|-|
+| `sr-only-hidden.spec.ts` | `.sr-only` / `.visually-hidden` measure ≤1×1 and are not returned by `elementFromPoint`, **on a cold context with Channel Pipeline never visited** | `.sr-only` moved back into the ChannelPipelineTab chunk (bead `-zncyv`): Dashboard 1004×24, `position: static`, hit-testable |
+| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px — on ten routes × dark/light/high-contrast × 1600×1000 and 1280×800 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
+| `route-typography-scale.spec.ts` | every visible text node in a route content pane computes to a P1 size — {20, 15, 13, 11, 10} text, {18, 16, 14, 64} icon | a new 22px site on M3U Manager **and** an allowlisted site silently fixed without deleting its entry (reported as `STALE`) |
+| `cross-route-css-leak.spec.ts` | shared-class typography does not depend on route visit order | four historical instances: `.list-header`, `.status-label`, `.group-count`, `.action-btn .material-icons` |
+
+```bash
+npm run test:css-guard:sr-only        # builds + serves the source; NO backend needed
+npm run test:css-guard:frozen-chrome  # needs a live ECM container
+npm run test:css-guard:type-scale     # needs a live ECM container
+npm run test:css-leak                 # needs a live ECM container
+npm run test:css-guards               # all four, against a live container
+```
+
+**CI status — read this before assuming coverage.**
+
+- `sr-only-hidden.spec.ts` **runs in CI**, as the `Screen-Reader-Only
+  Rendering Guard` job in `.github/workflows/test.yml`. It uses
+  `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the checked-out
+  source and serves it on an isolated preview port with no backend. The shell,
+  Dashboard and Settings all mount that way, so the assertion is reachable.
+  The job is **not** in the required-check set; making it required also needs
+  a matching sentinel job in `.github/workflows/docs-only-pass.yml`, or
+  docs-only PRs will hang waiting for a check that never runs.
+- `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts` and
+  `cross-route-css-leak.spec.ts` are **manual-only**. This is not an
+  oversight and not a "wire it up later" — all three walk all ten routes, and
+  Channel Manager's `.channels-pane` never mounts without an API (measured, on
+  a backend-less preview build: `waitForSelector('.channels-pane')` times out
+  at 60s). They need a live ECM container, which CI does not have; that is the
+  same constraint that defers the rest of `e2e/*.spec.ts`, tracked as bead
+  `enhancedchannelmanager-2lw25`. When 2lw25 lands a live-service CI
+  environment these three are the first specs that should move into it.
+- Until then the browser half of the CSS defence runs only when a human
+  remembers. Run `npm run test:css-guards` against the running container
+  before shipping any change under `frontend/src/**/*.css`.
+
+**These guards measure the build that is being SERVED, not your working tree.**
+The default base URL is the deployed container on `:6100`, so running them
+against a container that has not been redeployed since your edit reports the
+*old* build's CSS — and the type-scale guard will list the sites you just
+fixed as brand-new failures. Observed exactly that: nine sites fixed in the
+tree still showed as off-scale on `:6100` because the container predated the
+fix.
+
+```bash
+# sr-only: builds and serves YOUR tree, no container involved. Always exact.
+npm run test:css-guard:sr-only
+
+# the other three: deploy your build to the container FIRST, then run.
+scripts/deploy-frontend.sh
+npm run test:css-guards
+```
+
+`npx vite preview` is not a substitute for the deploy step for those three:
+it serves the bundle but proxies nothing, so `/api` 502s, Channel Manager's
+`.channels-pane` never mounts, and the ten-route walk times out. Only the
+sr-only guard is reachable without an API.
+
+**Their allowlist cannot rot.** `route-typography-scale.spec.ts` carries an
+allowlist because eight of ten routes have off-scale sites today, and it is
+bidirectional on purpose — same discipline as TIER 2 of
+`frontend/src/cssAudits/sharedClassChunkLeak.audit.test.ts`. A **new**
+off-scale site fails; a **stale** entry (its site now renders on-scale) also
+fails, with "delete this entry"; an entry whose selector matches nothing fails
+unless it is marked `dataDependent`. Fixing an allowlisted site therefore
+*requires* deleting its entry in the same commit. Every entry names the bead
+that owns it.
+
+**Shared plumbing lives in `e2e/fixtures/css-guard.ts`,** and three things in
+it are load-bearing rather than convenience:
+
+1. **One login per spec file.** `backend/auth/routes.py` rate-limits login at
+   `5/minute`; these guards open many contexts and a login per context blows
+   that budget, surfacing as `Login failed: Too Many Requests` — a flake that
+   reads like a broken assertion.
+2. **Hash navigation, never `page.reload()`.** Every route tab is a lazy chunk
+   whose stylesheet is appended to `<head>` on first visit and never removed.
+   A reload discards all of them, resetting the exact state these guards
+   observe and silently turning a real failure into a pass.
+3. **An explicit `waitFor` on the login gate.** `isVisible({ timeout })` is a
+   no-op in Playwright — the option is ignored — so a still-rendering login
+   form reads as "not a login page" and the run proceeds into a blank shell.
+
+## 4. Modal harness (dev-only dialog measurement)
+
+`frontend/modal-harness.html` force-renders **every dialog in the app** with
+stubbed data, including the many that cannot be reached against a real
+instance (no pending merges, empty review queues, no probe results, banner
+conditions unmet). It exists so a CSS change touching modals can be verified
+against all of them instead of the subset today's data happens to allow.
+Introduced by bead `enhancedchannelmanager-xhldy.1` for the P1 type-scale
+work; reusable for any later restyle of the same surfaces.
+
+```bash
+# Capture / re-capture the baseline (builds the harness, walks all dialogs)
+node scripts/measure-modal-typography.mjs
+
+# After a CSS change: what moved?
+node scripts/measure-modal-typography.mjs --diff
+
+# Poke at one dialog by hand
+cd frontend && npx vite --config vite.harness.config.ts
+# -> http://127.0.0.1:5273/modal-harness.html            (index of all dialogs)
+# -> http://127.0.0.1:5273/modal-harness.html?dialog=edit-channel
+# -> ...&theme=light   ...&live=1 (talk to a real backend instead of the stub)
+```
+
+Baseline artefact:
+`frontend/src/devHarness/baseline/modal-typography.baseline.json`.
+
+**It is not in the production bundle, and cannot be.** `vite.config.ts` has a
+single entry (`index.html`); the harness is built only by the separate
+`vite.harness.config.ts` into the gitignored `.modal-harness-dist/`.
+`src/devHarness/harnessIsolation.test.ts` fails if any app file imports harness
+code or if `vite.config.ts` grows a second entry.
+
+**The dialog list is derived from source, not hand-maintained.** Every
+non-test `.tsx` under `src/` is scanned for `modal-container` / `ModalOverlay`
+/ `role="dialog"` / `role="alertdialog"`, and
+`src/devHarness/harnessCoverage.test.ts` goes RED when a file matching those
+markers has no entry in `dialogCatalog.ts`. A dialog added later is therefore
+covered automatically, or it breaks the build — it cannot be silently missed.
+
+Adding a dialog to the harness:
+
+1. Add an entry to `src/devHarness/dialogCatalog.ts` (`status: 'stubbed'`, or
+   `'gap'` with a reason if it genuinely cannot be force-rendered).
+2. Add a recipe to `src/devHarness/dialogRenderers.tsx` — `tsc --noEmit` fails
+   until you do. Either render the component directly with stub props, or
+   render its host and list the `open` clicks that bring the dialog up.
+3. Add stub responses to `src/devHarness/apiStub.ts` if it fetches on mount.
+
+Never change a component to suit the harness. If a dialog cannot be reached
+without editing it, record it as a gap.
+
 ## Coverage ratchet cadence
 
 Coverage is enforced in CI as a **one-way ratchet**: the current floor is the

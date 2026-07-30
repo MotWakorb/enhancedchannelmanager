@@ -212,7 +212,7 @@
 .edit-mode-cancel-btn:hover:not(:disabled) {
   background-color: rgba(248, 113, 113, 0.15);
   border-color: var(--error);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .edit-mode-cancel-btn:disabled {
@@ -220,6 +220,14 @@
   cursor: not-allowed;
 }
 
+/* Body role, size token only; the authored 500 stays (§ "Adopting a role",
+   rule 1). Channel Manager's page action is the one route header button that
+   is not `.btn-primary` / `.btn-secondary` / `.btn-danger`, so PageHeader.css's
+   route-header sizing rule never reached it and its 0.9rem literal rendered
+   14.4px next to the 13px/500 those three resolve to in the same band. Same
+   role, same band, so the same size — a per-route button size is the drift the
+   P1 sweep exists to remove (PageHeader.css says so in as many words).
+   Bead enhancedchannelmanager-6z299, completion pass. */
 .enter-edit-mode-btn {
   display: flex;
   align-items: center;
@@ -228,7 +236,7 @@
   border: 1px solid var(--border-secondary);
   color: var(--button-text);
   border-radius: 4px;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;

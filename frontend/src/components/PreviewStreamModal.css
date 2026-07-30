@@ -100,7 +100,7 @@
 }
 
 .preview-stream-status .status-error {
-  color: var(--error);
+  color: var(--danger-text);
   background: var(--error-bg);
 }
 
@@ -150,7 +150,7 @@
   border: 1px solid var(--error);
   border-radius: var(--radius-lg);
   margin-bottom: 1rem;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .preview-stream-error .material-icons {

@@ -372,8 +372,22 @@
   font-size: var(--type-badge-size);
   font-weight: var(--type-badge-weight);
   line-height: var(--type-badge-line-height);
-  color: white;
+  /* The percentage sits ON the bar, so its colour is decided by the bar's own
+     fill, not by the page. `color: white` was declared once for all three
+     themes and failed in two of them: on --info-text / --success it measured
+     2.54 / 2.54 in dark and 2.97 / 1.37 in high contrast (bright green with
+     white on it is the worst pairing in the app). Both of those fills are
+     bright, so the label takes ink there and paper in the light theme, where
+     bead enhancedchannelmanager-dlavh darkened the same two tokens.
+     Dark 7.35 / 7.37, high contrast 6.29 / 13.62. */
+  color: #10121a;
   min-width: 30px;
+}
+
+/* 6.10 on --info-text, 6.18 on --success — the light theme's fills are the
+   dark ones, so the label inverts with them. */
+[data-theme="light"] .bandwidth-panel .ratio-segment {
+  color: #ffffff;
 }
 
 .bandwidth-panel .ratio-segment.inbound {
@@ -407,7 +421,7 @@
 .bandwidth-panel .error-message {
   background: var(--error-bg);
   border: 1px solid var(--error);
-  color: var(--error);
+  color: var(--danger-text);
   padding: 10px 14px;
   border-radius: var(--radius-lg);
   font-size: var(--type-body-size);

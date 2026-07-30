@@ -132,11 +132,11 @@
 }
 
 .user-menu-logout {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .user-menu-logout .material-icons {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Modal styles */

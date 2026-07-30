@@ -82,7 +82,20 @@
 /* Unused-only filter toggle (bead enhancedchannelmanager-09x38.13) — same
    pill affordance as .btn-secondary, with an .active state that mirrors
    .view-toggle button.active so both binary toggles in this header read
-   consistently. */
+   consistently.
+
+   Body role, size token only (§ "Adopting a role", rule 1: a control keeps the
+   weight it was authored with, and this one was authored with none).
+
+   It sits in the route header's controls slot, which is why the sweep skipped
+   it as frozen chrome. That was the wrong call, and the rule above says why:
+   the frozen band is the rail and the 45px application bar (§ "What is *not*
+   in this scale"), not `.route-page-header`, whose title is on the page-title
+   role and whose `.btn-primary` / `.btn-secondary` / `.btn-danger` are on the
+   body role via shared/common.css — measured live at 13px/500 in this very
+   toolbar. A rule whose stated intent is "same pill affordance as
+   .btn-secondary" was therefore 0.6px larger than the .btn-secondary beside
+   it. Bead enhancedchannelmanager-6z299, completion pass. */
 .dense-toolbar .unused-only-toggle {
   display: flex;
   align-items: center;
@@ -93,7 +106,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;

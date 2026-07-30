@@ -504,6 +504,80 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ─── Screen-reader-only rendering guard (bead enhancedchannelmanager-nraba) ──
+  # Fails the PR if a `.sr-only` / `.visually-hidden` region renders as
+  # ordinary visible text on a COLD context — the shape of bead
+  # enhancedchannelmanager-zncyv, where the utility was declared only in the
+  # lazily-loaded ChannelPipelineTab chunk while the Dashboard (eager) and
+  # Settings chunks rendered it, so both aria-live regions were visible copy
+  # (measured 1308x24 on the Dashboard) until the operator happened to open
+  # Channel Pipeline. All 16 tiers of
+  # frontend/src/cssAudits/sharedClassChunkLeak.audit.test.ts stayed green
+  # through the entire life of that bug: they model DUPLICATE declarations
+  # colliding, and `.sr-only` had exactly one declaration, so nothing ever
+  # collided.
+  #
+  # WHY THIS ONE SPEC AND NOT THE OTHER CSS GUARDS. It is the only one of the
+  # four that runs without a live ECM container. E2E_EXACT_BUILD=true builds
+  # the checked-out source and serves it on an isolated preview port with no
+  # backend; the shell, Dashboard and Settings all mount that way, so the
+  # assertion is reachable. `e2e/frozen-chrome.spec.ts` and
+  # `e2e/route-typography-scale.spec.ts` walk all ten routes, and Channel
+  # Manager's `.channels-pane` never mounts without an API — measured, not
+  # assumed. Those two plus `e2e/cross-route-css-leak.spec.ts` stay manual
+  # until bd-2lw25 lands a live-service CI environment. See
+  # docs/testing.md § "Rendered-CSS regression guards".
+  sr-only-hidden:
+    name: Screen-Reader-Only Rendering Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          # The repo-root package.json hosts @playwright/test; frontend/ hosts
+          # the Vite build this spec serves. Both lockfiles feed the cache key.
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the screen-reader-only rendering guard
+        # E2E_START_SERVER + E2E_EXACT_BUILD build the checked-out source and
+        # serve it on 127.0.0.1:4173 — the checked-in bundle, not a possibly
+        # stale dev server. --workers=1 because the spec opens one cold
+        # browser context per route and a second worker only adds contention.
+        run: |
+          E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/sr-only-hidden.spec.ts \
+            --project=chromium \
+            --workers=1 \
+            --retries=0 \
+            --reporter=github,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sr-only-hidden-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call

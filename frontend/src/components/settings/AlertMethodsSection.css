@@ -81,6 +81,6 @@
 }
 
 .alert-method-delete:hover:not(:disabled) {
-  color: var(--error, #ff6b6b);
+  color: var(--danger-text);
   border-color: var(--error, #ff6b6b);
 }

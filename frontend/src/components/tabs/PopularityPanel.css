@@ -119,7 +119,7 @@
 .popularity-panel .error-message {
   background: var(--error-bg);
   border: 1px solid var(--error);
-  color: var(--error);
+  color: var(--danger-text);
   padding: 10px 14px;
   border-radius: var(--radius-lg);
   font-size: var(--type-body-size);
@@ -217,7 +217,7 @@
 }
 
 .popularity-panel .trend.trend-down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .popularity-panel .trend.trend-stable {
@@ -312,7 +312,7 @@
 }
 
 .popularity-panel .rank-declined {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Trending Section */
@@ -350,7 +350,7 @@
 }
 
 .popularity-panel .trend-icon.down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .popularity-panel .trending-list {
@@ -401,7 +401,7 @@
 }
 
 .popularity-panel .trending-change.down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* The inline "nothing here" string that shared/common.css § 7 calls

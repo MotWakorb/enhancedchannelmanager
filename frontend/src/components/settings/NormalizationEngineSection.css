@@ -1366,7 +1366,7 @@
 }
 
 .norm-engine-apply-summary-errors {
-  color: var(--error);
+  color: var(--danger-text);
   font-weight: 600;
 }
 

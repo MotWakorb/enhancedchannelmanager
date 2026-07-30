@@ -148,7 +148,7 @@
 }
 
 .lookup-entry-remove:hover {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   background: rgba(239, 68, 68, 0.1);
 }
 

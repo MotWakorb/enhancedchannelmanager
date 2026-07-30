@@ -108,21 +108,46 @@
   margin-top: 0.5rem;
 }
 
+/* The table is portaled into the frozen route-header band by
+   `RouteHeaderSlot name="status"` (StatsTab.tsx), so it sits outside the P1
+   content-pane sweep and kept its literal sizes. `0.8125rem` is already
+   exactly `--type-body-size`, so naming the role here is a rename, not a
+   resize — the band's measured geometry is unchanged
+   (bead enhancedchannelmanager-wjbwr). */
 .provider-live-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
+/* A column header, which is the micro role's own idiom — it was already
+   uppercase and tracked, just at 11px/600/0.5px, i.e. the hybrid shape
+   docs/css_guidelines.md § "Partial redeclaration" warns about. The role's full
+   set is declared here: size, weight, tracking and the case. Micro deliberately
+   carries no line-height, so none is written.
+
+   Normally an off-scale size in this band would stay off-scale — it is frozen
+   chrome. This one is safe and was measured before being moved: the header row
+   goes 29px -> 27.5px, but `.provider-live-table-wrapper` caps at 220px and the
+   table clears that at the smallest size that renders at all (7 providers, the
+   first count above LIVE_STATS_CONDENSED_THRESHOLD, is a 242px table), so the
+   wrapper is pinned at 220px in every reachable case. `.header-left`,
+   `.page-header-status` and `.route-page-header` measure identically before and
+   after, in all three themes.
+
+   `--text-muted` is corrected for contrast: against this rule's own
+   `--bg-secondary` it measures 2.61:1 in the light theme, below the WCAG AA
+   4.5:1 floor. `--text-secondary` measures 5.27:1
+   (bead enhancedchannelmanager-wjbwr). */
 .provider-live-table thead th {
   position: sticky;
   top: 0;
   background: var(--bg-secondary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  font-size: 0.6875rem;
-  font-weight: 600;
+  letter-spacing: var(--type-micro-tracking);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-align: left;
   padding: 0.375rem 0.75rem;
   border-bottom: 1px solid var(--border-primary);
@@ -143,12 +168,21 @@
   white-space: nowrap;
 }
 
+/* `--accent-warning` is defined nowhere in the tree, so this always fell
+   through to the hardcoded hex and the high-contrast theme's `--warning`
+   (#ffaa00, 10.37:1 on its background) never reached it — the row rendered
+   #f59e0b at 9.22:1 instead. Same defect class as the `var(--error-color)`
+   PrintGuideModal was carrying, and the same correction the summary-tile twin
+   above already makes (bead enhancedchannelmanager-wjbwr). */
 .provider-live-table tr.unknown-bucket td {
-  color: var(--accent-warning, #f59e0b);
+  color: var(--warning, #f59e0b);
 }
 
+/* A glyph beside meta text takes `--icon-badge` by role. It is 14px, which is
+   what this rule already spelled out, so the band does not move
+   (bead enhancedchannelmanager-wjbwr). */
 .provider-live-table tr.unknown-bucket .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
   vertical-align: text-bottom;
   margin-right: 0.25rem;
 }
@@ -170,28 +204,62 @@
   max-width: 1px !important;
 }
 
-.header-actions {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
+/* `.header-actions` is owned by shared/common.css § TAB HEADERS. The copy that
+ * sat here rendered nothing of this tab's own: StatsTab.tsx has no
+ * `.header-actions` element — its Refresh button goes through
+ * `RouteHeaderSlot name="primary-action"` into the `.header-actions` div that
+ * PageHeader renders. But the copy was bare in the Stats lazy chunk, which is
+ * appended after the eager bundle and never removed, so from the first visit to
+ * Stats it outranked the shared rule on EVERY route's header toolbar for the
+ * rest of the session. It declared the shared rule's five properties with
+ * identical values and omitted its `flex-shrink: 0`, so the override was
+ * render-neutral — and one edit to either file away from being the
+ * `.action-btn` / `.toggle` defect again. Deleted rather than scoped: there is
+ * nothing here to scope. See docs/css_guidelines.md § Load order
+ * (bead enhancedchannelmanager-wjbwr). */
 
+/* The auto-refresh cluster is supporting detail beside the live counts, which
+ * is the meta role. 0.75rem is 12px and the role is 11px, but nothing renders
+ * at the inherited size — every text node under this element (`.refresh-label`,
+ * the CustomSelect trigger) declares its own — so naming the role costs no
+ * geometry; measured identical in all three themes.
+ *
+ * `--text-muted` is corrected because it measures 2.61:1 against the light
+ * theme's background, below the WCAG AA 4.5:1 floor for text; `--text-secondary`
+ * measures 5.27:1. This is the cluster's colour when the interval is Off;
+ * `.active` below overrides it (bead enhancedchannelmanager-wjbwr). */
 .refresh-indicator {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  color: var(--text-secondary);
 }
 
+/* `--success-text` is the token for text drawn ON a `--success` fill; used as
+ * a foreground against the page background it put this glyph at 1.09:1 in the
+ * light theme (#fff on #f5f5f5 — invisible, not merely dim) and 1.06:1 in
+ * high contrast. Bead enhancedchannelmanager-wjbwr measured it and left it,
+ * correctly, because `--success` was not a usable substitute either: 5.97:1
+ * dark and 14.43:1 high contrast but 2.09:1 light.
+ *
+ * `--success` IS the substitute now. Bead enhancedchannelmanager-dlavh
+ * re-toned the light theme's `--success` to a darker green of the same hue
+ * (#22c55e -> #137035), which is the same token decision that fixed
+ * `.status-success` / `.status-label` app-wide. This glyph is the ordinary
+ * "success" idiom and takes the ordinary success colour: 6.54 dark / 6.18
+ * light / 15.30 high contrast against the route header band. */
 .refresh-indicator.active {
-  color: var(--success-text);
+  color: var(--success);
 }
 
+/* This glyph sits beside meta text (`.refresh-label`), which is `--icon-badge`
+ * by role — chosen by what the glyph is doing, not by nearest pixel
+ * (docs/css_guidelines.md § "Adopting a role"). The token is 14px, which is
+ * what this rule already spelled out, so nothing in the band moves
+ * (bead enhancedchannelmanager-wjbwr). */
 .refresh-indicator .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .refresh-indicator .material-icons.spinning {
@@ -200,8 +268,15 @@
 
 /* @keyframes spin is defined in shared/common.css */
 
+/* An interactive control takes the role's SIZE token only and keeps the weight
+   it was authored with (docs/css_guidelines.md § "Adopting a role"). 0.8rem is
+   12.8px, which is not on the scale and was never rendered by anything: this
+   class lands on the CustomSelect container, and `.custom-select-trigger` — the
+   only text node under it — declares its own size, so the inherited value has
+   no consumer. Naming the body role documents what the control is rather than
+   leaving a number nothing reads (bead enhancedchannelmanager-wjbwr). */
 .refresh-select {
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 /* .btn-secondary is defined in shared/common.css */
@@ -727,7 +802,7 @@
 }
 
 .client-disconnect-btn:hover:not(:disabled) {
-  color: var(--error, #ff6b6b);
+  color: var(--danger-text);
   border-color: var(--error, #ff6b6b);
 }
 

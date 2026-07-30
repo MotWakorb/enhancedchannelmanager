@@ -247,14 +247,26 @@
   font-size: var(--icon-badge);
 }
 
+/* All six chips are one idiom: a Tailwind 400-level ink on a 20%-alpha fill of
+   the same hue, declared once for every theme. That is a dark-theme palette,
+   and on a pale row it collapses — measured on the fill over --bg-secondary in
+   the light theme: channel 1.87, epg 1.91, m3u 1.36, watch 1.79, task 1.96,
+   auto_creation 1.44. The light-theme block below re-inks each one to the
+   800-level tone of the SAME hue, so the category colour coding survives
+   intact and only the tone moves.
+
+   Four of them are also marginal in the dark theme, on the --bg-tertiary rows:
+   channel 4.32, epg 4.26, watch 4.33, task 4.18. Those take a one-step
+   lightening (400 -> 300) in place. m3u (5.71) and auto_creation (5.47) pass
+   and are untouched. Bead enhancedchannelmanager-dlavh. */
 .category-channel {
   background-color: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  color: #93c5fd; /* was #60a5fa: 4.32 -> 6.09 on a dark --bg-tertiary row */
 }
 
 .category-epg {
   background-color: rgba(168, 85, 247, 0.2);
-  color: #c084fc;
+  color: #d8b4fe; /* was #c084fc: 4.26 -> 6.36 */
 }
 
 .category-m3u {
@@ -264,18 +276,25 @@
 
 .category-watch {
   background-color: rgba(251, 146, 60, 0.2);
-  color: #fb923c;
+  color: #fdba74; /* was #fb923c: 4.33 -> 5.82 */
 }
 
 .category-task {
   background-color: rgba(139, 92, 246, 0.2);
-  color: #a78bfa;
+  color: #c4b5fd; /* was #a78bfa: 4.18 -> 6.17 */
 }
 
 .category-auto_creation {
   background-color: rgba(20, 184, 166, 0.2);
   color: #2dd4bf;
 }
+
+[data-theme="light"] .category-channel { color: #1e40af; } /* 1.87 -> 6.42 */
+[data-theme="light"] .category-epg { color: #6b21a8; } /* 1.91 -> 6.31 */
+[data-theme="light"] .category-m3u { color: #166534; } /* 1.36 -> 5.57 */
+[data-theme="light"] .category-watch { color: #9a3412; } /* 1.79 -> 5.78 */
+[data-theme="light"] .category-task { color: #5b21b6; } /* 1.96 -> 6.46 */
+[data-theme="light"] .category-auto_creation { color: #115e59; } /* 1.44 -> 5.87 */
 
 .entry-action {
   display: flex;
@@ -336,6 +355,12 @@
   white-space: nowrap;
 }
 
+/* Same shape as `.category-*` above — a 400-level ink on a 15%-alpha fill,
+   declared once for all three themes. In the light theme they measured 1.98,
+   2.03, 1.86 and 1.50 on the fill over --bg-secondary. All four pass in dark
+   (4.64-5.98 on a --bg-tertiary row) and high contrast, so only the light
+   theme is re-inked, to the 800-level tone of the same hue.
+   Bead enhancedchannelmanager-dlavh. */
 .source-ui {
   background-color: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
@@ -355,6 +380,11 @@
   background-color: rgba(20, 184, 166, 0.15);
   color: #2dd4bf;
 }
+
+[data-theme="light"] .source-ui { color: #1e40af; } /* 1.98 -> 6.80 */
+[data-theme="light"] .source-mcp_ai { color: #6b21a8; } /* 2.03 -> 6.70 */
+[data-theme="light"] .source-scheduler { color: #9a3412; } /* 1.86 -> 6.00 */
+[data-theme="light"] .source-auto_creation { color: #115e59; } /* 1.50 -> 6.12 */
 
 /* --text-secondary, not --text-muted (2.61:1 on --bg-secondary in light). */
 .source-unknown {

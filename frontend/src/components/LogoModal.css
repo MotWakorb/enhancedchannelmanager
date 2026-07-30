@@ -127,7 +127,7 @@
 
 .clear-file-btn:hover {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .clear-file-btn .material-icons {

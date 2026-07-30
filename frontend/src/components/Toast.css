@@ -64,7 +64,7 @@
 }
 
 .toast.toast-error .toast-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Content */
@@ -206,7 +206,7 @@
 
 .toast.toast-error .toast-action-button {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .toast.toast-error .toast-action-button:hover {

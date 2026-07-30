@@ -603,7 +603,12 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
   { selector: '.filter-select', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:111 | M3UChangesTab.css:160 | StreamsPane.css:194 — divergent width; § 4.3 flags the StreamsPane copy for verification' },
   { selector: '.filter-select .custom-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:116 | M3UChangesTab.css:165' },
   { selector: '.filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:96 | M3UChangesTab.css:153' },
-  { selector: '.header-actions', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab', 'StatsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:1141 | StatsTab.css:196 | JournalTab.css:65 | M3UChangesTab.css:68' },
+  // StatsTab's copy is gone (bead enhancedchannelmanager-wjbwr): StatsTab.tsx
+  // rendered no `.header-actions` element at all — its Refresh button reaches
+  // PageHeader's `.header-actions` through `RouteHeaderSlot name="primary-action"`
+  // — and the copy declared common.css's five properties with identical values,
+  // so deleting it is render-neutral. Journal and M3U Changes still declare it.
+  { selector: '.header-actions', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:1238 | JournalTab.css:60 | M3UChangesTab.css:63' },
   { selector: '.header-left', chunks: ['JournalTab', 'M3UChangesTab', 'StatsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'StatsTab.css:33 | JournalTab.css:26 | M3UChangesTab.css:34 — divergent row-gap' },
   { selector: '.header-stats', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:41 | M3UChangesTab.css:49' },
   { selector: '@media (max-width: 600px) :: .filter-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:483 | M3UChangesTab.css:527' },

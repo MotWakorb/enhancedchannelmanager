@@ -186,7 +186,7 @@
 }
 
 .notification-item.notification-error .notification-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Content */
@@ -286,7 +286,7 @@
 }
 
 .notification-item-action.delete:hover {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .notification-item-action .material-icons {
@@ -345,7 +345,7 @@
 }
 
 .probe-stat-failed {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .probe-stat-black-screen {
@@ -405,7 +405,7 @@
 }
 
 .probe-cancel-btn {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .probe-cancel-btn:hover {

@@ -42,7 +42,7 @@
 }
 
 .encrypted-backup-card .ebc-hint.is-error {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 .encrypted-backup-card .ebc-checkbox {
@@ -79,7 +79,7 @@
   margin-bottom: 0.875rem;
   font-size: var(--type-body-size);
   font-weight: var(--type-body-weight);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   line-height: var(--type-body-line-height);
 }
 

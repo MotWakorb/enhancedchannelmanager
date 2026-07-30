@@ -159,7 +159,7 @@
 
 .dep-batch-icon-fail {
   font-size: 16px !important;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Available variables panel */
