@@ -1657,7 +1657,7 @@ class TestSmartBootstrapFastPath:
     declared on the ORM that ``create_all()`` will keep racing into the DB
     ahead of the migration timeline.
 
-    Two key invariants:
+    Three key invariants:
 
     1. The fast-path MUST trigger when alembic lags head AND schema matches.
        Without it, the lone unguarded migration in any future release crashes
@@ -1667,10 +1667,18 @@ class TestSmartBootstrapFastPath:
        unset). A fresh DB needs the actual ``upgrade head`` to create
        everything; stamping at head without running migrations would leave a
        0-table install marked as up-to-date.
+
+    3. (enhancedchannelmanager-nywpw) The fast-path MUST NOT stamp across a
+       pending revision that REMOVES a schema object or rows.
+       ``_schema_matches_head`` is a subset check and is structurally blind to
+       such a revision. Those revisions are replayed individually; everything
+       else is still stamped over, so invariant 1 survives for the
+       non-destructive majority.
     """
 
     def test_fast_path_stamps_forward_when_schema_matches(self, tmp_path):
-        """alembic at 0005 + schema fully materialised → stamp head, no upgrade run."""
+        """alembic at 0005 + schema fully materialised → stamp over the
+        non-destructive pending revisions, replay only the destructive ones."""
         from unittest.mock import patch
 
         from alembic import command
@@ -1830,16 +1838,35 @@ class TestSmartBootstrapFastPath:
             head = database.get_alembic_head_revision()
             assert head != "0005", "test premise: head must be > 0005"
 
-            # 3. Call _bootstrap_alembic. Patch alembic.command.upgrade so we
-            # can assert the fast-path skipped it — if upgrade ran, the
-            # patch's call_count would be >= 1.
-            with patch("alembic.command.upgrade") as mock_upgrade:
+            # 3. Call _bootstrap_alembic. Spy on (but still execute)
+            # alembic.command.upgrade so we can see exactly which revisions
+            # were run for real versus stamped over.
+            import alembic.command as alembic_command
+
+            with patch(
+                "alembic.command.upgrade", wraps=alembic_command.upgrade
+            ) as mock_upgrade:
                 database._bootstrap_alembic(engine)
 
-            # 4. Fast-path stamped to head; no upgrade was run.
-            assert mock_upgrade.call_count == 0, (
-                f"upgrade head was called {mock_upgrade.call_count}× — "
-                "fast-path should have skipped it (schema already matches)."
+            # 4a. Only the destructive revisions ran, each targeted by id.
+            # A blanket ``upgrade head`` would reopen bd-ax3uj / bd-5w6jz.
+            targets = [call.args[1] for call in mock_upgrade.call_args_list]
+            assert targets == ["0010", "0011", "0012", "0029", "0041"], targets
+            assert "head" not in targets, (
+                "a blanket `upgrade head` re-runs every pending migration — "
+                "that is the whack-a-mole the fast-path exists to prevent."
+            )
+
+            # 4b. The remaining ~30 pending revisions were stamped over, not
+            # run — that is invariant 1 surviving the nywpw narrowing.
+            pending_count = len(database._pending_revisions(
+                __import__("alembic.script", fromlist=["ScriptDirectory"])
+                .ScriptDirectory.from_config(_make_alembic_config(db_url)),
+                head, "0005",
+            ))
+            assert pending_count - len(targets) >= 25, (
+                f"only {pending_count - len(targets)} revisions were stamped "
+                "over — the fast-path has been narrowed into uselessness."
             )
 
             with engine.connect() as conn:
@@ -1849,6 +1876,11 @@ class TestSmartBootstrapFastPath:
             assert rev == head, (
                 f"alembic_version not stamped to head after fast-path: {rev}"
             )
+
+            # 4c. The destructive revisions genuinely did their work.
+            live_tables = set(inspect(engine).get_table_names())
+            assert "lookup_tables" not in live_tables, "0041 did not drop"
+            assert "ffmpeg_saved_configs" not in live_tables, "0029 did not drop"
         finally:
             engine.dispose()
 
@@ -4260,5 +4292,375 @@ class TestMigration0041:
                 "0041 must be re-appliable after a downgrade."
             )
             assert self.INDEX not in _index_names(engine, self.TABLE)
+        finally:
+            engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# enhancedchannelmanager-nywpw — the fast path must not stamp past a
+# destructive pending revision
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestFastPathDestructiveRevisions:
+    """Regression lock for enhancedchannelmanager-nywpw.
+
+    OBSERVED IN PRODUCTION 2026-07-30: deploying revision 0041 (drop
+    ``lookup_tables``) logged ``Running stamp_revision 0040 -> 0041``.
+    ``alembic_version`` read 0041 while ``lookup_tables`` was still physically
+    present, and 0041's pre-drop row dump — the safety net for exactly the
+    instances that hold operator-authored rows — never ran.
+
+    Cause: the bd-5w6jz fast path stamps forward whenever
+    ``_schema_matches_head`` is true, and that predicate is structurally blind
+    to a drop-only revision. Every ``Base.metadata`` artifact is present
+    *precisely because* the pending migration's whole job is to remove
+    something the model no longer declares.
+
+    These tests reproduce the real scenario: a DB stamped one revision behind
+    head whose live schema fully covers the model shape, with a drop-only
+    revision pending.
+    """
+
+    TABLE = "lookup_tables"
+    DUMP_BASENAME = "lookup_tables_dropped_0041.json"
+
+    @staticmethod
+    def _seed_lookup_rows(engine, count: int = 3) -> None:
+        now = datetime.utcnow().isoformat(sep=" ")
+        with engine.begin() as conn:
+            for i in range(count):
+                conn.execute(
+                    text(
+                        "INSERT INTO lookup_tables "
+                        "(name, description, entries, created_at, updated_at) "
+                        "VALUES (:n, :d, :e, :c, :u)"
+                    ),
+                    {
+                        "n": f"table_{i}",
+                        "d": f"operator-authored table {i}",
+                        "e": json.dumps({f"k{i}": f"v{i}"}),
+                        "c": now,
+                        "u": now,
+                    },
+                )
+
+    def _db_at_0040_matching_head(self, tmp_path):
+        """Upgrade a scratch DB to 0040 — the pre-0041 production shape.
+
+        A DB built by real migrations through 0040 contains every table and
+        column ``Base.metadata`` declares at head (0041 only *removes*
+        ``lookup_tables``, which head's models no longer declare), so
+        ``_schema_matches_head`` returns True. That is the trap.
+        """
+        from alembic import command
+
+        db_file = tmp_path / "journal.db"
+        db_url = f"sqlite:///{db_file}"
+        command.upgrade(_make_alembic_config(db_url), "0040")
+        return db_file, db_url
+
+    def test_pending_drop_only_revision_is_not_stamped_over(self, tmp_path):
+        """0040 + schema-matches-head + pending 0041 → 0041 actually runs."""
+        db_file, db_url = self._db_at_0040_matching_head(tmp_path)
+        engine = create_engine(db_url, future=True)
+        try:
+            # Test premise: the table the pending revision drops is present,
+            # and the fast-path predicate nonetheless says "schema matches".
+            assert inspect(engine).has_table(self.TABLE)
+            assert database._schema_matches_head(engine) is True, (
+                "test premise broken: _schema_matches_head must be True at "
+                "0040 for this to reproduce the production bug."
+            )
+            head = database.get_alembic_head_revision()
+            assert head == "0041", f"test premise: head must be 0041, got {head}"
+
+            database._bootstrap_alembic(engine)
+
+            rev = database.get_current_schema_revision(engine)
+            assert rev == head, f"alembic_version should be at head, got {rev}"
+            assert not inspect(engine).has_table(self.TABLE), (
+                "lookup_tables is still present — the fast path stamped past "
+                "the drop-only revision 0041 instead of running it "
+                "(enhancedchannelmanager-nywpw)."
+            )
+        finally:
+            engine.dispose()
+
+    def test_row_dump_safety_net_runs_on_a_populated_instance(self, tmp_path):
+        """The instances with rows to lose are the ones that need the dump."""
+        db_file, db_url = self._db_at_0040_matching_head(tmp_path)
+        engine = create_engine(db_url, future=True)
+        try:
+            self._seed_lookup_rows(engine, count=3)
+            assert database._schema_matches_head(engine) is True
+
+            database._bootstrap_alembic(engine)
+
+            assert not inspect(engine).has_table(self.TABLE)
+        finally:
+            engine.dispose()
+
+        dump = db_file.parent / self.DUMP_BASENAME
+        assert dump.exists(), (
+            f"0041's pre-drop row dump was never written to {dump} — the "
+            "safety net is absent on exactly the instances that have rows "
+            "to lose (enhancedchannelmanager-nywpw)."
+        )
+        payload = json.loads(dump.read_text())
+        assert payload["revision"] == "0041"
+        assert payload["table"] == self.TABLE
+        assert [row["name"] for row in payload["rows"]] == [
+            "table_0", "table_1", "table_2",
+        ]
+        assert payload["rows"][1]["entries"] == {"k1": "v1"}
+
+    def test_downgrade_path_remains_usable_after_bootstrap(self, tmp_path):
+        """The documented rollback path works after a bootstrap that ran 0041.
+
+        NOTE: this test is deliberately *not* red-first. The bead
+        (enhancedchannelmanager-nywpw) lists "``alembic downgrade 0040`` on a
+        stamped instance tries to CREATE a table that already exists and
+        fails" as consequence 2. That is inaccurate for 0041 specifically —
+        its ``downgrade()`` is inspect-guarded and returns early when the
+        table is present, so a stamped-not-run instance silently no-ops rather
+        than crashing. The consequence is real for the general case (an
+        unguarded drop revision), not for this one. Kept as a forward lock on
+        0041's round-trip through the bootstrap path.
+        """
+        from alembic import command
+
+        db_file, db_url = self._db_at_0040_matching_head(tmp_path)
+        engine = create_engine(db_url, future=True)
+        try:
+            database._bootstrap_alembic(engine)
+        finally:
+            engine.dispose()
+
+        command.downgrade(_make_alembic_config(db_url), "0040")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert inspect(engine).has_table(self.TABLE), (
+                "downgrade to 0040 did not recreate lookup_tables"
+            )
+        finally:
+            engine.dispose()
+
+    def test_fast_path_still_skips_non_destructive_pending_revisions(self, tmp_path):
+        """The fix NARROWS the fast path — it does not remove it.
+
+        From 0040 the only pending revision is the destructive 0041, so
+        exactly one revision may be executed and it must be 0041 by id —
+        never a blanket ``upgrade head`` that re-runs the whole pending range
+        (that would reopen the bd-ax3uj / bd-5w6jz whack-a-mole).
+        """
+        from unittest.mock import patch
+
+        import alembic.command as alembic_command
+
+        _db_file, db_url = self._db_at_0040_matching_head(tmp_path)
+        engine = create_engine(db_url, future=True)
+        try:
+            with patch(
+                "alembic.command.upgrade", wraps=alembic_command.upgrade
+            ) as mock_upgrade:
+                database._bootstrap_alembic(engine)
+
+            targets = [call.args[1] for call in mock_upgrade.call_args_list]
+            assert targets == ["0041"], (
+                f"expected exactly one targeted upgrade to 0041, got {targets}"
+            )
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.integration
+class TestDestructiveRevisionDetection:
+    """Pins the destructive-revision detector against the real revision set."""
+
+    def test_detects_exactly_the_known_destructive_revisions(self):
+        from alembic.script import ScriptDirectory
+
+        cfg = _make_alembic_config("sqlite:///:memory:")
+        script_dir = ScriptDirectory.from_config(cfg)
+        pending = database._pending_revisions(script_dir, "0041", "0001")
+        flagged = [s.revision for s in pending if database._revision_is_destructive(s)]
+        assert flagged == ["0010", "0011", "0012", "0029", "0041"], flagged
+
+    def test_prose_about_ddl_in_a_docstring_is_not_a_drop(self, tmp_path):
+        """Docstrings routinely *describe* DDL; that must not flag a revision.
+
+        Load-bearing, not theoretical: without docstring stripping, revisions
+        0008, 0023, 0024, 0039 and 0040 all flag as destructive purely on
+        prose (e.g. 0011's "SQLite has no ``ALTER TABLE DROP CONSTRAINT``"),
+        which would drag five extra migrations into every replay.
+        """
+        prose = tmp_path / "prose_only.py"
+        prose.write_text(
+            '"""This revision explains that SQLite cannot DROP COLUMN.\n\n'
+            'It also mentions DROP TABLE and DELETE FROM in passing.\n"""\n\n'
+            "def upgrade():\n"
+            '    """We would DROP INDEX here if SQLite allowed it."""\n'
+            "    op.add_column('t', None)\n"
+        )
+
+        class _S:
+            revision = "9999"
+            path = str(prose)
+
+        assert database._revision_is_destructive(_S()) is False
+
+    def test_unparseable_revision_module_fails_safe(self, tmp_path):
+        """A module the scanner cannot parse must be treated as destructive."""
+        bad = tmp_path / "broken_revision.py"
+        bad.write_text("def upgrade(:\n    pass\n")
+
+        class _FakeScript:
+            revision = "9999"
+            path = str(bad)
+
+        assert database._revision_is_destructive(_FakeScript()) is True
+
+    def test_explicit_marker_overrides_the_scanner(self, tmp_path):
+        marker_true = tmp_path / "marker_true.py"
+        marker_true.write_text("destructive = True\n\ndef upgrade():\n    pass\n")
+        marker_false = tmp_path / "marker_false.py"
+        marker_false.write_text(
+            "destructive = False\n\n"
+            "def upgrade():\n"
+            "    op.drop_table('x')\n"
+        )
+
+        class _S:
+            def __init__(self, path):
+                self.revision = "9999"
+                self.path = str(path)
+
+        assert database._revision_is_destructive(_S(marker_true)) is True
+        assert database._revision_is_destructive(_S(marker_false)) is False
+
+
+@pytest.mark.integration
+class TestStampedPastDropSelfHeal:
+    """Self-heal for the population the pre-fix fast path already broke.
+
+    Reproduces the live instance's state exactly (verified 2026-07-30 against
+    ``ecm-ecm-1``): ``alembic_version = '0041'`` while ``lookup_tables`` AND
+    all four revision-0029 tables are still physically present. On such an
+    install ``current_rev == head``, so the fast path never fires and
+    ``upgrade head`` is a no-op — without this heal the drops would never
+    happen and ``alembic_version`` would assert a schema state that is not
+    true, forever.
+    """
+
+    LEFTOVER_0029 = (
+        "ffmpeg_saved_configs",
+        "playlist_profiles",
+        "publish_configurations",
+        "publish_history",
+    )
+
+    def _stamped_past_db(self, tmp_path):
+        """Upgrade to 0028, then STAMP to head — the pre-fix fast-path result."""
+        from alembic import command
+
+        db_file = tmp_path / "journal.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+        # Everything up to (but not including) the first table-drop revision.
+        command.upgrade(cfg, "0028")
+        # Now stamp straight to head, exactly as the pre-nywpw fast path did.
+        command.stamp(cfg, "0041")
+        return db_file, db_url
+
+    def test_heals_lookup_tables_and_writes_the_dump(self, tmp_path):
+        db_file, db_url = self._stamped_past_db(tmp_path)
+        engine = create_engine(db_url, future=True)
+        try:
+            # Test premise: the live-instance state.
+            assert database.get_current_schema_revision(engine) == "0041"
+            live = set(inspect(engine).get_table_names())
+            assert "lookup_tables" in live
+            assert set(self.LEFTOVER_0029).issubset(live)
+
+            TestFastPathDestructiveRevisions._seed_lookup_rows(engine, count=2)
+
+            database._bootstrap_alembic(engine)
+
+            live = set(inspect(engine).get_table_names())
+            assert "lookup_tables" not in live, (
+                "stamped-past 0041 was not healed — alembic_version still "
+                "lies about the physical schema (enhancedchannelmanager-nywpw)."
+            )
+            assert not set(self.LEFTOVER_0029).intersection(live), (
+                "stamped-past 0029 was not healed: "
+                f"{sorted(set(self.LEFTOVER_0029).intersection(live))}"
+            )
+            # The version row must be restored, not left at a predecessor.
+            assert database.get_current_schema_revision(engine) == "0041"
+        finally:
+            engine.dispose()
+
+        dump = db_file.parent / "lookup_tables_dropped_0041.json"
+        assert dump.exists(), (
+            "the heal must run 0041's own upgrade() so its pre-drop row dump "
+            "fires — that safety net is the whole point for populated instances."
+        )
+        assert len(json.loads(dump.read_text())["rows"]) == 2
+
+    def test_heal_is_a_noop_on_a_correctly_migrated_install(self, tmp_path):
+        """Steady state must not stamp, upgrade, or log an error."""
+        from unittest.mock import patch
+
+        from alembic import command
+
+        db_file = tmp_path / "journal.db"
+        db_url = f"sqlite:///{db_file}"
+        command.upgrade(_make_alembic_config(db_url), "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with patch("alembic.command.stamp") as mock_stamp:
+                database._heal_stamped_past_drops(
+                    _make_alembic_config(db_url),
+                    command,
+                    __import__("alembic.script", fromlist=["ScriptDirectory"])
+                    .ScriptDirectory.from_config(_make_alembic_config(db_url)),
+                    engine,
+                    "0041",
+                )
+            assert mock_stamp.call_count == 0, (
+                "the heal touched alembic_version on a healthy install"
+            )
+        finally:
+            engine.dispose()
+
+    def test_heal_skips_revisions_that_are_not_yet_applied(self, tmp_path):
+        """Tables present + revision NOT applied → normal upgrade path owns it."""
+        from unittest.mock import patch
+
+        from alembic import command
+
+        db_file = tmp_path / "journal.db"
+        db_url = f"sqlite:///{db_file}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0028")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert inspect(engine).has_table("lookup_tables")
+            with patch("alembic.command.stamp") as mock_stamp:
+                database._heal_stamped_past_drops(
+                    cfg,
+                    command,
+                    __import__("alembic.script", fromlist=["ScriptDirectory"])
+                    .ScriptDirectory.from_config(cfg),
+                    engine,
+                    "0028",
+                )
+            assert mock_stamp.call_count == 0
+            assert inspect(engine).has_table("lookup_tables")
         finally:
             engine.dispose()
