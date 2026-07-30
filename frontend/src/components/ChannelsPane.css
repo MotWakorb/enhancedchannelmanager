@@ -2140,6 +2140,28 @@
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Group Probe Button - probes all streams in all channels of a group */
+/* Idle opacity is 0.75, not 0.5. This is an icon-only button with no adjacent
+   label, so the glyph IS the affordance and WCAG 1.4.11's 3:1 non-text floor
+   applies to it — see `docs/css_guidelines.md` -> "opacity de-emphasises the
+   group, not the ink". PO decision on bead `enhancedchannelmanager-dlavh`: raise
+   the opacity rather than swap to a lighter ink token, so the de-emphasised
+   intent survives while the control stays findable.
+
+   Composited ratios against the surface it actually sits on (#1e1e23 dark /
+   #ffffff light / #000000 high-contrast), dark / light / high-contrast:
+       opacity 0.50   2.32 / 2.10 / 2.82   fails 3:1 in all three
+       opacity 0.70   3.30 / 3.00 / 4.69   clears, but light sits ON the floor
+       opacity 0.75   3.55 / 3.28 / 5.24   shipped
+   It is deliberately not 1.0 — hover still steps to full opacity plus the teal
+   ink below.
+
+   These numbers were RE-MEASURED on bead `enhancedchannelmanager-0zq1p`. This
+   comment previously recorded 1.56 / 2.10 / 2.25 at 0.5 and 3.15 / 3.28 / 5.02
+   at 0.75, and claimed 0.75 was the smallest 0.05 step that clears the floor
+   because 0.70 read 2.76 in dark. All of those came from a measurement core that
+   accumulated group opacity in the wrong direction and so faded this button's
+   own page background toward white; 0.70 does clear 3:1. The remediation was
+   still correct, and 0.75 stands as shipped — only the evidence was wrong. */
 .probe-group-btn {
   display: flex;
   align-items: center;
@@ -2151,7 +2173,7 @@
   cursor: pointer;
   border-radius: 4px;
   transition: color 0.15s, background 0.15s, opacity 0.15s;
-  opacity: 0.5;
+  opacity: 0.75;
   margin-left: 0.5rem;
 }
 
@@ -2164,6 +2186,11 @@
   background: rgba(20, 184, 166, 0.1);
 }
 
+/* Stays 0.5 while the idle state is 0.75 (bead enhancedchannelmanager-dlavh).
+   WCAG 1.4.3/1.4.11 exempt disabled controls, and `e2e/contrast-aa.spec.ts`
+   skips `[disabled]` subtrees for that reason, so the floor that forced the idle
+   value does not apply here — and the two values now actually distinguish
+   "de-emphasised but available" from "not available". */
 .probe-group-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

@@ -253,9 +253,39 @@
   background: var(--bg-hover);
 }
 
+/* The tint is 9%, not 14%, because the label and its own backdrop are the SAME
+   token: `color: var(--accent-primary)` on a tint of `--accent-primary`. In the
+   light theme #4f46e5 on the 14% composite (#d2d1e7 over --bg-tertiary) measured
+   4.20:1 against the WCAG AA 4.5 floor, on all ten non-Settings routes. At 9%
+   (#dad9e8) it measures 4.51. Darkening the token instead moves text and
+   backdrop together and buys much less than it appears to, and `--accent-primary`
+   is off limits regardless: 359 uses, 22 of them solid fills under white text, it
+   feeds `--button-primary-bg`, and fourteen declarations spell
+   `var(--accent-primary)33` — an 8-digit-hex trick that only parses while the
+   value stays a six-digit hex. PO decision on bead
+   `enhancedchannelmanager-dlavh`; measured by `e2e/contrast-aa.spec.ts`, which
+   carried this site as its first ALLOWLIST entry until this change.
+
+   The tint is a literal here, used by this one selector, so thinning it changes
+   nothing else. It does change the selected-row wash in ALL THREE themes, which
+   is the cost the PO accepted — the step moves each channel by 5% of the
+   distance between the tint colour and --bg-tertiary, so ~8 RGB units in light
+   and ~11 in dark and high-contrast, where the tint colour is further from the
+   surface. Label contrast rises everywhere (dark 9.05 -> 10.73, light
+   4.20 -> 4.51, high contrast 12.24 -> 14.31) because the backdrop moves away
+   from the ink; what shrinks is the wash's separation from the unselected rail.
+   Measured on the composited fills — selected row against `--bg-tertiary`:
+   dark 1.57 -> 1.32, light 1.22 -> 1.14, high contrast 1.44 -> 1.23; in CIE L*
+   the step drops 13.4 -> 8.6, 7.5 -> 4.8 and 14.9 -> 9.5. Every theme keeps
+   9/14 of the step, so dark and high contrast give up roughly twice as much
+   absolute wash as light gains — they were already passing, and that is the
+   trade the PO took. Selection is still carried by the 3px inset accent bar and
+   the accent-coloured label, not by the wash alone. Settings' drill-in is a
+   different rule (`SettingsTab.css`, `--accent-10` + `--accent-secondary`) and
+   is untouched. */
 .navigation-destination.active {
   color: var(--accent-primary);
-  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 9%, transparent);
   box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 

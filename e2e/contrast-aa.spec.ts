@@ -54,8 +54,40 @@
  * 3. `opacity` IS A GROUP MULTIPLIER, NOT A TEXT PROPERTY.
  *    An element with `opacity < 1` fades its entire subtree render — its own
  *    background and its text alike — onto whatever is behind it. That is why
- *    the Stats 64px `tv_off` illustration lands at 2.13 and not at the 4.2 its
+ *    the Stats 64px `tv_off` illustration lands at 2.11 and not at the 4.2 its
  *    declared `color` alone would suggest.
+ *
+ * 3a. AND IT ONLY EVER FADES DOWNWARD. `chainOf` walks UPWARD because that is
+ *    the only direction the DOM offers, but the alpha a node's background is
+ *    painted at is the product of its own `opacity` and its ANCESTORS' — a
+ *    descendant's `opacity` cannot reach back up and fade the surface the
+ *    descendant is sitting on. Accumulating in walk order and stamping the
+ *    running product onto each layer as it goes gets this exactly backwards,
+ *    and that is the bug bead `enhancedchannelmanager-0zq1p` fixed: an element
+ *    at `opacity: .5` had its whole page background painted at 0.5 over the
+ *    canvas's white, so the guard read a backdrop nothing on screen was
+ *    painting. `.probe-group-btn .material-icons` in dark sits on `#1e1e23`
+ *    (only `.channels-pane` and `html` paint, both `rgb(30,30,35)`); the old
+ *    core resolved `#56565a`, which is `#1e1e23` composited twice at alpha 0.5
+ *    over white. Three independent readings settled it: a screenshot of the
+ *    rendered page sampled inside the glyph's own box (mode `#1e1e23`, ink
+ *    `#575761`), the sibling text in `.no-streams` which has `opacity: 1` and
+ *    must by construction share its surface (`#252530` dark / `#f5f5f5` light /
+ *    `#0a0a0a` high-contrast — what the corrected core returns for the glyph,
+ *    not what the old one did), and the arithmetic. The error was invisible in
+ *    light because leaking the white canvas into a near-white page is a
+ *    near-no-op, which is the theme the original was validated against.
+ *
+ *    `selfOpacity` was NOT part of the bug and is unchanged: the measured
+ *    element's text really is inside every group in the chain, so the full
+ *    product is the right alpha for the ink.
+ *
+ *    KNOWN RESIDUAL, deliberately not fixed: `paint()` composites one
+ *    `fillRect` per layer, which reproduces the compositor exactly unless a
+ *    translucent group paints an OPAQUE background over another opaque one
+ *    (true nesting would flatten the group into a buffer first and composite
+ *    once). Measured across all 8277 sites this guard walks: zero such chains
+ *    today. If one appears the model needs the buffer, not another alpha term.
  *
  * 4. NOT-ACTUALLY-VISIBLE IS SKIPPED, AND THAT IS NOT A LOOPHOLE.
  *    `.visually-hidden` is a 1x1 clipped box. A naive walker reports it as
@@ -254,44 +286,35 @@ interface Exception {
  *     entry was deleted and `FREEZE_ANIMATION` added. Recorded because it is the
  *     clearest demonstration available that the ratchet catches a wrong entry —
  *     including the author's own — and not just a fixed one.
+ *   - `.navigation-destination.active:not(.settings-nav-item) .navigation-label`
+ *     — the selected primary-rail row, which this guard found and carried as its
+ *     first entry at a measured 4.20 light. The PO chose the 9% tint over
+ *     retoning `--accent-primary`, on bead `enhancedchannelmanager-dlavh`;
+ *     `TabNavigation.css` now paints `color-mix(... 9%, transparent)` and it
+ *     measures 4.51 light, with dark 9.05 -> 10.73 and high-contrast
+ *     12.24 -> 14.31 (both were already passing; the wash changed in all three
+ *     themes, which is the cost the PO accepted). `e2e/frozen-chrome.spec.ts`
+ *     pins the rail's geometry, not its colour, and was re-run to confirm it.
+ *   - `.probe-group-btn .material-icons` on Channel Manager — the only entry this
+ *     guard ever carried that failed in all three themes. An icon-only button
+ *     with no adjacent label, so the glyph is the affordance and the decorative
+ *     exemption did not apply. Fixed on the same PO decision by raising the idle
+ *     opacity 0.5 -> 0.75 (`ChannelsPane.css`).
+ *
+ *     RE-MEASURED under the corrected core (bead `enhancedchannelmanager-0zq1p`);
+ *     the figures this entry carried while it was live — 1.56 / 2.10 / 2.25 at
+ *     0.5, and 3.15 / 3.28 / 5.02 at 0.75 — were the old core's and are wrong in
+ *     dark and high-contrast. True, dark / light / high-contrast:
+ *         opacity 0.50   2.32 / 2.10 / 2.82   (fails all three — still a defect)
+ *         opacity 0.70   3.30 / 3.00 / 4.69
+ *         opacity 0.75   3.55 / 3.28 / 5.24   (shipped)
+ *     So the fix was right and the entry's deletion was right; only the numbers
+ *     were. 0.70 was rejected at the time on a reported 2.76 dark that the old
+ *     core invented — it does in fact clear 3:1 in all three themes, with light
+ *     sitting exactly ON the floor at 3.00 and no margin at all. 0.75 stands as
+ *     shipped; nothing here is a reason to re-open a settled PO decision.
  */
 const ALLOWLIST: readonly Exception[] = [
-  // ── The selected route in the primary rail, on EVERY route ──────────────
-  // Found by this guard, not reported to it. `.navigation-destination.active`
-  // (TabNavigation.css) paints `color: var(--accent-primary)` on
-  // `color-mix(in srgb, var(--accent-primary) 14%, transparent)` — the text and
-  // its own backdrop are the same token, so darkening the token darkens both
-  // and buys much less than it appears to. Light measures 4.20 against 4.5.
-  // Dark (#ffffff) and high-contrast (#ffff00) pass comfortably.
-  //
-  // NOT fixed here, deliberately. Thinning the tint to 9% clears it (4.53) but
-  // changes the selected-row wash in all three themes, and the primary rail is
-  // frozen chrome settled by beads `-57pp3` and `-eupzi` and pinned by
-  // `e2e/frozen-chrome.spec.ts`. Retoning `--accent-primary` instead is not
-  // available: 359 uses, 22 of them solid fills, it feeds `--button-primary-bg`,
-  // and fourteen declarations spell `var(--accent-primary)33`, which only parses
-  // while the value stays a six-digit hex. That is a look change and a
-  // blast-radius decision for the PO, not a drive-by.
-  //
-  // `:not(.settings-nav-item)` is load-bearing. Inside the Settings drill-in the
-  // same anchor carries BOTH classes, and `SettingsTab.css` wins the background
-  // with `--accent-10` and the colour with `--accent-secondary` — a different
-  // token on a different surface, fixed by the light `--accent-secondary` retone
-  // in this same change. Without the exclusion this entry claimed that site too,
-  // and the guard's own REGRESSED arm reported it at 3.25 against the recorded
-  // 4.20. That is the ratchet working: an over-broad selector was caught by the
-  // spec rather than by a reviewer.
-  {
-    selector: '.navigation-destination.active:not(.settings-nav-item) .navigation-label',
-    worst: { light: 4.2 },
-    bead: 'enhancedchannelmanager-eo7er',
-    reason:
-      'Selected rail row: --accent-primary #4f46e5 on a 14% tint of itself over --bg-tertiary ' +
-      '(#d2d1e7) = 4.20 vs 4.5. Renders on all ten non-Settings routes. Fix is either a 9% tint ' +
-      '(4.53) or a retone of --accent-primary; both need PO sign-off because the rail is frozen ' +
-      'chrome pinned by e2e/frozen-chrome.spec.ts.',
-  },
-
   // ── Dashboard per-card identity glyphs ─────────────────────────────────
   // `.dashboard-card-icon` paints `color: var(--dashboard-accent)` on
   // `color-mix(in srgb, var(--dashboard-accent) 16%, transparent)` — again a
@@ -302,6 +325,22 @@ const ALLOWLIST: readonly Exception[] = [
   // per-card accent is "decorative only — every card states its meaning in
   // text", which is the 1.4.11 exemption argument. It is recorded here rather
   // than assumed: the exemption is the PO's call, not the CSS comment's.
+  //
+  // THE PO HAS NOW MADE IT, on bead `enhancedchannelmanager-dlavh`: these five
+  // glyphs are EXEMPT AS DECORATIVE. WCAG 1.4.11 governs graphics that convey
+  // information, and each card states its status in words beside the chip, so the
+  // glyph conveys nothing the text does not. So this entry is no longer "pending"
+  // — it is a ratified exemption, and it is deliberately left here rather than
+  // being retired, because it is the ratchet on the premise the ratification
+  // rests on. The moment anybody makes a card's glyph informational — a
+  // tone-carrying colour with no adjacent word, a glyph that is the only
+  // difference between two card states — the exemption is void, and the entry is
+  // what fails the build and says so. Do not delete it as "a passing exception";
+  // the STALE arm will delete it on its own if the glyphs ever clear 3:1.
+  //
+  // `OperatorDashboard.css` is deliberately NOT edited: nothing about the
+  // ratification changes a rendered colour, and the file carried in-flight
+  // uncommitted work from bead `2896r` when this was decided.
   {
     route: 'dashboard',
     selector: '.dashboard-card-icon .material-icons',
@@ -309,8 +348,11 @@ const ALLOWLIST: readonly Exception[] = [
     bead: 'enhancedchannelmanager-eo7er',
     reason:
       'Per-card identity glyph on a 16% tint of its own colour; 5 of 6 fail the 3:1 glyph floor in ' +
-      'light (worst amber #f59e0b at 1.75). OperatorDashboard.css argues they are decorative and ' +
-      'that every card states its meaning in text — 1.4.11 exemption, pending PO confirmation.',
+      'light — amber #f59e0b 1.75, cyan 1.92, emerald 2.01, slate 2.07, blue 2.81; violet passes ' +
+      'at 3.19. Dark (3.36-5.26) and high-contrast (4.06-7.28) pass. RATIFIED DECORATIVE by the PO ' +
+      'on bead enhancedchannelmanager-dlavh: 1.4.11 governs graphics that convey information, and ' +
+      'every card states its status in words beside the chip. Entry retained as the ratchet on that ' +
+      'premise — if a glyph ever becomes informational, this entry is wrong and the build says so.',
   },
 
   // ── Stats empty-state illustration ─────────────────────────────────────
@@ -318,36 +360,41 @@ const ALLOWLIST: readonly Exception[] = [
   // declared colour clears the floor on its own and the group fade is what
   // takes it under. Purely decorative — `.no-streams` states the condition in
   // text beside it.
+  //
+  // This is the LAST survivor of the `opacity`-as-de-emphasis idiom in this
+  // allowlist, and the reason it survived is worth writing down, because it is
+  // not "nobody got to it". `.probe-group-btn .material-icons` had the identical
+  // shape and was fixed on bead `enhancedchannelmanager-dlavh` by raising the
+  // opacity; this one was NOT, on the same PO decision, because the two differ on
+  // the one thing 1.4.11 turns on. The probe button is an icon-only control with
+  // no adjacent label, so its glyph IS the affordance and has to be findable.
+  // This is a 64px illustration with "No active streams" set directly beneath it
+  // — it identifies nothing the words do not. Raising its opacity would be
+  // undoing a deliberate de-emphasis to satisfy a floor that does not apply.
+  //
+  // RE-MEASURED under the corrected measurement core (bead
+  // `enhancedchannelmanager-0zq1p`). It carried 1.78 dark / 2.13 light, both of
+  // them the old core's; the truth is 2.68 dark / 2.11 light, and high-contrast
+  // is 4.30 rather than the 3.13 the old core reported — still passing, so still
+  // correctly absent from `worst`. The conclusion is unchanged (it fails the 3:1
+  // glyph floor in dark and light and is exempt as decorative); only the numbers
+  // were wrong. The proof it is now reading the real surface: its sibling text
+  // inside the same `.no-streams` block has `opacity: 1` and therefore sits on
+  // exactly the same backdrop, and the corrected core returns the same #252530 /
+  // #f5f5f5 / #0a0a0a for both. The old core gave the glyph #5a5a60 / #fafafa /
+  // #444444 and the text beside it #252530 / #f5f5f5 / #0a0a0a.
   {
     route: 'stats',
     selector: '.no-streams .material-icons',
-    worst: { dark: 1.78, light: 2.13 },
+    worst: { dark: 2.68, light: 2.11 },
     bead: 'enhancedchannelmanager-eo7er',
     reason:
       '64px decorative empty-state illustration; `opacity: .5` takes it under even the 3:1 glyph ' +
-      'floor (dark 1.78, light 2.13; high-contrast passes). The adjacent text carries the meaning.',
+      'floor (dark 2.68, light 2.11; high-contrast passes at 4.30). The adjacent text carries the ' +
+      'meaning. Ratios re-measured under the corrected core, bead enhancedchannelmanager-0zq1p.',
     // Data-dependent in the INVERSE direction: it renders only while the
     // instance has no streams. On a populated instance it is legitimately
     // absent, which must not read as a rotted selector.
-    dataDependent: true,
-  },
-
-  // ── Channel Manager per-group probe affordance ─────────────────────────
-  // Also found by this guard rather than reported to it, and the same defect
-  // SHAPE as the Stats illustration: a `.material-icons` glyph dimmed by
-  // `opacity: .5` while idle. Unlike that one this is an interactive control's
-  // only icon, so the 1.4.11 exemption argument is much weaker — it fails in
-  // ALL THREE themes, which is why it is worth its own line rather than being
-  // folded into the entry above.
-  {
-    route: 'channel-manager',
-    selector: '.probe-group-btn .material-icons',
-    worst: { dark: 1.56, light: 2.1, 'high-contrast': 2.25 },
-    bead: 'enhancedchannelmanager-eo7er',
-    reason:
-      'Idle per-group probe button glyph at `opacity: .5`: dark 1.56, light 2.10, high-contrast ' +
-      '2.25, all against 3.0. Same shape as the Stats illustration but on an interactive control, ' +
-      'so the decorative exemption does not obviously apply.',
     dataDependent: true,
   },
 ]
@@ -449,20 +496,34 @@ async function scanRoute(
         return true
       }
 
-      /* ─── the composited stacking chain (see header notes 2 and 3) ─────── */
+      /* ─── the composited stacking chain (see header notes 2, 3 and 3a) ───
+         TWO PASSES, and the order is the whole point. The walk can only go
+         UPWARD (there is no "list my opacity ancestors" API), but the alpha a
+         node's background is painted at is the product of its OWN opacity and
+         its ANCESTORS' — never its descendants'. So the chain is collected
+         first and the alphas are accumulated afterwards, from the root down. */
       const chainOf = (el: Element) => {
-        const layers: Array<{ colour: string; groupAlpha: number }> = []
-        let cumulative = 1
+        const chain: Array<{ colour: string; opacity: number }> = []
         let gradient: string | null = null
         for (let n: Element | null = el; n; n = n.parentElement) {
           const cs = getComputedStyle(n)
           const op = Number.parseFloat(cs.opacity)
-          cumulative *= Number.isFinite(op) ? op : 1
           if (!gradient && cs.backgroundImage && cs.backgroundImage !== 'none') {
             gradient = `${n.tagName.toLowerCase()}: ${cs.backgroundImage.slice(0, 48)}`
           }
-          layers.push({ colour: cs.backgroundColor, groupAlpha: cumulative })
+          chain.push({ colour: cs.backgroundColor, opacity: Number.isFinite(op) ? op : 1 })
           if (n === document.documentElement) break
+        }
+        // Root -> element. `cumulative` therefore holds every opacity from the
+        // root down to and including `chain[i]` when `chain[i]` is stamped, and
+        // by the time the loop ends it holds the product of the whole chain —
+        // which is exactly `selfOpacity`, because the measured element's TEXT
+        // really is inside every one of those groups.
+        const layers: Array<{ colour: string; groupAlpha: number }> = new Array(chain.length)
+        let cumulative = 1
+        for (let i = chain.length - 1; i >= 0; i -= 1) {
+          cumulative *= chain[i].opacity
+          layers[i] = { colour: chain[i].colour, groupAlpha: cumulative }
         }
         return { layers, selfOpacity: cumulative, gradient }
       }

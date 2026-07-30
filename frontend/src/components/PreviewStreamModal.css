@@ -184,19 +184,36 @@
   font-weight: var(--type-item-title-weight);
 }
 
-/* Body role. 13.6px -> 13px. */
+/* Body role. 13.6px -> 13px.
+   NO `opacity` here, deliberately — this is the sentence that tells the
+   operator why playback failed, and `opacity` fades text against the PAGE, not
+   against the panel it sits on (see `docs/css_guidelines.md` -> "opacity
+   de-emphasises the group, not the ink"). At the `opacity: .9` this rule used
+   to carry it measured 4.14 dark / 4.54 light / 4.05 high-contrast against the
+   4.5 AA floor — failing in two of three themes for the sake of a fade nobody
+   can see. At full opacity it is 4.74 / 5.01 / 4.70. The heading above it is
+   `<strong>` at 13px/600 and the detail line below is 11px, so the hierarchy is
+   carried by size and weight, which cost no contrast (bead
+   `enhancedchannelmanager-4pzvg`). */
 .preview-stream-error p {
   margin: 0;
   font-size: var(--type-body-size);
   line-height: var(--type-body-line-height);
   font-weight: var(--type-body-weight);
-  opacity: 0.9;
 }
 
-/* Meta role. 12.8px -> 11px. */
+/* Meta role. 12.8px -> 11px.
+   De-emphasised with an ink token, not with `opacity`. At `opacity: .7` the
+   detail line measured 3.09 dark / 3.41 light / 2.99 high-contrast — the worst
+   contrast anywhere in this dialog, on the most technical string in it.
+   `--text-secondary` is the house token for meta text (`docs/css_guidelines.md`
+   -> Colour) and reads as genuinely secondary here because it is neutral beside
+   the red heading and message: 5.59 / 5.00 / 12.12. `--text-muted` was measured
+   too and rejected — 4.17 dark, under the floor on this tint (bead
+   `enhancedchannelmanager-4pzvg`). */
 .preview-stream-error .error-details {
   margin-top: 0.25rem;
-  opacity: 0.7;
+  color: var(--text-secondary);
   font-size: var(--type-meta-size);
   line-height: var(--type-meta-line-height);
   font-weight: var(--type-meta-weight);

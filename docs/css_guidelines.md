@@ -195,6 +195,51 @@ coding — is untouched. `.account-type.hdhr` (bead `sccol`) established it;
 and `.group-auto-sync-badge` follow it (bead `dlavh`). Record the measured
 ratio before and after in the comment.
 
+#### `opacity` de-emphasises the group, not the ink
+
+`opacity` is a **group multiplier**. An element with `opacity < 1` renders its
+whole subtree — its own background and its text alike — and then fades that
+render onto whatever is behind it. It does not lighten a colour against the
+surface the element sits on; it lowers the contrast of everything in the
+element against the PAGE. So reaching for `opacity` to make text "quieter"
+spends contrast, and spends it in a way that no theme token can compensate for,
+because the fade is applied after the theme has already resolved.
+
+**The rule.** Use `opacity` only where the contrast floor does not apply:
+decorative illustrations, `:disabled` controls (WCAG 1.4.3 and 1.4.11 both
+exempt them, and `e2e/contrast-aa.spec.ts` skips `[disabled]` subtrees for that
+reason). Where the de-emphasised thing is **text**, or is a control's **only
+glyph**, express the de-emphasis with an ink token instead — usually
+`--text-secondary` — and record the measured ratio in the rule's comment.
+
+Three sites found in one session, and they did not all resolve the same way,
+because WCAG 1.4.11 turns on whether the thing conveys information:
+
+| Site | Shape | Outcome |
+|-|-|-|
+| `.probe-group-btn .material-icons` | Icon-only control, no adjacent label — the glyph IS the affordance, 3:1 applies | **Fixed** by raising `opacity` `.5` → `.75` (bead `dlavh`): 2.32/2.10/2.82 → 3.55/3.28/5.24 |
+| Stats `.no-streams .material-icons` | 64px illustration with "No active streams" set directly beneath it — identifies nothing the words do not | **Deliberately not fixed** (bead `eo7er`). Raising it would undo an intentional de-emphasis to satisfy a floor that does not apply. Carried in the guard's allowlist at 2.68 dark / 2.11 light |
+| `.preview-stream-error p` / `.error-details` | Error text the operator has to read | **Fixed** by removing the fade (bead `4pzvg`): the message drops `opacity: .9` (4.14/4.54/4.05 → 4.74/5.01/4.70) and the detail line trades `opacity: .7` for `--text-secondary` (3.09/3.41/2.99 → 5.59/5.00/12.12) |
+
+Ratios are dark / light / high-contrast, composited against the surface the
+element actually sits on.
+
+Raising an `opacity` is a legitimate fix and often the least invasive one —
+it keeps the de-emphasised intent and the hover step. It is only unavailable
+when the value is already 1. Where hierarchy is what you actually wanted, size
+and weight cost no contrast at all: that is why the preview-stream error block
+needs no fade — its heading is 13px/600, its message 13px/400 and its detail
+line 11px.
+
+**Which core measured it.** Any ratio recorded against an `opacity` site before
+bead `enhancedchannelmanager-0zq1p` is suspect. The guard's measurement core
+accumulated group opacity in the wrong direction and faded the element's own
+page background toward the canvas's white, so it under-read every dark and
+high-contrast `opacity` site (`.probe-group-btn` read 1.56 where the truth is
+2.32). Light was almost unaffected — white leaking into a near-white page is a
+near-no-op — which is why it survived so long. A figure quoted for an `opacity`
+site with no bead reference should be re-measured, not trusted.
+
 ### What is *not* in this scale
 
 The rail and the top band are chrome and are frozen outside it: rail nav
@@ -657,3 +702,4 @@ Add a comment at the top of each component CSS listing which shared classes it u
 4. Am I duplicating `@keyframes spin`? Use `.spinning` from common.css.
 5. Am I creating a custom loading/error/empty state? Use `.loading-state` / `.error-banner` / `.empty-state`.
 6. Am I using `--accent-primary` for a background? Stop — use `--bg-tertiary` or `--button-primary-bg`.
+7. Am I reaching for `opacity` to make text or a control's only glyph quieter? Stop — that is a group fade against the page, not an ink change. Use an ink token and record the measured ratio: [`opacity` de-emphasises the group, not the ink](#opacity-de-emphasises-the-group-not-the-ink).
