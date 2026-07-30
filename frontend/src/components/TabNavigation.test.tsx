@@ -134,6 +134,49 @@ describe('grouped primary navigation', () => {
       expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument();
     });
 
+    // The drill-in's counterpart to the primary nav's group assertion above.
+    // The grouping is data (SETTINGS_SECTIONS.group) rendered through the same
+    // `.navigation-group > h2` markup, so this pins what an operator actually
+    // sees: six headings in the approved order, every destination under the
+    // right one, and each link still a real `#settings/<page>` anchor.
+    it('renders the approved Settings groups and destinations in order for an administrator', () => {
+      render(<TabNavigation activeTab="settings" onTabChange={vi.fn()} settingsPage="general" isAdmin />);
+      const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+
+      expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual([
+        'Connections', 'Channel Processing', 'Notifications & Reports', 'Upkeep', 'Workspace', 'Administration',
+      ]);
+      expect([...nav.querySelectorAll('.navigation-group')].map((group) => [
+        group.querySelector('h2')!.textContent,
+        [...group.querySelectorAll('a')].map((link) => link.getAttribute('aria-label')),
+      ])).toEqual([
+        ['Connections', ['General', 'Integrations']],
+        ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Lookup Tables', 'Channel Pipeline']],
+        ['Notifications & Reports', ['Notification Settings', 'M3U Digest']],
+        ['Upkeep', ['Scheduled Tasks', 'Maintenance', 'Backup & Restore']],
+        ['Workspace', ['Appearance', 'Linked Accounts']],
+        ['Administration', ['Authentication', 'User Management', 'TLS Certificates', 'MCP Integration']],
+      ]);
+      expect([...nav.querySelectorAll('a')].every((link) => link.getAttribute('href')?.startsWith('#settings/'))).toBe(true);
+      expect(within(nav).getByRole('link', { name: 'General' })).toHaveAttribute('aria-current', 'page');
+      // Back stays a sibling above the groups, keeping its explicit name.
+      expect(within(nav).getByRole('button', { name: 'Back to main navigation' })).toBeInTheDocument();
+    });
+
+    // Administration is hidden by the empty-group filter, not by a branch on
+    // `adminOnly` in the markup: a non-admin must see five headings and no
+    // Administration heading over an empty list.
+    it('drops the Administration group entirely for a non-administrator', () => {
+      render(<TabNavigation activeTab="settings" onTabChange={vi.fn()} settingsPage="general" />);
+      const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+
+      expect(within(nav).getAllByRole('heading').map((heading) => heading.textContent)).toEqual([
+        'Connections', 'Channel Processing', 'Notifications & Reports', 'Upkeep', 'Workspace',
+      ]);
+      expect(within(nav).queryByRole('link', { name: 'User Management' })).not.toBeInTheDocument();
+      expect([...nav.querySelectorAll('.navigation-group')].every((group) => group.querySelectorAll('a').length > 0)).toBe(true);
+    });
+
     it('marks the active section and reports section changes', async () => {
       const onSettingsPageChange = vi.fn();
       render(

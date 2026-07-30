@@ -61,7 +61,8 @@ You'll be logged in automatically after setup.
 
 
 1. In the grouped sidebar, choose **System** → **Settings**.
-2. Choose **General** in **Settings sections**.
+2. Choose **Connections** → **General** in the **Settings sections** list that
+   replaces the sidebar groups.
 
 **Step 3: Configure Dispatcharr Connection**
 
@@ -1031,10 +1032,14 @@ Each method supports:
 
 ### Settings Navigation
 
-Open **System** → **Settings**, then use **Settings sections**. Contextual
-links elsewhere in ECM can open the correct section directly. For the audited
-page list, **On this page** behavior, and exact **Save changes** /
-**Cancel changes** safeguards, see [Settings and contextual
+Open **System** → **Settings**. The sidebar swaps its groups for the
+**Settings sections** list — grouped as **Connections**, **Channel
+Processing**, **Notifications & Reports**, **Upkeep**, **Workspace**, and (for
+administrators) **Administration**. Select **Back** to restore the main
+groups. Contextual links elsewhere in ECM can open the correct section
+directly. For the group contents, the audited page list, **On this page**
+behavior, and exact **Save changes** / **Cancel changes** safeguards, see
+[Settings and contextual
 links](operator-workspace.md#settings-and-contextual-links).
 
 ### Tag-Based Normalization

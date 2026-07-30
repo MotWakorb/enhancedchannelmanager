@@ -16,22 +16,50 @@ headings:
 | Group | Destinations |
 |-|-|
 | **Overview** | **Dashboard** |
-| **Operations** | **Channel Manager**, **Guide**, **M3U Manager**, **EPG Manager**, **Logo Manager** |
-| **Automation** | **Channel Pipeline**, **M3U Changes** |
-| **Insights** | **Stats**, **Journal** |
+| **Operations** | **M3U Manager**, **EPG Manager**, **Logo Manager**, **Channel Manager** |
+| **Automation** | **Channel Pipeline** |
+| **Insights** | **Guide**, **Stats**, **M3U Changes**, **Journal** |
 | **System** | **Settings** |
 
-Select **Collapse navigation** at the bottom of the sidebar to switch to the
-68-pixel icon-only rail. The group headings and visible labels disappear, but
-every destination keeps its accessible name, tooltip, current-page treatment,
-and place in the keyboard order. The preference is stored in this browser.
-Select **Expand navigation** to restore labels.
+**Operations** follows the order you normally set ECM up in: sources, then
+programme data, then artwork, then the **Channel Manager** that uses all three.
+**Insights** holds the pages you read rather than configure.
+
+Select the ECM logo at the top of the sidebar to switch to the 68-pixel
+icon-only rail. The group headings and visible labels disappear, but every
+destination keeps its accessible name, tooltip, current-page treatment, and
+place in the keyboard order. The preference is stored in this browser. Select
+the logo again to restore the labels.
+
+The logo is the only collapse control; it is announced as **Collapse
+navigation** when the sidebar is expanded and **Expand navigation** when it is
+collapsed.
 
 ![Channel Manager at 1280×720 with the 68-pixel navigation rail](../images/user_guide/operator-workspace/1-channel-manager-1280-collapsed.png)
 
 At 1280×720, collapsing the sidebar gives dense pages more working width. At
 1920×1080, the expanded sidebar normally leaves enough room for both Channel
 Manager panes. ECM never changes the preference silently.
+
+## Service status in the header
+
+The top bar shows a status pill on the right, next to the User Guide and
+notification controls:
+
+| Pill | Meaning |
+|-|-|
+| **● Online** | ECM answered its health check normally. |
+| **● Connecting** | ECM has not answered its first health check yet. |
+| **● Offline** | The API returned an error. |
+| **● <status>** | ECM answered with a status other than healthy; the reported status is shown as-is. |
+
+The pill also shows the running ECM version, for example **● Online · v0.18.1**.
+The coloured dot repeats what the words already say, so the status is readable
+without relying on colour.
+
+When a newer ECM release is available, an **Update available** link appears
+beside the pill and opens the release notes. ECM has no bottom status bar; the
+header carries all of it.
 
 ### Keyboard-only navigation
 
@@ -42,7 +70,8 @@ Manager panes. ECM never changes the preference silently.
    above.
 3. Press `Enter` on a destination link.
 4. Press `Enter` or `Space` on **Collapse navigation** or **Expand
-   navigation**. Focus stays on the control.
+   navigation** — the logo control at the top of the sidebar, which is reached
+   before the destination links. Focus stays on the control.
 5. Use `Shift+Tab` to move backward. A visible outline identifies the focused
    control in either sidebar mode.
 
@@ -68,21 +97,49 @@ do not interpret a missing card as a zero value.
 
 ## Settings and contextual links
 
-**Settings** is one primary destination with its own **Settings sections**
-navigation. Links beside a task take you directly to the relevant subsection;
+**Settings** is one primary destination. Selecting it replaces the sidebar's
+groups with the **Settings sections** list, so the whole page width belongs to
+the settings content. The sections are grouped, in this order:
+
+| Group | Sections |
+|---|---|
+| **Connections** | General, Integrations |
+| **Channel Processing** | Channel Defaults, Channel Normalization, Tags, Lookup Tables, Channel Pipeline |
+| **Notifications & Reports** | Notification Settings, M3U Digest |
+| **Upkeep** | Scheduled Tasks, Maintenance, Backup & Restore |
+| **Workspace** | Appearance, Linked Accounts |
+| **Administration** | Authentication, User Management, TLS Certificates, MCP Integration |
+
+**Administration** appears for administrators only. Non-administrators see the
+first five groups and no empty Administration heading.
+
+Select **Back** at the top of the sidebar to restore the main navigation
+groups. Back only changes what the sidebar shows — you stay on the Settings
+page you were reading. Because the sidebar holds the Settings sections while
+you are in Settings, reach another destination by selecting **Back** first.
+
+Links beside a task take you directly to the relevant subsection;
 for example, **Channel default settings** in Channel Manager opens
 `#settings/channel-defaults`. Use those contextual links instead of hunting
 through every Settings section.
 
-Long, audited Settings pages—**General**, **Channel Defaults**,
-**Appearance**, **Notification Settings**, **Integrations**, **Channel
-Pipeline**, and **Maintenance**—show an **On this page** navigation region.
-Its buttons move within the current page and update the `?section=` portion of
-the hash. They do not leave Settings.
+Each section names itself in the page header rather than repeating a heading
+inside the content area. Opening **General** shows **SYSTEM / SETTINGS /
+GENERAL SETTINGS** with that section's description beneath it, so the content
+pane starts at the first setting.
+
+Any Settings page with more than one section shows an **On this page**
+navigation region in a column on the right of the page, which stays in place as
+the settings scroll. Pages with a single section, or none, do not show it —
+there would be nothing to move between. Its buttons move within the current
+page and update the `?section=` portion of the hash. They do not leave
+Settings. On narrower windows the region moves back above the settings content.
 
 ### Save and cancellation protection
 
-On the audited Settings pages, changing a field produces the sticky
+On the Settings pages that save as a page—**General**, **Channel Defaults**,
+**Appearance**, **Notification Settings**, **Integrations**, **Channel
+Pipeline**, and **Maintenance**—changing a field produces the sticky
 **Unsaved settings** action region:
 
 - **Save changes** writes the page's pending values.
@@ -182,12 +239,12 @@ The page names and hashes remain stable; only their visual grouping changed.
 | Former top-level destination | Current location | Canonical hash |
 |-|-|-|
 | Channel Manager | **Operations** → **Channel Manager** | `#channel-manager` |
-| Guide | **Operations** → **Guide** | `#guide` |
+| Guide | **Insights** → **Guide** | `#guide` |
 | M3U Manager | **Operations** → **M3U Manager** | `#m3u-manager` |
 | EPG Manager | **Operations** → **EPG Manager** | `#epg-manager` |
 | Logo Manager | **Operations** → **Logo Manager** | `#logo-manager` |
 | Auto-Creation | **Automation** → **Channel Pipeline** | `#channel-pipeline` |
-| M3U Changes | **Automation** → **M3U Changes** | `#m3u-changes` |
+| M3U Changes | **Insights** → **M3U Changes** | `#m3u-changes` |
 | Stats | **Insights** → **Stats** | `#stats` |
 | Journal | **Insights** → **Journal** | `#journal` |
 | Settings | **System** → **Settings** | `#settings` |

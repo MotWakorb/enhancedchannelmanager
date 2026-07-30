@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useHashRoute, _parseHash, _buildHash } from './useHashRoute';
+import { SETTINGS_PAGE_IDS } from '../components/settingsSections';
 
 describe('parseHash', () => {
   it('preserves supported section deep links on audited long pages', () => {
@@ -53,6 +54,19 @@ describe('parseHash', () => {
 
   it('returns settings with null page for invalid settings sub-page', () => {
     expect(_parseHash('#settings/invalid-page')).toEqual({ tab: 'settings', settingsPage: null });
+  });
+
+  // Bead enhancedchannelmanager-70u0r.7 made SETTINGS_SECTIONS the only place a
+  // settings id is written down; the router derives its admission check from it.
+  // Every declared destination must therefore be reachable by its own hash — a
+  // sidebar entry that falls through to the invalid-sub-page branch would land
+  // the operator on General with no error, which is the silent failure the
+  // previous three parallel lists could produce.
+  it('routes every declared settings destination by its own hash', () => {
+    for (const id of SETTINGS_PAGE_IDS) {
+      expect(_parseHash(`#settings/${id}`), `#settings/${id}`)
+        .toEqual({ tab: 'settings', settingsPage: id });
+    }
   });
 });
 

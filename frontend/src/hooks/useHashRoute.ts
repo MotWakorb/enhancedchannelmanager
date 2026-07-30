@@ -1,19 +1,17 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { TabId } from '../components/TabNavigation';
+import { isSettingsPage, type SettingsPage } from '../components/settingsSections';
 
-export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
+// The union and the set of routable settings ids used to be declared here, in
+// parallel with `SETTINGS_SECTIONS`. Both are now derived from that single
+// declaration (bead `enhancedchannelmanager-70u0r.7`); re-exported because most
+// of the app imports the type from the router rather than from the registry.
+export type { SettingsPage };
 
 const VALID_TABS: Set<string> = new Set([
   'dashboard', 'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
   'stats', 'settings',
-]);
-
-const VALID_SETTINGS_PAGES: Set<string> = new Set([
-  'general', 'channel-defaults', 'normalization', 'tag-engine', 'lookup-tables',
-  'appearance', 'email', 'integrations', 'scheduled-tasks', 'channel-pipeline',
-  'm3u-digest', 'maintenance', 'linked-accounts', 'auth-settings',
-  'user-management', 'tls-settings', 'mcp-settings', 'backup-restore',
 ]);
 
 /**
@@ -61,8 +59,8 @@ function parseHash(hash: string): HashRoute {
     if (subPage in LEGACY_SETTINGS_PAGE_ALIASES) {
       return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage], ...(section ? { section } : {}) };
     }
-    if (VALID_SETTINGS_PAGES.has(subPage)) {
-      return { tab: 'settings', settingsPage: subPage as SettingsPage, ...(section ? { section } : {}) };
+    if (isSettingsPage(subPage)) {
+      return { tab: 'settings', settingsPage: subPage, ...(section ? { section } : {}) };
     }
     // Invalid settings sub-page → fall back to settings/general
     return { tab: 'settings', settingsPage: null };

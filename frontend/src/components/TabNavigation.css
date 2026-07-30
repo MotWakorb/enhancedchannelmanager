@@ -160,6 +160,9 @@
   }
 }
 
+/* Only the Settings drill-in renders a Back control, so this rule needs no
+   .settings-navigation scope — and leaving it unscoped keeps :hover below at
+   equal specificity, so hover still wins the background. */
 .navigation-back {
   display: flex;
   align-items: center;
@@ -167,10 +170,9 @@
   width: 100%;
   min-height: 40px;
   margin-bottom: 0.25rem;
-  padding: 0.5rem 0.625rem;
+  padding: 1rem 0.625rem 0.5rem;
   border: 0;
   border-radius: 6px;
-  background: transparent;
   color: var(--text-secondary);
   font: inherit;
   font-size: 0.875rem;
@@ -178,6 +180,30 @@
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
+
+  /* PINNED, because Back is the only exit from Settings and it is the first
+     child of a scroll container (.primary-navigation, overflow-y: auto). Bead
+     enhancedchannelmanager-70u0r.4 measured the grouped drill-in at 1102px
+     against a 675px budget at 1280x720 — the minimum supported viewport — so
+     the rail genuinely scrolls, and an unpinned Back scrolls out of reach
+     exactly when the operator has gone looking for a destination further down.
+     This is the treatment the approved Settings IA nominated in advance:
+     sidebar-internal scrolling with the Back control kept in view.
+
+     top matches the container's own 0.5rem padding, negated: overflow clips at
+     the padding box, so scrolled rows are visible in that strip and a Back
+     pinned at top: 0 would have them sliding through the gap above it. Pinning
+     flush to the border box instead means Back sits at its sticky boundary at
+     rest, so it never jumps when scrolling starts. The negative margin keeps
+     the extra 0.5rem of padding-top out of the layout, and the padding puts the
+     label back where it was, so the rail's vertical budget is unchanged. */
+  position: sticky;
+  top: -0.5rem;
+  z-index: 1;
+  margin-top: -0.5rem;
+  /* Opaque, not transparent: rows must scroll BEHIND this, not through it.
+     Matches .primary-sidebar so the pinned strip reads as chrome. */
+  background: var(--bg-tertiary);
 }
 
 .navigation-back:hover {

@@ -26,8 +26,15 @@
  *     `[data-theme="light"]` and `[data-theme="high-contrast"]`; a theme block
  *     that redefines a spacing or font token moves the chrome in that theme
  *     only, and dark-only measurement would never see it.
- *   - TWO VIEWPORTS, 1600x1000 and 1280x800, because the shell has responsive
- *     breakpoints and a constant that holds wide can still collapse narrow.
+ *   - THREE VIEWPORTS, because the shell has responsive breakpoints and a
+ *     constant that holds wide can still collapse narrow. 1280x720 is the
+ *     MINIMUM SUPPORTED viewport and therefore the one that has to be pinned;
+ *     it was added by bead `enhancedchannelmanager-70u0r.4`, which found the
+ *     matrix stopping at 1280x800 — 80px of height that the supported floor
+ *     does not have, and the height is what the Settings drill-in strains.
+ *     1280x800 is kept alongside it rather than replaced: it is the width
+ *     breakpoint's other height, and dropping a row from a frozen matrix is not
+ *     a free change.
  *
  * NOT VACUOUS. Each probe declares the routes it must be present on. A probe
  * that fails to render where it is required fails the run — a guard whose
@@ -54,10 +61,11 @@ import {
 } from './fixtures/css-guard'
 import type { Page } from '@playwright/test'
 
-/** Viewports the constants must hold at. */
+/** Viewports the constants must hold at. 1280x720 is the supported minimum. */
 const VIEWPORTS: ReadonlyArray<{ width: number; height: number }> = [
   { width: 1600, height: 1000 },
   { width: 1280, height: 800 },
+  { width: 1280, height: 720 },
 ]
 
 /**

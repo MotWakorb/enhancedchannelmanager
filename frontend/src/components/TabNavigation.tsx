@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { EcmLogo } from './EcmLogo';
 import { EcmWordmark } from './EcmWordmark';
 import { GROUPS } from './navigationGroups';
-import { visibleSettingsSections } from './settingsSections';
-import type { SettingsPage } from '../hooks/useHashRoute';
+import { settingsSectionGroups, type SettingsPage } from './settingsSections';
 import './TabNavigation.css';
 
 export type TabId = 'dashboard' | 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' | 'logo-manager' | 'm3u-changes' | 'channel-pipeline' | 'journal' | 'stats' | 'settings';
@@ -72,12 +71,13 @@ export function TabNavigation({
     }
   }, [activeTab]);
 
-  // Preserves the Administration grouping the in-page settings list carried.
-  const sections = visibleSettingsSections(isAdmin);
-  const settingsGroups = [
-    { label: 'Settings', sections: sections.filter((section) => !section.adminOnly) },
-    { label: 'Administration', sections: sections.filter((section) => section.adminOnly) },
-  ].filter((group) => group.sections.length > 0);
+  // Grouping is a property of SETTINGS_SECTIONS, not of this component: it was
+  // a hardcoded two-way `adminOnly` split until bead
+  // `enhancedchannelmanager-70u0r.2` made it an N-way derivation over
+  // SETTINGS_GROUP_ORDER, so moving a destination between groups is now a data
+  // change. Administration is still driven by `adminOnly` — see
+  // settingsSectionGroups().
+  const settingsGroups = settingsSectionGroups(isAdmin);
   const activeSettingsPage = settingsPage ?? 'general';
 
   const toggleCollapsed = () => {

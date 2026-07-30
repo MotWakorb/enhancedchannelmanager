@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HEADER_POLICIES, ROUTE_HIERARCHY } from './routeHierarchy';
 import { ROUTE_TITLES } from './routeTitles';
 import { GROUPS } from './navigationGroups';
-import { SETTINGS_SECTIONS, settingsSectionHeading } from './settingsSections';
+import {
+  SETTINGS_GROUP_ORDER,
+  SETTINGS_PAGE_IDS,
+  SETTINGS_SECTIONS,
+  isSettingsPage,
+  settingsSectionGroups,
+  settingsSectionHeading,
+  visibleSettingsSections,
+} from './settingsSections';
 
 describe('primary route hierarchy', () => {
   // The sidebar group and the page-header breadcrumb are separate declarations.
@@ -40,6 +48,79 @@ describe('primary route hierarchy', () => {
       if (heading.description !== undefined) {
         expect(heading.description, `${section.id} description`).toMatch(/^[A-Z].*[.!?]$/s);
       }
+    }
+  });
+
+  // The grouping analogue of the crumb check above. A section whose `group` is
+  // not a declared group renders nowhere at all — `settingsSectionGroups`
+  // iterates SETTINGS_GROUP_ORDER, so an unrecognised value silently drops the
+  // destination out of the sidebar rather than failing loudly.
+  it('places every Settings section in exactly one declared group', () => {
+    const declared = new Set<string>(SETTINGS_GROUP_ORDER);
+    for (const section of SETTINGS_SECTIONS) {
+      expect(declared.has(section.group), `${section.id} group "${section.group}"`).toBe(true);
+    }
+    expect(new Set(SETTINGS_GROUP_ORDER).size).toBe(SETTINGS_GROUP_ORDER.length);
+
+    const grouped = settingsSectionGroups(true).flatMap((group) => group.sections.map((section) => section.id));
+    expect(grouped).toHaveLength(SETTINGS_SECTIONS.length);
+    expect(new Set(grouped).size).toBe(grouped.length);
+  });
+
+  // The approved assignment, pinned literally. PO decision D1 on epic
+  // enhancedchannelmanager-70u0r, including the amendment that moved Scheduled
+  // Tasks out of Notifications & Reports into Upkeep: it is EPG refresh, M3U
+  // refresh and database cleanup, which is upkeep rather than reporting.
+  //
+  // Written out longhand rather than derived, so moving a destination between
+  // groups has to argue with a named expectation instead of quietly passing.
+  // Lookup Tables sits in Channel Processing provisionally; bead
+  // enhancedchannelmanager-70u0r.1 retires the destination and this group drops
+  // back to four.
+  it('renders the approved Settings groups, names and order for an administrator', () => {
+    expect(settingsSectionGroups(true).map((group) => [group.label, group.sections.map((section) => section.label)])).toEqual([
+      ['Connections', ['General', 'Integrations']],
+      ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Lookup Tables', 'Channel Pipeline']],
+      ['Notifications & Reports', ['Notification Settings', 'M3U Digest']],
+      ['Upkeep', ['Scheduled Tasks', 'Maintenance', 'Backup & Restore']],
+      ['Workspace', ['Appearance', 'Linked Accounts']],
+      ['Administration', ['Authentication', 'User Management', 'TLS Certificates', 'MCP Integration']],
+    ]);
+  });
+
+  // Administration must stay derived from `adminOnly` rather than from the
+  // group label. If the two ever disagree, a non-admin either loses a section
+  // they are entitled to or is shown an Administration heading over an empty
+  // list — the failure the empty-group filter exists to prevent.
+  it('keeps the Administration group and adminOnly in agreement', () => {
+    for (const section of SETTINGS_SECTIONS) {
+      expect(Boolean(section.adminOnly), `${section.id} adminOnly vs group`).toBe(section.group === 'Administration');
+    }
+
+    const nonAdmin = settingsSectionGroups(false);
+    expect(nonAdmin.map((group) => group.label)).toEqual(
+      SETTINGS_GROUP_ORDER.filter((label) => label !== 'Administration'),
+    );
+    for (const group of [...nonAdmin, ...settingsSectionGroups(true)]) {
+      expect(group.sections.length, `${group.label} is rendered with no sections`).toBeGreaterThan(0);
+    }
+    expect(nonAdmin.flatMap((group) => group.sections)).toEqual(visibleSettingsSections(false));
+  });
+
+  // Bead enhancedchannelmanager-70u0r.7: the SettingsPage union,
+  // VALID_SETTINGS_PAGES and SETTINGS_SECTIONS were three hand-maintained lists
+  // of the same ids. They are now one declaration with the other two derived,
+  // so this asserts the derivation rather than three lists agreeing by hand.
+  it('routes exactly the declared Settings ids and nothing else', () => {
+    expect(SETTINGS_PAGE_IDS).toEqual(SETTINGS_SECTIONS.map((section) => section.id));
+    expect(new Set(SETTINGS_PAGE_IDS).size).toBe(SETTINGS_PAGE_IDS.length);
+    for (const id of SETTINGS_PAGE_IDS) {
+      expect(isSettingsPage(id), `${id} is not routable`).toBe(true);
+    }
+    // Retired and never-declared ids must fail the guard so they reach the
+    // alias table or the invalid-sub-page fallback instead of routing.
+    for (const id of ['security', 'auto-creation', 'not-a-settings-page', '']) {
+      expect(isSettingsPage(id), `${id} must not be routable`).toBe(false);
     }
   });
 
