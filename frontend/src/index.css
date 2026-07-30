@@ -207,8 +207,63 @@ textarea {
   --border-accent: rgba(100, 108, 255, 0.5);
 
   --accent-primary: #4f46e5;
-  --accent-secondary: #6366f1;
+
+  /* Contrast remediation, bead enhancedchannelmanager-dlavh. #6366f1 ->
+     #3e41ee: the SAME hue (238.7deg) and the same saturation (83.5%), darkened
+     along its own HSL lightness ray from 66.7% to 58.7%. Nothing moved hue.
+
+     WHY IT HAD TO MOVE. #6366f1 does not clear 4.5:1 as text on ANY surface in
+     this palette — not even bare --bg-primary, where it measures 4.47. Every
+     one of the ten surfaces it paints on failed. The three sites the bead names
+     are the ones an operator meets in the default state; the rest are edit-mode
+     and dropdown states that no audit had ever rendered. Figures marked
+     [measured] come from the live compositor; the rest are computed from the
+     same surfaces because those states do not render on this instance:
+
+       sticky-section-nav pill (Stats + Settings), accent-10 over the nav's own
+         color-mix surface #e7e8f7   3.68 -> 5.41   [measured]
+       .settings-nav-item.active, accent-10 over --bg-tertiary #dadbea
+                                     3.25 -> 4.79   [measured]
+       .edit-mode-banner, accent-15 over --bg-primary     3.73 -> 5.48
+       .preview-new-number, accent-20 over --bg-primary   3.50 -> 5.15
+       .group-tag / .epg-dropdown-source, --bg-hover      3.38 -> 4.98
+       .edit-mode-label / -timer / .pane-header h2, --bg-secondary
+                                     4.10 -> 6.03
+       .edit-mode-dialog-toggle:hover, --bg-tertiary      3.65 -> 5.36
+       bare --bg-primary                                  4.47 -> 6.57
+
+     Non-text uses, 3:1 floor, all already passing and all improved: the
+     `inset 2px` rail bar in StickySectionNav.css, the `inset 3px` edit-mode bar
+     in TabNavigation.css, and the StatsTab.tsx chart `stroke`.
+
+     WHY RETONING THE TOKEN AND NOT SWAPPING THE CALL SITES. Audited before
+     touching it, because --error taught us a token can hold two incompatible
+     jobs (bead -4l51b): all seventeen occurrences of --accent-secondary, with
+     comments stripped, are three definitions, eleven `color`, two decorative
+     `box-shadow` bars and one chart `stroke`. There is NO background, border or
+     rgba()/color-mix() use anywhere — so unlike --error there is no fill under
+     white text that a darker value could regress. docs/css_guidelines.md:563
+     already states the rule this measurement confirms: never use
+     --accent-primary or --accent-secondary for backgrounds.
+
+     WHY NOT #4548ee, the lightest value that technically passes. It measures
+     4.51 on --bg-tertiary — 0.01 above the floor, which is inside the
+     measurement's own epsilon. #3e41ee keeps 0.32 of real headroom.
+
+     The honest consequence: in THIS theme --accent-secondary no longer reads as
+     lighter than --accent-primary (#4f46e5) — they converge, and the secondary
+     is marginally the deeper of the two. AA leaves no legal step above it on a
+     light surface, exactly as it leaves none between --text-muted and
+     --text-secondary above. Light/lighter is a dark-theme distinction; do not
+     reach for --accent-secondary here expecting a softer accent. The dark
+     (#e0e0e8) and high-contrast (#ffff88) values are untouched — both already
+     pass in their own themes.
+
+     Guarded by e2e/contrast-aa.spec.ts, which measures all three themes at
+     1280x720 and 1920x1080 and goes red on every ratio quoted above. */
+  --accent-secondary: #3e41ee;
   --accent-hover: rgba(100, 108, 255, 0.1);
+
 
   /* Accent blue opacity scale (selection/highlight tints) */
   --accent-5: rgba(100, 108, 255, 0.05);

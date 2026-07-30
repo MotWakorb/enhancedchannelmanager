@@ -165,7 +165,7 @@ npm run test:e2e:report    # View test report
 
 ### Rendered-CSS regression guards
 
-Four specs in `e2e/` are not feature tests — they are guards over *rendered*
+Six specs in `e2e/` are not feature tests — they are guards over *rendered*
 CSS, the layer where the project has repeatedly regressed while every unit
 test stayed green. They exist because a computed style in a real browser is
 the only thing that can prove these claims; jsdom cannot, and neither can a
@@ -174,16 +174,24 @@ declaration-level audit.
 | Spec | What it pins | Proven red against |
 |-|-|-|
 | `sr-only-hidden.spec.ts` | `.sr-only` / `.visually-hidden` measure ≤1×1 and are not returned by `elementFromPoint`, **on a cold context with Channel Pipeline never visited** | `.sr-only` moved back into the ChannelPipelineTab chunk (bead `-zncyv`): Dashboard 1004×24, `position: static`, hit-testable |
-| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px — on ten routes × dark/light/high-contrast × 1600×1000 and 1280×800 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
+| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px — on ten routes × dark/light/high-contrast × 1600×1000, 1280×800 and 1280×720 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
 | `route-typography-scale.spec.ts` | every visible text node in a route content pane computes to a P1 size — {20, 15, 13, 11, 10} text, {18, 16, 14, 64} icon | a new 22px site on M3U Manager **and** an allowlisted site silently fixed without deleting its entry (reported as `STALE`) |
 | `cross-route-css-leak.spec.ts` | shared-class typography does not depend on route visit order | four historical instances: `.list-header`, `.status-label`, `.group-count`, `.action-btn .material-icons` |
+| `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA — 4.5:1 normal, 3:1 large and non-text glyphs — in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
+| `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds — it scrolls, Back stays pinned and opaque, the last destination stays reachable — at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
+
+`frozen-chrome.spec.ts` pins **1280×720 as well as 1280×800** because 1280×720
+is the minimum supported viewport, and the height is what the Settings drill-in
+strains. Both rows are kept; dropping one from a frozen matrix is not free.
 
 ```bash
 npm run test:css-guard:sr-only        # builds + serves the source; NO backend needed
-npm run test:css-guard:frozen-chrome  # needs a live ECM container
-npm run test:css-guard:type-scale     # needs a live ECM container
-npm run test:css-leak                 # needs a live ECM container
-npm run test:css-guards               # all four, against a live container
+npm run test:css-guard:frozen-chrome  # needs a live ECM backend
+npm run test:css-guard:type-scale     # needs a live ECM backend
+npm run test:css-guard:contrast-aa    # needs a live ECM backend; ~10 min, 66 route walks
+npm run test:css-leak                 # needs a live ECM backend
+npm run test:css-guards               # all of the above, against a live backend
+npm run test:css-guard:settings-nav   # needs a live ECM backend
 ```
 
 **CI status — read this before assuming coverage.**
@@ -196,15 +204,15 @@ npm run test:css-guards               # all four, against a live container
   The job is **not** in the required-check set; making it required also needs
   a matching sentinel job in `.github/workflows/docs-only-pass.yml`, or
   docs-only PRs will hang waiting for a check that never runs.
-- `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts` and
-  `cross-route-css-leak.spec.ts` are **manual-only**. This is not an
-  oversight and not a "wire it up later" — all three walk all ten routes, and
+- `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
+  `contrast-aa.spec.ts` and `cross-route-css-leak.spec.ts` are **manual-only**.
+  This is not an oversight and not a "wire it up later" — all four walk every route, and
   Channel Manager's `.channels-pane` never mounts without an API (measured, on
   a backend-less preview build: `waitForSelector('.channels-pane')` times out
   at 60s). They need a live ECM container, which CI does not have; that is the
   same constraint that defers the rest of `e2e/*.spec.ts`, tracked as bead
   `enhancedchannelmanager-2lw25`. When 2lw25 lands a live-service CI
-  environment these three are the first specs that should move into it.
+  environment these four are the first specs that should move into it.
 - Until then the browser half of the CSS defence runs only when a human
   remembers. Run `npm run test:css-guards` against the running container
   before shipping any change under `frontend/src/**/*.css`.
@@ -221,15 +229,32 @@ fix.
 # sr-only: builds and serves YOUR tree, no container involved. Always exact.
 npm run test:css-guard:sr-only
 
-# the other three: deploy your build to the container FIRST, then run.
+# the others: deploy your build to the container FIRST, then run.
 scripts/deploy-frontend.sh
 npm run test:css-guards
 ```
 
-`npx vite preview` is not a substitute for the deploy step for those three:
-it serves the bundle but proxies nothing, so `/api` 502s, Channel Manager's
-`.channels-pane` never mounts, and the ten-route walk times out. Only the
-sr-only guard is reachable without an API.
+**Or serve your own tree and skip the deploy entirely.** `vite preview`
+inherits `server.proxy` from `frontend/vite.config.ts`, so it *does* proxy
+`/api` — to `http://localhost:8000`. With a backend answering there, the whole
+guard set runs against the working tree with nothing deployed:
+
+```bash
+cd frontend && npm run build && npx vite preview --host 127.0.0.1 --port 4173 &
+E2E_BASE_URL=http://127.0.0.1:4173 npm run test:css-guards
+```
+
+Measured on bead `-70u0r.4`: `sr-only-hidden`, `frozen-chrome`,
+`route-typography-scale`, `cross-route-css-leak` and `settings-nav-groups` all
+green this way, including `frozen-chrome`'s full ten-route walk with Channel
+Manager's `.channels-pane` mounting normally — so a backend-less preview is not
+the constraint the paragraph above assumed. This corrects an earlier claim that preview "proxies
+nothing, so `/api` 502s" — that was true of a bare static server, not of
+`vite preview`. Use it whenever you must measure rendered CSS *before*
+committing or deploying; it is the only way to run these guards against an
+uncommitted tree. The caveat that survives is the important one: **these
+guards measure the build being SERVED.** Rebuild after every edit, or you are
+re-measuring the previous bundle.
 
 **Their allowlist cannot rot.** `route-typography-scale.spec.ts` carries an
 allowlist because eight of ten routes have off-scale sites today, and it is

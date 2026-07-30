@@ -19,7 +19,9 @@
     "test:css-guard:sr-only": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/sr-only-hidden.spec.ts --project=chromium",
     "test:css-guard:frozen-chrome": "playwright test e2e/frozen-chrome.spec.ts --project=chromium",
     "test:css-guard:type-scale": "playwright test e2e/route-typography-scale.spec.ts --project=chromium",
-    "test:css-guards": "playwright test e2e/sr-only-hidden.spec.ts e2e/frozen-chrome.spec.ts e2e/route-typography-scale.spec.ts e2e/cross-route-css-leak.spec.ts --project=chromium --workers=2",
+    "test:css-guard:contrast-aa": "playwright test e2e/contrast-aa.spec.ts --project=chromium",
+    "test:css-guard:settings-nav": "playwright test e2e/settings-nav-groups.spec.ts --project=chromium",
+    "test:css-guards": "playwright test e2e/sr-only-hidden.spec.ts e2e/frozen-chrome.spec.ts e2e/route-typography-scale.spec.ts e2e/contrast-aa.spec.ts e2e/cross-route-css-leak.spec.ts e2e/settings-nav-groups.spec.ts --project=chromium --workers=2",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
     "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"
   },

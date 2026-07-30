@@ -517,16 +517,17 @@ jobs:
   # colliding, and `.sr-only` had exactly one declaration, so nothing ever
   # collided.
   #
-  # WHY THIS ONE SPEC AND NOT THE OTHER CSS GUARDS. It is the only one of the
-  # four that runs without a live ECM container. E2E_EXACT_BUILD=true builds
+  # WHY THIS ONE SPEC AND NOT THE OTHER CSS GUARDS. It is the only one that
+  # runs without a live ECM container. E2E_EXACT_BUILD=true builds
   # the checked-out source and serves it on an isolated preview port with no
   # backend; the shell, Dashboard and Settings all mount that way, so the
-  # assertion is reachable. `e2e/frozen-chrome.spec.ts` and
-  # `e2e/route-typography-scale.spec.ts` walk all ten routes, and Channel
-  # Manager's `.channels-pane` never mounts without an API — measured, not
-  # assumed. Those two plus `e2e/cross-route-css-leak.spec.ts` stay manual
-  # until bd-2lw25 lands a live-service CI environment. See
-  # docs/testing.md § "Rendered-CSS regression guards".
+  # assertion is reachable. `e2e/frozen-chrome.spec.ts`,
+  # `e2e/route-typography-scale.spec.ts` and `e2e/contrast-aa.spec.ts` walk
+  # every route, and Channel Manager's `.channels-pane` never mounts without an
+  # API — measured, not assumed. Those three plus
+  # `e2e/cross-route-css-leak.spec.ts` stay manual until bd-2lw25 lands a
+  # live-service CI environment. See docs/testing.md § "Rendered-CSS
+  # regression guards".
   sr-only-hidden:
     name: Screen-Reader-Only Rendering Guard
     runs-on: ubuntu-latest

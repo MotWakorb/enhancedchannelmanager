@@ -44,6 +44,26 @@
  * outlive the defects it describes. Every entry names an owning bead, so a
  * reader can always answer "who is going to fix this, and under what?".
  *
+ * WHICH BEAD AN ENTRY NAMES. This list was first written while `-f4yc7` was the
+ * only bead that had ever discussed the scale, so every entry cited it — and
+ * `-f4yc7` then closed, leaving ten entries pointing at a bead nobody could
+ * pick up. An entry naming a closed bead answers "under what?" with "nothing",
+ * which is the same rot the STALE arm exists to prevent. The split now is:
+ *
+ *   PERMANENT frozen-band entries  ->  the bead whose PO decision FROZE them,
+ *                                      `-f4yc7`. Closed is correct here: these
+ *                                      record a settled decision, not pending
+ *                                      work, and nothing is going to change.
+ *   PENDING entries                ->  `enhancedchannelmanager-6z299.8`, the
+ *                                      open completion pass that owns the
+ *                                      remaining off-scale route text.
+ *   this spec itself               ->  `enhancedchannelmanager-6z299.9`, the
+ *                                      open bead that owns the rendered-CSS
+ *                                      guards.
+ *
+ * Same rule in `e2e/contrast-aa.spec.ts`, which enforces it by convention too:
+ * a pending exception cites an OPEN bead or it is not a pending exception.
+ *
  * `dataDependent: true` marks a site that only renders when the instance has
  * the relevant records. This instance has almost none, so those entries
  * cannot be checked for staleness here — the flag is a documented admission,
@@ -59,7 +79,9 @@
  * `frontend/src/shared/tokens.css` rather than a literal px value, and delete
  * any `em`-relative size in its ancestor chain (an `em` size compounds and is
  * the reason 0.9em reads as 14.4px here and something else two levels down).
- * See docs/css_guidelines.md and bead enhancedchannelmanager-f4yc7.
+ * See docs/css_guidelines.md, bead enhancedchannelmanager-f4yc7 for the scale
+ * itself, and bead enhancedchannelmanager-6z299.8 for the pages it has not
+ * reached yet.
  */
 import { test, expect } from './fixtures/base'
 import {
@@ -168,21 +190,21 @@ const ALLOWLIST: readonly Exception[] = [
     route: 'channel-manager',
     selector: '.filter-dropdown-button .dropdown-arrow, .group-filter-button .dropdown-arrow',
     sizesPx: [9.6],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'em-relative (0.6em) caret compounding off the scale. P1 rollout to this page pending.',
   },
   {
     route: 'journal',
     selector: '.journal-purge-control .journal-purge-label',
     sizesPx: [13.6],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'rem-relative (0.85rem) toolbar label. P1 rollout to this page pending.',
   },
   {
     route: 'channel-manager',
     selector: '.group-toggle-btn .group-toggle',
     sizesPx: [11.2],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'em-relative (0.7em) disclosure caret. P1 rollout to this page pending.',
     dataDependent: true,
   },
@@ -195,14 +217,14 @@ const ALLOWLIST: readonly Exception[] = [
     route: 'stats',
     selector: '.panel-header .refresh-btn .material-icons',
     sizesPx: [24],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'Material Icons default; the P1 action-icon role is 16px.',
   },
   {
     route: 'logo-manager',
     selector: '.source-load-announcement .material-icons',
     sizesPx: [24],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'Material Icons default on the transient source-load status; P1 status icon is 18px.',
     dataDependent: true,
   },
@@ -210,7 +232,7 @@ const ALLOWLIST: readonly Exception[] = [
     route: 'logo-manager',
     selector: '.logo-thumbnail .placeholder .material-icons',
     sizesPx: [24],
-    bead: 'enhancedchannelmanager-f4yc7',
+    bead: 'enhancedchannelmanager-6z299.8',
     reason: 'Material Icons default on the broken-artwork placeholder; renders only when a logo fails to load.',
     dataDependent: true,
   },
