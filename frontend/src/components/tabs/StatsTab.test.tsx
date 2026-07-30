@@ -1682,6 +1682,107 @@ describe('StatsTab — section jump nav (bead 09x38.15 item 9)', () => {
   });
 });
 
+// bead enhancedchannelmanager-mch8j — the section nav must be complete and the
+// section anchors must exist from FIRST PAINT, not once each panel's fetch
+// settles.
+//
+// StickySectionNav discovers a section only once that section exposes a
+// heading or a `data-section-label`, and it can only assign an `id` to a
+// section it has discovered. BandwidthPanel, PopularityPanel and
+// WatchHistoryPanel used to render heading-less loading branches (and
+// BandwidthPanel dropped its `id` entirely), which meant (a) the "On this
+// page" list grew entry-by-entry as each fetch landed, and (b) a shared deep
+// link `#stats?section=stats-section-bandwidth-panel` named an anchor that did
+// not exist until the bandwidth fetch settled.
+//
+// These specs pin the loading state specifically: every panel fetch is left
+// PENDING for the whole test, so nothing here can pass by waiting.
+describe('StatsTab — section nav is complete from first paint (bead mch8j)', () => {
+  const originalHash = window.location.hash;
+
+  // Every always-mounted panel section, with the label the nav shows and the
+  // anchor id a deep link may name. Both halves are load-bearing: a panel that
+  // grew a `data-section-label` but lost its explicit `id` would still break
+  // every previously-shared link, because the nav would fall back to a
+  // generated id slugged from the label.
+  const ALWAYS_MOUNTED = [
+    ['Bandwidth In/Out', 'stats-section-bandwidth-panel'],
+    ['Enhanced Statistics', 'stats-section-enhanced'],
+    ['Popularity Rankings', 'stats-section-popularity'],
+    ['Watch History', 'stats-section-watch-history'],
+    ['User Watch Time', 'stats-section-user-watch-time'],
+    ['Providers', 'stats-section-providers'],
+    ['Provider Stream Usage', 'stats-section-provider-stream-usage'],
+  ] as const;
+
+  /** A promise that never settles — the panel stays in its loading branch. */
+  const pending = <T,>() => new Promise<T>(() => {});
+
+  beforeEach(() => {
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(api.getChannelStats).mockResolvedValue({
+      count: 0,
+      channels: [],
+    } as unknown as ChannelStatsResponse);
+    // StatsTab gates its whole content pane on its own initial fetch, so the
+    // first `getBandwidthStats` call (StatsTab's own Promise.all) has to
+    // settle for the panels to mount at all. Every later call is
+    // BandwidthPanel's, and those stay pending.
+    vi.mocked(api.getBandwidthStats)
+      .mockReturnValue(pending())
+      .mockResolvedValueOnce(baseBandwidth);
+    vi.mocked(api.getPopularityRankings).mockReturnValue(pending());
+    vi.mocked(api.getTrendingChannels).mockReturnValue(pending());
+    vi.mocked(api.getWatchHistory).mockReturnValue(pending());
+  });
+
+  afterEach(() => {
+    window.location.hash = originalHash;
+  });
+
+  it('lists every always-mounted panel, and exposes every anchor, while all panel fetches are still pending', async () => {
+    const { container } = render(<StatsTab />);
+
+    const nav = await screen.findByRole('navigation', { name: 'On this page' });
+
+    // The three panels under test are still showing their loading branch —
+    // this is the window the bug lived in, not a settled page.
+    expect(screen.getByText('Loading bandwidth data...')).toBeInTheDocument();
+    expect(screen.getByText('Loading popularity data...')).toBeInTheDocument();
+    expect(screen.getByText('Loading watch history...')).toBeInTheDocument();
+
+    for (const [label, id] of ALWAYS_MOUNTED) {
+      expect(within(nav).getByRole('button', { name: label })).toBeInTheDocument();
+      expect(container.querySelector(`#${id}`)).toBeInTheDocument();
+    }
+  });
+
+  it('resolves a deep link to a section whose panel is still loading', async () => {
+    // The nav reads the requested section out of the hash query string.
+    window.location.hash = '#stats?section=stats-section-bandwidth-panel';
+    // Record which element each scroll landed on: the nav must scroll its own
+    // container and nothing else.
+    const scrolled: HTMLElement[] = [];
+    Element.prototype.scrollTo = vi.fn(function (this: HTMLElement) {
+      scrolled.push(this);
+    });
+
+    const { container } = render(<StatsTab />);
+
+    await screen.findByRole('navigation', { name: 'On this page' });
+    // Still loading — the anchor exists anyway, which is the whole point.
+    expect(screen.getByText('Loading bandwidth data...')).toBeInTheDocument();
+    expect(container.querySelector('#stats-section-bandwidth-panel')).toBeInTheDocument();
+
+    // The scroll is queued in a rAF callback.
+    await waitFor(() => {
+      expect(scrolled.some((el) => el.classList.contains('stats-content'))).toBe(true);
+    });
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
 // enhancedchannelmanager-2sfpt #1: a small channel logo renders beside the
 // channel number in Active Channels rows, resolved from the channel's logo_id
 // via the loaded logo map. Null/unknown logos render no <img> (no broken icon).

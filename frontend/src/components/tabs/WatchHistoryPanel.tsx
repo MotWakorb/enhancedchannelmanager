@@ -91,16 +91,20 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
     setExpandedId(expandedId === id ? null : id);
   };
 
+  // `data-section-label` on both branches, not just the loaded one: the
+  // loading branch has no heading, so without it StickySectionNav skips this
+  // section entirely and the "On this page" entry pops in when the fetch
+  // settles (bead enhancedchannelmanager-mch8j).
   if (loading && !data) {
     return (
-      <div className="watch-history-panel" id="stats-section-watch-history">
+      <div className="watch-history-panel" id="stats-section-watch-history" data-section-label="Watch History">
         <div className="loading-state">Loading watch history...</div>
       </div>
     );
   }
 
   return (
-    <div className="watch-history-panel" id="stats-section-watch-history">
+    <div className="watch-history-panel" id="stats-section-watch-history" data-section-label="Watch History">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Watch History</h3>

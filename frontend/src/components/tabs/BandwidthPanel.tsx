@@ -59,9 +59,14 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
     return { inPercent, outPercent: 100 - inPercent };
   };
 
+  // The loading branch carries the same `id` and `data-section-label` as the
+  // loaded one so StickySectionNav can list this section — and so a deep link
+  // to `#stats?section=stats-section-bandwidth-panel` finds its anchor — from
+  // first paint rather than once the fetch settles
+  // (bead enhancedchannelmanager-mch8j).
   if (loading && !data) {
     return (
-      <div className="bandwidth-panel">
+      <div className="bandwidth-panel" id="stats-section-bandwidth-panel" data-section-label="Bandwidth In/Out">
         <div className="loading-state">Loading bandwidth data...</div>
       </div>
     );
@@ -71,7 +76,7 @@ export function BandwidthPanel({ refreshTrigger }: BandwidthPanelProps) {
   const ratio = getRatio();
 
   return (
-    <div className="bandwidth-panel" id="stats-section-bandwidth-panel">
+    <div className="bandwidth-panel" id="stats-section-bandwidth-panel" data-section-label="Bandwidth In/Out">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Bandwidth In/Out</h3>
