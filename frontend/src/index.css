@@ -132,20 +132,62 @@
    type scale's "13px body" meant two typefaces depending on whether the element
    was a control. Measured before the fix: 387 controls across the ten routes.
 
-   `.material-icons` below is deliberately unaffected: it sets its own family
-   and must keep it, and this rule does not reach it because the icon class is
-   applied to a span inside the control, not to the control itself.
+   They do not inherit `font-size` either, and that half was missed the first
+   time. Measured on 2026-07-30, with the family reset already in place: 274 of
+   418 visible controls across the ten routes, and 516 elements across 77 of the
+   81 catalogued dialogs, still rendered at 13.3333px — Chromium's own control
+   size (`-webkit-small-control`), a value nobody in this repository chose. Bead
+   enhancedchannelmanager-ul2tp.
 
-   Guarded by e2e/control-typeface.spec.ts, which asserts the RENDERED face
-   rather than the declared family — the distinction matters, because
-   `getComputedStyle().fontFamily` returns the author's stack and would report
-   agreement that the font engine never delivered. Bead
-   enhancedchannelmanager-6z299.9 owns the guard. */
+   WHY THE BODY ROLE AND NOT `inherit`. `inherit` is the obvious symmetry with
+   the line above, and it is wrong here, measured: `body` computes to 16px — the
+   root default, which is no more chosen than 13.3333px is — so inheriting would
+   have taken 263 of those 274 controls UP to 16px, off the P1 text scale
+   entirely and 2.67px louder in every toolbar and dialog. The body role is what
+   the scale already assigns to controls: docs/css_guidelines.md § Typography
+   reads "Body ... running text, buttons, inputs, page descriptions". So the
+   move is 13.3333px -> 13px, which is on the scale and 0.33px of geometry.
+
+   This is an ELEMENT selector (0,0,1). Every class rule that gives a control its
+   own size still wins, which is why the 88 controls already sized by component
+   CSS do not move. A control that needs a different size takes a P1 role token
+   from the "Typography Roles" group below — never a literal px.
+
+   `line-height` IS an inherited property, but the user agent sets
+   `line-height: normal` on form controls, so controls do not take the root's
+   1.5 either. It is deliberately NOT reset here, and this is a decision rather
+   than an omission:
+
+     - Measured: at 13px, `normal` is a 15px line box and `1.5` is 19.5px. Every
+       control whose height is content-driven grows 4.5px — `input.priority-input`
+       measured 28.19px -> 32.69px — across every toolbar and 77 dialogs, and the
+       rail and header band geometry is pinned by e2e/frozen-chrome.spec.ts.
+     - Nothing is bought for it. A control's vertical rhythm is padding-driven
+       and its single line of text is centred in that padding; the 1.5 body
+       line-height exists for the vertical rhythm of MULTI-LINE running text,
+       which is not what a button or a single-line input is.
+     - `textarea` is the one genuinely multi-line control. If a dialog ever wants
+       looser text in one, that is a rule on that textarea, not an app-wide reset
+       that also inflates every button.
+
+   `.material-icons` below is deliberately unaffected by both declarations: it
+   sets its own family and its own 24px, and this rule does not reach it because
+   the icon class is applied to a span inside the control, not to the control
+   itself.
+
+   Guarded by e2e/control-typeface.spec.ts, which asserts the RENDERED face and
+   the RENDERED size rather than the declarations — the distinction matters,
+   because `getComputedStyle().fontFamily` returns the author's stack and would
+   report agreement that the font engine never delivered, and because the UA's
+   control size is a property of the client, so the guard measures it in a
+   CSS-free iframe each run instead of hardcoding 13.3333px. Bead
+   enhancedchannelmanager-6z299.9 owns the face arm, ul2tp the size arm. */
 button,
 input,
 select,
 textarea {
   font-family: inherit;
+  font-size: var(--type-body-size);
 }
 
 .material-icons {
