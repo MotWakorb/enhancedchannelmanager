@@ -332,10 +332,6 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
   return (
     <div className="tls-settings-section">
-      <div className="settings-page-header">
-        <h2>TLS/SSL Certificate Management</h2>
-        <p>Configure HTTPS with Let's Encrypt automatic certificates or manual certificate upload.</p>
-      </div>
 
       {dnsChallenge && (
         <div className="error-banner">

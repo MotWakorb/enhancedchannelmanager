@@ -143,7 +143,10 @@ export function StickySectionNav({
     if (target && container) scrollWithinContainer(container, target, preferredScrollBehavior());
   };
   return <nav className={`sticky-section-nav placement-${placement}`} aria-label="On this page">
-    <span>On this page</span>
+    {/* `.micro-label` (shared/common.css § 24) owns the size, weight, case and
+        tracking. See StickySectionNav.css for why it is a class here rather
+        than declarations there (bead enhancedchannelmanager-6z299). */}
+    <span className="micro-label">On this page</span>
     <div>
       {items.map((item) => <button
         type="button"

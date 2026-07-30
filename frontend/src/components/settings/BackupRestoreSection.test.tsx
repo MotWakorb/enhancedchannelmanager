@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { BackupRestoreSection } from './BackupRestoreSection';
+import { settingsSectionHeading } from '../settingsSections';
 
 // Mock the API module
 vi.mock('../../services/api', () => ({
@@ -119,9 +120,13 @@ describe('BackupRestoreSection', () => {
       expect(screen.getByTestId('outbound-mode-public_only')).toBeInTheDocument();
     });
 
-    it('renders page header', async () => {
+    // The section's own "Backup & Restore" heading moved into the route
+    // breadcrumb (SYSTEM / SETTINGS / BACKUP & RESTORE), so the section must no
+    // longer render it itself — and the breadcrumb source must still supply it.
+    it('does not render its own page heading, leaving it to the route breadcrumb', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Backup & Restore' })).not.toBeInTheDocument();
+      expect(settingsSectionHeading('backup-restore').title).toBe('Backup & Restore');
 
       // Let mount-time fetches settle.
       await waitFor(() => {

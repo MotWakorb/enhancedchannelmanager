@@ -107,10 +107,6 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
   return (
     <div className="auth-settings-section">
-      <div className="settings-page-header">
-        <h2>Authentication</h2>
-        <p>Configure authentication providers and security settings.</p>
-      </div>
 
       {/* Global Settings */}
       <div className="settings-section">

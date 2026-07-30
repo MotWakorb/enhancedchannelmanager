@@ -145,11 +145,6 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
   return (
     <div className="mcp-settings-section">
-      <div className="settings-page-header">
-        <h2>MCP Integration</h2>
-        <p>Connect Claude to ECM via the Model Context Protocol. Claude can list channels, manage streams, refresh M3U accounts, probe stream health, and more — all through natural language.</p>
-      </div>
-
       {/* Server Status */}
       <div className="settings-section">
         <div className="settings-section-header">

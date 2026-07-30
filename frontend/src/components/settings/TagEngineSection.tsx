@@ -510,10 +510,6 @@ export function TagEngineSection() {
 
   return (
     <div className="tag-engine-section">
-      <div className="settings-page-header">
-        <h2>Tags</h2>
-        <p>Manage tag vocabularies used by normalization rules for pattern matching.</p>
-      </div>
 
       <div className="tag-engine-toolbar">
         <div className="search-box">

@@ -229,7 +229,7 @@ function LookupTableEditorModal({ initial, onClose, onSaved }: EditorModalProps)
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn btn-secondary" onClick={onClose} disabled={saving}>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose} disabled={saving}>
             Cancel
           </button>
           <button
@@ -298,14 +298,6 @@ export function LookupTableSection() {
 
   return (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Lookup Tables</h2>
-        <p>
-          Named <code>key → value</code> tables used by the dummy EPG template engine's
-          {' '}<code>{'{key|lookup:<name>}'}</code> pipe.
-        </p>
-      </div>
-
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">table_view</span>

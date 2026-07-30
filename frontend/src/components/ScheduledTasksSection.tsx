@@ -3,6 +3,7 @@ import * as api from '../services/api';
 import type { TaskStatus } from '../services/api';
 import type { ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
+import { RouteHeaderSlot } from './RouteHeaderSlots';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { TaskStatusPill } from './TaskStatusPill';
@@ -84,7 +85,14 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
   };
 
   return (
-    <div data-testid={`task-card-${task.task_id}`} style={{
+    // data-settings-section opts this card into the Settings section rail
+    // without inheriting `.settings-section` styling; the label is explicit
+    // because the card's title is a styled div rather than a heading.
+    <div
+      data-testid={`task-card-${task.task_id}`}
+      data-settings-section=""
+      data-section-label={task.task_name}
+      style={{
       backgroundColor: 'var(--bg-secondary)',
       border: '1px solid var(--border-color)',
       borderRadius: '8px',
@@ -92,21 +100,36 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       overflow: 'visible',
     }}>
       {/* Header */}
+      {/* The action group keeps its natural width and never wraps its labels
+          ("Run Now" was breaking across two lines); the title block absorbs the
+          remaining space and may wrap to its own row when that is not enough,
+          so the description always has room rather than being squeezed into a
+          narrow column. */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
+        flexDirection: 'column',
+        gap: '0.35rem',
         padding: '1rem',
         borderBottom: showHistory ? '1px solid var(--border-color)' : 'none',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+        }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 auto', minWidth: 0 }}>
           {statusIcon()}
-          <div>
-            <div style={{ fontWeight: 600, fontSize: '1rem' }}>{task.task_name}</div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{task.task_description}</div>
-          </div>
+          <div style={{ fontWeight: 600, fontSize: '1rem', minWidth: 0 }}>{task.task_name}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+        }}>
           {/* Task status pill (vkktd.4) — bound to effective_enabled so a task
               whose child schedules are all disabled reads "Enabled, won't run"
               (amber, with a one-click Fix it) instead of a misleading bare
@@ -200,6 +223,15 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
             History
           </button>
         </div>
+        </div>
+        {/* Full card width rather than sharing the title row: the action group
+            leaves the title column ~300px, which wrapped longer descriptions to
+            as many as eight lines. */}
+        {task.task_description && (
+          <div style={{ fontSize: '0.78rem', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+            {task.task_description}
+          </div>
+        )}
       </div>
 
       {/* Status info */}
@@ -627,37 +659,19 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
 
   return (
     <div>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '1.5rem',
-      }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Tasks</h2>
-          <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Manage automated tasks like EPG refresh, M3U refresh, and database cleanup
-          </p>
-        </div>
+      {/* Heading and description live in the route breadcrumb
+          (SYSTEM / SETTINGS / SCHEDULED TASKS); the refresh control is
+          portalled up beside them rather than repeating a header row here. */}
+      <RouteHeaderSlot name="controls">
         <button
+          type="button"
+          className="btn-secondary"
           onClick={() => { loadTasks(); }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.25rem',
-            padding: '0.5rem 0.75rem',
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '0.85rem',
-          }}
         >
           <span className="material-icons" style={{ fontSize: '16px' }}>refresh</span>
           Refresh
         </button>
-      </div>
+      </RouteHeaderSlot>
 
       {tasks.length === 0 ? (
         <div style={{

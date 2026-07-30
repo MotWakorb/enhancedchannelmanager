@@ -239,10 +239,6 @@ export function LinkedAccountsSection() {
 
   return (
     <div className="linked-accounts-section">
-      <div className="settings-page-header">
-        <h2>Linked Accounts</h2>
-        <p>Link external service accounts for single sign-on and synchronization.</p>
-      </div>
 
       {/* Current Linked Identities */}
       {identities.length === 0 ? (
