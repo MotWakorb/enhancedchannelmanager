@@ -13,6 +13,11 @@ import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
 import { AlertMethodsSection } from '../settings/AlertMethodsSection';
 import { EventSyncTeamAliasesSection } from '../settings/EventSyncTeamAliasesSection';
+import {
+  SettingsSectionHeader,
+  SettingsSectionPlaceholders,
+  type SettingsSectionMeta,
+} from '../settings/SettingsSectionHeader';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -285,6 +290,35 @@ function SortableFailedCategoryItem({
     </div>
   );
 }
+
+/**
+ * The M3U Digest page's sections, in render order. Single authority for both
+ * the loading placeholders and the loaded cards, so the Settings section rail
+ * is complete from first paint and its anchor ids never move (see
+ * settings/SettingsSectionHeader.tsx; bead enhancedchannelmanager-b32co).
+ *
+ * "Last Digest" is absent on purpose: it is gated on there having been one,
+ * which is data rather than a loading window.
+ */
+const M3U_DIGEST_SECTIONS = {
+  notifications: { icon: 'notifications', label: 'Digest Notifications' },
+  frequency: { icon: 'schedule', label: 'Frequency' },
+  contentFilters: { icon: 'filter_list', label: 'Content Filters' },
+  accountFilter: { icon: 'checklist', label: 'Account Filter' },
+  excludePatterns: { icon: 'filter_alt', label: 'Exclude Patterns' },
+  emailRecipients: { icon: 'mail', label: 'Email Recipients' },
+  discord: { icon: 'forum', label: 'Discord Notification' },
+} as const satisfies Record<string, SettingsSectionMeta>;
+
+const M3U_DIGEST_ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [
+  M3U_DIGEST_SECTIONS.notifications,
+  M3U_DIGEST_SECTIONS.frequency,
+  M3U_DIGEST_SECTIONS.contentFilters,
+  M3U_DIGEST_SECTIONS.accountFilter,
+  M3U_DIGEST_SECTIONS.excludePatterns,
+  M3U_DIGEST_SECTIONS.emailRecipients,
+  M3U_DIGEST_SECTIONS.discord,
+];
 
 interface SettingsTabProps {
   onSaved: () => void;
@@ -4240,11 +4274,21 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const renderM3UDigestPage = () => (
     <div className="settings-page">
 
+      {/* The placeholders are what keep this page's seven rail entries — and
+          the anchors a shared `?section=` link names — present while the fetch
+          is in flight. Without them the rail appears from nothing when it
+          settles, and a deep link scrolls the reader away from wherever they
+          were reading (bead enhancedchannelmanager-b32co). The error branch
+          below deliberately has none: a failed load has no sections to offer,
+          and it only becomes a loaded page through an explicit Retry. */}
       {digestLoading && (
-        <div className="loading-state">
-          <span className="material-icons spinning">sync</span>
-          <span>Loading digest settings...</span>
-        </div>
+        <>
+          <div className="loading-state">
+            <span className="material-icons spinning">sync</span>
+            <span>Loading digest settings...</span>
+          </div>
+          <SettingsSectionPlaceholders sections={M3U_DIGEST_ALWAYS_PRESENT} />
+        </>
       )}
 
       {digestError && !digestLoading && (
@@ -4267,10 +4311,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <>
           {/* Enable/Disable Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">notifications</span>
-              <h3>Digest Notifications</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.notifications} />
 
             <div className="settings-group">
               <div className="checkbox-group">
@@ -4290,10 +4331,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Frequency Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">schedule</span>
-              <h3>Frequency</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.frequency} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4334,10 +4372,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Content Filters Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">filter_list</span>
-              <h3>Content Filters</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.contentFilters} />
 
             <div className="settings-group">
               <div className="checkbox-group">
@@ -4383,10 +4418,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Account Filter Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">checklist</span>
-              <h3>Account Filter</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.accountFilter} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4410,10 +4442,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Exclude Patterns Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">filter_alt</span>
-              <h3>Exclude Patterns</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.excludePatterns} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4526,10 +4555,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Recipients Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">mail</span>
-              <h3>Email Recipients</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.emailRecipients} />
 
             {!smtpConfigured && (
               <div className="warning-banner">
@@ -4605,10 +4631,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Discord Notification Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">forum</span>
-              <h3>Discord Notification</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.discord} />
 
             {!discordConfigured && (
               <div className="warning-banner">
@@ -4974,9 +4997,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
-      {/* Probe Status Indicator - shows when probing */}
+      {/* Probe Status Indicator - shows when probing.
+          NOT a `.settings-section`: it is a transient status card with no
+          heading, present only while a probe runs. `.settings-section` is the
+          section rail's selector, so wearing it for card chrome put an
+          unlabelled element inside the rail's query — one that could never be
+          given an id and so could never be linked to or jumped to. Labelling
+          it instead would be worse: a rail entry that appears when a
+          background probe starts and vanishes when it finishes is exactly the
+          reflow bead enhancedchannelmanager-b32co exists to remove, and a
+          shared `?section=` link to it would be dead whenever no probe is
+          running. `.probe-progress-banner` carries the same card chrome and no
+          rail membership. */}
       {probingAll && (
-        <div className="settings-section" style={{ padding: '1rem' }}>
+        <div className="probe-progress-banner">
             <div style={{
               display: 'flex',
               flexDirection: 'column',

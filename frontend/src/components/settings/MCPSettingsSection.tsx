@@ -10,7 +10,28 @@ import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
+import {
+  SettingsSectionHeader,
+  SettingsSectionPlaceholders,
+  type SettingsSectionMeta,
+} from './SettingsSectionHeader';
 import './MCPSettingsSection.css';
+
+/**
+ * The sections this page always has, in render order. Single authority for
+ * both the loading placeholders and the loaded cards, so the Settings section
+ * rail is complete from first paint and its anchor ids never move
+ * (see SettingsSectionHeader.tsx; bead enhancedchannelmanager-b32co).
+ *
+ * "Connection" and "Available Tools" are absent on purpose: they are gated on
+ * a key being configured, which is data rather than a loading window.
+ */
+const SECTIONS = {
+  serverStatus: { icon: 'dns', label: 'Server Status' },
+  apiKey: { icon: 'vpn_key', label: 'API Key' },
+} as const satisfies Record<string, SettingsSectionMeta>;
+
+const ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [SECTIONS.serverStatus, SECTIONS.apiKey];
 
 interface Props {
   isAdmin: boolean;
@@ -132,6 +153,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     );
   }
 
+  // The placeholders are what keep this page's two rail entries — and the
+  // anchors a shared `?section=` link names — present while the fetch is in
+  // flight. Without them the rail appears from nothing when it settles, and a
+  // deep link scrolls the reader away from wherever they were reading. The
+  // `!isAdmin` branch above deliberately has none: that page really has no
+  // sections, and it never resolves into one that does.
   if (loading) {
     return (
       <div className="mcp-settings-section">
@@ -139,6 +166,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
           <span className="material-icons spinning">sync</span>
           Loading MCP settings...
         </div>
+        <SettingsSectionPlaceholders sections={ALWAYS_PRESENT} />
       </div>
     );
   }
@@ -147,10 +175,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     <div className="mcp-settings-section">
       {/* Server Status */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">dns</span>
-          <h3>Server Status</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.serverStatus} />
         <div className="mcp-status-row">
           {mcpStatus === null ? (
             <div className="mcp-status-badge mcp-status-checking">
@@ -199,10 +224,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
       {/* API Key Management */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">vpn_key</span>
-          <h3>API Key</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.apiKey} />
 
         <div className="form-group-vertical">
           {keyConfigured ? (

@@ -167,6 +167,20 @@
   margin-bottom: 1.5rem;
 }
 
+/* The Maintenance page's running-probe banner. Same card chrome as
+   `.settings-section` (padding was an inline 1rem override), but deliberately
+   NOT that class: `.settings-section` is the Settings section rail's selector,
+   and this card is a transient, heading-less status readout that must not
+   enter the rail — see the comment at its call site in SettingsTab.tsx
+   (bead enhancedchannelmanager-b32co). */
+.probe-progress-banner {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
 .settings-section-header {
   display: flex;
   align-items: center;
