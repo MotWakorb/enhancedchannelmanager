@@ -15,7 +15,7 @@ This document is normative for the new UI. The mockup establishes layout, hierar
 - Primary navigation and its current labels/icons are defined in [`frontend/src/TabNavigation.tsx`](../../frontend/src/TabNavigation.tsx) (`TabId`, `TABS`).
 - Hash parsing, canonical settings URLs, legacy aliases, `pushState`, and back/forward handling are defined in [`frontend/src/hooks/useHashRoute.ts`](../../frontend/src/hooks/useHashRoute.ts).
 - Current route-to-page composition and Channel Manager data/action wiring are in [`frontend/src/App.tsx`](../../frontend/src/App.tsx), especially the `activeTab` branches and `ChannelManagerTab` props.
-- Settings destinations, labels, admin visibility, and rendered sections are in [`frontend/src/components/tabs/SettingsTab.tsx`](../../frontend/src/components/tabs/SettingsTab.tsx), in the `settings-sidebar` and `activePage` branches.
+- Settings destinations, labels, and admin visibility are in [`frontend/src/components/settingsSections.ts`](../../frontend/src/components/settingsSections.ts); the rendered sections remain in [`frontend/src/components/tabs/SettingsTab.tsx`](../../frontend/src/components/tabs/SettingsTab.tsx) under the `activePage` branches.
 - Existing read APIs available to a dashboard are in [`frontend/src/services/api.ts`](../../frontend/src/services/api.ts): `getHealth`, `getChannels`, `getStreams`, `getM3UAccounts`, `getM3UChangesSummary`, `getTasks`, `getJournalStats`, and `getChannelStats`.
 - Existing authentication and route protection originate in [`frontend/src/main.tsx`](../../frontend/src/main.tsx), [`frontend/src/components/ProtectedRoute.tsx`](../../frontend/src/components/ProtectedRoute.tsx), and [`frontend/src/hooks/useAuth.tsx`](../../frontend/src/hooks/useAuth.tsx).
 - The detailed Channel Manager contract is tracked by beads `enhancedchannelmanager-2896r.10` through `.14`. The epic notes designate mockup v16/`48353d7` as the canonical visual reference.
@@ -56,21 +56,48 @@ Every primary destination appears exactly once:
 1. **Overview**
    - Dashboard — `dashboard`
 2. **Operations**
-   - Channel Manager — `channel-manager`
-   - Guide — `guide`
    - M3U Manager — `m3u-manager`
    - EPG Manager — `epg-manager`
    - Logo Manager — `logo-manager`
+   - Channel Manager — `channel-manager`
 3. **Automation**
    - Channel Pipeline — `channel-pipeline`
-   - M3U Changes — `m3u-changes`
 4. **Insights**
+   - Guide — `guide`
    - Stats — `stats`
+   - M3U Changes — `m3u-changes`
    - Journal — `journal`
 5. **System**
    - Settings — `settings`
 
-The product name/logo and collapse control precede the groups; account/notification controls remain available without displacing primary destinations. Group labels describe operator intent and are not links.
+Operations is ordered along the operator's setup path — sources, then programme
+data, then artwork, then the Channel Manager that consumes all three. Insights
+collects the read-mostly surfaces: Guide and M3U Changes sit here rather than in
+Operations/Automation because neither changes configuration.
+
+The product name/logo precedes the groups; account/notification controls remain available without displacing primary destinations. Group labels describe operator intent and are not links.
+
+The logo **is** the collapse control — a `<button>` wrapping the mark, first in the sidebar's focus order, with no separate Collapse button at the foot of the sidebar. Exactly one control may carry the `Collapse navigation`/`Expand navigation` accessible name: Playwright's `getByRole` name option matches substrings, so a second control sharing that phrase makes every query for the toggle ambiguous.
+
+### Application header
+
+The header spans the main column and carries, in order: the workspace context
+label, the service status indicator, the update notice when one applies, the
+User Guide and repository links, notifications, and the account menu.
+
+- The service indicator is a single `role="status"` region reading
+  `<dot> <state> · v<version>`. States are **Online** (health reports a healthy
+  status), the reported status verbatim when it is anything else, **Offline**
+  when the API errored, and **Connecting** before the first health response.
+- The coloured dot is reinforcement only. State is always stated in text, and
+  the label uses `--text-primary` rather than a tinted colour so it stays well
+  clear of the 4.5:1 floor repaired in `enhancedchannelmanager-rv84z`.
+- The build version is part of the indicator rather than a separate element.
+  There is no application footer; the shell grid is header + work area only, and
+  the bottom bound of the work area is the viewport.
+- The update notice is a link to the release, shown only when an update is
+  available, and its pulse animation is disabled under
+  `prefers-reduced-motion: reduce`.
 
 ### Collapsed semantics
 
@@ -98,13 +125,13 @@ The new shell changes discoverability, not URLs. Hashes remain the public route 
 |---|---|---|---|---|
 | empty hash | `#channel-manager` (current behavior) | Operations / Channel Manager | authenticated | Preserve until Dashboard default is explicitly approved |
 | `#channel-manager` | `#channel-manager` | Operations / Channel Manager | authenticated | Same page/actions |
-| `#guide` | `#guide` | Operations / Guide | authenticated | Same page/actions |
+| `#guide` | `#guide` | Insights / Guide | authenticated | Same page/actions |
 | `#m3u-manager` | `#m3u-manager` | Operations / M3U Manager | authenticated | Same page/actions |
 | `#epg-manager` | `#epg-manager` | Operations / EPG Manager | authenticated | Same page/actions |
 | `#logo-manager` | `#logo-manager` | Operations / Logo Manager | authenticated | Same page/actions |
 | `#channel-pipeline` | `#channel-pipeline` | Automation / Channel Pipeline | authenticated | Canonical route already rendered by `App.tsx` |
 | `#auto-creation` | `#channel-pipeline` | Automation / Channel Pipeline | authenticated | Preserve legacy alias; replace/canonicalize without losing Back behavior |
-| `#m3u-changes` | `#m3u-changes` | Automation / M3U Changes | authenticated | Same page/actions |
+| `#m3u-changes` | `#m3u-changes` | Insights / M3U Changes | authenticated | Same page/actions |
 | `#stats` | `#stats` | Insights / Stats | authenticated; panels may be admin-gated | Keep panel-level permission behavior |
 | `#journal` | `#journal` | Insights / Journal | authenticated | Same page/actions |
 | `#settings` | `#settings` | System / Settings / General | authenticated | Same as General; no duplicate destination |
@@ -113,36 +140,129 @@ The new shell changes discoverability, not URLs. Hashes remain the public route 
 
 The current `TabNavigation.tsx` still declares `auto-creation`, while `useHashRoute.ts` and `App.tsx` use `channel-pipeline`. Implementation must remove that source-level mismatch without removing the legacy `#auto-creation` alias.
 
+### Settings drill-in
+
+Selecting **Settings** replaces the sidebar's groups with a `<nav aria-label="Settings sections">` listing every Settings destination. There is no in-page settings section list; the sidebar is the single control, and the page keeps the full content width.
+
+The destinations are grouped, in this order:
+
+| # | Group | Destinations | Why these belong together |
+|---|---|---|---|
+| 1 | **Connections** | General, Integrations | Both answer *"what other systems does ECM talk to?"* — the Dispatcharr connection ECM is a client of, and the Emby/Plex/Jellyfin servers it reads back from. |
+| 2 | **Channel Processing** | Channel Defaults, Channel Normalization, Tags, Channel Pipeline | The path a stream takes to become a channel: defaults for creation, rules for cleaning the name, the vocabularies those rules match against, and the automation that runs it. |
+| 3 | **Notifications & Reports** | Notification Settings, M3U Digest | Notification Settings is delivery *transport* (SMTP, Discord, Telegram, Alert Methods); M3U Digest is a *report* that rides it. Adjacent, not merged. |
+| 4 | **Upkeep** | Scheduled Tasks, Maintenance, Backup & Restore | *"How do I keep this instance healthy?"* — the recurring work, the diagnostic and cleanup tools, and the recovery path. |
+| 5 | **Workspace** | Appearance, Linked Accounts | The operator-facing surface rather than instance behaviour: how ECM presents itself, and which identities sign in to it. |
+| 6 | **Administration** | Authentication, User Management, TLS Certificates, MCP Integration | Administrators only. |
+
+Group order follows the operator's path, mirroring the rationale this document already applies to the primary sidebar.
+
+- Grouping is a property of the data, not of the sidebar component: `group` on each entry of [`settingsSections.ts`](../../frontend/src/components/settingsSections.ts), rendered through the same `<section class="navigation-group"><h2>` markup the primary nav uses. Moving a destination between groups is a data change.
+- **`Upkeep`, not `System` or `Maintenance`.** The primary nav already uses `System` for the group that *contains* Settings, so reusing it would make one word denote two levels of the same tree; `Maintenance` is the name of a destination *inside* this group. Both alternatives collide.
+- **Administration is derived from `adminOnly`, not from the group label.** All four of its destinations carry `adminOnly`, so for a non-admin the group is left empty and dropped wholesale by the empty-group filter — a non-admin never sees an Administration heading over an empty list. `routeHierarchy.test.ts` asserts the group and the flag agree.
+- **Channel Processing is four destinations, not five.** Lookup Tables briefly sat here provisionally: it served the dummy EPG template engine rather than channel processing and had no coherent home in this grouping — which was the finding, not a gap. Bead `enhancedchannelmanager-70u0r.1` retired the whole feature (PO decision D2), so the group is four. `#settings/lookup-tables` survives as a compatibility alias only.
+- A **Back** control heads the drill-in. Its accessible name is `Back to main navigation`, which contains the visible `Back` label so WCAG 2.5.3 holds while the collapsed rail hides the label entirely. It is **pinned** (`position: sticky`, opaque) — see the measured cost below.
+- Back restores the groups without changing the route: the operator stays on the Settings page they were reading. Reaching another destination therefore takes Back first, which is the accepted cost of the drill-in.
+- Entering Settings by any means — sidebar, contextual link, or deep link — opens the drill-in. Re-selecting Settings while already there reopens it after a Back.
+- Section links are real `#settings/<page>` anchors carrying `aria-current="page"`, and honour the same guarded-navigation disable contract as primary destinations.
+
+#### Measured vertical cost — the rail scrolls, and Back is pinned
+
+Measured by bead `enhancedchannelmanager-70u0r.4` against a build of the source,
+in all three themes (identical in each — no theme changes the rail's height):
+
+| State | Viewport | Rail content | Rail budget | Overflow |
+|---|---|---:|---:|---:|
+| Expanded | 1280×720 | 1099px | 675px | 424px |
+| Expanded | 1920×1080 | 1099px | 1035px | 64px |
+| Collapsed | 1280×720 | 896px | 675px | 221px |
+| Collapsed | 1920×1080 | 1035px | 1035px | — |
+
+Each group costs 38.7px (a 30.7px heading plus 8px of separation), so going from
+two groups to six added ~155px. Three things follow, and the middle one is the
+reason Back is pinned:
+
+- **The expanded rail already overflowed at 1280×720 before grouping** — 18
+  destinations at 45px each do not fit 675px whatever the headings do. Grouping
+  made an existing overflow worse; it did not create it. The collapsed rail
+  overflows at 1280×720 for the same reason, and grouping contributes *nothing*
+  there, since the headings are `display: none` on the 68px rail.
+- **At 1920×1080 the overflow is new.** Ungrouped, the rail was ~944px against a
+  1035px budget; grouping pushes it to 1099px. The spacious viewport no longer
+  shows the whole list either.
+- **So the rail genuinely scrolls, and `.primary-navigation` is a scroll
+  container whose first child was the Back control.** An operator scrolling down
+  to Administration took the only exit from Settings off screen with them. Back
+  is therefore `position: sticky` with an opaque background, pinned flush to the
+  top of the scroll box: destinations scroll *behind* it. This is the treatment
+  the Settings IA proposal nominated in advance for exactly this outcome —
+  sidebar-internal scrolling with the Back control kept in view — chosen over
+  reducing the group count, which would contradict the approved assignment.
+
+`e2e/settings-nav-groups.spec.ts` asserts the overflow *contract* rather than
+asserting the rail fits: where it overflows, the rail must scroll, Back must
+stay inside the visible box and stay opaque, and the last destination must be
+reachable. Reducing the destination count would change the numbers above without
+changing what has to hold.
+
+### Settings page heading
+
+Settings sections do not render their own heading block. The route header carries a third crumb — `SYSTEM / SETTINGS / <SECTION>` — with the section's descriptive line beneath it, returning that vertical space to the content pane.
+
+- Crumb text and description come from [`settingsSections.ts`](../../frontend/src/components/settingsSections.ts), carried verbatim from the `.settings-page-header` blocks they replaced. A section's crumb may therefore differ from its shorter sidebar label (`General` → `GENERAL SETTINGS`, `TLS Certificates` → `TLS/SSL CERTIFICATE MANAGEMENT`).
+- Sections that never had their own description (`scheduled-tasks`, `backup-restore`) fall back to the Settings route purpose so the header keeps a constant height across sections.
+- The route `h1` is the only rendering of a section's name, so every section must resolve a non-empty crumb; `routeHierarchy.test.ts` enforces that.
+- **The crumb stays three parts. The sidebar group is not a fourth crumb.** Grouping the drill-in makes `SYSTEM / SETTINGS / CHANNEL PROCESSING / TAGS` the obvious move, and it is rejected: at 1280×720 a four-part crumb competes with the header's status indicator, update notice and links, and the group is already visible in the sidebar with `aria-current` marking the active destination, so the fourth part adds no orientation the operator lacks. `App.tsx` therefore needs no change for the grouping.
+- Permission and empty states keep their own in-pane messaging. The MCP section's non-admin denial block is not a page heading and is retained.
+
+### Settings section navigation
+
+`StickySectionNav` takes a `placement` prop. Settings passes `rail`; Stats keeps the default `top` bar.
+
+Settings passes the selector `.settings-section` for every page rather than an allow-list of audited-long pages. As a rail the nav costs no vertical space, so the only reason to withhold it is having too little to navigate, and the component already renders nothing below two sections. `auditedLongSettingsPages` still exists and still gates `supportsPageSave` — that is a separate contract and must not be conflated with section navigation.
+
+- `rail` renders a sticky right-hand column inside the `.settings-content` scroll container, so the section list consumes no vertical space in the content pane.
+- Below 1100px the rail returns to the stacked bar above the content, because the column would otherwise crowd the settings themselves.
+- Only the `top` bar overlays content from above, so only it bounds the focus-visibility logic. Treating a full-height rail as a top boundary would scroll focused controls far past the viewport.
+
 ### Settings routes
 
 Each Settings route appears once inside Settings. The global sidebar does not expand all Settings pages into primary destinations.
 
-| Canonical URL | Settings label | Visibility |
-|---|---|---|
-| `#settings` | General | authenticated |
-| `#settings/channel-defaults` | Channel Defaults | authenticated |
-| `#settings/normalization` | Channel Normalization | authenticated |
-| `#settings/tag-engine` | Tags | authenticated |
-| `#settings/lookup-tables` | Lookup Tables | authenticated |
-| `#settings/appearance` | Appearance | authenticated |
-| `#settings/email` | Notification Settings | authenticated |
-| `#settings/integrations` | Integrations | authenticated |
-| `#settings/scheduled-tasks` | Scheduled Tasks | authenticated |
-| `#settings/channel-pipeline` | Channel Pipeline | authenticated |
-| `#settings/m3u-digest` | M3U Digest | authenticated |
-| `#settings/maintenance` | Maintenance | authenticated |
-| `#settings/linked-accounts` | Linked Accounts | authenticated |
-| `#settings/backup-restore` | Backup & Restore | authenticated; current section applies its existing admin rules |
-| `#settings/auth-settings` | Authentication | admin only |
-| `#settings/user-management` | User Management | admin only |
-| `#settings/tls-settings` | TLS Certificates | admin only |
-| `#settings/mcp-settings` | MCP Integration | admin only |
+Listed in navigation order. The `SettingsPage` union, the router's set of accepted
+sub-page ids, and this inventory are all derived from the one declaration in
+[`settingsSections.ts`](../../frontend/src/components/settingsSections.ts) —
+adding or retiring a destination is a single entry, not three parallel lists.
+
+| Canonical URL | Group | Settings label | Visibility |
+|---|---|---|---|
+| `#settings` | Connections | General | authenticated |
+| `#settings/integrations` | Connections | Integrations | authenticated |
+| `#settings/channel-defaults` | Channel Processing | Channel Defaults | authenticated |
+| `#settings/normalization` | Channel Processing | Channel Normalization | authenticated |
+| `#settings/tag-engine` | Channel Processing | Tags | authenticated |
+| `#settings/channel-pipeline` | Channel Processing | Channel Pipeline | authenticated |
+| `#settings/email` | Notifications & Reports | Notification Settings | authenticated |
+| `#settings/m3u-digest` | Notifications & Reports | M3U Digest | authenticated |
+| `#settings/scheduled-tasks` | Upkeep | Scheduled Tasks | authenticated |
+| `#settings/maintenance` | Upkeep | Maintenance | authenticated |
+| `#settings/backup-restore` | Upkeep | Backup & Restore | authenticated; current section applies its existing admin rules |
+| `#settings/appearance` | Workspace | Appearance | authenticated |
+| `#settings/linked-accounts` | Workspace | Linked Accounts | authenticated |
+| `#settings/auth-settings` | Administration | Authentication | admin only |
+| `#settings/user-management` | Administration | User Management | admin only |
+| `#settings/tls-settings` | Administration | TLS Certificates | admin only |
+| `#settings/mcp-settings` | Administration | MCP Integration | admin only |
 
 Compatibility aliases:
 
 - `#settings/general` canonicalizes to `#settings`.
 - `#settings/auto-creation` resolves to `#settings/channel-pipeline`.
 - `#settings/security` resolves to `#settings/backup-restore`.
+- `#settings/lookup-tables` resolves to `#settings` (General) — the Lookup Tables feature was
+  removed outright by bead `enhancedchannelmanager-70u0r.1`, so it has no successor page. The
+  alias exists so a bookmarked URL resolves explicitly rather than via the unknown-page
+  fallback.
 - Unknown `#settings/<page>` falls back to General without exposing an admin page.
 
 Contextual links must target these hashes directly. If preserving return context is implemented, use a non-sensitive `returnTo` value in client history state, not a query/hash format that invalidates existing parsing.
@@ -308,7 +428,7 @@ reduced. Primary actions, source-backed status, controls, and contextual links
 retain DOM/focus order and wrap when necessary. Dense-screen secondary actions
 use their labelled overflow menus; no required task action is removed.
 
-The footer and route-header padding compact at 1280×720, and Dashboard outer
+Route-header padding compacts at 1280×720, and Dashboard outer
 padding reduces to return height to task content. At 1920×1080 the spacious
 padding and untruncated purpose statement remain. Channel Manager is an
 intentional exception to generic content flow: its two `minmax(0)` panes and
@@ -351,7 +471,8 @@ inventory rather than sampling it:
 Every populated row uses intercepted, deterministic API fixtures and runs
 through the shared 1280×720 and 1920×1080 hierarchy/geometry loop. The loop
 asserts a route-specific task element (not merely a page shell), a truly focused
-primary or first task control clear of header/sticky/footer regions, visible
+primary or first task control clear of header/sticky regions and the viewport
+bottom, visible
 source-backed status where the route defines it, and horizontal/scroll
 ownership. The alternate-state loop uses deterministic empty or failure
 fixtures and verifies geometry and the applicable recovery control at both

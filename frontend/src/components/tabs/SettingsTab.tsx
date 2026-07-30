@@ -11,7 +11,6 @@ import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
-import { LookupTableSection } from '../settings/LookupTableSection';
 import { AlertMethodsSection } from '../settings/AlertMethodsSection';
 import { EventSyncTeamAliasesSection } from '../settings/EventSyncTeamAliasesSection';
 import { useAuth } from '../../hooks/useAuth';
@@ -5845,7 +5844,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
-        {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'integrations' && renderIntegrationsPage()}

@@ -4,7 +4,6 @@ Unit tests for the dummy EPG template engine.
 Syntax covered:
   - Placeholders:     {name}
   - Pipe transforms:  {name|uppercase|trim}
-  - Lookup pipes:     {name|lookup:tablename}
   - Conditionals:     {if:group}...{/if}
                       {if:group=value}...{/if}
                       {if:group~regex}...{/if}
@@ -107,33 +106,36 @@ class TestPipeTransforms:
 
 
 # ----------------------------------------------------------------------------
-# Lookup tables
+# Lookup pipe removal (bead enhancedchannelmanager-70u0r.1, PO decision D2)
+#
+# ``lookup:<table>`` was removed along with the lookup_tables feature. It is
+# now an ordinary unknown transform. These tests pin that: the engine raises,
+# and the ``render_template()`` wrapper in ``dummy_epg_engine`` still degrades
+# to the raw template — which is EXACTLY what a grandfathered profile holding
+# ``{x|lookup:y}`` already produced in generated XMLTV before removal, because
+# ``generate_xmltv`` never passed a lookups dict. Output behaviour is
+# therefore unchanged for such profiles.
 # ----------------------------------------------------------------------------
 
-class TestLookups:
-    def test_lookup_resolves_key_to_value(self):
-        lookups = {"callsigns": {"ESPN": "espn.com"}}
-        assert render("{name|lookup:callsigns}", {"name": "ESPN"}, lookups=lookups) == "espn.com"
-
-    def test_lookup_missing_key_falls_back_to_input(self):
-        lookups = {"callsigns": {"ESPN": "espn.com"}}
-        assert render("{name|lookup:callsigns}", {"name": "UNKNOWN"}, lookups=lookups) == "UNKNOWN"
-
-    def test_lookup_unknown_table_raises(self):
-        with pytest.raises(TemplateSyntaxError):
-            render("{name|lookup:nonexistent}", {"name": "ESPN"}, lookups={})
-
-    def test_lookup_chained_after_transform(self):
-        # uppercase first, then look up
-        lookups = {"stations": {"ESPN": "Entertainment Sports Programming Network"}}
-        assert (
-            render("{name|uppercase|lookup:stations}", {"name": "espn"}, lookups=lookups)
-            == "Entertainment Sports Programming Network"
-        )
-
-    def test_lookup_with_no_lookups_dict_raises(self):
-        with pytest.raises(TemplateSyntaxError):
+class TestLookupPipeRemoved:
+    def test_lookup_is_an_unknown_transform(self):
+        with pytest.raises(TemplateSyntaxError, match="Unknown transform"):
             render("{name|lookup:callsigns}", {"name": "ESPN"})
+
+    def test_render_does_not_accept_a_lookups_argument(self):
+        with pytest.raises(TypeError):
+            render("{name}", {"name": "ESPN"}, lookups={"t": {}})  # type: ignore[call-arg]
+
+    def test_engine_constructor_does_not_accept_lookups(self):
+        with pytest.raises(TypeError):
+            TemplateEngine(lookups={"t": {}})  # type: ignore[call-arg]
+
+    def test_dummy_epg_wrapper_falls_back_to_raw_template(self):
+        from dummy_epg_engine import render_template
+        assert (
+            render_template("{away|lookup:teams} at {home}", {"away": "A", "home": "B"})
+            == "{away|lookup:teams} at {home}"
+        )
 
 
 # ----------------------------------------------------------------------------
@@ -227,7 +229,7 @@ class TestGuards:
 
 class TestRenderWithTrace:
     """Trace mode annotates each segment so the preview UI can visualize
-    pipe pipelines, conditional branches, and lookup hits/misses."""
+    pipe pipelines and conditional branches."""
 
     def test_literal_only_trace(self):
         engine = TemplateEngine()
@@ -249,25 +251,6 @@ class TestRenderWithTrace:
         assert placeholder["pipes"][1]["input"] == "  HI  "
         assert placeholder["pipes"][1]["output"] == "HI"
 
-    def test_lookup_hit_annotates_matched_true(self):
-        engine = TemplateEngine()
-        out, trace = engine.render_with_trace(
-            "{code|lookup:countries}", {"code": "US"}, lookups={"countries": {"US": "USA"}}
-        )
-        assert out == "USA"
-        pipe = trace[0]["pipes"][0]
-        assert pipe["transform"] == "lookup"
-        assert pipe["source"] == "countries"
-        assert pipe["matched"] is True
-
-    def test_lookup_miss_annotates_matched_false(self):
-        engine = TemplateEngine()
-        out, trace = engine.render_with_trace(
-            "{code|lookup:countries}", {"code": "XX"}, lookups={"countries": {"US": "USA"}}
-        )
-        assert out == "XX"
-        pipe = trace[0]["pipes"][0]
-        assert pipe["matched"] is False
 
     def test_conditional_taken_includes_body_trace(self):
         engine = TemplateEngine()
@@ -308,14 +291,6 @@ class TestTemplateEngineClass:
         assert engine.render("{x|uppercase}", {"x": "a"}) == "A"
         assert engine.render("{y|lowercase}", {"y": "B"}) == "b"
 
-    def test_lookups_set_on_instance(self):
-        engine = TemplateEngine(lookups={"flags": {"usa": "🇺🇸"}})
-        assert engine.render("{country|lookup:flags}", {"country": "usa"}) == "🇺🇸"
-
-    def test_render_level_lookups_override_instance_lookups(self):
-        engine = TemplateEngine(lookups={"tbl": {"a": "from-instance"}})
-        out = engine.render("{k|lookup:tbl}", {"k": "a"}, lookups={"tbl": {"a": "from-call"}})
-        assert out == "from-call"
 
 
 # ----------------------------------------------------------------------------

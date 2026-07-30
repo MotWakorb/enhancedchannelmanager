@@ -242,8 +242,8 @@ def register(mcp: FastMCP):
             condition_value: Value/pattern for condition_type (not needed for
                 'always' or 'tag_group')
             case_sensitive: Whether condition_value matching is case-sensitive
-            tag_group_id: Tag group ID for condition_type='tag_group' (see the
-                lookup-tables tools for tag groups)
+            tag_group_id: Tag group ID for condition_type='tag_group' (see
+                list_tag_groups / create_tag_group)
             tag_match_position: 'prefix', 'suffix', or 'contains' — where the
                 matched tag must sit (condition_type='tag_group')
             require_delimiter: Require a strong delimiter (':','-','|','/')

@@ -31,6 +31,12 @@ const LEGACY_SETTINGS_PAGE_ALIASES: Record<string, SettingsPage> = {
   // Restore. Bookmarked/shared #settings/security URLs keep resolving there
   // instead of silently falling back to settings/general.
   security: 'backup-restore',
+  // "Lookup Tables" page removed with the whole Lookup Tables feature (bead
+  // 70u0r.1, PO decision D2 — the |lookup: pipe, CRUD router, model and table
+  // went too). It has no successor page, so bookmarked #settings/lookup-tables
+  // URLs land on General deliberately rather than hitting the silent
+  // invalid-subpage fallback. Follows the `security` precedent above.
+  'lookup-tables': 'general',
 };
 
 const DEFAULT_TAB: TabId = 'channel-manager';

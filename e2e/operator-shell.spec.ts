@@ -2554,7 +2554,6 @@ test.describe('operator shell navigation behavior', () => {
       ['General', 'GENERAL SETTINGS'],
       ['Normalization', 'CHANNEL NORMALIZATION'],
       ['Tags', 'TAGS'],
-      ['Lookup Tables', 'LOOKUP TABLES'],
       ['Backup & Restore', 'BACKUP & RESTORE'],
       ['Scheduled Tasks', 'SCHEDULED TASKS'],
     ]

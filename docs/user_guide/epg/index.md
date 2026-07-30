@@ -28,6 +28,7 @@ End users do not read this section, though the EPG they see in their player is t
 | `troubleshoot-epg.md` | Common EPG issues — wrong listings, blank guide, slow refresh, channel matched to the wrong programme — and how to diagnose. |
 | [`migrate-guides.md`](migrate-guides.md) | Preview and safely apply IPTV ↔ Gracenote guide assignment migrations using LCN/Gracenote station identifiers. |
 | [`finding-mislinked-channels.md`](finding-mislinked-channels.md) | Find & fix channels sharing one EPG row (the West-shows-East mis-link) using the read-only duplicate-link audit. |
+| [`lookup-tables-retired.md`](lookup-tables-retired.md) | **Upgrade note.** Lookup Tables and the `{key\|lookup:<table>}` pipe were removed; export any rows before upgrading. |
 
 ## Schedules Direct (SD)
 

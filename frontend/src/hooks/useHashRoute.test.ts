@@ -86,6 +86,19 @@ describe('legacy hash alias (Security page removal, bead 09x38.12)', () => {
   });
 });
 
+describe('legacy hash alias (Lookup Tables removal, bead 70u0r.1)', () => {
+  // The feature was removed outright, so there is no successor page. The alias
+  // exists so a bookmarked URL resolves to General EXPLICITLY rather than via
+  // the invalid-subpage fallback, which returns settingsPage: null.
+  it('resolves the retired settings/lookup-tables hash to settings/general', () => {
+    expect(_parseHash('#settings/lookup-tables')).toEqual({ tab: 'settings', settingsPage: 'general' });
+  });
+
+  it('is a real alias, not the invalid-subpage fallback', () => {
+    expect(_parseHash('#settings/no-such-page')).toEqual({ tab: 'settings', settingsPage: null });
+  });
+});
+
 describe('buildHash', () => {
   it('builds simple tab hashes', () => {
     expect(_buildHash('dashboard')).toBe('#dashboard');

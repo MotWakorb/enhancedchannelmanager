@@ -277,7 +277,7 @@
 }
 
 /* `.btn-icon` is owned by shared/common.css § 3 BUTTONS. Three files
-   declared it bare — this one, LookupTableSection.css and
+   declared it bare — this one, the since-removed LookupTableSection.css and
    M3ULinkedAccountsModal.css — two of them in the SAME lazy Settings chunk,
    where whichever imported later silently won, and they disagreed on
    padding, colour and glyph size (bead enhancedchannelmanager-6z299). */

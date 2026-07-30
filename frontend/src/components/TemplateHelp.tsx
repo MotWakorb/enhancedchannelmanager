@@ -3,7 +3,7 @@
  *
  * Kept tight: each row is a compact example + one-line explanation so the
  * reader can scan rather than read. Section groupings mirror the engine's
- * mental model: placeholders, pipes, lookups, conditionals.
+ * mental model: placeholders, pipes, conditionals.
  */
 import { memo } from 'react';
 
@@ -49,18 +49,6 @@ export const TemplateHelp = memo(function TemplateHelp({ isOpen, onToggle }: Tem
               <dd>Replace every occurrence; <code>to</code> may be empty (<code>|replace:x:</code> deletes every <code>x</code>).</dd>
               <dt><code>{'|normalize'}</code></dt>
               <dd>Same as the legacy <code>_normalize</code> suffix.</dd>
-            </dl>
-          </section>
-
-          <section>
-            <h4>Lookup tables</h4>
-            <dl>
-              <dt><code>{'{name|lookup:<table>}'}</code></dt>
-              <dd>
-                Resolve the current value through a table defined inline on this
-                source or in <em>Settings → Lookup Tables</em>. Keys that aren't
-                found pass through unchanged.
-              </dd>
             </dl>
           </section>
 

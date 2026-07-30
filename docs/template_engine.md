@@ -39,7 +39,16 @@ Chain left-to-right with `|`; each pipe receives the previous pipe's output.
 | `strip:<chars>` | Strip any of `<chars>` from both ends |
 | `replace:<from>:<to>` | Replace every occurrence (`to` may be empty) |
 | `normalize` | Same as the `_normalize` suffix |
-| `lookup:<table>` | Resolve the value through a table; miss → passthrough |
+
+> **Retired: `lookup:<table>`.** The lookup-table pipe and the whole Lookup
+> Tables feature (Settings page, `/api/lookup-tables`, the `LookupTable` model
+> and the `lookup_tables` table) were removed in bead
+> `enhancedchannelmanager-70u0r.1`. `lookup` is now an ordinary unknown
+> transform. A grandfathered template still containing `{x|lookup:y}` renders
+> the raw template text — which is exactly what it already produced in
+> generated XMLTV before removal, because `generate_xmltv()` never passed a
+> lookups dict. See
+> [Lookup Tables retired](user_guide/epg/lookup-tables-retired.md).
 
 ### Conditionals
 
@@ -56,16 +65,9 @@ Invalid regex inside a conditional evaluates to **false** (the engine never
 throws from a typo). Oversized regex (> 500 chars) also evaluates to false,
 which prevents catastrophic backtracking on untrusted input.
 
-### Lookup tables
+### Syntax-error fallback
 
-Two sources resolve at render time, merged with **inline overrides global**:
-
-- **Inline** — `inline_lookups` on the dummy EPG source's custom_properties,
-  or equivalent field on the `POST /api/dummy-epg/preview` request.
-- **Global** — saved tables managed under *Settings → Lookup Tables*, attached
-  to a source by ID via `global_lookup_ids`.
-
-Referencing a table that doesn't exist raises `TemplateSyntaxError`. The
+Referencing an unknown transform raises `TemplateSyntaxError`. The
 higher-level `render_template()` wrapper in `dummy_epg_engine.py` catches this
 and falls back to the raw template text so a single profile typo can't tank
 an XMLTV refresh — the broken tokens become visible in the output, which is
@@ -88,20 +90,12 @@ the intended signal to the user.
 With groups `league=nfl, team=chiefs` → `NFL: Chiefs`.
 With `team` absent → `NFL: `.
 
-With `team=chiefs` and a global lookup table `teams={chiefs: "Kansas City Chiefs"}`:
-
-```
-{league|uppercase}: {team|lookup:teams}
-```
-
-→ `NFL: Kansas City Chiefs`.
-
 ## Trace mode
 
 Both engines expose a trace-producing variant used by the enhanced preview UI:
 
-- Python: `TemplateEngine.render_with_trace(template, groups, lookups) -> (str, list[dict])`
-- TypeScript: `new TemplateEngine().renderWithTrace(template, groups, lookups) -> { output, trace }`
+- Python: `TemplateEngine.render_with_trace(template, groups) -> (str, list[dict])`
+- TypeScript: `new TemplateEngine().renderWithTrace(template, groups) -> { output, trace }`
 
 A `trace` is a list of `TraceStep` entries:
 
@@ -129,17 +123,16 @@ A `trace` is a list of `TraceStep` entries:
 ]
 ```
 
-Lookup pipes additionally carry `{source: <table>, matched: bool}`. The trace
-preserves order, so rendering the `output` strings concatenated from each
-step reproduces the final output exactly.
+A synthesised step carries `source` as a provenance note (the legacy
+`_normalize` suffix is the only one today). The trace preserves order, so
+rendering the `output` strings concatenated from each step reproduces the
+final output exactly.
 
 ## Related files
 
 - `backend/template_engine.py`, `backend/tests/unit/test_template_engine.py`
 - `backend/dummy_epg_engine.py` — calls `render_template()` from the engine
 - `backend/routers/dummy_epg.py` — `/preview`, `/preview/batch`, `include_trace`
-- `backend/routers/lookup_tables.py` — CRUD for global tables
 - `frontend/src/utils/templateEngine.ts`, `frontend/src/utils/templateEngine.test.ts`
 - `frontend/src/components/TemplateHelp.tsx` — in-app syntax reference
-- `frontend/src/components/settings/LookupTableSection.tsx` — global table management UI
-- `frontend/src/components/DummyEPGSourceModal.tsx` — inline tables + global attachment + preview UI
+- `frontend/src/components/DummyEPGSourceModal.tsx` — legacy source editor + preview UI

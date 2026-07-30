@@ -73,7 +73,6 @@ import { RuleBuilder } from '../components/channelPipeline/RuleBuilder'
 import { CloudTargetEditor } from '../components/settings/CloudTargetEditor'
 import { CloudTargetsCard } from '../components/settings/CloudTargetsCard'
 import { LinkedAccountsSection } from '../components/settings/LinkedAccountsSection'
-import { LookupTableSection } from '../components/settings/LookupTableSection'
 import { NormalizationEngineSection } from '../components/settings/NormalizationEngineSection'
 import { TagEngineSection } from '../components/settings/TagEngineSection'
 import { EPGManagerTab } from '../components/tabs/EPGManagerTab'
@@ -574,11 +573,6 @@ const RENDERERS = {
   'linked-accounts-link': {
     render: () => <LinkedAccountsSection />,
     open: [click('', { selector: '.link-provider-button' })],
-  },
-
-  'lookup-table-editor': {
-    render: () => <LookupTableSection />,
-    open: [click('New')],
   },
 
   'cloud-targets-card-delete': {

@@ -1,8 +1,8 @@
 """
 Integration tests for the dummy EPG template engine through the preview
 endpoints. Covers edge cases the unit tests can't exercise end-to-end:
-nested conditionals, missing lookups, invalid regex in conditionals, and
-backwards compatibility with the legacy {name_normalize} syntax.
+nested conditionals, invalid regex in conditionals, and backwards
+compatibility with the legacy {name_normalize} syntax.
 """
 import pytest
 
@@ -56,51 +56,45 @@ class TestNestedConditionals:
         assert inner_conds[0]["taken"] is True
 
 
-class TestLookupEdgeCases:
-    @pytest.mark.asyncio
-    async def test_missing_key_passes_value_through(self, async_client):
-        """Unknown key in a lookup table → input value renders unchanged."""
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "ZZ",
-            "title_pattern": r"(?P<code>.+)",
-            "title_template": "{code|lookup:countries}",
-            "inline_lookups": {"countries": {"US": "United States"}},
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-        assert response.status_code == 200
-        assert response.json()["rendered"]["title"] == "ZZ"
+class TestLookupPipeRemovedEndToEnd:
+    """bead enhancedchannelmanager-70u0r.1 / PO decision D2 — the
+    ``|lookup:<table>`` pipe and the lookup_tables feature were removed.
+
+    The regression this pins is the preview/production divergence that
+    motivated removal: before removal, ``/preview`` resolved the pipe (because
+    it merged a lookups dict) while ``generate_xmltv`` never passed one, so the
+    generated XMLTV emitted the RAW template text instead. Preview now agrees
+    with XMLTV — both degrade to the raw template.
+    """
 
     @pytest.mark.asyncio
-    async def test_unknown_table_falls_back_to_raw_template(self, async_client):
-        """A reference to a table that wasn't declared is a typo, but the
-        engine swallows the TemplateSyntaxError and renders the raw template
-        so a single bad profile doesn't tank an XMLTV refresh. The surface
-        is intentionally visible — the field shows the unrendered tokens so
-        the user can spot the bug."""
+    async def test_lookup_pipe_now_falls_back_to_raw_template(self, async_client):
         response = await async_client.post("/api/dummy-epg/preview", json={
             "sample_name": "ESPN",
             "title_pattern": r"(?P<name>.+)",
-            "title_template": "{name|lookup:not_a_table}",
+            "title_template": "{name|lookup:stations}",
             "event_timezone": "UTC",
             "program_duration": 180,
         })
         assert response.status_code == 200
-        assert response.json()["rendered"]["title"] == "{name|lookup:not_a_table}"
+        assert response.json()["rendered"]["title"] == "{name|lookup:stations}"
 
     @pytest.mark.asyncio
-    async def test_lookup_chained_after_case_transform(self, async_client):
-        """Chained pipes: case change first, lookup second, correct hit."""
+    async def test_retired_request_fields_are_ignored_not_rejected(self, async_client):
+        """A stale client (cached bundle) may still post inline_lookups /
+        global_lookup_ids. Pydantic ignores unknown fields, so the request must
+        still succeed rather than 422/500."""
         response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "espn",
+            "sample_name": "ESPN",
             "title_pattern": r"(?P<name>.+)",
-            "title_template": "{name|uppercase|lookup:stations}",
-            "inline_lookups": {"stations": {"ESPN": "Entertainment Sports"}},
+            "title_template": "{name|uppercase}",
+            "inline_lookups": {"stations": {"ESPN": "x"}},
+            "global_lookup_ids": [1, 2, 3],
             "event_timezone": "UTC",
             "program_duration": 180,
         })
-        assert response.status_code == 200
-        assert response.json()["rendered"]["title"] == "Entertainment Sports"
+        assert response.status_code == 200, response.json()
+        assert response.json()["rendered"]["title"] == "ESPN"
 
 
 class TestInvalidRegexInConditional:
@@ -227,45 +221,6 @@ class TestTraceShape:
         body = response.json()
         assert body["rendered"]["title"] == "HI"
         assert "traces" not in body
-
-
-class TestGlobalLookupResolution:
-    """Tables created via /api/lookup-tables are resolvable from the preview
-    endpoint by ID — this is the happy path the preview UI relies on to show
-    global lookup values."""
-
-    @pytest.mark.asyncio
-    async def test_global_lookup_resolves_end_to_end(self, async_client):
-        created = (await async_client.post(
-            "/api/lookup-tables",
-            json={"name": "leagues", "entries": {"nfl": "National Football League"}},
-        )).json()
-
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "nfl",
-            "title_pattern": r"(?P<code>.+)",
-            "title_template": "{code|lookup:leagues}",
-            "global_lookup_ids": [created["id"]],
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-        assert response.status_code == 200
-        assert response.json()["rendered"]["title"] == "National Football League"
-
-    @pytest.mark.asyncio
-    async def test_missing_global_id_is_ignored_without_error(self, async_client):
-        """Stale global_lookup_ids (e.g. a table was deleted) shouldn't crash
-        the preview — absent IDs are simply skipped during resolution."""
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "US",
-            "title_pattern": r"(?P<code>.+)",
-            "title_template": "{code}",   # no lookup pipe — only the IDs list is stale
-            "global_lookup_ids": [99999],
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-        assert response.status_code == 200
-        assert response.json()["rendered"]["title"] == "US"
 
 
 class TestRedosResiliencePreview:

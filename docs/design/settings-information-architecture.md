@@ -1,6 +1,11 @@
 # Settings Information Architecture — Proposal
 
-**Status:** Proposal. Not approved. No code has been written.
+**Status:** Adjudicated. PO decisions **D1–D5** were taken on 2026-07-29 and are recorded in the
+comments on epic `enhancedchannelmanager-70u0r`. This document is preserved as the analysis that
+produced them — it is **not** updated to describe the shipped state. Where a decision went against
+the recommendation, the resolution is noted inline (see §7 for D2). For the shipped Settings
+grouping, read [`operator-workspace-information-architecture.md`](./operator-workspace-information-architecture.md)
+and `frontend/src/components/settingsSections.ts`.
 **Epic:** `enhancedchannelmanager-70u0r`
 **Builds on:** [`operator-workspace-information-architecture.md`](./operator-workspace-information-architecture.md) (approved) and the in-flight, uncommitted beads `2896r.16` / `2896r.17` (the Settings drill-in and the heading→breadcrumb hoist, including the untracked `frontend/src/components/settingsSections.ts`).
 **Author:** UX Designer
@@ -356,6 +361,33 @@ operator-visible win without waiting on a refactor of the largest file in the fr
 ---
 
 ## 7. Lookup Tables
+
+> ### Outcome — D2: the PO chose **R2-D**, not the recommended R2-B
+>
+> Full removal, pipe included. Implemented in bead
+> `enhancedchannelmanager-70u0r.1`: the Settings destination, `LookupTableSection.tsx`/`.css`, its
+> devHarness catalog entry and renderer, the five API client functions, `routers/lookup_tables.py`,
+> the `LookupTable` model, `_resolve_lookups`, the `inline_lookups` / `global_lookup_ids` preview
+> request fields, the `|lookup:` pipe in **both** template engines, and the `lookup_tables` table
+> (destructive Alembic revision `0041`). Operator-facing upgrade note:
+> [`user_guide/epg/lookup-tables-retired.md`](../user_guide/epg/lookup-tables-retired.md).
+> `#settings/lookup-tables` was added to `LEGACY_SETTINGS_PAGE_ALIASES` → `general`, as §6 required.
+>
+> **One claim in §7.4 below is wrong and the correction is why D2 is defensible.** §7.4 treats
+> removing the pipe as having "an output-changing blast radius." It does not. Measured against the
+> engine directly: `generate_xmltv()` calls `generate_channel_xml` with six positional args, leaving
+> `lookups` at its `None` default, so `TemplateEngine.render` raised "unknown lookup table" and
+> `render_template`'s fallback emitted the **raw template text** as the programme `<title>`/`<desc>`.
+> After removal the same template raises "unknown transform" and takes the same fallback — byte-for-byte
+> identical generated XMLTV. The only behaviour that changes is **preview**, which stops contradicting
+> the guide. §7.4's "under R2-D it would be a genuine migration with an export step" stands and is
+> honoured by the upgrade note; "output-changing" does not.
+>
+> **§7.2's zero-rows evidence was also too narrow to carry the migration.** Zero on this instance is
+> not zero everywhere: the Lookup Tables page was a reachable Settings destination in every release
+> from **v0.16.0 (2026-05-12) through v0.18.0 (2026-07-26)**, so populated instances cannot be ruled
+> out. That is why revision `0041` dumps every row to JSON beside the database before dropping, and
+> why the upgrade note leads with an export step.
 
 ### 7.1 The unresolved premise, stated plainly
 

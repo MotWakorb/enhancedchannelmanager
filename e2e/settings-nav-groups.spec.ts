@@ -62,9 +62,8 @@ const VIEWPORTS: ReadonlyArray<{ width: number; height: number }> = [
  * that moved Scheduled Tasks into Upkeep — it is EPG refresh, M3U refresh and
  * database cleanup, which is upkeep rather than reporting.
  *
- * Lookup Tables is in Channel Processing provisionally; bead
- * `enhancedchannelmanager-70u0r.1` retires the destination and this group drops
- * back to four.
+ * Channel Processing is four destinations: bead
+ * `enhancedchannelmanager-70u0r.1` retired Lookup Tables (PO decision D2).
  *
  * The e2e user is an administrator, so Administration renders. The non-admin
  * case (five groups, no empty Administration heading) is covered by
@@ -72,7 +71,7 @@ const VIEWPORTS: ReadonlyArray<{ width: number; height: number }> = [
  */
 const APPROVED_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Connections', ['General', 'Integrations']],
-  ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Lookup Tables', 'Channel Pipeline']],
+  ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Channel Pipeline']],
   ['Notifications & Reports', ['Notification Settings', 'M3U Digest']],
   ['Upkeep', ['Scheduled Tasks', 'Maintenance', 'Backup & Restore']],
   ['Workspace', ['Appearance', 'Linked Accounts']],

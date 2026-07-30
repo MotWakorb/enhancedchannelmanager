@@ -319,9 +319,10 @@
   font-size: var(--icon-action);
 }
 
-/* Icon-only button. Three bare copies existed — LookupTableSection.css and
-   TagEngineSection.css in the SAME Settings chunk (whichever imported later
-   silently won) and M3ULinkedAccountsModal.css in the eager bundle. They
+/* Icon-only button. Three bare copies existed — the since-removed
+   LookupTableSection.css and TagEngineSection.css in the SAME Settings chunk
+   (whichever imported later silently won) and M3ULinkedAccountsModal.css in
+   the eager bundle. They
    disagreed on padding, colour and glyph size. This is the single treatment.
    Like `.action-btn` in § 18 it is a control, so its glyph takes the action
    size, not the status size. Bead enhancedchannelmanager-6z299. */
@@ -680,7 +681,7 @@
    (ChannelManagerTab), and — sent to the body role by 6z299.4 and corrected
    in the 6z299.7 cleanup pass, because two treatments for one idiom is the thing this class
    exists to stop — `.alert-methods-empty`, `.team-aliases-empty`,
-   `.saved-backups-empty`, `.lookup-tables-empty` (Settings).
+   `.saved-backups-empty` (Settings).
 
    Carrying these values inline instead of the class, each for a stated
    reason in its own file: `.filter-dropdown-empty` (StreamsPane.css, also

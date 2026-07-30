@@ -50,8 +50,8 @@
 
 /* `.btn-icon`, `.btn-icon.delete` and the glyph size are owned by
    shared/common.css § 3 BUTTONS. Three files declared `.btn-icon` bare —
-   this one, LookupTableSection.css and TagEngineSection.css — the latter two
-   in the SAME lazy Settings chunk, where whichever imported later silently
+   this one, the since-removed LookupTableSection.css and TagEngineSection.css
+   — the latter two in the SAME lazy Settings chunk, where whichever imported later silently
    won, and all three disagreed on padding, colour and glyph size
    (bead enhancedchannelmanager-6z299). */
 

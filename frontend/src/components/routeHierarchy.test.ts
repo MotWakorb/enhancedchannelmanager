@@ -74,13 +74,12 @@ describe('primary route hierarchy', () => {
   //
   // Written out longhand rather than derived, so moving a destination between
   // groups has to argue with a named expectation instead of quietly passing.
-  // Lookup Tables sits in Channel Processing provisionally; bead
-  // enhancedchannelmanager-70u0r.1 retires the destination and this group drops
-  // back to four.
+  // Channel Processing is four destinations since bead
+  // enhancedchannelmanager-70u0r.1 retired Lookup Tables (PO decision D2).
   it('renders the approved Settings groups, names and order for an administrator', () => {
     expect(settingsSectionGroups(true).map((group) => [group.label, group.sections.map((section) => section.label)])).toEqual([
       ['Connections', ['General', 'Integrations']],
-      ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Lookup Tables', 'Channel Pipeline']],
+      ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Channel Pipeline']],
       ['Notifications & Reports', ['Notification Settings', 'M3U Digest']],
       ['Upkeep', ['Scheduled Tasks', 'Maintenance', 'Backup & Restore']],
       ['Workspace', ['Appearance', 'Linked Accounts']],

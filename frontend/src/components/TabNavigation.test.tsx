@@ -151,7 +151,7 @@ describe('grouped primary navigation', () => {
         [...group.querySelectorAll('a')].map((link) => link.getAttribute('aria-label')),
       ])).toEqual([
         ['Connections', ['General', 'Integrations']],
-        ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Lookup Tables', 'Channel Pipeline']],
+        ['Channel Processing', ['Channel Defaults', 'Channel Normalization', 'Tags', 'Channel Pipeline']],
         ['Notifications & Reports', ['Notification Settings', 'M3U Digest']],
         ['Upkeep', ['Scheduled Tasks', 'Maintenance', 'Backup & Restore']],
         ['Workspace', ['Appearance', 'Linked Accounts']],

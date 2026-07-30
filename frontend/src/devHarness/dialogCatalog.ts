@@ -95,7 +95,6 @@ export const DIALOG_CATALOG = [
 
   // ------------------------------------------------------------ host-driven
   { id: 'linked-accounts-link', file: 'src/components/settings/LinkedAccountsSection.tsx', label: 'Link identity provider', status: 'stubbed', via: 'host' },
-  { id: 'lookup-table-editor', file: 'src/components/settings/LookupTableSection.tsx', label: 'Lookup table editor', status: 'stubbed', via: 'host' },
   { id: 'cloud-targets-card-delete', file: 'src/components/settings/CloudTargetsCard.tsx', label: 'Cloud targets → delete confirm', status: 'stubbed', via: 'host' },
   { id: 'dummy-epg-delete-confirm', file: 'src/components/DummyEPGManagerSection.tsx', label: 'Dummy EPG → delete confirm', status: 'stubbed', via: 'host' },
   { id: 'dummy-epg-export', file: 'src/components/DummyEPGManagerSection.tsx', label: 'Dummy EPG → export', status: 'stubbed', via: 'host' },

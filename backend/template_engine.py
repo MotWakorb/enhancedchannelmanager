@@ -4,7 +4,6 @@ Template engine for dummy EPG title/description rendering.
 Supports:
   - Placeholders          {name}
   - Chained pipes         {name|uppercase|trim|strip:-}
-  - Lookup pipes          {name|lookup:tablename}
   - Conditionals          {if:group}body{/if}
                           {if:group=value}body{/if}
                           {if:group~regex}body{/if}
@@ -25,7 +24,7 @@ import safe_regex
 
 
 class TemplateSyntaxError(ValueError):
-    """Raised when a template is malformed or references an unknown transform/table."""
+    """Raised when a template is malformed or references an unknown transform."""
 
 
 # ---------------------------------------------------------------------------
@@ -85,15 +84,14 @@ _TRANSFORMS = {
     "strip": _t_strip,
     "replace": _t_replace,
     "normalize": _t_normalize,
-    # "lookup" is handled specially because it needs the lookups dict.
 }
 
 
 class TemplateEngine:
     """Render dummy-EPG templates against extracted regex groups.
 
-    Instances are cheap to construct and reusable; per-call arguments override
-    per-instance defaults.
+    Instances are stateless and cheap to construct, so they are freely
+    reusable across renders.
     """
 
     # Public caps — exposed so tests and callers can reason about them.
@@ -106,9 +104,6 @@ class TemplateEngine:
     # Pattern for a single {placeholder} — body has no unescaped '{' or '}'.
     _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
 
-    def __init__(self, lookups: Optional[dict[str, dict[str, str]]] = None) -> None:
-        self._lookups = lookups or {}
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -116,7 +111,6 @@ class TemplateEngine:
         self,
         template: str,
         groups: dict[str, Any],
-        lookups: Optional[dict[str, dict[str, str]]] = None,
     ) -> str:
         if template is None:
             return ""
@@ -125,17 +119,15 @@ class TemplateEngine:
                 f"Template exceeds maximum length of {self.MAX_TEMPLATE_LEN} chars"
             )
 
-        effective_lookups = lookups if lookups is not None else self._lookups
         # Truncate group values up-front so every downstream transform and
         # regex conditional operates on bounded input.
         bounded_groups = {k: self._truncate(str(v)) for k, v in groups.items()}
-        return self._render_segment(template, bounded_groups, effective_lookups)
+        return self._render_segment(template, bounded_groups)
 
     def render_with_trace(
         self,
         template: str,
         groups: dict[str, Any],
-        lookups: Optional[dict[str, dict[str, str]]] = None,
     ) -> tuple[str, list[dict]]:
         """Render template and return (output, trace).
 
@@ -146,8 +138,8 @@ class TemplateEngine:
           - {"kind": "conditional", "condition": <str>, "kind_detail": "truthy"|
               "equality"|"regex", "taken": <bool>, "value": <str>, "body": [...]}
         Pipe step: {"transform": <str>, "arg": <str|None>, "input": <str>,
-                     "output": <str>, "source"?: <str> (e.g. lookup table name),
-                     "matched"?: <bool>}
+                     "output": <str>, "source"?: <str> (provenance note, e.g.
+                     "legacy _normalize suffix")}
         """
         if template is None:
             return "", []
@@ -155,10 +147,9 @@ class TemplateEngine:
             raise TemplateSyntaxError(
                 f"Template exceeds maximum length of {self.MAX_TEMPLATE_LEN} chars"
             )
-        effective_lookups = lookups if lookups is not None else self._lookups
         bounded_groups = {k: self._truncate(str(v)) for k, v in groups.items()}
         trace: list[dict] = []
-        output = self._render_segment(template, bounded_groups, effective_lookups, trace_out=trace)
+        output = self._render_segment(template, bounded_groups, trace_out=trace)
         return output, trace
 
     # ------------------------------------------------------------------
@@ -168,7 +159,6 @@ class TemplateEngine:
         self,
         template: str,
         groups: dict[str, str],
-        lookups: dict[str, dict[str, str]],
         trace_out: Optional[list[dict]] = None,
     ) -> str:
         out: list[str] = []
@@ -205,7 +195,7 @@ class TemplateEngine:
                 taken, detail = self._evaluate_condition(condition, groups)
                 if taken:
                     out.append(self._render_segment(
-                        template[body_start:body_end], groups, lookups,
+                        template[body_start:body_end], groups,
                         trace_out=body_trace if trace_out is not None else None,
                     ))
                 if trace_out is not None:
@@ -223,7 +213,7 @@ class TemplateEngine:
             if directive == "/if":
                 raise TemplateSyntaxError("Unmatched '{/if}'")
 
-            out.append(self._render_placeholder(directive, groups, lookups, trace_out=trace_out))
+            out.append(self._render_placeholder(directive, groups, trace_out=trace_out))
             i = close + 1
 
         return "".join(out)
@@ -298,7 +288,6 @@ class TemplateEngine:
         self,
         body: str,
         groups: dict[str, str],
-        lookups: dict[str, dict[str, str]],
         trace_out: Optional[list[dict]] = None,
     ) -> str:
         parts = body.split("|")
@@ -343,25 +332,6 @@ class TemplateEngine:
                 transform, arg = pipe_spec, None
 
             step_input = value
-            if transform == "lookup":
-                if arg is None:
-                    raise TemplateSyntaxError("lookup transform requires a table name")
-                if arg not in lookups:
-                    raise TemplateSyntaxError(f"Unknown lookup table: {arg!r}")
-                table = lookups[arg]
-                matched = value in table
-                value = table[value] if matched else value
-                if trace_out is not None:
-                    pipe_steps.append({
-                        "transform": "lookup",
-                        "arg": arg,
-                        "input": step_input,
-                        "output": value,
-                        "source": arg,
-                        "matched": matched,
-                    })
-                continue
-
             fn = _TRANSFORMS.get(transform)
             if fn is None:
                 raise TemplateSyntaxError(f"Unknown transform: {transform!r}")
@@ -399,9 +369,5 @@ class TemplateEngine:
 # ---------------------------------------------------------------------------
 # Convenience wrapper matching the API the tests expect.
 # ---------------------------------------------------------------------------
-def render(
-    template: str,
-    groups: dict[str, Any],
-    lookups: Optional[dict[str, dict[str, str]]] = None,
-) -> str:
-    return TemplateEngine().render(template, groups, lookups=lookups)
+def render(template: str, groups: dict[str, Any]) -> str:
+    return TemplateEngine().render(template, groups)

@@ -4046,3 +4046,219 @@ class TestMigration0019:
             assert col_type == "INTEGER", f"{name} must be INTEGER after round-trip"
         finally:
             engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Migration 0041 — drop lookup_tables (bead enhancedchannelmanager-70u0r.1)
+# ---------------------------------------------------------------------------
+
+
+class TestMigration0041:
+    """Migration 0041 — DESTRUCTIVE drop of ``lookup_tables``.
+
+    PO decision D2 on epic 70u0r retired the Lookup Tables feature outright
+    (UI, CRUD router, ``LookupTable`` model, the ``|lookup:<table>`` template
+    pipe, and this table). The destination shipped as a reachable Settings page
+    in v0.16.0 through v0.18.0, so an upgrading instance may hold rows — which
+    is why this migration dumps them to JSON beside the database before
+    dropping, and why every assertion about the dump matters.
+
+    Coverage:
+      - Fresh upgrade head — table and its ``idx_lookup_table_name`` index gone.
+      - Populated upgrade — rows are written to
+        ``<db_dir>/lookup_tables_dropped_0041.json`` before the drop, including
+        a row whose ``entries`` is not valid JSON.
+      - Empty upgrade — no dump file is left behind (nothing was lost).
+      - Downgrade — table and index reappear with the baseline shape, EMPTY
+        (the rows are unrecoverable; that is the accepted, documented cost).
+      - Idempotency — a DB whose table already vanished (``create_all`` drift)
+        upgrades without raising ``no such table``.
+      - Round-trip up/down/up.
+    """
+
+    TABLE = "lookup_tables"
+    INDEX = "idx_lookup_table_name"
+    DUMP = "lookup_tables_dropped_0041.json"
+
+    BASELINE_COLUMNS = {
+        "id", "name", "description", "entries", "created_at", "updated_at",
+    }
+
+    @staticmethod
+    def _seed(db_url: str) -> None:
+        """Insert two rows: one well-formed, one with unparseable ``entries``."""
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO lookup_tables "
+                    "(name, description, entries, created_at, updated_at) "
+                    "VALUES (:n, :d, :e, :c, :u)"
+                ), {
+                    "n": "teams", "d": "NFL long names",
+                    "e": json.dumps({"KC": "Kansas City Chiefs"}),
+                    "c": "2026-05-20 10:00:00", "u": "2026-05-20 10:00:00",
+                })
+                conn.execute(text(
+                    "INSERT INTO lookup_tables "
+                    "(name, description, entries, created_at, updated_at) "
+                    "VALUES (:n, :d, :e, :c, :u)"
+                ), {
+                    "n": "corrupt", "d": None, "e": "{not valid json",
+                    "c": "2026-06-01 08:00:00", "u": "2026-06-01 08:00:00",
+                })
+        finally:
+            engine.dispose()
+
+    def test_fresh_upgrade_head_drops_table_and_index(self, tmp_path):
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_fresh.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "head")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE), (
+                f"{self.TABLE} must be gone after upgrade head — 0041 drops it."
+            )
+            assert self.INDEX not in _index_names(engine, self.TABLE)
+        finally:
+            engine.dispose()
+
+    def test_populated_upgrade_dumps_rows_before_dropping(self, tmp_path):
+        """The rows the migration deletes are written out first.
+
+        This is the safety net for an operator who upgrades without reading the
+        upgrade note. If it regresses, a populated instance loses data silently.
+        """
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_populated.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0040")
+        self._seed(db_url)
+
+        command.upgrade(cfg, "0041")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE)
+        finally:
+            engine.dispose()
+
+        dump = tmp_path / self.DUMP
+        assert dump.exists(), (
+            f"{self.DUMP} must be written beside the DB before the drop — "
+            f"without it a populated instance loses operator-authored data "
+            f"with no trace."
+        )
+        payload = json.loads(dump.read_text(encoding="utf-8"))
+        assert payload["revision"] == "0041"
+        assert payload["table"] == self.TABLE
+        by_name = {row["name"]: row for row in payload["rows"]}
+        assert set(by_name) == {"teams", "corrupt"}
+        assert by_name["teams"]["entries"] == {"KC": "Kansas City Chiefs"}
+        assert by_name["teams"]["entries_raw"] is None
+        assert by_name["teams"]["description"] == "NFL long names"
+        # A row whose entries never parsed must still survive into the dump.
+        assert by_name["corrupt"]["entries"] is None
+        assert by_name["corrupt"]["entries_raw"] == "{not valid json"
+
+    def test_empty_upgrade_writes_no_dump(self, tmp_path):
+        """Nothing lost → no stray file in the operator's config directory."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_empty.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0040")
+        command.upgrade(cfg, "0041")
+
+        assert not (tmp_path / self.DUMP).exists(), (
+            "An empty table must not produce a dump file."
+        )
+
+    def test_downgrade_recreates_baseline_shape_but_not_rows(self, tmp_path):
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_downgrade.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0040")
+        self._seed(db_url)
+        command.upgrade(cfg, "0041")
+        command.downgrade(cfg, "0040")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            inspector = inspect(engine)
+            assert inspector.has_table(self.TABLE), (
+                "downgrade must recreate the table so the schema is reversible."
+            )
+            assert _column_names(engine, self.TABLE) == self.BASELINE_COLUMNS
+            assert self.INDEX in _index_names(engine, self.TABLE), (
+                f"{self.INDEX} must be recreated by the downgrade."
+            )
+            with engine.connect() as conn:
+                count = conn.execute(
+                    text(f"SELECT COUNT(*) FROM {self.TABLE}")
+                ).scalar()
+            assert count == 0, (
+                "downgrade restores the SCHEMA only — the rows are gone, and "
+                "this assertion documents that so nobody mistakes the down "
+                "migration for a recovery path."
+            )
+        finally:
+            engine.dispose()
+
+    def test_upgrade_is_idempotent_when_table_already_absent(self, tmp_path):
+        """create_all drift: the model is gone, so the table may already be."""
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_drift.db'}"
+        cfg = _make_alembic_config(db_url)
+        command.upgrade(cfg, "0040")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"DROP TABLE {self.TABLE}"))
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "0041")  # must not raise "no such table"
+
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE)
+        finally:
+            engine.dispose()
+
+    def test_round_trip_up_down_up(self, tmp_path):
+        from alembic import command
+
+        db_url = f"sqlite:///{tmp_path / 'mig0041_round_trip.db'}"
+        cfg = _make_alembic_config(db_url)
+
+        command.upgrade(cfg, "0041")
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE)
+        finally:
+            engine.dispose()
+
+        command.downgrade(cfg, "0040")
+        engine = create_engine(db_url, future=True)
+        try:
+            assert inspect(engine).has_table(self.TABLE)
+        finally:
+            engine.dispose()
+
+        command.upgrade(cfg, "0041")
+        engine = create_engine(db_url, future=True)
+        try:
+            assert not inspect(engine).has_table(self.TABLE), (
+                "0041 must be re-appliable after a downgrade."
+            )
+            assert self.INDEX not in _index_names(engine, self.TABLE)
+        finally:
+            engine.dispose()

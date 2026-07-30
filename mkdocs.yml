@@ -89,6 +89,7 @@ nav:
       - user_guide/epg/index.md
       - Finding & Fixing Mis-linked Channels: user_guide/epg/finding-mislinked-channels.md
       - Migrate Guides: user_guide/epg/migrate-guides.md
+      - Lookup Tables Retired: user_guide/epg/lookup-tables-retired.md
   - Normalization: user_guide/normalization/index.md
   - Stats:
       - user_guide/stats/index.md

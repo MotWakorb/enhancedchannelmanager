@@ -1,14 +1,14 @@
 {
-  "capturedAt": "2026-07-30T03:43:53.507Z",
+  "capturedAt": "2026-07-30T14:27:26.048Z",
   "viewport": {
     "width": 1440,
     "height": 900
   },
   "theme": "dark (app default)",
   "counts": {
-    "filesMatchingDialogMarkers": 62,
-    "cataloguedDialogs": 83,
-    "rendered": 82,
+    "filesMatchingDialogMarkers": 61,
+    "cataloguedDialogs": 82,
+    "rendered": 81,
     "notRendered": 0,
     "crashed": 0,
     "timeout": 0,
@@ -616,7 +616,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "Schedules Direct — United Kingdom"
+          "sample": "Schedules Direct \u2014 United Kingdom"
         }
       ]
     },
@@ -1130,7 +1130,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Channel Details — BBC One HD (London)"
+          "sample": "Channel Details \u2014 BBC One HD (London)"
         },
         {
           "signature": "h4",
@@ -1723,7 +1723,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Runs a preview (dry run) first — no changes are made until y"
+          "sample": "Runs a preview (dry run) first \u2014 no changes are made until y"
         },
         {
           "signature": "span.material-icons",
@@ -2062,7 +2062,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Channels - 24/7 filler — movies"
+          "sample": "Channels - 24/7 filler \u2014 movies"
         },
         {
           "signature": "h3",
@@ -2682,47 +2682,47 @@
       "error": null,
       "unstubbedCalls": [],
       "consoleErrors": [],
-      "elementCount": 116,
+      "elementCount": 112,
       "fontSizeHistogram": {
-        "16px": 38,
-        "18px": 11,
+        "16px": 37,
+        "18px": 10,
         "13.3333px": 2,
         "13px": 37,
         "10px": 4,
         "11px": 14,
-        "15px": 10
+        "15px": 8
       },
       "geometry": {
         "container": {
-          "w": 691.29,
-          "h": 753.51
+          "w": 696.77,
+          "h": 759.48
         },
         "header": {
-          "w": 689.32,
-          "h": 64.19
+          "w": 694.78,
+          "h": 64.7
         },
         "body": {
-          "w": 689.32,
-          "h": 622.16
+          "w": 694.78,
+          "h": 627.09
         },
         "footer": {
-          "w": 689.32,
-          "h": 65.18
+          "w": 694.78,
+          "h": 65.7
         },
         "closeBtn": {
-          "w": 31.6,
-          "h": 31.6
+          "w": 31.85,
+          "h": 31.85
         },
         "rowHeights": {
           ".modal-btn": {
             "n": 2,
-            "min": 32.59,
-            "max": 32.59
+            "min": 32.85,
+            "max": 32.85
           },
           ".modal-form-group": {
             "n": 13,
-            "min": 17.96,
-            "max": 123.14
+            "min": 18.1,
+            "max": 124.11
           }
         },
         "horizontalOverflow": false,
@@ -2811,7 +2811,7 @@
             "text-transform": "none",
             "font-style": "normal"
           },
-          "count": 5,
+          "count": 4,
           "sample": "expand_moreUpcoming/Ended Templates (Optional)"
         },
         {
@@ -2965,7 +2965,7 @@
             "text-transform": "none",
             "font-style": "normal"
           },
-          "count": 5,
+          "count": 4,
           "sample": "Upcoming/Ended Templates (Optional)"
         },
         {
@@ -3007,7 +3007,7 @@
             "text-transform": "none",
             "font-style": "normal"
           },
-          "count": 10,
+          "count": 9,
           "sample": "close"
         },
         {
@@ -3976,7 +3976,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "1 group selected▲"
+          "sample": "1 group selected\u25b2"
         },
         {
           "signature": "input",
@@ -4032,7 +4032,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "▲"
+          "sample": "\u25b2"
         },
         {
           "signature": "span.filter-option-name",
@@ -4046,7 +4046,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span.material-icons.search-icon",
@@ -4194,7 +4194,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Choose a target…"
+          "sample": "Choose a target\u2026"
         },
         {
           "signature": "p",
@@ -4222,7 +4222,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Choose a target…Schedules Direct — United Kingdom (Gracenote"
+          "sample": "Choose a target\u2026Schedules Direct \u2014 United Kingdom (Gracenote"
         },
         {
           "signature": "span.material-icons",
@@ -5837,7 +5837,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "United Kingdom — Entertainmentexpand_more"
+          "sample": "United Kingdom \u2014 Entertainmentexpand_more"
         },
         {
           "signature": "button.modal-btn.modal-btn-primary",
@@ -5991,7 +5991,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span.form-hint",
@@ -6005,7 +6005,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "(Schedules Direct — United Kingdom)"
+          "sample": "(Schedules Direct \u2014 United Kingdom)"
         },
         {
           "signature": "span.material-icons",
@@ -6741,7 +6741,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span.material-icons",
@@ -7629,7 +7629,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "playlist_addCreate in…expand_less"
+          "sample": "playlist_addCreate in\u2026expand_less"
         },
         {
           "signature": "button.stream-create-menu-item",
@@ -7643,7 +7643,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "folderUnited Kingdom — Entertainment"
+          "sample": "folderUnited Kingdom \u2014 Entertainment"
         },
         {
           "signature": "input.stream-create-menu-filter-input",
@@ -7671,7 +7671,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span",
@@ -7685,7 +7685,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Create in…"
+          "sample": "Create in\u2026"
         },
         {
           "signature": "span.material-icons",
@@ -9051,7 +9051,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Channel pipeline suspended — the previous run was abandoned "
+          "sample": "Channel pipeline suspended \u2014 the previous run was abandoned "
         },
         {
           "signature": "h3",
@@ -9236,7 +9236,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Turn auto-sync OFF for ‘’?"
+          "sample": "Turn auto-sync OFF for \u2018\u2019?"
         },
         {
           "signature": "p",
@@ -9250,7 +9250,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Turn OFF auto_channel_sync for ‘’ ()? Dispatcharr will stop "
+          "sample": "Turn OFF auto_channel_sync for \u2018\u2019 ()? Dispatcharr will stop "
         },
         {
           "signature": "p.form-hint",
@@ -9416,7 +9416,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "No separate secondary? Use the master group's own streams →"
+          "sample": "No separate secondary? Use the master group's own streams \u2192"
         },
         {
           "signature": "button.event-sync-review-jump",
@@ -9472,7 +9472,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "3 patterns · time ±30 min · score ≥ 0.80"
+          "sample": "3 patterns \u00b7 time \u00b130 min \u00b7 score \u2265 0.80"
         },
         {
           "signature": "dt",
@@ -10016,7 +10016,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "Auto — use the Create Channel action's target groupexpand_mo"
+          "sample": "Auto \u2014 use the Create Channel action's target groupexpand_mo"
         },
         {
           "signature": "button.filter-dropdown-button",
@@ -10030,7 +10030,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "No groups selected▼"
+          "sample": "No groups selected\u25bc"
         },
         {
           "signature": "button.modal-stepper-item",
@@ -10254,7 +10254,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "Auto — use the Create Channel action's target group"
+          "sample": "Auto \u2014 use the Create Channel action's target group"
         },
         {
           "signature": "span.dropdown-arrow",
@@ -10268,7 +10268,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "▼"
+          "sample": "\u25bc"
         },
         {
           "signature": "span.field-hint",
@@ -10380,7 +10380,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "warningNo scope group will resolve — this rule has no Create"
+          "sample": "warningNo scope group will resolve \u2014 this rule has no Create"
         },
         {
           "signature": "span.rule-phase-num",
@@ -10761,7 +10761,7 @@
     "task-schedule-add": {
       "status": "rendered",
       "file": "src/components/TaskEditorModal.tsx",
-      "label": "Task editor → add schedule",
+      "label": "Task editor \u2192 add schedule",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -11237,7 +11237,7 @@
     "task-schedule-edit": {
       "status": "rendered",
       "file": "src/components/TaskEditorModal.tsx",
-      "label": "Task editor → edit schedule",
+      "label": "Task editor \u2192 edit schedule",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -11935,404 +11935,10 @@
         }
       ]
     },
-    "lookup-table-editor": {
-      "status": "rendered",
-      "file": "src/components/settings/LookupTableSection.tsx",
-      "label": "Lookup table editor",
-      "via": "host",
-      "error": null,
-      "unstubbedCalls": [],
-      "consoleErrors": [],
-      "elementCount": 55,
-      "fontSizeHistogram": {
-        "16px": 18,
-        "18px": 3,
-        "15px": 1,
-        "13px": 23,
-        "10px": 6,
-        "13.3333px": 3,
-        "11px": 1
-      },
-      "geometry": {
-        "container": {
-          "w": 546.53,
-          "h": 493.24
-        },
-        "header": {
-          "w": 544.54,
-          "h": 64.59
-        },
-        "body": {
-          "w": 544.54,
-          "h": 359.1
-        },
-        "footer": {
-          "w": 544.54,
-          "h": 67.57
-        },
-        "closeBtn": {
-          "w": 31.8,
-          "h": 31.8
-        },
-        "rowHeights": {
-          ".modal-btn": {
-            "n": 2,
-            "min": 32.79,
-            "max": 34.78
-          },
-          ".modal-form-group": {
-            "n": 2,
-            "min": 62.79,
-            "max": 86.64
-          }
-        },
-        "horizontalOverflow": false,
-        "scrollWidth": 1440,
-        "clientWidth": 1440
-      },
-      "rows": [
-        {
-          "signature": "button.btn-icon",
-          "style": {
-            "font-size": "13.3333px",
-            "font-weight": "400",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "edit"
-        },
-        {
-          "signature": "button.btn-icon.btn-icon-danger",
-          "style": {
-            "font-size": "13.3333px",
-            "font-weight": "400",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "delete"
-        },
-        {
-          "signature": "button.btn-primary.btn-small",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "500",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "add New Table"
-        },
-        {
-          "signature": "button.btn-primary.modal-btn.modal-btn-primary",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "500",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Create"
-        },
-        {
-          "signature": "button.btn-secondary.btn-small",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "500",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": "add Add Row"
-        },
-        {
-          "signature": "button.modal-btn.modal-btn-secondary",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "500",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Cancel"
-        },
-        {
-          "signature": "button.modal-close-btn",
-          "style": {
-            "font-size": "13.3333px",
-            "font-weight": "400",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "close"
-        },
-        {
-          "signature": "code",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "19.5px",
-            "font-family": "monospace",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": "{key|lookup:<name>}"
-        },
-        {
-          "signature": "h2",
-          "style": {
-            "font-size": "18px",
-            "font-weight": "600",
-            "line-height": "23.4px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "New Lookup Table"
-        },
-        {
-          "signature": "h3",
-          "style": {
-            "font-size": "15px",
-            "font-weight": "600",
-            "line-height": "19.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Tables"
-        },
-        {
-          "signature": "input",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "normal",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": ""
-        },
-        {
-          "signature": "label",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "500",
-            "line-height": "18.2px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": "Name"
-        },
-        {
-          "signature": "p.lookup-entries-empty",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "19.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "No entries yet. Add a row or paste below."
-        },
-        {
-          "signature": "span",
-          "style": {
-            "font-size": "10px",
-            "font-weight": "700",
-            "line-height": "15px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "0.8px",
-            "text-transform": "uppercase",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Entries"
-        },
-        {
-          "signature": "span.form-hint",
-          "style": {
-            "font-size": "11px",
-            "font-weight": "400",
-            "line-height": "16.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Used in templates as {key|lookup:<name>}."
-        },
-        {
-          "signature": "span.material-icons",
-          "style": {
-            "font-size": "16px",
-            "font-weight": "400",
-            "line-height": "16px",
-            "font-family": "\"Material Icons\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 4,
-          "sample": "add"
-        },
-        {
-          "signature": "span.material-icons",
-          "style": {
-            "font-size": "18px",
-            "font-weight": "400",
-            "line-height": "18px",
-            "font-family": "\"Material Icons\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": "table_view"
-        },
-        {
-          "signature": "summary",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "19.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Bulk import (one key=value per line)"
-        },
-        {
-          "signature": "td.lookup-tables-desc",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "19.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Maps provider callsigns onto operator-facing names."
-        },
-        {
-          "signature": "td.lookup-tables-name",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "600",
-            "line-height": "18.2px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Callsign to display name"
-        },
-        {
-          "signature": "td.num",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "19.5px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "42"
-        },
-        {
-          "signature": "textarea",
-          "style": {
-            "font-size": "13px",
-            "font-weight": "400",
-            "line-height": "normal",
-            "font-family": "ui-monospace, \"SF Mono\", Consolas, monospace",
-            "letter-spacing": "normal",
-            "text-transform": "none",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": ""
-        },
-        {
-          "signature": "th",
-          "style": {
-            "font-size": "10px",
-            "font-weight": "700",
-            "line-height": "15px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "0.8px",
-            "text-transform": "uppercase",
-            "font-style": "normal"
-          },
-          "count": 2,
-          "sample": "Name"
-        },
-        {
-          "signature": "th.num",
-          "style": {
-            "font-size": "10px",
-            "font-weight": "700",
-            "line-height": "15px",
-            "font-family": "Inter, system-ui, Avenir, Helvetica, Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Noto Color Emoji\"",
-            "letter-spacing": "0.8px",
-            "text-transform": "uppercase",
-            "font-style": "normal"
-          },
-          "count": 1,
-          "sample": "Entries"
-        }
-      ]
-    },
     "cloud-targets-card-delete": {
       "status": "rendered",
       "file": "src/components/settings/CloudTargetsCard.tsx",
-      "label": "Cloud targets → delete confirm",
+      "label": "Cloud targets \u2192 delete confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -12578,7 +12184,7 @@
     "dummy-epg-delete-confirm": {
       "status": "rendered",
       "file": "src/components/DummyEPGManagerSection.tsx",
-      "label": "Dummy EPG → delete confirm",
+      "label": "Dummy EPG \u2192 delete confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -12749,7 +12355,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "24/7 filler — movies"
+          "sample": "24/7 filler \u2014 movies"
         },
         {
           "signature": "h2",
@@ -12791,7 +12397,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "Are you sure you want to delete 24/7 filler — movies?"
+          "sample": "Are you sure you want to delete 24/7 filler \u2014 movies?"
         },
         {
           "signature": "p.header-description",
@@ -12875,14 +12481,14 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "24/7 filler — movies"
+          "sample": "24/7 filler \u2014 movies"
         }
       ]
     },
     "dummy-epg-export": {
       "status": "rendered",
       "file": "src/components/DummyEPGManagerSection.tsx",
-      "label": "Dummy EPG → export",
+      "label": "Dummy EPG \u2192 export",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -13019,7 +12625,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "24/7 filler — movies"
+          "sample": "24/7 filler \u2014 movies"
         },
         {
           "signature": "h2",
@@ -13138,7 +12744,7 @@
     "dummy-epg-import-yaml": {
       "status": "rendered",
       "file": "src/components/DummyEPGManagerSection.tsx",
-      "label": "Dummy EPG → import YAML",
+      "label": "Dummy EPG \u2192 import YAML",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -13281,7 +12887,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "24/7 filler — movies"
+          "sample": "24/7 filler \u2014 movies"
         },
         {
           "signature": "h2",
@@ -13414,7 +13020,7 @@
     "logo-delete-confirm": {
       "status": "rendered",
       "file": "src/components/tabs/LogoManagerTab.tsx",
-      "label": "Logo manager → delete confirm",
+      "label": "Logo manager \u2192 delete confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -13563,7 +13169,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "×"
+          "sample": "\u00d7"
         },
         {
           "signature": "button.copy-btn",
@@ -13871,7 +13477,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "1–2 of 2"
+          "sample": "1\u20132 of 2"
         },
         {
           "signature": "strong",
@@ -14098,7 +13704,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "24/7 filler — movies"
+          "sample": "24/7 filler \u2014 movies"
         },
         {
           "signature": "div.source-message",
@@ -14553,7 +14159,7 @@
     "scheduled-tasks-run": {
       "status": "rendered",
       "file": "src/components/ScheduledTasksSection.tsx",
-      "label": "Scheduled tasks → run now",
+      "label": "Scheduled tasks \u2192 run now",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -14864,7 +14470,7 @@
     "history-checkpoint-name": {
       "status": "rendered",
       "file": "src/components/HistoryToolbar.tsx",
-      "label": "History → name checkpoint",
+      "label": "History \u2192 name checkpoint",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -15034,7 +14640,7 @@
     "tag-import": {
       "status": "rendered",
       "file": "src/components/settings/TagEngineSection.tsx",
-      "label": "Tag engine → import",
+      "label": "Tag engine \u2192 import",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -15359,7 +14965,7 @@
     "tag-create-group": {
       "status": "rendered",
       "file": "src/components/settings/TagEngineSection.tsx",
-      "label": "Tag engine → create group",
+      "label": "Tag engine \u2192 create group",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -15597,7 +15203,7 @@
     "norm-rule-editor": {
       "status": "rendered",
       "file": "src/components/settings/NormalizationEngineSection.tsx",
-      "label": "Normalization → rule editor",
+      "label": "Normalization \u2192 rule editor",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -16175,7 +15781,7 @@
     "norm-group-editor": {
       "status": "rendered",
       "file": "src/components/settings/NormalizationEngineSection.tsx",
-      "label": "Normalization → group editor",
+      "label": "Normalization \u2192 group editor",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -16557,7 +16163,7 @@
     "norm-import": {
       "status": "rendered",
       "file": "src/components/settings/NormalizationEngineSection.tsx",
-      "label": "Normalization → import",
+      "label": "Normalization \u2192 import",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -16953,7 +16559,7 @@
     "norm-apply": {
       "status": "rendered",
       "file": "src/components/settings/NormalizationEngineSection.tsx",
-      "label": "Normalization → apply to channels",
+      "label": "Normalization \u2192 apply to channels",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -17337,7 +16943,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "—"
+          "sample": "\u2014"
         },
         {
           "signature": "span.norm-engine-apply-rule-count",
@@ -17442,7 +17048,7 @@
     "norm-apply-confirm": {
       "status": "rendered",
       "file": "src/components/settings/NormalizationEngineSection.tsx",
-      "label": "Normalization → apply confirm (alertdialog)",
+      "label": "Normalization \u2192 apply confirm (alertdialog)",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -17868,7 +17474,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "—"
+          "sample": "\u2014"
         },
         {
           "signature": "span.norm-engine-apply-rule-count",
@@ -17987,7 +17593,7 @@
     "pending-merge-bulk": {
       "status": "rendered",
       "file": "src/components/tabs/PendingMergesPage.tsx",
-      "label": "Pending merges → bulk confirm",
+      "label": "Pending merges \u2192 bulk confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -18255,7 +17861,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span.pending-merges-candidate-id",
@@ -18332,7 +17938,7 @@
     "user-profile": {
       "status": "rendered",
       "file": "src/components/UserMenu.tsx",
-      "label": "User menu → profile",
+      "label": "User menu \u2192 profile",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -18531,7 +18137,7 @@
     "user-password": {
       "status": "rendered",
       "file": "src/components/UserMenu.tsx",
-      "label": "User menu → change password",
+      "label": "User menu \u2192 change password",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -18730,7 +18336,7 @@
     "settings-plex-token": {
       "status": "rendered",
       "file": "src/components/tabs/SettingsTab.tsx",
-      "label": "Settings → Plex token help",
+      "label": "Settings \u2192 Plex token help",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -19014,7 +18620,7 @@
             "font-style": "normal"
           },
           "count": 5,
-          "sample": "Open Plex Web in your browser — typically http://<your-plex-"
+          "sample": "Open Plex Web in your browser \u2014 typically http://<your-plex-"
         },
         {
           "signature": "p",
@@ -19042,7 +18648,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Important: use the server-local token from the steps above —"
+          "sample": "Important: use the server-local token from the steps above \u2014"
         },
         {
           "signature": "p.plex-token-ref-link",
@@ -19189,7 +18795,7 @@
     "settings-probe-results": {
       "status": "rendered",
       "file": "src/components/tabs/SettingsTab.tsx",
-      "label": "Settings → probe results",
+      "label": "Settings \u2192 probe results",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -19716,7 +19322,7 @@
     "settings-reorder": {
       "status": "rendered",
       "file": "src/components/tabs/SettingsTab.tsx",
-      "label": "Settings → reorder",
+      "label": "Settings \u2192 reorder",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -20093,7 +19699,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "Priority: Resolution → Bitrate"
+          "sample": "Priority: Resolution \u2192 Bitrate"
         },
         {
           "signature": "span.custom-select-arrow.material-icons",
@@ -20240,7 +19846,7 @@
     "channels-pane-renumber-all": {
       "status": "rendered",
       "file": "src/components/ChannelsPane.tsx",
-      "label": "Channels pane → renumber all groups",
+      "label": "Channels pane \u2192 renumber all groups",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -20380,7 +19986,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "3 groups selected▼"
+          "sample": "3 groups selected\u25bc"
         },
         {
           "signature": "button.group-menu-btn",
@@ -20408,7 +20014,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "▶︎Uncategorized – Channels without a specific group"
+          "sample": "\u25b6\ufe0eUncategorized \u2013 Channels without a specific group"
         },
         {
           "signature": "button.missing-streams-alert",
@@ -20702,7 +20308,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "▼"
+          "sample": "\u25bc"
         },
         {
           "signature": "span.group-count",
@@ -20744,7 +20350,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "Uncategorized – Channels without a specific group"
+          "sample": "Uncategorized \u2013 Channels without a specific group"
         },
         {
           "signature": "span.group-range",
@@ -20772,7 +20378,7 @@
             "font-style": "italic"
           },
           "count": 1,
-          "sample": "– Channels without a specific group"
+          "sample": "\u2013 Channels without a specific group"
         },
         {
           "signature": "span.group-toggle",
@@ -20786,7 +20392,7 @@
             "font-style": "normal"
           },
           "count": 4,
-          "sample": "▶︎"
+          "sample": "\u25b6\ufe0e"
         },
         {
           "signature": "span.material-icons",
@@ -20884,7 +20490,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "United Kingdom — Entertainment"
+          "sample": "United Kingdom \u2014 Entertainment"
         },
         {
           "signature": "span.renumber-all-group-range",
@@ -20898,7 +20504,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "1–1"
+          "sample": "1\u20131"
         },
         {
           "signature": "strong",
@@ -20919,7 +20525,7 @@
     "streams-bulk-create": {
       "status": "rendered",
       "file": "src/components/StreamsPane.tsx",
-      "label": "Streams pane → bulk create channels",
+      "label": "Streams pane \u2192 bulk create channels",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -21266,7 +20872,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "▶︎"
+          "sample": "\u25b6\ufe0e"
         },
         {
           "signature": "span.expand-icon.material-icons",
@@ -21357,7 +20963,7 @@
     "streams-bulk-create-conflict": {
       "status": "rendered",
       "file": "src/components/StreamsPane.tsx",
-      "label": "Streams pane → bulk create conflict",
+      "label": "Streams pane \u2192 bulk create conflict",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -21725,7 +21331,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "\"United Kingdom — Entertainment\""
+          "sample": "\"United Kingdom \u2014 Entertainment\""
         },
         {
           "signature": "span.collapsible-title",
@@ -21781,7 +21387,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "▶︎"
+          "sample": "\u25b6\ufe0e"
         },
         {
           "signature": "span.expand-icon.material-icons",
@@ -21928,7 +21534,7 @@
     "cp-rule-builder-modal": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → rule builder modal shell",
+      "label": "Pipeline tab \u2192 rule builder modal shell",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -22120,7 +21726,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -22316,7 +21922,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -22659,7 +22265,7 @@
     "cp-delete-confirm": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → delete rule confirm",
+      "label": "Pipeline tab \u2192 delete rule confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -22840,7 +22446,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -23036,7 +22642,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -23379,7 +22985,7 @@
     "cp-import-dialog": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → import rules",
+      "label": "Pipeline tab \u2192 import rules",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -23569,7 +23175,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -23765,7 +23371,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -24122,7 +23728,7 @@
     "cp-export-dialog": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → export rules",
+      "label": "Pipeline tab \u2192 export rules",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -24306,7 +23912,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -24488,7 +24094,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -24845,7 +24451,7 @@
     "cp-execution-details": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → execution details",
+      "label": "Pipeline tab \u2192 execution details",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -25026,7 +24632,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.log-empty",
@@ -25250,7 +24856,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -25593,7 +25199,7 @@
     "cp-event-sync-run-confirm": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → event-sync run confirm",
+      "label": "Pipeline tab \u2192 event-sync run confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -25760,7 +25366,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -25872,7 +25478,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Running \"Event sync — Premier League\" will attach streams to"
+          "sample": "Running \"Event sync \u2014 Premier League\" will attach streams to"
         },
         {
           "signature": "p.form-hint",
@@ -25956,7 +25562,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -26313,7 +25919,7 @@
     "cp-rollback-confirm": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → rollback confirm",
+      "label": "Pipeline tab \u2192 rollback confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -26494,7 +26100,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -26704,7 +26310,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -27061,7 +26667,7 @@
     "cp-revert-confirm": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → undo this run confirm",
+      "label": "Pipeline tab \u2192 undo this run confirm",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -27242,7 +26848,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -27368,7 +26974,7 @@
             "font-style": "normal"
           },
           "count": 2,
-          "sample": "Any changes made since that snapshot — manual edits, automat"
+          "sample": "Any changes made since that snapshot \u2014 manual edits, automat"
         },
         {
           "signature": "span.badge.badge-info.badge-sm.rule-kind-badge",
@@ -27438,7 +27044,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",
@@ -27795,7 +27401,7 @@
     "cp-revert-result": {
       "status": "rendered",
       "file": "src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "label": "Pipeline tab → revert complete summary",
+      "label": "Pipeline tab \u2192 revert complete summary",
       "via": "host",
       "error": null,
       "unstubbedCalls": [],
@@ -27962,7 +27568,7 @@
             "font-style": "normal"
           },
           "count": 1,
-          "sample": "Run-on-refresh is disabled — the channel pipeline will not f"
+          "sample": "Run-on-refresh is disabled \u2014 the channel pipeline will not f"
         },
         {
           "signature": "div.rule-description",
@@ -28172,7 +27778,7 @@
             "font-style": "normal"
           },
           "count": 3,
-          "sample": "Event sync — Premier League"
+          "sample": "Event sync \u2014 Premier League"
         },
         {
           "signature": "span.event-sync-exclusion-icon.material-icons",

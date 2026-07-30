@@ -109,16 +109,6 @@ const SECTION_DEFINITIONS = [
     description: 'Manage tag vocabularies used by normalization rules for pattern matching.',
   },
   {
-    // Grouped here provisionally. Lookup Tables serves the dummy EPG template
-    // engine, not channel processing, and has no coherent home in the approved
-    // grouping — which is the finding, not a gap: bead
-    // `enhancedchannelmanager-70u0r.1` retires the destination entirely (PO
-    // decision D2), at which point Channel Processing drops back to four.
-    id: 'lookup-tables', label: 'Lookup Tables', icon: 'table_view',
-    group: 'Channel Processing',
-    description: "Named key → value tables used by the dummy EPG template engine's {key|lookup:<name>} pipe.",
-  },
-  {
     id: 'channel-pipeline', label: 'Channel Pipeline', icon: 'auto_awesome',
     group: 'Channel Processing',
     description: 'Configure global exclusion filters for the channel pipeline. Streams matching these filters will be excluded before any rules are evaluated.',

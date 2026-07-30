@@ -305,7 +305,7 @@ function envelope<T>(list: T[]): T[] {
     'executions', 'candidates', 'tables', 'variables', 'conditions', 'actions',
     'diffs', 'conflicts', 'lineups', 'exclusions', 'reviews', 'snapshots',
     'files', 'backups', 'matches', 'programs', 'duplicate_groups', 'tags',
-    'providers', 'users', 'lookup_tables', 'stats',
+    'providers', 'users', 'stats',
   ]
   for (const key of aliases) value[key] = list
   value.count = list.length
@@ -446,7 +446,7 @@ export const STUB_ROUTES: StubRoute[] = [
     { id: 1, name: 'Backblaze B2 (offsite)', kind: 's3', provider: 's3', bucket: 'ecm-backups', prefix: 'nightly/', enabled: true, last_status: 'success', last_run: NOW, config: {} },
   ]) },
 
-  // --- normalization / tags / lookup ------------------------------------
+  // --- normalization / tags ---------------------------------------------
   {
     // POST dry-run. Its `diffs` drive the whole apply modal; the generic write
     // fallback would leave it undefined and crash the dialog on open.
@@ -466,10 +466,6 @@ export const STUB_ROUTES: StubRoute[] = [
   { match: /\/api\/tags\/groups/, body: envelope([stubTagGroup()]) },
   { match: /\/api\/tags\/export/, body: 'groups: []\n' },
   { match: /\/api\/tags/, body: envelope([stubTagGroup()]) },
-  { match: /\/api\/lookup-tables/, body: envelope([
-    { id: 1, name: 'Callsign to display name', description: 'Maps provider callsigns onto operator-facing names.', entry_count: 42, entries: [], updated_at: NOW, created_at: NOW },
-  ]) },
-
   // --- channel pipeline -------------------------------------------------
   { match: /\/api\/channel-pipeline\/circuit-breaker/, body: {
     state: 'open',

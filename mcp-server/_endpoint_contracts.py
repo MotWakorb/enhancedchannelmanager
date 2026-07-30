@@ -622,7 +622,7 @@ ENDPOINTS: dict[str, Endpoint] = {
             "fallback_title_template", "fallback_description_template",
             "event_timezone", "output_timezone", "program_duration",
             "channel_logo_url_template", "program_poster_url_template",
-            "pattern_variants", "inline_lookups", "global_lookup_ids", "include_trace",
+            "pattern_variants", "include_trace",
         }),
         response_fields=frozenset({
             "original_name", "substituted_name", "matched", "matched_variant",
