@@ -2400,7 +2400,7 @@ export function NormalizationEngineSection() {
 
             <div className="modal-footer">
               <button
-                className="modal-btn"
+                className="modal-btn modal-btn-secondary"
                 onClick={closeApplyModal}
                 type="button"
                 disabled={applyExecuting}
@@ -2491,7 +2491,7 @@ export function NormalizationEngineSection() {
             </div>
             <div className="modal-footer">
               <button
-                className="modal-btn"
+                className="modal-btn modal-btn-secondary"
                 type="button"
                 onClick={() => setShowApplyConfirm(false)}
                 disabled={applyExecuting}

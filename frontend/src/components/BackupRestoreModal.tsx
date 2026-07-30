@@ -361,11 +361,11 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
         <div className="modal-footer">
           {step === 'select' && (
             <>
-              <button className="modal-btn-secondary" onClick={onClose}>
+              <button className="modal-btn modal-btn-secondary" onClick={onClose}>
                 Cancel
               </button>
               <button
-                className="modal-btn-primary"
+                className="modal-btn modal-btn-primary"
                 disabled={selectedSections.size === 0}
                 onClick={handleRestore}
               >
@@ -374,12 +374,12 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
             </>
           )}
           {step === 'results' && (
-            <button className="modal-btn-primary" onClick={onClose}>
+            <button className="modal-btn modal-btn-primary" onClick={onClose}>
               Done
             </button>
           )}
           {step === 'upload' && (
-            <button className="modal-btn-secondary" onClick={onClose}>
+            <button className="modal-btn modal-btn-secondary" onClick={onClose}>
               Cancel
             </button>
           )}

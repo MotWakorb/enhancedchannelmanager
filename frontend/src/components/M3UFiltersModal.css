@@ -16,8 +16,11 @@
   gap: 0.25rem;
 }
 
+/* Item-title role. 14px -> 13px. */
 .m3u-filters-modal .account-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-secondary);
 }
 
@@ -31,23 +34,28 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Body role. 14px -> 13px. */
 .filter-help {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
 /* Add Filter button - small variant */
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .m3u-filters-modal .btn-small {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.375rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .m3u-filters-modal .btn-small .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Filter Form */
@@ -59,9 +67,12 @@
   margin-bottom: 1rem;
 }
 
+/* Section role. 16px -> 15px. */
 .filter-form h3 {
   margin: 0 0 1rem 0;
-  font-size: 1rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
@@ -72,8 +83,11 @@
   margin-bottom: 1rem;
 }
 
+/* Meta role. 12px -> 11px. */
 .filter-form .form-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-top: 0.25rem;
 }
@@ -94,6 +108,7 @@
   overflow: hidden;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .filters-header {
   display: grid;
   grid-template-columns: 80px 1fr 100px 60px 80px;
@@ -101,11 +116,11 @@
   padding: 0.75rem 1rem;
   background-color: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .filter-row {
@@ -150,12 +165,15 @@
   white-space: nowrap;
 }
 
+/* Body role. 12.8px -> 13px. */
 .filter-pattern code {
   background-color: var(--bg-primary);
   padding: 0.25rem 0.5rem;
   border-radius: var(--radius-md);
   font-family: monospace;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -170,11 +188,13 @@
    chunks, so each owned the other's chip depending on which tab you visited
    last. The name now says which badge it is
    (bead enhancedchannelmanager-6z299.2). */
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .filter-mode-badge {
   padding: 0.25rem 0.5rem;
   border-radius: var(--radius-md);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
 }
 
@@ -188,9 +208,12 @@
   color: #4ade80;
 }
 
+/* Body role. 14px -> 13px. */
 .filter-order {
   text-align: center;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
@@ -230,8 +253,9 @@
   color: var(--danger-text);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .m3u-filters-modal .action-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Responsive */

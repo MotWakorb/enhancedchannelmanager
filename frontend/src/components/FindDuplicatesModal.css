@@ -17,6 +17,7 @@
 }
 
 /* Summary bar */
+/* Body role. 13.6px -> 13px. */
 .dup-summary {
   display: flex;
   align-items: center;
@@ -25,16 +26,20 @@
   background: var(--bg-secondary);
   border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 17.6px -> 18px. */
 .dup-summary .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
 /* Merge result banner */
+/* Body role. 13.6px -> 13px. */
 .dup-merge-result {
   display: flex;
   align-items: center;
@@ -43,12 +48,15 @@
   background: var(--bg-secondary);
   border-radius: 6px;
   color: var(--success);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 17.6px -> 18px. */
 .dup-merge-result .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 .dup-merge-failed {
@@ -100,14 +108,19 @@
   cursor: pointer;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .dup-group-name {
-  font-weight: 600;
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
+/* Meta role. 12.8px -> 11px. */
 .dup-group-count {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -147,19 +160,25 @@
   min-width: 0;
 }
 
+/* Item-title role. 14px -> 13px. */
 .dup-channel-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .dup-channel-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -171,18 +190,22 @@
   color: var(--text-secondary);
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dup-channel-group {
   padding: 0.1rem 0.35rem;
   background: var(--bg-secondary);
   border-radius: 3px;
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .dup-keep-badge {
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--type-micro-tracking);
   color: var(--success);
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--success);
@@ -197,8 +220,9 @@
   gap: 0.5rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .find-duplicates-modal .modal-header h2 .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
 }
 
 /* Ignore-spacing fold toggle (GH #645) — sits above the scan states so it

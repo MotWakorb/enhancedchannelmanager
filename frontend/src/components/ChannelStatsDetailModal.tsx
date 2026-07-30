@@ -122,7 +122,7 @@ export function ChannelStatsDetailModal({ channelId, uuid, name, onClose }: Chan
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onClose}>Close</button>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </ModalOverlay>

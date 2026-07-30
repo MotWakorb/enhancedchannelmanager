@@ -55,8 +55,13 @@
   text-align: center;
 }
 
-.drop-icon {
-  font-size: 48px;
+/* Same 0-1-0 shape as `.brm-dropzone-icon` and `.dropzone-icon`, both of which
+   the harness measured rendering at `index.css`'s base 24px. This one is not
+   reached by the harness stub, so it is fixed by inspection rather than by
+   measurement: scoped to `.drop-zone` for the required second class of depth,
+   on the --icon-empty illustration role (bead enhancedchannelmanager-xhldy). */
+.drop-zone .drop-icon {
+  font-size: var(--icon-empty);
   color: var(--text-muted);
 }
 
@@ -65,21 +70,29 @@
   color: var(--accent-primary);
 }
 
+/* Section role. 15.2px -> 15px. */
 .drop-text {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .drop-subtext {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
+/* Meta role. 12px -> 11px. */
 .file-types {
   margin: 0.5rem 0 0 0;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -130,8 +143,9 @@
   color: var(--danger-text);
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .clear-file-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* ===================== */
@@ -151,9 +165,12 @@
   background-color: var(--border-primary);
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .or-text {
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
 }
 
@@ -196,11 +213,14 @@
   margin-bottom: 1rem;
 }
 
+/* Label role. 14.4px -> 13px. */
 .current-logo-preview label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
 }
 
 .preview-image-container {

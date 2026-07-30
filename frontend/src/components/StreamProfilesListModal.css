@@ -26,9 +26,12 @@
   font-weight: 500;
 }
 
+/* Meta role. 12px -> 11px. */
 .stream-profile-command {
   color: var(--text-secondary, #888);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
   white-space: nowrap;
   overflow: hidden;

@@ -36,15 +36,21 @@
   accent-color: var(--accent-primary);
 }
 
+/* Body role. 14px -> 13px. */
 .radio-label span {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* "or" divider between input options */
+/* Body role. 13.6px -> 13px. */
 .form-or {
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin: 0.5rem 0;
 }
 
@@ -101,8 +107,11 @@
   flex-shrink: 0;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .uploaded-file-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

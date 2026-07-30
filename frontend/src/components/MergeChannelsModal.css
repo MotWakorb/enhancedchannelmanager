@@ -27,13 +27,19 @@
   background: var(--bg-secondary, #252540);
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .merge-source-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Body role. 12.8px -> 13px. */
 .merge-source-streams {
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
 }
 
@@ -69,17 +75,25 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .merge-stream-item {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 3px 6px;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
 }
 
-.merge-stream-icon {
-  font-size: 16px;
+/* MEASURED DEAD, now fixed (bead enhancedchannelmanager-xhldy) — 0-1-0 in an
+   eager stylesheet, so this glyph rendered at `index.css`'s base 24px, not the
+   16px the source claimed. Scoped to `.merge-stream-item` for the required
+   second class of depth. A glyph beside body text -> --icon-action.
+   24px -> 16px, which is what the author intended all along. */
+.merge-stream-item .merge-stream-icon {
+  font-size: var(--icon-action);
   color: var(--text-secondary, #888);
 }
 

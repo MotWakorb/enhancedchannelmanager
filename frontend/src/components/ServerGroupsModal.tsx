@@ -140,7 +140,7 @@ export function ServerGroupsModal({ onClose, onChanged }: ServerGroupsModalProps
               disabled={creating}
             />
             <button
-              className="modal-btn-primary"
+              className="modal-btn modal-btn-primary"
               onClick={handleCreate}
               disabled={!newName.trim() || creating}
             >
@@ -215,7 +215,7 @@ export function ServerGroupsModal({ onClose, onChanged }: ServerGroupsModalProps
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onClose}>Close</button>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </ModalOverlay>

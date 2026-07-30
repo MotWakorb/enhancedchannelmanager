@@ -23,8 +23,9 @@
 }
 
 /* Preview spinner */
+/* Status/panel glyph -> --icon-status. 14px -> 18px. */
 .dep-preview-spinner {
-  font-size: 14px !important;
+  font-size: var(--icon-status);
   margin-left: 0.5rem;
   vertical-align: middle;
 }
@@ -34,18 +35,24 @@
   margin-bottom: 0.75rem;
 }
 
+/* Meta role. 12px -> 11px. */
 .dep-preview-subs strong {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   margin-bottom: 0.375rem;
 }
 
+/* Meta role. 12px -> 11px. */
 .dep-preview-sub-step {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 0.25rem 0;
   color: var(--text-secondary);
 }
@@ -59,8 +66,11 @@
   min-width: 1.25rem;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-preview-sub-step code {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   background-color: var(--bg-primary);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
@@ -75,21 +85,28 @@
   color: var(--text-muted);
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-step-unchanged {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   font-style: italic;
 }
 
 /* Batch test results */
+/* Meta role. 12px -> 11px. */
 .dep-batch-results {
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   overflow: hidden;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-bottom: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 10.4px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .dep-batch-header {
   display: grid;
   grid-template-columns: 2fr 1fr 2fr 48px;
@@ -97,11 +114,11 @@
   padding: 0.5rem 0.75rem;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
-  font-weight: 600;
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  font-size: 0.65rem;
-  letter-spacing: 0.03em;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .dep-batch-row {
@@ -125,18 +142,24 @@
   background: rgba(239, 68, 68, 0.04);
 }
 
+/* Item-title role. 11.2px -> 13px. */
 .dep-batch-name {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.7rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-batch-variant {
   color: var(--text-secondary);
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .dep-batch-title {
@@ -152,13 +175,19 @@
   justify-content: center;
 }
 
+/* Section role. 16px -> 15px. */
 .dep-batch-icon-match {
-  font-size: 16px !important;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--success);
 }
 
+/* Section role. 16px -> 15px. */
 .dep-batch-icon-fail {
-  font-size: 16px !important;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--danger-text);
 }
 
@@ -171,12 +200,13 @@
   margin-bottom: 1rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .dep-available-vars-title {
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -192,18 +222,23 @@
   margin-bottom: 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 10.4px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .dep-var-section-label {
-  font-size: 0.65rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--type-micro-tracking);
   min-width: 5rem;
   flex-shrink: 0;
 }
 
+/* Badge role. 10.4px -> 10px. */
 .dep-var-chip {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.65rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
@@ -211,8 +246,11 @@
   color: var(--text-primary);
 }
 
+/* Meta role. 10.4px -> 11px. */
 .dep-var-hint {
-  font-size: 0.65rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   font-style: italic;
   margin-top: 0.375rem;
@@ -251,28 +289,35 @@
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-batch-detail-row {
   display: flex;
   gap: 0.5rem;
   padding: 0.2rem 0;
-  font-size: 0.7rem;
-  line-height: 1.4;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
+/* Micro role — the tracked uppercase label idiom. 10.4px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .dep-batch-detail-label {
   color: var(--text-muted);
   min-width: 7.5rem;
   flex-shrink: 0;
-  font-size: 0.65rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--type-micro-tracking);
   padding-top: 0.05rem;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-batch-detail-value {
   color: var(--text-primary);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   word-break: break-all;
 }
 
@@ -282,9 +327,12 @@
   gap: 0.375rem;
 }
 
+/* Badge role. 10px -> 10px. */
 .dep-batch-group-chip {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.625rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
@@ -297,10 +345,13 @@
 }
 
 /* Channel Group Selector */
+/* Body role. 12.8px -> 13px. */
 .dep-groups-loading,
 .dep-groups-empty {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   padding: 0.75rem;
   text-align: center;
 }
@@ -320,18 +371,20 @@
   background: var(--bg-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .dep-group-search .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .dep-group-search input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 .dep-group-actions-row {
@@ -343,16 +396,20 @@
   background: var(--bg-secondary);
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-group-count {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 11.2px -> 11px. */
 .dep-group-clear-btn {
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
   cursor: pointer;
   padding: 0;
 }
@@ -366,13 +423,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 12.8px -> 13px. */
 .dep-group-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0.625rem;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
   transition: background 0.1s;
 }
@@ -396,8 +456,11 @@
   white-space: nowrap;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .dep-group-ch-count {
   flex-shrink: 0;
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }

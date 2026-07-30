@@ -5636,14 +5636,14 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCloseCreateGroupModal}
                 disabled={creatingGroup}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleCreateGroup}
                 disabled={creatingGroup || !newGroupName.trim()}
               >
@@ -5684,7 +5684,7 @@ export function ChannelsPane({
                         </div>
                       </div>
                       <button
-                        className="modal-btn primary"
+                        className="modal-btn modal-btn-primary"
                         onClick={() => handleRestoreGroup(group.id)}
                         style={{ marginLeft: '12px' }}
                       >
@@ -5697,7 +5697,7 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => hiddenGroupsModal.close()}
               >
                 Close
@@ -5766,14 +5766,14 @@ export function ChannelsPane({
             )}
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCancelDelete}
                 disabled={deleting}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn danger"
+                className="modal-btn modal-btn-danger"
                 onClick={handleConfirmDelete}
                 disabled={deleting}
               >
@@ -5821,14 +5821,14 @@ export function ChannelsPane({
               </div>
               <div className="modal-actions">
                 <button
-                  className="modal-btn cancel"
+                  className="modal-btn modal-btn-secondary"
                   onClick={handleCancelDeleteGroup}
                   disabled={deletingGroup}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn danger"
+                  className="modal-btn modal-btn-danger"
                   onClick={handleConfirmDeleteGroup}
                   disabled={deletingGroup}
                 >
@@ -5865,14 +5865,14 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCancelRenameGroup}
                 disabled={renamingGroup}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleConfirmRenameGroup}
                 disabled={renamingGroup || !renameGroupName.trim()}
               >
@@ -5938,14 +5938,14 @@ export function ChannelsPane({
               </div>
               <div className="modal-actions">
                 <button
-                  className="modal-btn cancel"
+                  className="modal-btn modal-btn-secondary"
                   onClick={handleCancelBulkDelete}
                   disabled={bulkDeleting}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn danger"
+                  className="modal-btn modal-btn-danger"
                   onClick={handleConfirmBulkDelete}
                   disabled={bulkDeleting}
                 >
@@ -6303,13 +6303,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCrossGroupMoveCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleMoveButtonClick}
                 disabled={!isMoveButtonEnabled()}
               >
@@ -6426,13 +6426,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleGroupReorderCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleGroupReorderConfirm}
                 disabled={
                   groupReorderNumberingOption === 'custom' &&
@@ -6574,13 +6574,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleSortRenumberCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleSortRenumberConfirm}
                 disabled={!sortRenumberStartingNumber || isNaN(parseInt(sortRenumberStartingNumber, 10)) || parseInt(sortRenumberStartingNumber, 10) < 1}
               >
@@ -6691,14 +6691,14 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleMassRenumberCancel}
               >
                 Cancel
               </button>
               {getMassRenumberConflicts.hasConflicts ? (
                 <button
-                  className="modal-btn primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(true)}
                   disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
                   title={`Shift ${getMassRenumberConflicts.conflicts.length} conflicting channel(s) to numbers ${parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length} and up`}
@@ -6708,7 +6708,7 @@ export function ChannelsPane({
                 </button>
               ) : (
                 <button
-                  className="modal-btn primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(false)}
                   disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
                 >

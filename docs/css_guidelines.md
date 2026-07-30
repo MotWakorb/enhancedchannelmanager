@@ -35,6 +35,7 @@ the number lives in one place.
 |-|-|-|-|-|-|-|
 | Page title | `--type-page-title-*` | 20px (`--text-3xl`) | 700 | 1.3 | uppercase (from the string, not CSS) | the route title, e.g. `OPERATIONS / M3U MANAGER` |
 | Metric | `--type-metric-*` | 20px (`--text-3xl`) | 600 | 1.2 | — | the headline number on a stat/summary tile |
+| Modal title | `--type-modal-title-*` | 18px (`--text-2xl`) | 600 | 1.3 | — | the title of a dialog |
 | Section | `--type-section-*` | 15px | 600 | 1.3 | — | a heading inside a page |
 | Body | `--type-body-*` | 13px | 400 | 1.5 | — | running text, buttons, inputs, page descriptions |
 | Item title | `--type-item-title-*` | 13px | 600 | 1.4 | — | the name of a row in a list |
@@ -56,6 +57,16 @@ is 600 and numeric, and the two never sit on the same line — the title is the
 first line of the route header, the metric is inside a tile in the pane below.
 Sizing them from one role would tie a later change to one of them to the
 other.
+
+**Modal title is a distinct role, not the section role.** A dialog's title is
+the primary heading of its own surface, so it sits closer to a route title than
+to a panel heading inside a page — it reads against the modal's own body copy,
+not against the route header behind the overlay. PO decision on bead
+`enhancedchannelmanager-xhldy`. It was a bespoke `--modal-title-size: 1.1rem`
+(17.6px) in `ModalBase.css`; the role is 18px because 17.6px was never a chosen
+number — it is what `1.1rem` computes to — and 18px is `--text-2xl`, a primitive
+the scale already carries. `--modal-title-size` survives as the per-modal
+theming seam, now defaulting to the role.
 
 Label and item title are both 13px for the same reason: a field caption reads
 as part of its control, so it takes the button weight (500), while a list-row
@@ -335,6 +346,30 @@ the load-bearing half):
   all and rendered at the UA 16px), and the six Stats panels'
   `.section-title`.
 
+**The modal estate is remapped (bead `enhancedchannelmanager-xhldy`).**
+`ModalBase.css` plus the 34 dedicated `*Modal.css` / `*Dialog.css` files, the
+seven modal-only Channel Pipeline stylesheets (`RuleBuilder`, `ActionEditor`,
+`ConditionEditor`, `EventSyncRuleEditor`, `EventSyncPreviewPanel`,
+`EventSyncTestPatternsPanel`, `ProviderScopedGroupPicker`) and the modal ranges
+inside seven page stylesheets are on the roles above. Verified against all 82
+force-rendered dialogs in `frontend/src/devHarness/` at 1280x720, 1440x900 and
+1920x1080 — see § Modal Patterns for how to re-run it. `17.6px` is gone from the
+estate entirely (101 elements → 0).
+
+Two idiom notes that came out of that pass:
+
+- **Text arrows and carets are not icons.** `▼` in a `.dropdown-arrow`, `→`
+  between a before/after pair — these are typographic marks whose size is tuned
+  to the glyph, and the icon tokens (18/16/14/64) all mean "a Material Icons
+  box". They keep their authored literal with a comment saying so. Only a rule
+  whose selector actually reaches a `.material-icons` element takes an icon
+  token.
+- **The icon scale has no card tier.** `.modal-choice-btn .material-icons` (28px)
+  and `.rule-kind-option .material-icons` are large illustrative glyphs inside a
+  choice card. `--icon-status` makes the card read as empty and `--icon-empty`
+  swamps it, so the first is left at its literal and flagged rather than forced
+  onto a token that means something else.
+
 **Never write a bare `font-size` in a content-pane rule.** That is a rule now,
 not an aspiration — every content-pane page has been through the sweep, so a
 new literal size is a new divergence rather than one of many. Pick a role. If
@@ -546,6 +581,19 @@ import '../ModalBase.css';  // MUST import in every modal component
 Key modal classes:
 - **Form groups**: `modal-form-group` (not custom `form-row` / `form-group`)
 - **Buttons**: `modal-btn modal-btn-primary` / `modal-btn-secondary` / `modal-btn-danger`
+  — the **base `modal-btn` class is mandatory**; it carries the geometry and the
+  type, the variant carries only the colours. 27 buttons wore a variant with no
+  base class and rendered at the user-agent default 13.3333px with none of the
+  padding (bead `enhancedchannelmanager-xhldy`).
+  There is **one** spelling: hyphenated. `.modal-btn.primary` / `.cancel` /
+  `.danger` used to exist in `ChannelsPane.css` and are gone; `.cancel` maps to
+  `-secondary`. Do not reintroduce an adjective-class variant.
+  `.modal-btn` is deliberately **not** unified with `common.css`'s `.btn-*` —
+  the two differ in padding and radius (`0.5rem 1rem` / `--radius-md` against
+  `0.625rem 1.25rem` / `--radius-lg`) and unifying 168 buttons is a vocabulary
+  decision, not a typography one. Never wear both (`modal-btn btn-secondary`):
+  `common.css` is emitted last, so `.btn-*` wins the geometry and the button
+  renders a size its siblings do not.
 - **Checkboxes**: `modal-checkbox-label`
 - **Close button**: `modal-close-btn` (not `modal-close`)
 - **Hints**: `form-hint` inside `modal-form-group`
@@ -553,6 +601,28 @@ Key modal classes:
 - **Section titles**: `modal-section-title`
 
 Size classes: `modal-sm` (400px), `modal-md` (550px), `modal-lg` (700px), `modal-xl` (900px), `modal-xxl` (1000px), `modal-full` (95vw)
+
+### Verifying a modal change
+
+`frontend/src/devHarness/` force-renders 82 of the 83 dialogs with **no backend
+and no login** (the 83rd is `ModalOverlay.tsx`, the shared wrapper, measured
+indirectly by all the others). A committed baseline of selector-signature rows
+plus per-dialog geometry lives beside it, so any change to modal type or chrome
+is a before/after measurement rather than an argument:
+
+```
+node scripts/measure-modal-typography.mjs --diff            # what moved
+node scripts/measure-modal-typography.mjs                   # re-baseline
+node scripts/measure-modal-typography.mjs --viewport 1280x720 --out /tmp/x.json
+```
+
+Run `--diff` **before** you start and confirm it reads zero — a stale baseline
+silently mixes someone else's landed work into your delta. The baseline is
+captured at 1440x900 and `--diff` refuses any other viewport for that reason;
+1280x720 (the minimum supported viewport) and 1920x1080 are checked with
+`--viewport` + `--out`. Mobile is not a target, so the `max-width: 480/500/600px`
+blocks in the modal estate are deliberately unverified — none of them is active
+at either supported width.
 
 ## Theme Variables — Critical Rules
 

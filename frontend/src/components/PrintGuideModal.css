@@ -271,7 +271,8 @@
    block, which inside a 550px modal would swamp the sentence under it.
    Flagged on the bead rather than force-fitted to a token that means
    something else (bead enhancedchannelmanager-6z299.3). */
+/* Illustration glyph -> --icon-empty. 32px -> 64px. */
 .print-guide-empty-range .material-icons {
-  font-size: 2rem;
+  font-size: var(--icon-empty);
   opacity: 0.5;
 }

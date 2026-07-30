@@ -735,10 +735,12 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Modal-title role. 18px -> 18px. */
 .norm-engine-modal-header h3 {
   margin: 0;
-  font-size: 1.125rem;
-  font-weight: 600;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -761,14 +763,17 @@
   margin-bottom: 1rem;
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-form-group label {
   display: block;
   margin-bottom: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-form-group input,
 .norm-engine-form-group select,
 .norm-engine-form-group textarea {
@@ -778,7 +783,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-form-group input:focus,
@@ -811,11 +816,12 @@
   margin-bottom: 1rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -834,21 +840,25 @@
   margin-top: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-preview h5 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 14px -> 13px. */
 .norm-engine-preview-result {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-family: monospace;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-preview-result.matched .material-icons {
@@ -876,6 +886,7 @@
   color: var(--warning-text, #eab308);
 }
 
+/* Badge role. 12px -> 10px. */
 .norm-engine-preview-result .matched-tag {
   display: inline-flex;
   align-items: center;
@@ -885,23 +896,28 @@
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   color: var(--text-secondary);
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .norm-engine-preview-result .matched-tag .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
   color: var(--text-muted);
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-preview-result .else-badge {
   margin-left: 0.5rem;
   padding: 0.125rem 0.375rem;
   background: var(--warning-bg, rgba(234, 179, 8, 0.2));
   color: var(--warning-text, #eab308);
   border-radius: var(--radius-md);
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
 }
 
@@ -916,9 +932,11 @@
   border-radius: var(--radius-lg);
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-mode-label {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
@@ -931,12 +949,13 @@
   overflow: hidden;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-mode-btn {
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -966,9 +985,11 @@
   margin-bottom: 1rem;
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-compound-header label {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
@@ -976,21 +997,23 @@
   min-width: 180px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-logic-select .custom-select-trigger {
   padding: 0.375rem 0.75rem;
   min-width: 180px;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-condition-type-select {
   min-width: 140px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-condition-type-select .custom-select-trigger {
   padding: 0.375rem 0.5rem;
   min-width: 140px;
   max-width: 140px;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-conditions-list {
@@ -1016,6 +1039,7 @@
 }
 
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-condition-fields input {
   flex: 1;
   padding: 0.375rem 0.5rem;
@@ -1023,7 +1047,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   font-family: monospace;
 }
 
@@ -1037,11 +1061,12 @@
   gap: 0.5rem;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .norm-engine-condition-checkbox {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   color: var(--text-muted);
   cursor: pointer;
   padding: 0.25rem 0.375rem;
@@ -1060,6 +1085,7 @@
   accent-color: var(--accent-primary);
 }
 
+/* Body role. 13px -> 13px. */
 .norm-engine-add-condition {
   display: flex;
   align-items: center;
@@ -1072,7 +1098,9 @@
   border: 1px dashed var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -1083,8 +1111,9 @@
   background: var(--accent-primary-transparent);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-add-condition .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 /* Else Branch Styles */
@@ -1130,9 +1159,12 @@
   gap: 1rem;
 }
 
+/* Meta role. 14px -> 11px. */
 .norm-engine-apply-count {
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .norm-engine-apply-table-wrap {
@@ -1142,10 +1174,13 @@
   border-radius: var(--radius-lg);
 }
 
+/* Body role. 14px -> 13px. */
 .norm-engine-apply-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-table th,
@@ -1174,8 +1209,9 @@
   color: var(--warning);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-collision .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-apply-ok {
@@ -1214,8 +1250,9 @@
   outline: none;
 }
 
+/* Button/inline-action glyph -> --icon-action. 17.6px -> 16px. */
 .norm-engine-apply-trace-toggle .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-apply-trace-row td {
@@ -1228,17 +1265,22 @@
   border-left: 3px solid var(--accent-50);
 }
 
+/* Section role. 13.6px -> 15px. */
 .norm-engine-apply-trace-heading {
-  font-weight: 600;
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
 }
 
+/* Body role. 13.6px -> 13px. */
 .norm-engine-apply-trace-empty {
   color: var(--text-secondary);
   font-style: italic;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-trace-list {
@@ -1247,17 +1289,21 @@
   list-style: none;
 }
 
+/* Body role. 13.6px -> 13px. */
 .norm-engine-apply-trace-item {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.2rem 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-trace-item .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--accent-50);
 }
 
@@ -1266,43 +1312,54 @@
   font-weight: 500;
 }
 
+/* Body role. 12.8px -> 13px. */
 .norm-engine-apply-trace-item code {
   background: var(--bg-primary);
   padding: 0.05rem 0.3rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .norm-engine-apply-rule-count {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-apply-conflict-badge {
   display: inline-block;
   background: var(--warning);
   color: #fff;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   padding: 0.1rem 0.4rem;
   border-radius: var(--radius-sm);
   margin-right: 0.35rem;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .norm-engine-apply-conflict-hint {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   color: var(--warning);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-left: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-conflict-hint .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-apply-table tr.apply-row-source-conflict {
@@ -1313,13 +1370,14 @@
   background: rgba(16, 185, 129, 0.1);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .norm-engine-apply-winner-radio {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   margin-left: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -1329,9 +1387,12 @@
   color: var(--text-primary);
 }
 
+/* Body role. 14.4px -> 13px. */
 .norm-engine-apply-confirm-warning {
   color: var(--warning);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-confirm-count {
@@ -1358,10 +1419,13 @@
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 14.4px -> 13px. */
 .norm-engine-apply-summary-counts {
   display: flex;
   gap: 1.25rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -1370,9 +1434,12 @@
   font-weight: 600;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .norm-engine-apply-summary-hash {
   margin-top: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -1382,9 +1449,10 @@
   border-radius: var(--radius-sm);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .norm-engine-apply-summary-link {
   margin-top: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
 }
 

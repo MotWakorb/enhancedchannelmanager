@@ -37,8 +37,11 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Label role. 14.4px -> 13px. */
 .source-filter-label {
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -49,6 +52,7 @@
   max-width: 300px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .source-filter-button {
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -56,7 +60,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -93,6 +97,7 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Body role. 12.8px -> 13px. */
 .source-filter-action {
   flex: 1;
   padding: 0.375rem 0.625rem;
@@ -100,7 +105,9 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -147,8 +154,11 @@
   cursor: pointer;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .source-option-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -156,8 +166,11 @@
   flex: 1;
 }
 
+/* Meta role. 12px -> 11px. */
 .source-option-count {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -167,6 +180,7 @@
   border-top: 1px solid var(--border-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .source-apply-btn {
   width: 100%;
   display: flex;
@@ -178,7 +192,7 @@
   border: none;
   border-radius: var(--radius-md);
   color: var(--button-primary-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: filter 0.15s;
@@ -188,8 +202,9 @@
   filter: brightness(1.1);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .source-apply-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 
@@ -201,13 +216,15 @@
   margin-bottom: 1rem;
 }
 
+/* Section role. 15.2px -> 15px. */
 .conflicts-section .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0.625rem 0.75rem;
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   background: var(--bg-secondary);
 }
@@ -225,8 +242,9 @@
   gap: 0.5rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .conflicts-title .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .conflicts-actions {
@@ -235,6 +253,7 @@
   gap: 0.75rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .accept-all-btn {
   display: flex;
   align-items: center;
@@ -244,7 +263,7 @@
   border: 1px solid var(--success);
   border-radius: var(--radius-md);
   color: var(--success);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -254,13 +273,17 @@
   filter: brightness(1.3);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .accept-all-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Navigation label in nav buttons */
+/* Label role. 14.4px -> 13px. */
 .nav-label {
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
 }
 
 
@@ -291,14 +314,19 @@
   margin-bottom: 0.25rem;
 }
 
+/* Section role. 17.6px -> 15px. */
 .conflict-card-header .channel-name {
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
+/* Label role. 12.8px -> 13px. */
 .conflict-card-header .normalized-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -313,17 +341,19 @@
   flex-shrink: 0;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .conflict-card-search .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .conflict-card-search input {
   flex: 1;
   background: transparent;
   border: none;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -348,8 +378,9 @@
   color: var(--text-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .conflict-card-search .clear-search .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .conflict-card-body {
@@ -381,6 +412,7 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .conflict-card-mode-toggle .mode-btn {
   flex: 1;
   padding: 0.375rem 0.75rem;
@@ -388,7 +420,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -421,19 +453,24 @@
   color: var(--text-primary);
 }
 
+/* Badge role. 11.2px -> 10px. */
 .country-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.125rem 0.375rem;
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   border-radius: var(--radius-sm);
 }
 
+/* Label role. 12.8px -> 13px. */
 .normalized-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -493,19 +530,28 @@
   gap: 0.125rem;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .option-info .epg-name {
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .option-info .epg-tvgid {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   font-family: monospace;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .option-info .epg-source {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--accent-primary);
 }
 
@@ -518,8 +564,11 @@
   background: var(--bg-secondary);
 }
 
+/* Label role. 14.4px -> 13px. */
 .skip-label {
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -530,12 +579,14 @@
   background: var(--input-bg);
 }
 
+/* Micro role — the tracked uppercase label idiom. 10.4px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .recommended-tag {
   display: inline-block;
   margin-left: 0.5rem;
   padding: 0.125rem 0.375rem;
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
@@ -587,8 +638,11 @@
   flex: 1;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .matched-channel .channel-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -609,15 +663,21 @@
   flex: 1;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .matched-epg .epg-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--success);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .matched-epg .epg-tvgid {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   font-family: monospace;
   white-space: nowrap;
@@ -653,13 +713,19 @@
   background: var(--bg-tertiary);
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .unmatched-item .channel-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .unmatched-item .normalized-name {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -685,8 +751,9 @@
   flex: 1;
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .unmatched-item .search-icon {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -707,20 +774,27 @@
   min-width: 0;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .assigned-epg-info .assigned-icon {
-  font-size: 16px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .assigned-epg-info .assigned-epg-name {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .assigned-count {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--success);
   margin-left: 0.375rem;
 }
@@ -756,9 +830,11 @@
   gap: 0.625rem;
 }
 
+/* Section role. 16px -> 15px. */
 .epg-search-card-header .channel-name {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
@@ -791,17 +867,19 @@
   flex-shrink: 0;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .epg-search-card-search .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .epg-search-card-search input {
   flex: 1;
   background: transparent;
   border: none;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -809,9 +887,12 @@
   color: var(--text-secondary);
 }
 
+/* Meta role. 12.8px -> 11px. */
 .epg-search-hint {
   padding: 0.375rem 1rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   font-style: italic;
   border-bottom: 1px solid var(--border-secondary);
@@ -838,10 +919,13 @@
   font-style: italic;
 }
 
+/* Body role. 12.8px -> 13px. */
 .more-results {
   padding: 0.625rem;
   text-align: center;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   font-style: italic;
   border-top: 1px solid var(--border-secondary);
@@ -862,40 +946,48 @@
    Confidence Scores and Badges
    ============================================================================= */
 
+/* Badge role. 12px -> 10px. */
 .confidence-badge {
   flex-shrink: 0;
   padding: 0.125rem 0.5rem;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   border-radius: var(--radius-2xl);
   margin-left: auto;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .option-confidence {
   flex-shrink: 0;
   padding: 0.125rem 0.5rem;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   border-radius: var(--radius-2xl);
   margin-left: auto;
 }
 
 /* Override count in section header */
+/* Meta role. 12px -> 11px. */
 .override-count {
-  font-size: 0.75rem;
-  font-weight: normal;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--warning);
   margin-left: 0.25rem;
 }
 
 /* Modified tag for overridden matches */
+/* Badge role. 10.4px -> 10px. */
 .modified-tag {
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   color: var(--warning);
   background: var(--warning-bg);
   padding: 0.0625rem 0.375rem;
@@ -936,9 +1028,10 @@
   color: var(--warning);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .edit-match-btn .material-icons,
 .reset-match-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Matched item states */
@@ -956,10 +1049,13 @@
   padding: 0.5rem 0;
 }
 
+/* Body role. 14.4px -> 13px. */
 .bulk-epg-configure-intro {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .bulk-epg-configure-sources {

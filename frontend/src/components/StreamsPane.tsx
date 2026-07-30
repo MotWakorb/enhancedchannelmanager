@@ -3006,7 +3006,7 @@ export function StreamsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => setBulkCreateShowConflict(false)}
                 disabled={bulkCreateLoading}
               >

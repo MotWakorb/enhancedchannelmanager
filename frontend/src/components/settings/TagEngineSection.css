@@ -500,9 +500,12 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Modal-title role. 18px -> 18px. */
 :where(.tag-engine-group-modal) .modal-header h3 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -541,13 +544,14 @@
    shared treatment every other form in the app already gets
    (bead enhancedchannelmanager-6z299). */
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 :where(.tag-engine-group-modal) .form-group input {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 :where(.tag-engine-group-modal) .form-group input:focus {

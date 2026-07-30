@@ -2479,14 +2479,14 @@ export function EventSyncRuleEditor({
             </div>
             <div className="modal-footer">
               <button
-                className="modal-btn-secondary"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => setShowDiscardConfirm(false)}
                 data-testid="event-sync-discard-keep"
               >
                 Keep editing
               </button>
               <button
-                className="modal-btn-danger"
+                className="modal-btn modal-btn-danger"
                 onClick={() => {
                   setShowDiscardConfirm(false);
                   onCancel();

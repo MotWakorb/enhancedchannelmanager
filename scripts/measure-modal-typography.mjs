@@ -12,6 +12,18 @@
  *   node scripts/measure-modal-typography.mjs --diff           # compare to baseline
  *   node scripts/measure-modal-typography.mjs --only edit-channel,merge-channels
  *   node scripts/measure-modal-typography.mjs --no-build       # reuse last harness build
+ *   node scripts/measure-modal-typography.mjs --viewport 1280x720
+ *
+ * WHY --viewport
+ * -------------
+ * The baseline is captured at 1440x900 and that is deliberately the default, so
+ * `--diff` always compares like with like. But 1280x720 is the minimum
+ * supported viewport and 1920x1080 is the common one, and a modal's GEOMETRY
+ * (container width, body max-height, whether the footer wraps, whether a row
+ * clips) is viewport-dependent even when its typography is not. Passing an
+ * explicit viewport lets a pass check both without disturbing the baseline;
+ * write those runs to `--out`, never over the baseline
+ * (bead enhancedchannelmanager-xhldy).
  *
  * WHY NOT A LIVE APP + LOGIN
  * --------------------------
@@ -44,7 +56,7 @@ const DEFAULT_BASELINE = resolve(
   'src/devHarness/baseline/modal-typography.baseline.json'
 )
 const PREVIEW_URL = 'http://127.0.0.1:4273'
-const VIEWPORT = { width: 1440, height: 900 }
+const BASELINE_VIEWPORT = { width: 1440, height: 900 }
 
 const argv = process.argv.slice(2)
 const flag = (name) => argv.includes(`--${name}`)
@@ -55,6 +67,23 @@ const value = (name, fallback) => {
 
 const outPath = resolve(REPO, value('out', DEFAULT_BASELINE))
 const only = value('only', null)?.split(',').map((s) => s.trim())
+
+/** `--viewport 1280x720`; defaults to the baseline's 1440x900. */
+const VIEWPORT = (() => {
+  const raw = value('viewport', null)
+  if (!raw) return BASELINE_VIEWPORT
+  const m = /^(\d+)x(\d+)$/.exec(raw.trim())
+  if (!m) throw new Error(`--viewport wants WxH, e.g. 1280x720; got ${raw}`)
+  return { width: Number(m[1]), height: Number(m[2]) }
+})()
+
+/** A --diff against the committed baseline is only meaningful at its viewport. */
+if (flag('diff') && (VIEWPORT.width !== BASELINE_VIEWPORT.width || VIEWPORT.height !== BASELINE_VIEWPORT.height)) {
+  throw new Error(
+    `--diff compares against a baseline captured at ${BASELINE_VIEWPORT.width}x${BASELINE_VIEWPORT.height}; ` +
+      `re-run without --viewport, or capture with --out and diff the two files yourself.`
+  )
+}
 
 /** ------------------------------------------------------------------ */
 
@@ -146,9 +175,44 @@ const COLLECT = () => {
     }
   }
 
+  /**
+   * Geometry, so a viewport run can report what a type change did to the box —
+   * the chrome heights and the tallest repeated row. Typography is
+   * viewport-independent above the modal media queries (600px), but geometry is
+   * not, which is the whole reason for measuring two viewports
+   * (bead enhancedchannelmanager-xhldy).
+   */
+  const box = (sel) => {
+    const el = document.querySelector(sel)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100 }
+  }
+  const rowHeights = {}
+  for (const sel of ['.modal-btn', '.modal-form-group', '.modal-stepper-item', '.dropdown-option', '.modal-summary-item']) {
+    const els = [...document.querySelectorAll(sel)]
+    if (!els.length) continue
+    const hs = els.map((e) => Math.round(e.getBoundingClientRect().height * 100) / 100)
+    rowHeights[sel] = { n: hs.length, min: Math.min(...hs), max: Math.max(...hs) }
+  }
+  const docEl = document.documentElement
+  const geometry = {
+    container: box('.modal-container'),
+    header: box('.modal-header'),
+    body: box('.modal-body'),
+    footer: box('.modal-footer'),
+    closeBtn: box('.modal-close-btn'),
+    rowHeights,
+    // a horizontal scrollbar on <body> is the failure this is really watching
+    horizontalOverflow: docEl.scrollWidth > docEl.clientWidth,
+    scrollWidth: docEl.scrollWidth,
+    clientWidth: docEl.clientWidth,
+  }
+
   return {
     elementCount,
     fontSizeHistogram,
+    geometry,
     rows: Array.from(bySignature.values()).sort((a, b) =>
       a.signature === b.signature
         ? JSON.stringify(a.style).localeCompare(JSON.stringify(b.style))

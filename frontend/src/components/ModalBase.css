@@ -62,7 +62,12 @@
   --modal-header-border: var(--border-primary);
   --modal-header-padding: 1rem 1.25rem; /* was 0.5rem; StreamsPane's rendered */
   --modal-title-color: var(--text-primary, #ffffff);
-  --modal-title-size: 1.1rem;
+  /* Was a bespoke `1.1rem`. The modal title is now a real role on the P1 scale
+     (`--type-modal-title-*` in index.css, bead
+     enhancedchannelmanager-xhldy). This token is kept as the theming seam the
+     rest of this file's tokens are — a consumer can still override the title
+     size per modal — but its default now comes from the scale. */
+  --modal-title-size: var(--type-modal-title-size);
 
   /* Body */
   --modal-body-padding: 1.25rem; /* was 1rem; StreamsPane's rendered */
@@ -79,7 +84,14 @@
   /* Close button */
   --modal-close-color: var(--text-secondary, #888);
   --modal-close-hover-color: #ff6b6b;
-  --modal-close-size: 1.5rem;
+  /* Was `1.5rem` (24px). The close X is a glyph inside a button, so by
+     § "Adopting a role" it is chosen by role, not nearest pixel — but
+     --icon-action (16px) would shrink the dismiss target from 32x32 to 24x24.
+     --icon-status (18px) is the panel-header tier, which is where this glyph
+     actually sits, and `.modal-close-btn`'s padding is raised from 4px to 7px
+     below so the target box stays exactly 32x32 — the canonical `.action-btn`
+     size (bead enhancedchannelmanager-xhldy). */
+  --modal-close-size: var(--icon-status);
 
   /* Animation */
   --modal-animation-duration: 0.2s;
@@ -193,27 +205,33 @@
   flex-shrink: 0;
 }
 
+/* Modal title role — 18px/600/1.3. `--modal-title-size` defaults to the role's
+   size token; the weight and line-height are taken from the role directly
+   because no consumer overrides them. */
 .modal-header h2,
 .modal-header .modal-title {
   margin: 0;
   font-size: var(--modal-title-size);
-  font-weight: 600;
+  font-weight: var(--type-modal-title-weight);
+  line-height: var(--type-modal-title-line-height);
   color: var(--modal-title-color);
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
+/* A panel-header glyph beside the title → --icon-status (18px, was 20px). */
 .modal-header .modal-title .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
 }
 
-/* Subtitle/description in header */
+/* Subtitle/description in header — body role. */
 .modal-header .modal-subtitle {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary, #888);
-  font-weight: 400;
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-top: 0.25rem;
 }
 
@@ -223,7 +241,9 @@
   border: none;
   color: var(--modal-close-color);
   cursor: pointer;
-  padding: 0.25rem;
+  /* 7px, not 4px: holds the 32x32 target after the glyph went 24px -> 18px.
+     See --modal-close-size (bead enhancedchannelmanager-xhldy). */
+  padding: 0.4375rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -306,16 +326,22 @@
   margin-bottom: 0;
 }
 
+/* Label role — the modal's mirror of `.form-group label` in common.css, which
+   took the same role in bead enhancedchannelmanager-6z299. */
 .modal-form-group label {
   display: block;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-primary, #fff);
   margin-bottom: 0.5rem;
 }
 
+/* Meta role — supporting detail under a control. */
 .modal-form-group .form-hint {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary, #888);
   margin-top: 0.25rem;
 }
@@ -328,7 +354,9 @@
 .modal-form-group textarea {
   width: 100%;
   padding: 0.625rem 0.75rem;
-  font-size: 0.9rem;
+  /* Interactive control: takes the body role's SIZE token only and keeps the
+     weight it was authored with (§ "Adopting a role", rule 1). */
+  font-size: var(--type-body-size);
   background: var(--bg-tertiary, #1a1a2e);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg);
@@ -349,15 +377,23 @@
   color: #ffffff;
 }
 
+/* `--error-color` is defined nowhere (bead enhancedchannelmanager-lw04j), so
+   this resolved to a fixed #ef4444 in all three themes and never picked up
+   bead 4l51b's retone of `--error`. A border is a non-text mark, so it takes
+   the fill token. */
 .modal-form-group input.error,
 .modal-form-group select.error,
 .modal-form-group textarea.error {
-  border-color: var(--error-color, #ef4444);
+  border-color: var(--error);
 }
 
+/* Meta role. Red TEXT takes `--danger-text`, not `--error` — `--error` is a
+   fill only (bead enhancedchannelmanager-4l51b). */
 .modal-form-group .form-error {
-  font-size: 0.8rem;
-  color: var(--error-color, #ef4444);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--danger-text);
   margin-top: 0.25rem;
 }
 
@@ -382,8 +418,23 @@
    BUTTONS - Modal-specific button styles
    ============================================================================= */
 
-/* ChannelsPane.css carried a bare `.modal-btn` too. Both files are eager and
-   it is emitted after this one, so its padding, radius and single-property
+/* VARIANT NAMING — one spelling, `.modal-btn-<variant>`
+   (bead enhancedchannelmanager-xhldy, PO decision 2).
+   This family had TWO contradictory spellings: ModalBase's
+   `.modal-btn-primary` / `-secondary` / `-danger` (documented in
+   docs/css_guidelines.md § Modal Patterns) and ChannelsPane.css's
+   `.modal-btn.primary` / `.cancel` / `.danger`, used by 22 buttons in
+   ChannelsPane.tsx and StreamsPane.tsx. The hyphenated spelling wins because
+   it is the documented one and the one 108 buttons already use; the
+   ChannelsPane rules are deleted and their markup migrated. `.cancel` maps to
+   `-secondary` — the same object under a name that says what it looks like
+   rather than what one instance of it does.
+   NOT unified with common.css's `.btn-*`: the two languages genuinely differ
+   (0.5rem 1rem / --radius-md here against 0.625rem 1.25rem / --radius-lg
+   there) and unifying them is a vocabulary decision for the look refactor.
+
+   ChannelsPane.css also carried a bare `.modal-btn`. Both files are eager and
+   it was emitted after this one, so its padding, radius and single-property
    transition were what every modal button in the app rendered, while this
    rule's display/gap/weight/border survived alongside. Its copy is deleted and
    the three contended values re-pointed here, so the button is unchanged and
@@ -395,7 +446,9 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  font-size: 0.9rem;
+  /* Interactive control: body role's SIZE only, keeping the authored 500
+     weight (§ "Adopting a role", rule 1). 14.4px -> 13px. */
+  font-size: var(--type-body-size);
   font-weight: 500;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -408,8 +461,11 @@
   cursor: not-allowed;
 }
 
+/* --icon-status, matching `.btn-primary` / `.btn-secondary` / `.btn-danger` /
+   `.btn-test` in shared/common.css, which all put their glyph on that token.
+   `--icon-action` is the `.btn-small` / `.btn-icon` tier. 17.6px -> 18px. */
 .modal-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 /* Primary button */
@@ -424,23 +480,42 @@
   border-color: var(--button-primary-hover-bg, #5558e3);
 }
 
-/* Secondary button */
+/* Secondary button. Also the target of ChannelsPane's former
+   `.modal-btn.cancel` — see the variant-naming note above.
+   `--border-color` is defined nowhere (bead enhancedchannelmanager-lw04j), so
+   both rules below resolved to a fixed #3a3a5a / #4a4a6a in all three themes —
+   a purple-grey belonging to no theme, and visibly wrong on a light surface.
+   Re-pointed at `--border-primary` / `--border-secondary`, which are the
+   theme-aware tokens those literals were approximating. */
 .modal-btn-secondary {
   background: var(--bg-tertiary, #2a2a4a);
   color: var(--text-primary, #fff);
-  border-color: var(--border-color, #3a3a5a);
+  border-color: var(--border-primary);
 }
 
 .modal-btn-secondary:hover:not(:disabled) {
   background: var(--bg-secondary, #353555);
-  border-color: var(--border-color, #4a4a6a);
+  border-color: var(--border-secondary);
 }
 
-/* Danger button */
+/* Danger button — a solid fill carrying white text, which is exactly
+   `--error`'s one remaining job (bead enhancedchannelmanager-4l51b).
+   It read `var(--error-color, #ef4444)`, and `--error-color` is defined
+   nowhere, so the fill was a hardcoded #ef4444 in every theme: it never picked
+   up 4l51b's retone and measured 3.76:1 under white instead of the retoned
+   4.83:1 (dark) / 5.13:1 (high contrast). This is one of the modal contrast
+   failures handed to this pass.
+   The hover keeps the literal #dc2626, byte-identical to `.btn-danger`'s hover
+   in shared/common.css, so the two button languages behave the same. NOTE for
+   the look refactor: after 4l51b retoned dark `--error` to #dc2626, that
+   literal equals the resting fill, so hover is a no-op in the dark theme — for
+   BOTH families. Fixing it means choosing three per-theme hover shades, which
+   is a colour decision, not a typography one, and is deliberately not taken
+   here (bead enhancedchannelmanager-xhldy). */
 .modal-btn-danger {
-  background: var(--error-color, #ef4444);
+  background: var(--error);
   color: #fff;
-  border-color: var(--error-color, #ef4444);
+  border-color: var(--error);
 }
 
 .modal-btn-danger:hover:not(:disabled) {
@@ -476,8 +551,11 @@
   color: var(--text-secondary, #888);
 }
 
+/* Loading illustration → --icon-empty, matching `.loading-state` in
+   shared/common.css. 32px -> 64px; the same growth the P1 sweep already took
+   app-wide for `.loading-state` / `.empty-state`. */
 .modal-loading .material-icons {
-  font-size: 2rem;
+  font-size: var(--icon-empty);
   /* Uses @keyframes spin from shared/common.css */
   animation: spin 1s linear infinite reverse;
 }
@@ -543,9 +621,11 @@
   margin-bottom: 0;
 }
 
+/* Section role — a heading inside the modal body. 14.4px -> 15px. */
 .modal-section-title {
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary, #fff);
   margin-bottom: 0.75rem;
   display: flex;
@@ -553,8 +633,9 @@
   gap: 0.5rem;
 }
 
+/* Panel-header glyph → --icon-status. 16px -> 18px. */
 .modal-section-title .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
 }
 
@@ -571,6 +652,7 @@
 }
 
 /* Dropdown trigger button */
+/* Control: body role's SIZE only, authored weight kept (14px -> 13px). */
 .dropdown-trigger {
   display: flex;
   align-items: center;
@@ -581,7 +663,7 @@
   border: 1px solid var(--border-secondary, #3a3a5a);
   border-radius: var(--radius-lg);
   color: var(--text-primary, #fff);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   text-align: left;
 }
@@ -590,8 +672,9 @@
   border-color: var(--accent-primary, #6366f1);
 }
 
+/* Trigger chevron, panel/control glyph tier. 18px was already --icon-status. */
 .dropdown-trigger .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-secondary, #888);
   transition: transform 0.2s;
 }
@@ -633,17 +716,19 @@
   border-bottom: 1px solid var(--border-primary, #2a2a4a);
 }
 
+/* Matches `.search-box .material-icons` in shared/common.css. */
 .dropdown-search .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted, #666);
 }
 
+/* Control: body role's SIZE only. */
 .dropdown-search input {
   flex: 1;
   border: none;
   background: none;
   color: var(--text-primary, #fff);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -668,8 +753,9 @@
   color: var(--text-primary, #fff);
 }
 
+/* Matches `.search-box .clear-search .material-icons` in shared/common.css. */
 .dropdown-search .clear-search .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Dropdown inline input - for "add new" functionality */
@@ -681,6 +767,7 @@
   border-bottom: 1px solid var(--border-primary, #2a2a4a);
 }
 
+/* Controls: body role's SIZE only (12.8px -> 13px). */
 .new-group-input input,
 .logo-url-input input {
   flex: 1;
@@ -689,7 +776,7 @@
   border: 1px solid var(--border-secondary, #3a3a5a);
   border-radius: var(--radius-md);
   color: var(--text-primary, #fff);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 .new-group-input input:focus,
@@ -728,9 +815,11 @@
   cursor: not-allowed;
 }
 
+/* Glyph in a small inline button -> --icon-action, matching `.btn-icon`.
+   18px -> 16px. */
 .new-group-input button .material-icons,
 .logo-url-input button .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .new-group-input button.cancel-btn {
@@ -752,6 +841,8 @@
   border-bottom: 1px solid var(--border-primary, #2a2a4a);
 }
 
+/* Control: body role's SIZE only, matching `.btn-small` in
+   shared/common.css, which is also on --type-body-size (12px -> 13px). */
 .dropdown-actions button {
   flex: 1;
   padding: 0.375rem 0.5rem;
@@ -759,7 +850,7 @@
   border: none;
   border-radius: var(--radius-md);
   color: var(--text-primary, #fff);
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -776,6 +867,7 @@
 }
 
 /* Dropdown option items - unified styles */
+/* Body role. An option row is running text in a list. */
 .dropdown-option,
 .dropdown-option-item,
 .logo-option-none {
@@ -785,7 +877,9 @@
   padding: 0.5rem;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
 }
 
@@ -801,9 +895,13 @@
    `.dropdown-option-item` never took these values and must not start
    (bead enhancedchannelmanager-87o0c). ChannelsPane.tsx renders no logo picker
    of its own; the render sites are EditChannelModal and AutoSyncSettingsModal. */
+/* Meta role: the "None" pseudo-option is deliberately quieter than the real
+   options above, which is what its smaller authored size was expressing. */
 .logo-option-none {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   text-align: center;
 }
 
@@ -843,19 +941,25 @@
   color: var(--text-muted, #666);
 }
 
+/* Body role. */
 .dropdown-empty {
   display: block;
   padding: 0.75rem;
   text-align: center;
   color: var(--text-muted, #666);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. */
 .dropdown-loading {
   padding: 1rem;
   text-align: center;
   color: var(--text-muted, #666);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Add new option - special styling */
@@ -866,8 +970,9 @@
   margin-bottom: 0.25rem;
 }
 
+/* Glyph beside body text in an option row -> --icon-action. 18px -> 16px. */
 .dropdown-option-item.add-new-option .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .dropdown-option-item.add-new-option:hover {
@@ -955,32 +1060,41 @@
   margin-bottom: 1.5rem;
 }
 
+/* Illustration glyph -> --icon-empty, matching `.empty-state` in
+   shared/common.css. 64px was already the token's value. */
 .modal-info-icon .material-icons {
-  font-size: 64px;
+  font-size: var(--icon-empty);
   color: var(--accent-primary, #6366f1);
 }
 
 /* Intro paragraph */
+/* Body role: a lead paragraph is still running text (16px -> 13px). */
 .modal-info-intro {
-  font-size: 1rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 1rem;
   color: var(--text-primary, #fff);
 }
 
 /* General info text */
+/* Body role. */
 .modal-info-text {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
   margin: 0;
 }
 
 /* Description paragraph at top of modal body */
+/* Body role. */
 .modal-description {
   color: var(--text-muted, #666);
   margin: 0 0 1rem 0;
-  font-size: 0.9rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Info card - for grouped information blocks */
@@ -996,18 +1110,24 @@
   margin-bottom: 0;
 }
 
+/* Item-title role: the lead line of a card is the heaviest thing in it.
+   15.2px/inherited-bold -> 13px/600. */
 .modal-info-card strong {
   display: block;
   color: var(--accent-primary, #6366f1);
   margin-bottom: 0.5rem;
-  font-size: 0.95rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
 }
 
+/* Body role. */
 .modal-info-card p {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 
@@ -1037,8 +1157,11 @@
   transition: width 0.1s ease-out;
 }
 
+/* Meta role: supporting detail under the progress bar. */
 .modal-progress-detail {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
   text-align: center;
   white-space: nowrap;
@@ -1060,15 +1183,19 @@
   flex-wrap: wrap;
 }
 
+/* Body role. */
 .modal-summary-item {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Leading status glyph -> --icon-status. 18px was already the token's value. */
 .modal-summary-item .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 .modal-summary-item.success {
@@ -1087,9 +1214,12 @@
   color: var(--info, #3b82f6);
 }
 
+/* Meta role. The authored `normal` weight is 400, which is the meta weight,
+   so this is a rename rather than a change. */
 .modal-summary-item .score-range {
-  font-size: 0.8rem;
-  font-weight: normal;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   opacity: 0.8;
   margin-left: 0.25rem;
 }
@@ -1111,17 +1241,23 @@
   margin-bottom: 1rem;
 }
 
+/* Inline notice glyph -> --icon-status, matching `.warning-message` in
+   shared/common.css. 24px -> 18px. */
 .modal-warning-banner .material-icons {
-  font-size: 24px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
+/* Body role. */
 .modal-warning-banner p {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Error banner variant */
+/* Body role, matching `.error-banner` in shared/common.css. */
 .modal-error-banner {
   display: flex;
   align-items: center;
@@ -1132,11 +1268,14 @@
   border-radius: var(--radius-lg);
   color: var(--error-color, #ef4444);
   margin-bottom: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Matches `.error-banner .material-icons` in shared/common.css. */
 .modal-error-banner .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -1156,12 +1295,14 @@
   margin-bottom: 0;
 }
 
+/* Control (a clickable section header): section role's SIZE only, keeping
+   the authored 500 weight. 15.2px -> 15px. */
 .modal-collapsible-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.625rem 0.75rem;
-  font-size: 0.95rem;
+  font-size: var(--type-section-size);
   font-weight: 500;
   color: var(--text-primary, #fff);
   background: var(--bg-secondary, #252540);
@@ -1176,13 +1317,17 @@
   background: var(--bg-tertiary, #2a2a4a);
 }
 
+/* Matches `.collapsible-header .material-icons:first-child` in
+   shared/common.css. 20px -> 18px. */
 .modal-collapsible-header .material-icons:first-child {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
+/* Matches `.collapsible-header .expand-icon` in shared/common.css.
+   20px -> 18px. */
 .modal-collapsible-header .expand-icon {
   margin-left: auto;
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--text-secondary, #888);
 }
 
@@ -1200,10 +1345,13 @@
   text-align: center;
 }
 
+/* Body role. */
 .modal-choice-prompt > p {
   margin: 0 0 1rem 0;
   color: var(--text-primary, #fff);
-  font-size: 0.95rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .modal-choice-buttons {
@@ -1231,6 +1379,12 @@
   background: var(--bg-tertiary, #2a2a4a);
 }
 
+/* DELIBERATELY NOT TOKENISED (bead enhancedchannelmanager-xhldy).
+   This is the large illustrative glyph inside a two-up choice card. The icon
+   scale has 18 / 16 / 14 and a 64px empty-state illustration, and none of them
+   names what this glyph is doing: --icon-status would make the card read as
+   empty, --icon-empty would swamp it. Reported as a gap in the icon scale
+   rather than forced onto a token that means something else. */
 .modal-choice-btn .material-icons {
   font-size: 28px;
   color: var(--text-secondary, #888);
@@ -1247,14 +1401,20 @@
   gap: 0.25rem;
 }
 
+/* Item-title role: the name of a choice is the heaviest thing in its card.
+   15.2px/500 -> 13px/600. */
 .modal-choice-title {
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Meta role: the description under a choice title. */
 .modal-choice-desc {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary, #888);
 }
 
@@ -1309,13 +1469,18 @@
   cursor: not-allowed;
 }
 
+/* Glyph in a prev/next button -> --icon-status, the tier `.btn-*` uses in
+   shared/common.css. 20px -> 18px. */
 .modal-nav-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
+/* Label role (13px/500) — an exact fit for a wayfinding counter, which is
+   neither running text nor a list-row name. 15.2px/500 -> 13px/500. */
 .modal-nav-counter {
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-primary, #fff);
 }
 
@@ -1345,18 +1510,20 @@
   padding: 0.375rem 0.75rem;
 }
 
+/* Matches `.search-box .material-icons` in shared/common.css. */
 .modal-search-box .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted, #666);
 }
 
+/* Control: body role's SIZE only. */
 .modal-search-box input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--text-primary, #fff);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .modal-search-box input::placeholder {
@@ -1378,8 +1545,9 @@
   color: var(--text-primary, #fff);
 }
 
+/* Matches `.search-box .clear-search .material-icons` in shared/common.css. */
 .modal-search-box .clear-search .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 
@@ -1410,8 +1578,10 @@
   color: var(--danger-text);
 }
 
+/* Icon-only button -> --icon-action, matching `.btn-icon` and `.action-btn`
+   in shared/common.css. 18px -> 16px. */
 .modal-icon-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 
@@ -1441,18 +1611,23 @@
   gap: 0.5rem;
 }
 
+/* Meta role: a count beside a toolbar is supporting detail. */
 .modal-toolbar-count {
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary, #888);
 }
 
 /* Small button for toolbar actions */
+/* Control: body role's SIZE only, matching `.btn-small` in
+   shared/common.css, which is on the same token. 12px -> 13px. */
 .modal-btn-small {
   padding: 0.375rem 0.75rem;
   background-color: transparent;
   border: 1px solid var(--border-secondary, #3a3a5a);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary, #888);
   cursor: pointer;
   transition: all 0.15s;
@@ -1544,14 +1719,20 @@
   text-align: center;
 }
 
+/* Illustration glyph -> --icon-empty, matching `.empty-state` in
+   shared/common.css. 36px -> 64px, the same growth the P1 sweep already took
+   app-wide. */
 .modal-empty-state .material-icons {
-  font-size: 36px;
+  font-size: var(--icon-empty);
   color: var(--text-muted, #666);
 }
 
+/* Body role, matching `.empty-state p` in shared/common.css. */
 .modal-empty-state p {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 
@@ -1589,15 +1770,22 @@
   flex-direction: column;
 }
 
+/* Modal-title role: `.modal-header-info h2` is the alternate spelling of the
+   dialog title, so it takes the same role as `.modal-header h2`.
+   16px -> 18px. */
 .modal-header-info h2 {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Body role, matching `.modal-header .modal-subtitle`. */
 .modal-header-subtitle {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
 }
 
@@ -1620,19 +1808,24 @@
   border-bottom: 1px solid var(--border-primary, #3a3a5a);
 }
 
+/* Micro role — the tracked uppercase label idiom. text-transform stays
+   uppercase, declared below, because micro sets case at the call site
+   (§ Colour / `.micro-label`). 12.8px/600/0.05em -> 10px/700/0.08em. */
 .modal-section-divider span {
   padding: 0 1rem;
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Meta role. */
 .modal-section-description {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
   margin-bottom: 1rem;
-  line-height: 1.5;
+  line-height: var(--type-meta-line-height);
 }
 
 
@@ -1657,11 +1850,16 @@
    CHECKBOX LABEL - Checkbox with inline label
    ============================================================================= */
 
+/* Body role, not label: the text sits BESIDE its checkbox and reads as
+   running text, which is why the nearest shared analogue
+   (`.checkbox-option` in common.css) declares no weight either. */
 .modal-checkbox-label {
   display: flex !important;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
   cursor: pointer;
   user-select: none;
@@ -1692,9 +1890,13 @@
   margin-top: 1rem;
 }
 
+/* Section role — a heading inside the modal body. 14px/inherited-bold ->
+   15px/600. */
 .modal-preview-section h4 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.875rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary, #fff);
 }
 
@@ -1702,16 +1904,21 @@
   margin-bottom: 0.75rem;
 }
 
+/* Meta role. */
 .modal-preview-groups strong {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary, #888);
   margin-bottom: 0.25rem;
 }
 
+/* Meta role's SIZE only: the monospace face and its own line-height stay,
+   since `code` is not running text. */
 .modal-preview-groups code {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   background-color: var(--bg-primary, #1a1a2e);
   padding: 0.5rem;
   border-radius: var(--radius-md);
@@ -1720,8 +1927,11 @@
   white-space: pre;
 }
 
+/* Body role. */
 .modal-preview-item {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
   margin-bottom: 0.5rem;
 }
@@ -1735,16 +1945,20 @@
   margin-right: 0.5rem;
 }
 
+/* Body role. */
 .modal-preview-no-match {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   color: var(--warning, #f59e0b);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Inline notice glyph -> --icon-status. 18px was already the token's value. */
 .modal-preview-no-match .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 
@@ -1804,6 +2018,7 @@
   margin-bottom: 4px;
 }
 
+/* Label role (13px/500) — an exact fit for a stepper step name. */
 .modal-stepper-item {
   flex: 1;
   display: inline-flex;
@@ -1815,8 +2030,9 @@
   border-radius: var(--radius-md, 6px);
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -1837,6 +2053,8 @@
   outline-offset: 2px;
 }
 
+/* Badge role: the step number is text inside a pill, which is what the
+   badge role names. 11px/700 -> 10px/500. */
 .modal-stepper-num {
   display: inline-flex;
   align-items: center;
@@ -1846,8 +2064,9 @@
   border-radius: 50%;
   background: var(--bg-primary);
   color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   flex-shrink: 0;
 }
 
@@ -1867,19 +2086,22 @@
   gap: 6px;
 }
 
+/* Micro role. 12px/600/0.04em -> 10px/700/0.08em. */
 .modal-intent-title {
   margin: 0;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--type-micro-tracking);
   color: var(--text-secondary);
 }
 
+/* Body role — an exact fit; this was already 13px/1.5. */
 .modal-intent-text {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
 }
 
@@ -1926,10 +2148,12 @@
   margin-top: 2px;
 }
 
+/* Label role (13px/500) — a `<summary>` is a control caption. 12px -> 13px. */
 .modal-why > summary {
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   padding: 4px 8px;
 }

@@ -89,8 +89,11 @@ label.group-item .group-name {
    (bead enhancedchannelmanager-6z299.2). `:where()` keeps the selector at
    (0,1,0) — the bare rule's specificity — so nothing else in this modal moves;
    only the leak into PrintGuideModal stops. */
+/* Meta role. 13.6px -> 11px. */
 :where(.delete-orphaned-modal) .group-details {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 

@@ -73,11 +73,14 @@
 /* Editor modal — entries list + bulk import                              */
 /* ---------------------------------------------------------------------- */
 
+/* Body role. 13px -> 13px. */
 .lookup-table-editor code {
   background: var(--bg-primary);
   padding: 0.0625rem 0.25rem;
   border-radius: 0.125rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -85,20 +88,25 @@
   margin-top: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .lookup-entries-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 13px -> 13px. */
 .lookup-entries-empty {
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin: 0;
   padding: 0.75rem;
   background: var(--bg-primary);
@@ -122,6 +130,7 @@
   gap: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .lookup-entry-row input {
   width: 100%;
   padding: 0.375rem 0.5rem;
@@ -129,7 +138,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md, 0.375rem);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
 .lookup-entry-arrow {
@@ -152,8 +161,9 @@
   background: rgba(239, 68, 68, 0.1);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .lookup-entry-remove .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .lookup-bulk {
@@ -164,10 +174,11 @@
   border-radius: var(--radius-md, 0.5rem);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .lookup-bulk summary {
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   user-select: none;
 }
 
@@ -175,6 +186,7 @@
   color: var(--text-primary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .lookup-bulk textarea {
   width: 100%;
   margin: 0.5rem 0;
@@ -184,7 +196,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md, 0.375rem);
   font-family: ui-monospace, 'SF Mono', Consolas, monospace;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   resize: vertical;
 }
 

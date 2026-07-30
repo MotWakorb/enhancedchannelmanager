@@ -7,9 +7,12 @@
   overflow-y: auto;
 }
 
+/* Body role. 14.4px -> 13px. */
 .bulk-rule-settings-intro {
   margin: 0 0 1rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #aaa);
 }
 
@@ -52,7 +55,10 @@
   align-items: center;
 }
 
+/* Meta role. 13.6px -> 11px. */
 .bulk-rule-settings-modal .form-hint {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-top: 0.35rem;
 }

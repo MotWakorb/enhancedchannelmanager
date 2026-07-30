@@ -44,9 +44,12 @@
   margin-bottom: 0.5rem;
 }
 
+/* Section role. 16px -> 15px. */
 .profiles-header h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
@@ -117,15 +120,18 @@
    Manager the channel-profiles list took this modal's 16px/600 name treatment
    for the rest of the session (bead enhancedchannelmanager-6z299.2).
    `:where()` keeps it at (0,1,0), so this modal renders identically. */
+/* Item-title role. 16px -> 13px. */
 :where(.m3u-profile-modal) .profile-name {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .default-badge {
   display: flex;
   align-items: center;
@@ -134,20 +140,25 @@
   background-color: rgba(var(--accent-primary-rgb, 99, 102, 241), 0.2);
   color: var(--accent-primary);
   border-radius: 12px;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .default-badge .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
+/* Meta role. 14px -> 11px. */
 .profile-details {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Scoped to this modal's root — the other half of the `.detail-item` collision
@@ -164,8 +175,9 @@
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 :where(.m3u-profile-modal) .detail-item .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
 :where(.m3u-profile-modal) .detail-item.pattern {
@@ -236,8 +248,9 @@
   color: var(--danger-text);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .m3u-profile-modal .action-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Profile Form */
@@ -248,13 +261,16 @@
   padding: 1.5rem;
 }
 
+/* Section role. 16px -> 15px. */
 .profile-form h3 {
   margin: 0 0 1rem 0;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
+/* Body role. 14px -> 13px. */
 .info-message {
   display: flex;
   align-items: flex-start;
@@ -265,11 +281,14 @@
   border: 1px solid rgba(59, 130, 246, 0.3);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .info-message .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
   margin-top: 0.125rem;
 }
@@ -280,15 +299,18 @@
   gap: 1rem;
 }
 
+/* Label role. 14px -> 13px. */
 .form-fields label {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .form-fields label input[type="text"],
 .form-fields label input[type="number"] {
   padding: 0.625rem 0.875rem;
@@ -296,7 +318,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .form-fields label input[type="checkbox"] {
@@ -329,12 +351,14 @@
   border-top: 1px solid var(--border-primary);
 }
 
+/* Label role. 14px -> 13px. */
 .form-actions .checkbox-label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;

@@ -17,22 +17,29 @@
   gap: 0.25rem;
 }
 
+/* Item-title role. 14px -> 13px. */
 .m3u-groups-modal .account-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-secondary);
 }
 
+/* Body role. 12.8px -> 13px. */
 .m3u-groups-modal .linked-info {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--accent-primary);
   margin-top: 0.125rem;
 }
 
+/* Status/panel glyph -> --icon-status. 14px -> 18px. */
 .m3u-groups-modal .linked-info .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-status);
 }
 
 /* Toolbar */
@@ -89,6 +96,7 @@
   min-height: 100%;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .groups-header {
   display: grid;
   grid-template-columns: 1fr 70px 90px 70px 45px;
@@ -96,11 +104,11 @@
   padding: 0.75rem 1.5rem;
   background-color: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   position: sticky;
   top: 0;
   z-index: var(--z-raised);
@@ -136,11 +144,14 @@
 }
 
 /* Auto-sync owned by another account indicator */
+/* Meta role. 11.2px -> 11px. */
 .autosync-owned {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   padding: 0.25rem 0.5rem;
   background-color: var(--bg-tertiary);
@@ -149,8 +160,9 @@
   overflow: hidden;
 }
 
+/* Status/panel glyph -> --icon-status. 14px -> 18px. */
 .autosync-owned .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -170,12 +182,14 @@
   gap: 0.375rem;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .autosync-shared-indicator {
-  font-size: 16px;
+  font-size: var(--icon-status);
   color: var(--warning);
   cursor: help;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .group-start input {
   width: 100%;
   padding: 0.375rem 0.5rem;
@@ -183,7 +197,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   text-align: center;
 }
 
@@ -230,8 +244,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .settings-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 .settings-btn.has-settings {
@@ -324,11 +339,12 @@
   gap: 1.25rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .filter-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;

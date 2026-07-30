@@ -44,27 +44,35 @@
   text-align: left;
 }
 
+/* Section role. 16px -> 15px. */
 .rule-section .section-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   margin: 0;
   text-align: left;
 }
 
+/* Meta role. 13px -> 11px. */
 .rule-section .section-hint {
-  font-size: 13px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   text-align: left;
 }
 
+/* Body role. 13px -> 13px. */
 .section-error {
   padding: 10px 14px;
   background: rgba(220, 53, 69, 0.1);
   border: 1px solid rgba(220, 53, 69, 0.3);
   border-radius: var(--radius-lg);
   color: var(--error-color, #dc3545);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 16px;
 }
 
@@ -73,14 +81,17 @@
   margin-bottom: 16px;
 }
 
+/* Label role. 13px -> 13px. */
 .form-field label {
   display: block;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .form-field input[type="text"],
 .form-field input[type="number"],
 .form-field textarea {
@@ -90,7 +101,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-family: inherit;
 }
 
@@ -160,12 +171,13 @@
   padding: 8px 0;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .checkbox-group .checkbox-item {
   display: inline-flex !important;
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-weight: 400;
   color: var(--text-primary);
   white-space: nowrap;
@@ -193,8 +205,11 @@
   cursor: pointer;
 }
 
+/* Body role. 14px -> 13px. */
 .checkbox-field span {
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -231,10 +246,11 @@
   margin: 4px 0;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .connector-toggle {
   padding: 4px 16px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-primary);
@@ -264,6 +280,7 @@
   position: relative;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .add-item-btn {
   display: flex;
   align-items: center;
@@ -274,7 +291,7 @@
   border-radius: var(--radius-xl);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   transition: all 0.2s;
 }
 
@@ -284,8 +301,9 @@
   background: var(--bg-secondary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .add-item-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* Type Selector Dropdown */
@@ -332,15 +350,17 @@
   padding: 8px 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .type-category-label {
   padding: 8px 16px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
   color: var(--text-muted);
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 14px -> 13px. */
 .type-option {
   display: block;
   width: 100%;
@@ -350,7 +370,9 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .type-option:hover {
@@ -387,10 +409,11 @@
    `:where()` keeps both selectors at the specificity they had, so the
    `.btn-primary`/`.btn-secondary`/`.btn-danger` treatments from common.css
    § 3 BUTTONS layer on top exactly as they do now. */
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 :where(.rule-builder) .btn {
   padding: 10px 20px;
   border-radius: var(--radius-lg);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
@@ -459,11 +482,12 @@
   margin-top: 4px;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .norm-group-actions .text-button {
   background: none;
   border: none;
   color: var(--accent-primary, #3b82f6);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
@@ -484,17 +508,27 @@
    the collision was invisible because nothing wore the class
    (bead enhancedchannelmanager-87o0c). */
 
+/* Meta role. 12px -> 11px. */
 .norm-hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--warning);
   margin-left: 4px;
 }
 
-.norm-hint-icon {
-  font-size: 14px;
+/* MEASURED DEAD, now fixed (bead enhancedchannelmanager-xhldy) — 0-1-0, and
+   although this file is a lazy Channel Pipeline chunk (which normally wins
+   against the eager bundle), the harness measured the glyph at 24px, so
+   `index.css`'s base `.material-icons` was winning here too. Scoped to
+   `.norm-hint` for the required second class of depth. The hint text beside it
+   is meta-sized, so the glyph takes --icon-badge. 24px -> 14px, which is what
+   the author intended. */
+.norm-hint .norm-hint-icon {
+  font-size: var(--icon-badge);
 }
 
 /* ============================================================================
@@ -564,18 +598,21 @@
   scroll-margin-top: 8px;
 }
 
+/* Section role. 15px -> 15px. */
 .rule-phase-title {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-primary);
   margin: 0 0 16px;
 }
 
+/* Meta role. 12px -> 11px. */
 .rule-phase-num {
   display: inline-flex;
   align-items: center;
@@ -585,21 +622,25 @@
   border-radius: 50%;
   background: var(--button-primary-bg, #6366f1);
   color: var(--button-primary-text, #fff);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   flex-shrink: 0;
 }
 
 /* Collapsible "Why / when to use" body text. */
+/* Meta role. 12px -> 11px. */
 .rule-why-body {
   margin: 0;
   padding: 8px 10px 10px;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
 /* Rail: advisory save hint. */
+/* Meta role. 12px -> 11px. */
 .rule-save-hint {
   display: flex;
   align-items: flex-start;
@@ -609,12 +650,14 @@
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .rule-save-hint .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
   color: var(--info, #3b82f6);
   flex-shrink: 0;
 }

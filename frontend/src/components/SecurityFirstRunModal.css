@@ -43,14 +43,18 @@
   min-width: 0;
 }
 
+/* Section role. 15.2px -> 15px. */
 .security-first-run-option-title {
-  font-weight: 600;
-  font-size: 0.95rem;
+  font-weight: var(--type-section-weight);
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .security-first-run-option-detail {
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }

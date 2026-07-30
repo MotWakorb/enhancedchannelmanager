@@ -18,17 +18,20 @@
   border-left: 3px solid var(--accent-primary);
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .conflict-info .info-icon {
   color: var(--accent-primary);
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
+/* Body role. 14px -> 13px. */
 .conflict-info p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Select/Deselect All actions */
@@ -86,16 +89,20 @@
    (bead enhancedchannelmanager-87o0c). */
 
 /* ID display styling */
+/* Body role. 13px -> 13px. */
 .conflict-ids {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .conflict-ids .arrow {
   color: var(--text-tertiary);
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .old-id,
@@ -105,17 +112,22 @@
   gap: 0.125rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .id-label {
   color: var(--text-tertiary);
-  font-size: 0.75rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 14px -> 13px. */
 .id-value {
   color: var(--text-secondary);
   font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .new-id .id-value {

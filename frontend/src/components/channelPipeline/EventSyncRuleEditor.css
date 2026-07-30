@@ -48,19 +48,22 @@
   gap: 6px;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .event-sync-impact-title {
   margin: 0;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--type-micro-tracking);
   color: var(--text-secondary);
 }
 
+/* Body role. 13px -> 13px. */
 .event-sync-impact-line {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -90,13 +93,15 @@
   display: none;
 }
 
+/* Section role. 16px -> 15px. */
 .event-sync-phase-title {
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   padding-bottom: 6px;
   border-bottom: 2px solid var(--border-primary);
@@ -107,6 +112,7 @@
   outline-offset: 2px;
 }
 
+/* Meta role. 12px -> 11px. */
 .event-sync-phase-num {
   display: inline-flex;
   align-items: center;
@@ -116,8 +122,9 @@
   border-radius: 50%;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Review-step summary (bead m1s38.1) with per-row jump-back links. */
@@ -144,11 +151,13 @@
   color: var(--text-primary);
 }
 
+/* Body role. 13px -> 13px. */
 .event-sync-review-row dd {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 .event-sync-review-warn {
@@ -180,8 +189,9 @@
   color: var(--text-primary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .event-sync-review-jump .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
 .event-sync-quick-path {
@@ -190,12 +200,15 @@
 
 /* S4b: inline "use the master group's own streams" anchor in the Secondary
    section — a link-styled button (no new primitive). */
+/* Meta role. 12px -> 11px. */
 .event-sync-inline-link {
   align-self: flex-start;
   background: none;
   border: none;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--accent-primary);
   cursor: pointer;
   text-align: left;
@@ -217,15 +230,18 @@
   gap: 8px;
 }
 
+/* Section role. 15px -> 15px. */
 .event-sync-section-title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-primary);
   padding-bottom: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .event-sync-editor input[type='text'],
 .event-sync-editor input[type='number'],
 .event-sync-editor textarea {
@@ -235,7 +251,7 @@
   border: 1px solid var(--border-primary);
   border-radius: 4px;
   padding: 8px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 
 .event-sync-secondary-search {
@@ -250,39 +266,50 @@
   padding: 8px;
 }
 
+/* Meta role. 12px -> 11px. */
 .event-sync-inline-warn {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 14px -> 18px. */
 .event-sync-inline-warn .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-status);
 }
 
 /* bead x82s3: round-trip guard hint — an already-selected group that's
    disabled/hidden from the default enabled-only filter still renders, with
    this subtle marker. */
+/* Meta role. 12px -> 11px. */
 .event-sync-disabled-hint {
   margin-left: 8px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-style: italic;
   color: var(--text-muted);
 }
 
+/* Body role. 13px -> 13px. */
 .event-sync-status-ok {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .event-sync-status-ok .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
 .event-sync-pattern-list {
@@ -313,13 +340,19 @@
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .event-sync-pattern-desc {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
+/* Meta role. 12px -> 11px. */
 .event-sync-pattern-example {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
   color: var(--text-muted);
 }
@@ -369,19 +402,23 @@
   gap: 8px;
 }
 
+/* Body role. 13px -> 13px. */
 .event-sync-save-error {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
 /* Guided-setup fix buttons inside the auto-sync warnings (ti939.3.4). */
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .event-sync-fix-btn {
   display: block;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   padding: 4px 10px;
 }
 /* The active-window fieldset — `.rule-active-window`, its `legend`,

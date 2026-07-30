@@ -2196,9 +2196,12 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .modal-content h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -2208,14 +2211,18 @@
   gap: 1rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .modal-form label {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .modal-form input,
 .modal-form select {
   padding: 0.5rem;
@@ -2223,7 +2230,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .modal-form input:focus,
@@ -2239,27 +2246,21 @@
   margin-top: 1.5rem;
 }
 
-.modal-btn.cancel {
-  background-color: var(--bg-hover);
-  border: 1px solid var(--border-secondary);
-  color: var(--button-text);
-}
-
-.modal-btn.cancel:hover:not(:disabled) {
-  background-color: var(--button-hover-bg);
-}
-
-.modal-btn.primary {
-  background-color: var(--button-primary-bg);
-  border: none;
-  color: var(--button-primary-text);
-}
-
-.modal-btn.primary:hover:not(:disabled) {
-  background-color: var(--button-primary-bg);
-}
-
-/* `.modal-btn:disabled` was byte-identical to ModalBase.css's and, being the
+/* `.modal-btn.cancel` and `.modal-btn.primary` are gone; `.modal-btn-secondary`
+   and `.modal-btn-primary` in ModalBase.css own them now, and the 22 markup
+   sites in this file and StreamsPane.tsx were migrated to that spelling
+   (bead enhancedchannelmanager-xhldy, PO decision 2 — see the variant-naming
+   note above `.modal-btn` in ModalBase.css).
+   NOT render-neutral, deliberately — these buttons converge on the canonical
+   treatment the app's other 108 modal buttons already use:
+     - cancel  -> secondary: fill --bg-hover -> --bg-tertiary, ink
+       --button-text -> --text-primary, and the border becomes theme-aware
+       (--border-primary) instead of ModalBase's dead `--border-color` literal.
+     - primary -> primary: gains the 1px border `.modal-btn` declares (the old
+       rule said `border: none`, so the box grows 2px in each axis) and gains a
+       real hover shade — `.modal-btn.primary:hover` re-declared its own resting
+       background, so hover was a no-op.
+   `.modal-btn:disabled` was byte-identical to ModalBase.css's and, being the
    later of the two eager copies, simply reasserted it
    (bead enhancedchannelmanager-87o0c). */
 
@@ -2270,6 +2271,7 @@
   overflow: hidden;
 }
 
+/* Section role. 14px -> 15px. */
 .modal-form .collapsible-header {
   display: flex;
   align-items: center;
@@ -2280,7 +2282,9 @@
   border: none;
   cursor: pointer;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   text-align: left;
 }
 
@@ -2288,14 +2292,16 @@
   background-color: var(--bg-hover);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .modal-form .collapsible-header .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .modal-form .collapsible-summary {
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   color: var(--text-muted);
 }
 
@@ -2312,11 +2318,15 @@
   margin-left: 1.5rem;
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .separator-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .separator-btn {
   padding: 0.25rem 0.5rem;
   background-color: var(--bg-secondary);
@@ -2324,7 +2334,7 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   min-width: 28px;
 }
 
@@ -2338,6 +2348,7 @@
   color: var(--button-primary-text);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .country-input {
   width: 80px;
   margin-left: 1.5rem;
@@ -2346,7 +2357,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .modal-form .country-input:focus {
@@ -2364,18 +2375,22 @@
   border-top: 1px solid var(--border-secondary);
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .prefix-order-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .modal-form .prefix-order-options .radio-option {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.375rem;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
 }
 
@@ -2397,15 +2412,20 @@
   margin-top: 0.25rem;
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .preview-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Item-title role. 14px -> 13px. */
 .modal-form .preview-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
   color: var(--accent-primary);
-  font-weight: 500;
+  font-weight: var(--type-item-title-weight);
 }
 
 /* Normalization Options in Modal */
@@ -2415,6 +2435,7 @@
   gap: 0.75rem;
 }
 
+/* Item-title role. 14px -> 13px. */
 .modal-form .original-stream-name {
   display: flex;
   align-items: center;
@@ -2422,11 +2443,16 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-secondary);
   border-radius: 4px;
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .original-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -2436,25 +2462,32 @@
   word-break: break-word;
 }
 
+/* Body role. 14px -> 13px. */
 .modal-form .normalization-option {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .modal-form .normalization-option > span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .normalization-option select {
   padding: 0.375rem 0.5rem;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -2468,6 +2501,7 @@
   margin-top: 0.25rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .renormalize-btn {
   display: flex;
   align-items: center;
@@ -2479,7 +2513,7 @@
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   margin-top: 0.25rem;
 }
@@ -2488,18 +2522,21 @@
   opacity: 0.9;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .modal-form .renormalize-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
+/* Meta role. 12px -> 11px. */
 .modal-form .normalization-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin: 0;
   padding: 0.5rem;
   background-color: var(--bg-secondary);
   border-radius: 4px;
-  line-height: 1.4;
+  line-height: var(--type-meta-line-height);
 }
 
 /* Profile List in Modal */
@@ -2509,13 +2546,14 @@
   gap: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .profile-checkbox {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
 }
 
@@ -2577,8 +2615,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 24px -> 16px. */
 .conflict-option-btn .material-icons {
-  font-size: 24px;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -2600,14 +2639,20 @@
   gap: 0.25rem;
 }
 
+/* Section role. 15.2px -> 15px. */
 .conflict-option-text strong {
   color: var(--text-primary);
-  font-size: 0.95rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .conflict-option-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Group autocomplete styles */
@@ -2615,6 +2660,7 @@
   position: relative;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .group-autocomplete input {
   width: 100%;
   padding: 0.5rem;
@@ -2623,7 +2669,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .group-autocomplete input:focus {
@@ -2631,6 +2677,7 @@
   border-color: var(--accent-primary);
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12.8px -> 11px. */
 .group-autocomplete-clear {
   position: absolute;
   right: 0.5rem;
@@ -2641,7 +2688,7 @@
   color: var(--text-muted);
   cursor: pointer;
   padding: 0.25rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
   line-height: 1;
 }
 
@@ -2664,10 +2711,13 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Body role. 14.4px -> 13px. */
 .group-autocomplete-option {
   padding: 0.5rem 0.75rem;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
 }
 
@@ -2680,9 +2730,12 @@
   color: var(--text-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .group-autocomplete-empty {
   padding: 0.5rem 0.75rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -2701,14 +2754,20 @@
   color: var(--button-text);
 }
 
+/* Body role. 13.6px -> 13px. */
 .delete-warning {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--warning) !important;
   font-style: italic;
 }
 
+/* Body role. 13.6px -> 13px. */
 .delete-info {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -2721,13 +2780,14 @@
   border-radius: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .delete-channels-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .delete-channels-checkbox input[type="checkbox"] {
@@ -2742,6 +2802,7 @@
 }
 
 /* Bulk delete empty groups checkbox */
+/* Label role. 14.4px -> 13px. */
 .delete-checkbox-label {
   display: flex;
   align-items: flex-start;
@@ -2753,7 +2814,9 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
 }
 
 .delete-checkbox-label input[type="checkbox"] {
@@ -2770,19 +2833,13 @@
   line-height: 1.4;
 }
 
-.modal-btn.danger {
-  background-color: var(--error);
-  color: var(--text-primary);
-}
-
-.modal-btn.danger:hover:not(:disabled) {
-  background-color: #b91c1c;
-}
-
-.modal-btn.danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* `.modal-btn.danger` is gone — `.modal-btn-danger` in ModalBase.css owns it,
+   and the three markup sites in this file were migrated to that spelling
+   (bead enhancedchannelmanager-xhldy). The fill was already `--error`, which is
+   correct; what changes is the ink (`--text-primary` -> `#fff`, so the button
+   keeps white text in the light theme instead of flipping to #1a1a1a on a red
+   fill) and the hover shade (#b91c1c -> #dc2626, matching `.btn-danger`).
+   `:disabled` was byte-identical to ModalBase's `.modal-btn:disabled`. */
 
 /* Rename group dialog */
 .rename-dialog {
@@ -2793,13 +2850,17 @@
   padding: 0 0.5rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .rename-form label {
   display: block;
   margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .rename-input {
   width: 100%;
   padding: 0.625rem 0.75rem;
@@ -2807,7 +2868,7 @@
   border-radius: 4px;
   background-color: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   margin-bottom: 1rem;
 }
 
@@ -2831,13 +2892,14 @@
   border-radius: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .renumber-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .renumber-checkbox input[type="checkbox"] {
@@ -2852,12 +2914,15 @@
   border-top: 1px solid var(--border-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .renumber-preview-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   flex-wrap: wrap;
 }
 
@@ -2876,20 +2941,29 @@
   min-width: 2rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-name-old {
   color: var(--text-secondary);
   margin-left: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-name-new {
   color: var(--success);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-preview-more {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   font-style: italic;
   margin-top: 0.25rem;
 }
@@ -2925,8 +2999,9 @@
   color: var(--text-muted);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .channel-logo-placeholder .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 
@@ -2954,15 +3029,18 @@
   flex: 1;
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .edit-channel-header-fields label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .edit-channel-number-input,
 .edit-channel-name-input {
   width: 100%;
@@ -2971,7 +3049,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
 }
 
 .edit-channel-number-input {
@@ -2979,8 +3057,9 @@
   text-align: center;
 }
 
+/* Control: section role's SIZE only, authored weight kept. 17.6px -> 15px. */
 .edit-channel-name-input {
-  font-size: 1.1rem;
+  font-size: var(--type-section-size);
 }
 
 .edit-channel-number-input:focus,
@@ -2993,13 +3072,15 @@
   margin-bottom: 1.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .edit-channel-section label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .logo-section-header {
@@ -3065,6 +3146,7 @@
    EditChannelModal and AutoSyncSettingsModal, neither of which is this file's
    surface (bead enhancedchannelmanager-87o0c). */
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-search-input {
   width: 100%;
   padding: 0.5rem;
@@ -3073,7 +3155,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-search-input:focus {
@@ -3088,6 +3170,7 @@
   align-items: center;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-add-row input[type="text"] {
   flex: 1;
   padding: 0.5rem;
@@ -3095,7 +3178,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-add-row input[type="text"]:focus {
@@ -3103,6 +3186,7 @@
   border-color: var(--accent-primary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-add-btn {
   display: flex;
   align-items: center;
@@ -3116,7 +3200,7 @@
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
   white-space: nowrap;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-add-btn:hover {
@@ -3129,6 +3213,7 @@
   cursor: not-allowed;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-upload-btn {
   display: flex;
   align-items: center;
@@ -3142,7 +3227,7 @@
   color: var(--button-text);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -3157,10 +3242,12 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .logo-upload-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-epg-btn {
   display: flex;
   align-items: center;
@@ -3174,7 +3261,7 @@
   color: var(--button-text);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -3189,8 +3276,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .logo-epg-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Discard Changes Confirmation Dialog */
@@ -3217,17 +3305,21 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .discard-confirm-title {
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
   margin-bottom: 0.75rem;
 }
 
+/* Body role. 14.4px -> 13px. */
 .discard-confirm-message {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
   margin-bottom: 1.25rem;
 }
 
@@ -3237,6 +3329,7 @@
   justify-content: flex-end;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .discard-confirm-cancel {
   padding: 0.5rem 1rem;
   background-color: transparent;
@@ -3244,7 +3337,7 @@
   border-radius: 4px;
   color: var(--button-text);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s, color 0.15s;
 }
 
@@ -3253,6 +3346,7 @@
   color: var(--text-primary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .discard-confirm-discard {
   padding: 0.5rem 1rem;
   background-color: var(--error);
@@ -3260,7 +3354,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s;
 }
 
@@ -3286,11 +3380,15 @@
   background-color: var(--input-bg);
 }
 
+/* Body role. 14.4px -> 13px. */
 .current-logo-preview span {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .current-logo-remove-btn {
   margin-left: auto;
   padding: 0.25rem 0.5rem;
@@ -3298,7 +3396,7 @@
   border: 1px solid var(--error);
   border-radius: 4px;
   color: var(--danger-text);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -3308,6 +3406,7 @@
 }
 
 /* Edit Channel Form Elements */
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .edit-channel-text-input {
   width: 100%;
   padding: 0.5rem;
@@ -3315,7 +3414,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .edit-channel-text-input:focus {
@@ -3355,11 +3454,13 @@
   color: var(--accent-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .edit-channel-copy-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Get from EPG button */
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .edit-channel-get-epg-btn {
   padding: 0.375rem 0.625rem;
   background-color: var(--bg-hover);
@@ -3370,7 +3471,7 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
@@ -3381,8 +3482,9 @@
   border-color: var(--accent-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .edit-channel-get-epg-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* TVG-ID Picker */
@@ -3402,18 +3504,24 @@
   border-radius: 4px;
 }
 
+/* Meta role. 12px -> 11px. */
 .edit-channel-hint {
   display: block;
   margin-top: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .edit-channel-error {
   display: block;
   margin-top: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--error-color, #ef4444);
   font-style: italic;
 }
@@ -3445,27 +3553,34 @@
   min-width: 0;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .current-epg-name {
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .current-epg-tvgid {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .current-epg-remove-btn {
   padding: 0.25rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--error);
   border-radius: 4px;
   color: var(--danger-text);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -3480,6 +3595,7 @@
   margin-bottom: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .epg-source-filter-btn {
   display: flex;
   align-items: center;
@@ -3490,7 +3606,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   width: 100%;
 }
 
@@ -3498,8 +3614,9 @@
   background-color: var(--bg-hover);
 }
 
+/* Button/inline-action glyph -> --icon-action. 17.6px -> 16px. */
 .epg-source-filter-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -3528,6 +3645,7 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .epg-source-filter-actions button {
   flex: 1;
   padding: 0.35rem 0.5rem;
@@ -3536,7 +3654,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 .epg-source-filter-actions button:hover {
@@ -3547,6 +3665,7 @@
   padding: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .epg-source-filter-option {
   display: flex;
   align-items: center;
@@ -3554,7 +3673,9 @@
   padding: 0.4rem 0.5rem;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -3597,12 +3718,15 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Body role. 13.6px -> 13px. */
 .epg-dropdown-loading,
 .epg-dropdown-empty {
   padding: 1rem;
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .epg-dropdown-item {
@@ -3638,24 +3762,32 @@
   min-width: 0;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .epg-dropdown-name {
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .epg-dropdown-tvgid {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .epg-dropdown-source {
   color: var(--accent-secondary);
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 0.125rem 0.375rem;
   background-color: var(--accent-primary)33;
   border-radius: 3px;
@@ -3669,9 +3801,12 @@
   max-width: 560px;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .cross-group-move-dialog h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -3679,11 +3814,13 @@
   margin-bottom: 1rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .cross-group-move-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .cross-group-move-info .group-tag {
@@ -3706,13 +3843,16 @@
   padding: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-channel-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -3725,6 +3865,7 @@
   font-style: italic;
 }
 
+/* Badge role. 12px -> 10px. */
 .cross-group-move-channel-list .channel-number-badge {
   display: inline-flex;
   align-items: center;
@@ -3735,7 +3876,9 @@
   color: var(--text-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
 }
 
 .cross-group-move-warning {
@@ -3748,9 +3891,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .cross-group-move-warning .warning-icon {
   color: var(--warning);
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -3758,18 +3902,23 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .cross-group-move-warning .warning-text strong {
   display: block;
   color: var(--warning);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-warning .warning-text p {
   margin: 0;
   color: var(--warning);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Conflict warning (info style - blue) */
@@ -3783,9 +3932,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .cross-group-move-conflict-warning .conflict-icon {
   color: #3b82f6;
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -3793,18 +3943,23 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .cross-group-move-conflict-warning .conflict-warning-text strong {
   display: block;
   color: #60a5fa;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-conflict-warning .conflict-warning-text p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .cross-group-move-conflict-warning .conflict-warning-text p strong {
@@ -3822,19 +3977,24 @@
   margin-bottom: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .cross-group-move-options .channel-number-section label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.375rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-options .group-range-info {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Radio button option group */
@@ -3875,8 +4035,9 @@
   flex-shrink: 0;
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .move-option-radio .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -3888,16 +4049,22 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .move-option-text strong {
   display: block;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.125rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .move-option-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Custom number input - inline within radio option */
@@ -3908,6 +4075,7 @@
   margin-top: 0.375rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .custom-number-input-inline {
   width: 140px;
   padding: 0.375rem 0.5rem;
@@ -3915,7 +4083,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .custom-number-input-inline:focus {
@@ -3927,9 +4095,12 @@
   color: var(--text-muted);
 }
 
+/* Body role. 12.8px -> 13px. */
 .custom-number-range-inline {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   white-space: nowrap;
 }
 
@@ -3961,17 +4132,22 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .source-renumber-text strong {
   display: block;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .source-renumber-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Drag Overlay */
@@ -4557,11 +4733,13 @@
   margin-bottom: 1.25rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .sort-renumber-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .sort-renumber-options {
@@ -4574,13 +4752,16 @@
   gap: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .sort-renumber-field label {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .sort-renumber-input {
   width: 150px;
   padding: 0.625rem 0.75rem;
@@ -4588,7 +4769,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
 }
 
@@ -4597,9 +4778,12 @@
   border-color: var(--accent-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .sort-renumber-range {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .sort-renumber-order-field {
@@ -4615,6 +4799,7 @@
   margin-top: 0;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .sort-renumber-checkbox {
   display: flex;
   align-items: center;
@@ -4622,7 +4807,7 @@
   margin-top: 0.75rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .sort-renumber-checkbox input[type="checkbox"],
@@ -4642,12 +4827,14 @@
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .sort-renumber-preview label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4661,13 +4848,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .sort-renumber-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4680,6 +4870,7 @@
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .preview-old-number {
   display: inline-flex;
   align-items: center;
@@ -4690,7 +4881,9 @@
   color: var(--text-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   text-decoration: line-through;
 }
 
@@ -4699,6 +4892,7 @@
   font-weight: bold;
 }
 
+/* Meta role. 12px -> 11px. */
 .preview-new-number {
   display: inline-flex;
   align-items: center;
@@ -4709,8 +4903,9 @@
   color: var(--accent-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* `.preview-name` is owned by StreamsPane.css, which declares it bare in the
@@ -4725,9 +4920,12 @@
   max-width: 550px;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .mass-renumber-dialog h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -4735,11 +4933,13 @@
   margin-bottom: 1.25rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .mass-renumber-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .mass-renumber-options {
@@ -4752,13 +4952,16 @@
   gap: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .mass-renumber-field label {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .mass-renumber-input {
   width: 150px;
   padding: 0.625rem 0.75rem;
@@ -4766,7 +4969,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
 }
 
@@ -4775,9 +4978,12 @@
   border-color: var(--accent-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .mass-renumber-range {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .mass-renumber-conflict-warning {
@@ -4790,9 +4996,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .mass-renumber-conflict-warning .conflict-icon {
   color: #f59e0b;
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -4806,10 +5013,13 @@
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .mass-renumber-conflict-warning .conflict-warning-content p {
   margin: 0 0 0.5rem 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .conflict-channel-list {
@@ -4818,12 +5028,15 @@
   padding: 0;
 }
 
+/* Body role. 13.6px -> 13px. */
 .conflict-channel-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .conflict-channel-list li.more-conflicts {
@@ -4831,6 +5044,7 @@
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .conflict-channel-number {
   display: inline-flex;
   align-items: center;
@@ -4841,8 +5055,9 @@
   color: #f59e0b;
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Sole owner of `.conflict-channel-name`. GracenoteConflictModal.css declared
@@ -4851,25 +5066,29 @@
    `var(--text-secondary)` — its weight and 0.9375rem size are the only things
    that survived from there, and they are folded in below so its copy could go
    (bead enhancedchannelmanager-87o0c). */
+/* Item-title role. 15px -> 13px. */
 .conflict-channel-name {
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 500;
-  font-size: 0.9375rem;
+  font-weight: var(--type-item-title-weight);
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
 .mass-renumber-preview {
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .mass-renumber-preview label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4883,13 +5102,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .mass-renumber-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4918,12 +5140,14 @@
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .renumber-all-preview > label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4937,13 +5161,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .renumber-all-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.375rem 0.5rem;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4960,14 +5187,18 @@
   white-space: nowrap;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .renumber-all-group-count {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
   min-width: 55px;
   text-align: right;
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-all-group-start {
   width: 72px;
   padding: 0.25rem 0.375rem;
@@ -4975,7 +5206,9 @@
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   text-align: center;
   transition: border-color 0.15s, box-shadow 0.15s;
 }

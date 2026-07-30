@@ -514,6 +514,23 @@ textarea {
   --type-metric-weight: 600;
   --type-metric-line-height: 1.2;
 
+  /* The title of a dialog — 18px.
+     A DISTINCT role, not the 15px section role, by PO decision on bead
+     enhancedchannelmanager-xhldy: a dialog's title is the primary heading of
+     its own surface, so it sits closer to a route title than to a panel
+     heading inside a page. It reads against the modal's own body copy, not
+     against the route header behind the overlay, which is why 20px would be
+     too loud and 15px too quiet.
+     DEVIATION, deliberate: the PO framed this as "roughly its current
+     17.6px/600". 17.6px is not a chosen number — it is what
+     `--modal-title-size: 1.1rem` happened to compute to. 18px is
+     `--text-2xl`, a primitive the scale already carries, so this role points
+     at a primitive like every other role instead of minting a bespoke value
+     for one rule. The rendered delta is +0.4px. */
+  --type-modal-title-size: var(--text-2xl);
+  --type-modal-title-weight: 600;
+  --type-modal-title-line-height: 1.3;
+
   /* Section heading inside a page — 15px */
   --type-section-size: 0.9375rem;
   --type-section-weight: 600;

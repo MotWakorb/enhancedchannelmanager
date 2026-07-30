@@ -337,14 +337,14 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading || connectionVerified !== true}>
                 {loading ? 'Saving...' : 'Save'}
               </button>
-              <button className="modal-btn btn-secondary settings-modal-restore-toggle" onClick={() => setShowRestore(true)}>
+              <button className="modal-btn modal-btn-secondary settings-modal-restore-toggle" onClick={() => setShowRestore(true)}>
                 <span className="material-icons" style={{ fontSize: '1rem', marginRight: '0.25rem' }}>restore</span>
                 Restore from Backup
               </button>
             </>
           ) : (
             <>
-              <button className="modal-btn btn-secondary" onClick={() => setShowRestore(false)} disabled={restoring}>
+              <button className="modal-btn modal-btn-secondary" onClick={() => setShowRestore(false)} disabled={restoring}>
                 Back
               </button>
               <button className="modal-btn modal-btn-primary btn-primary" onClick={handleRestoreFromBackup} disabled={restoring}>
