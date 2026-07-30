@@ -75,8 +75,8 @@
  * off-scale sites and read as a pass — the single most likely way a guard
  * like this dies quietly.
  *
- * WHEN THIS FAILS ON A NEW SITE: give the element a P1 role from
- * `frontend/src/shared/tokens.css` rather than a literal px value, and delete
+ * WHEN THIS FAILS ON A NEW SITE: give the element a P1 role from the
+ * "Typography Roles" group in `frontend/src/index.css` rather than a literal px value, and delete
  * any `em`-relative size in its ancestor chain (an `em` size compounds and is
  * the reason 0.9em reads as 14.4px here and something else two levels down).
  * See docs/css_guidelines.md, bead enhancedchannelmanager-f4yc7 for the scale
@@ -445,8 +445,8 @@ test.describe('every route content pane stays on the P1 type scale', () => {
         ? ''
         : `${newSites.length} NEW off-scale text site(s). Every visible text node in a route's content ` +
             `pane must compute to one of ${ON_SCALE_PX.join(', ')}px (P1 text roles then icon roles, ` +
-            `bead enhancedchannelmanager-f4yc7). Give the element a P1 role from ` +
-            `frontend/src/shared/tokens.css instead of a literal size, and delete any em-relative size ` +
+            `bead enhancedchannelmanager-f4yc7). Give the element a P1 role from the ` +
+            `"Typography Roles" group in frontend/src/index.css instead of a literal size, and delete any em-relative size ` +
             `in its ancestor chain — em compounds, which is why 0.9em reads as 14.4px here. If the site ` +
             `is a deliberate, owned exception, add it to ALLOWLIST with the bead that owns it.\n` +
             `${newSites.join('\n')}`

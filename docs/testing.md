@@ -165,7 +165,7 @@ npm run test:e2e:report    # View test report
 
 ### Rendered-CSS regression guards
 
-Six specs in `e2e/` are not feature tests — they are guards over *rendered*
+Seven specs in `e2e/` are not feature tests — they are guards over *rendered*
 CSS, the layer where the project has repeatedly regressed while every unit
 test stayed green. They exist because a computed style in a real browser is
 the only thing that can prove these claims; jsdom cannot, and neither can a
@@ -179,19 +179,21 @@ declaration-level audit.
 | `cross-route-css-leak.spec.ts` | shared-class typography does not depend on route visit order | four historical instances: `.list-header`, `.status-label`, `.group-count`, `.action-btn .material-icons` |
 | `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA — 4.5:1 normal, 3:1 large and non-text glyphs — in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
 | `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds — it scrolls, Back stays pinned and opaque, the last destination stays reachable — at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
+| `control-typeface.spec.ts` | every visible `button`/`input`/`select`/`textarea` on ten routes renders in the SAME resolved face as its nearest text-bearing ancestor (arm 1), and at a size the application chose rather than the user-agent's own control default (arm 2) | arm 1 (bead `-6z299.9`): controls resolving to generic `sans-serif` while surrounding text resolved to `system-ui`, invisible to a `fontFamily` string comparison. Arm 2 (bead `-ul2tp`): 274 of 418 visible controls across the ten routes rendering at Chromium's 13.3333px UA default with arm 1 green throughout |
 
 `frozen-chrome.spec.ts` pins **1280×720 as well as 1280×800** because 1280×720
 is the minimum supported viewport, and the height is what the Settings drill-in
 strains. Both rows are kept; dropping one from a frozen matrix is not free.
 
 ```bash
-npm run test:css-guard:sr-only        # builds + serves the source; NO backend needed
-npm run test:css-guard:frozen-chrome  # needs a live ECM backend
-npm run test:css-guard:type-scale     # needs a live ECM backend
-npm run test:css-guard:contrast-aa    # needs a live ECM backend; ~10 min, 66 route walks
-npm run test:css-leak                 # needs a live ECM backend
-npm run test:css-guards               # all of the above, against a live backend
-npm run test:css-guard:settings-nav   # needs a live ECM backend
+npm run test:css-guard:sr-only            # builds + serves the source; NO backend needed
+npm run test:css-guard:frozen-chrome      # needs a live ECM backend
+npm run test:css-guard:type-scale         # needs a live ECM backend
+npm run test:css-guard:contrast-aa        # needs a live ECM backend; ~10 min, 66 route walks
+npm run test:css-leak                     # needs a live ECM backend
+npm run test:css-guards                   # all of the above, against a live backend
+npm run test:css-guard:settings-nav       # needs a live ECM backend
+npm run test:css-guard:control-typeface   # needs a live ECM backend
 ```
 
 **CI status — read this before assuming coverage.**
@@ -205,14 +207,15 @@ npm run test:css-guard:settings-nav   # needs a live ECM backend
   a matching sentinel job in `.github/workflows/docs-only-pass.yml`, or
   docs-only PRs will hang waiting for a check that never runs.
 - `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
-  `contrast-aa.spec.ts` and `cross-route-css-leak.spec.ts` are **manual-only**.
-  This is not an oversight and not a "wire it up later" — all four walk every route, and
+  `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
+  `control-typeface.spec.ts` are **manual-only**.
+  This is not an oversight and not a "wire it up later" — all five walk every route, and
   Channel Manager's `.channels-pane` never mounts without an API (measured, on
   a backend-less preview build: `waitForSelector('.channels-pane')` times out
   at 60s). They need a live ECM container, which CI does not have; that is the
   same constraint that defers the rest of `e2e/*.spec.ts`, tracked as bead
   `enhancedchannelmanager-2lw25`. When 2lw25 lands a live-service CI
-  environment these four are the first specs that should move into it.
+  environment these five are the first specs that should move into it.
 - Until then the browser half of the CSS defence runs only when a human
   remembers. Run `npm run test:css-guards` against the running container
   before shipping any change under `frontend/src/**/*.css`.
@@ -248,7 +251,10 @@ Measured on bead `-70u0r.4`: `sr-only-hidden`, `frozen-chrome`,
 `route-typography-scale`, `cross-route-css-leak` and `settings-nav-groups` all
 green this way, including `frozen-chrome`'s full ten-route walk with Channel
 Manager's `.channels-pane` mounting normally — so a backend-less preview is not
-the constraint the paragraph above assumed. This corrects an earlier claim that preview "proxies
+the constraint the paragraph above assumed. `control-typeface` was verified the
+same way under bead `-ae3ms`, the pass that wired it into `test:css-guards`:
+all 21 tests across the full seven-spec aggregate passed against a `vite
+preview` tree with `/api` proxied to the live container. This corrects an earlier claim that preview "proxies
 nothing, so `/api` 502s" — that was true of a bare static server, not of
 `vite preview`. Use it whenever you must measure rendered CSS *before*
 committing or deploying; it is the only way to run these guards against an
