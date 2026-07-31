@@ -512,15 +512,25 @@
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
 }
 
+/* The padding was a literal `1rem 1.25rem` copied from ModalBase. This file is
+   in the Settings lazy chunk, which is appended after the eager bundle, so at
+   equal (0,1,0) specificity this rule WINS over ModalBase's `.modal-header` on
+   byte order — which meant that when bead enhancedchannelmanager-99o0x
+   shortened `--modal-header-padding` to 0.5rem, this one dialog kept a 59px
+   band while the whole rest of the estate went to 49px. Pointed at the token
+   so it tracks the chassis instead of shadowing it. The chassis conversion
+   this modal still needs (see the note above) is unchanged and still pending;
+   this is one value, not the conversion. */
 :where(.tag-engine-group-modal) .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.25rem;
+  padding: var(--modal-header-padding);
   border-bottom: 1px solid var(--border-primary);
 }
 
-/* Modal-title role. 18px -> 18px. */
+/* Modal-title role. Follows the role token, so 18px -> 16px with the estate
+   (bead enhancedchannelmanager-99o0x). */
 :where(.tag-engine-group-modal) .modal-header h3 {
   margin: 0;
   font-size: var(--type-modal-title-size);

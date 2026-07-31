@@ -35,7 +35,7 @@ the number lives in one place.
 |-|-|-|-|-|-|-|
 | Page title | `--type-page-title-*` | 20px (`--text-3xl`) | 700 | 1.3 | uppercase (from the string, not CSS) | the route title, e.g. `OPERATIONS / M3U MANAGER` |
 | Metric | `--type-metric-*` | 20px (`--text-3xl`) | 600 | 1.2 | — | the headline number on a stat/summary tile |
-| Modal title | `--type-modal-title-*` | 18px (`--text-2xl`) | 600 | 1.3 | — | the title of a dialog |
+| Modal title | `--type-modal-title-*` | 16px (`--text-xl`) | 600 | 1.3 | — | the title of a dialog |
 | Section | `--type-section-*` | 15px | 600 | 1.3 | — | a heading inside a page |
 | Body | `--type-body-*` | 13px | 400 | 1.5 | — | running text, buttons, inputs, page descriptions |
 | Item title | `--type-item-title-*` | 13px | 600 | 1.4 | — | the name of a row in a list |
@@ -63,10 +63,21 @@ the primary heading of its own surface, so it sits closer to a route title than
 to a panel heading inside a page — it reads against the modal's own body copy,
 not against the route header behind the overlay. PO decision on bead
 `enhancedchannelmanager-xhldy`. It was a bespoke `--modal-title-size: 1.1rem`
-(17.6px) in `ModalBase.css`; the role is 18px because 17.6px was never a chosen
-number — it is what `1.1rem` computes to — and 18px is `--text-2xl`, a primitive
-the scale already carries. `--modal-title-size` survives as the per-modal
-theming seam, now defaulting to the role.
+(17.6px) in `ModalBase.css`; `xhldy` set the role to 18px because 17.6px was
+never a chosen number — it is what `1.1rem` computes to. `--modal-title-size`
+survives as the per-modal theming seam, now defaulting to the role.
+
+Bead `enhancedchannelmanager-99o0x` moved it **18px → 16px** (`--text-xl`) on
+the PO's "the title text is oversized", and kept it a separate role rather than
+collapsing it into `--type-section-*`. The reason is hierarchy inside the
+dialog, not the number: a modal body's own headings are `.modal-section-title`
+at the 15px/600 section role, so a title at 15px/600 would be identical to the
+headings *below* it and the dialog would lose its primary heading. A 1px step
+reads thin, but by this scale's own standard it is not redundancy — a role
+names the *kind* of text, not its size, and body / item title / label already
+share 13px **exactly** while page title and metric share 20px. Modal title is
+the only role naming "the primary heading of an overlay surface". Weight stays
+600: dropping it would put the dialog title *below* its own section headings.
 
 Label and item title are both 13px for the same reason: a field caption reads
 as part of its control, so it takes the button weight (500), while a list-row
@@ -696,6 +707,23 @@ Key modal classes:
 - **Section titles**: `modal-section-title`
 
 Size classes: `modal-sm` (400px), `modal-md` (550px), `modal-lg` (700px), `modal-xl` (900px), `modal-xxl` (1000px), `modal-full` (95vw)
+
+### The header band is 49px, and the close button is what sizes it
+
+`.modal-header` is `min-height: 49px` = `--modal-header-padding`'s 8px, the
+32x32 `.modal-close-btn`, another 8px, and the 1px bottom border. Measured
+animation-free across all 72 harness headers, **55 of them were exactly that
+sum** before bead `enhancedchannelmanager-99o0x` shortened the padding — the
+title's line box (20.8px at 16px/1.3) sits *inside* the button's row and does
+not reach it. So **changing `--type-modal-title-size` alone moves no band**;
+the band levers are the padding token and the close button's box, and the
+button is deliberately left at 32x32 (it is the canonical `.action-btn` target
+and the dialog's escape hatch — see the comment on `--modal-close-size`).
+
+The `min-height` exists to collapse an accident: a header used to be 65px with
+a close button and 56px without, purely because of whether the dialog offered
+one. It is a floor, not a cap — a header carrying a `.modal-subtitle` second
+line still grows past it, to ~61px, and that extra is content and is correct.
 
 ### Verifying a modal change
 

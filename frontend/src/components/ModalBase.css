@@ -60,7 +60,27 @@
      that resolved to a fixed #3a3a5a in every theme. StreamsPane's copy won
      with the theme-aware token, which is what renders. */
   --modal-header-border: var(--border-primary);
-  --modal-header-padding: 1rem 1.25rem; /* was 0.5rem; StreamsPane's rendered */
+  /* Vertical padding 1rem -> 0.5rem, horizontal unchanged
+     (bead enhancedchannelmanager-99o0x, PO: "the title bar is too tall").
+     THE BAND IS SIZED BY THE CLOSE BUTTON, NOT THE TITLE. Measured
+     animation-free across all 72 headers in the dev harness: 55 of them are
+     exactly 16 + 32 + 16 + 1 = 65px — the 32x32 close button plus this
+     padding plus the border — while the 18px/1.3 title's line box is only
+     23.39px and sits INSIDE that 32px row. Shrinking the title alone would
+     therefore have moved nothing for those 55. This token is the lever that
+     does move them; the title is a separate, additive change
+     (`--type-modal-title-size`, index.css).
+     0.5rem is not an arbitrary pick: it is the value this file originally
+     authored for the whole shorthand. It never rendered because
+     StreamsPane.css declared a bare `.modal-header` later in the eager
+     bundle, and bead 87o0c re-pointed the token at what was actually
+     rendering rather than at what was chosen. Restoring 0.5rem on the
+     vertical axis returns the band to this file's own intent; the horizontal
+     1.25rem stays, so the title still lines up with `--modal-body-padding`.
+     New band: 8 + 32 + 8 + 1 = 49px, a 25% cut.
+     The other lever available here — shrinking the 32x32 close button — was
+     deliberately NOT taken. See `--modal-close-size` below. */
+  --modal-header-padding: 0.5rem 1.25rem;
   --modal-title-color: var(--text-primary, #ffffff);
   /* Was a bespoke `1.1rem`. The modal title is now a real role on the P1 scale
      (`--type-modal-title-*` in index.css, bead
@@ -90,7 +110,26 @@
      --icon-status (18px) is the panel-header tier, which is where this glyph
      actually sits, and `.modal-close-btn`'s padding is raised from 4px to 7px
      below so the target box stays exactly 32x32 — the canonical `.action-btn`
-     size (bead enhancedchannelmanager-xhldy). */
+     size (bead enhancedchannelmanager-xhldy).
+
+     NOT SHRUNK when the band was shortened (bead
+     enhancedchannelmanager-99o0x), even though the 32x32 box is what sizes the
+     band and shrinking it is technically modal-local — `.modal-close-btn` is
+     declared in this file and nowhere else, so it does not share a rule with
+     `.action-btn`. Three reasons it stays anyway:
+       1. The 32x32 is a deliberate alignment with the app's canonical action
+          target, not a coincidence. Breaking it makes the dismiss control
+          smaller than every row action button in the app, which is a
+          consistency decision for the whole estate, not a modal-chrome tweak.
+       2. It is the primary escape hatch. Shrinking the one control whose job
+          is "get me out of here" to buy 8px of chrome is a bad trade, and
+          24x24 is the WCAG 2.5.8 floor it would be heading toward.
+       3. The padding lever alone delivers the full 16px reduction the PO
+          asked for, and it moves EVERY header — including the two dialogs
+          that spell their close button `.modal-close` (PendingMergesPage,
+          TagEngineSection) and the seven with a second header line. Shrinking
+          the button would have moved only the 55-dialog cluster and WIDENED
+          the spread between clusters. */
   --modal-close-size: var(--icon-status);
 
   /* Animation */
@@ -194,10 +233,27 @@
    HEADER - Title bar with optional close button
    ============================================================================= */
 
+/* ONE title-bar height for the estate (bead enhancedchannelmanager-99o0x).
+   `min-height` is border-box (index.css sets `box-sizing: border-box` on `*`),
+   so 49px is the whole band: 8px padding + the 32x32 close button + 8px
+   padding + the 1px bottom border — exactly what a header WITH a close button
+   computes to on its own.
+   It exists because the 65/56 split this bead inherited was never a designed
+   distinction: a header measured 65px if the dialog happened to carry a close
+   button and 56px if it did not, and after the padding cut the two would have
+   diverged further still (49px against 37.8px, because a 16px/1.3 title's line
+   box is only 20.8px). A dismiss affordance the dialog happens not to offer is
+   not a reason for its title bar to be a different height, and 37.8px is where
+   a band starts reading as crushed against the body below it. The floor
+   collapses the accident; it does not cap anything, so a header with a second
+   line still grows past it — see `.modal-subtitle`.
+   `align-items: center` already centres the row, so the floor pads
+   symmetrically with no further change. */
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 49px;
   padding: var(--modal-header-padding);
   background: var(--modal-header-bg);
   border-bottom: 1px solid var(--modal-header-border);
@@ -205,7 +261,8 @@
   flex-shrink: 0;
 }
 
-/* Modal title role — 18px/600/1.3. `--modal-title-size` defaults to the role's
+/* Modal title role — 16px/600/1.3 (was 18px; bead
+   enhancedchannelmanager-99o0x). `--modal-title-size` defaults to the role's
    size token; the weight and line-height are taken from the role directly
    because no consumer overrides them. */
 .modal-header h2,
@@ -235,7 +292,23 @@
   color: var(--accent-primary, #6366f1);
 }
 
-/* Subtitle/description in header — body role. */
+/* Subtitle/description in header — body role.
+   A header carrying one of these is TALLER THAN THE 49px FLOOR ON PURPOSE
+   (bead enhancedchannelmanager-99o0x). Seven dialogs do it — find-duplicates,
+   task-editor, task-schedule-add, task-schedule-edit with this class, and
+   auto-sync-settings, m3u-filters, m3u-groups with a hand-rolled
+   `.header-info > span` of the same shape — and they measured 78.6-79.9px
+   against the estate's 65px.
+   They were checked separately and are NOT defective. The extra height is
+   CONTENT, not chrome: the second line names which account, task or group the
+   dialog is acting on, which is the thing the operator most needs and cannot
+   recover from the title alone. So they shrink by exactly the same 16px of
+   chrome as every other header (79.9 -> 61.3) and keep their content-driven
+   extra; they are deliberately not pulled down to the single-line 49px, which
+   would mean either dropping the line or crushing its leading.
+   The three hand-rolled ones should be migrated onto this class — filed
+   separately, not fixed here, because it is markup churn in seven components
+   for no rendered change. */
 .modal-header .modal-subtitle {
   font-size: var(--type-body-size);
   color: var(--text-secondary, #888);
@@ -1780,8 +1853,8 @@
 }
 
 /* Modal-title role: `.modal-header-info h2` is the alternate spelling of the
-   dialog title, so it takes the same role as `.modal-header h2`.
-   16px -> 18px. */
+   dialog title, so it takes the same role as `.modal-header h2` — 16px/600/1.3
+   after bead enhancedchannelmanager-99o0x. */
 .modal-header-info h2 {
   margin: 0;
   font-size: var(--type-modal-title-size);

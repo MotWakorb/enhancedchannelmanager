@@ -556,20 +556,37 @@ textarea {
   --type-metric-weight: 600;
   --type-metric-line-height: 1.2;
 
-  /* The title of a dialog — 18px.
+  /* The title of a dialog — 16px.
      A DISTINCT role, not the 15px section role, by PO decision on bead
      enhancedchannelmanager-xhldy: a dialog's title is the primary heading of
      its own surface, so it sits closer to a route title than to a panel
      heading inside a page. It reads against the modal's own body copy, not
      against the route header behind the overlay, which is why 20px would be
      too loud and 15px too quiet.
-     DEVIATION, deliberate: the PO framed this as "roughly its current
-     17.6px/600". 17.6px is not a chosen number — it is what
-     `--modal-title-size: 1.1rem` happened to compute to. 18px is
-     `--text-2xl`, a primitive the scale already carries, so this role points
-     at a primitive like every other role instead of minting a bespoke value
-     for one rule. The rendered delta is +0.4px. */
-  --type-modal-title-size: var(--text-2xl);
+     xhldy set it to 18px (`--text-2xl`), correcting a bespoke `1.1rem`
+     (17.6px) that was never a chosen number.
+
+     18px -> 16px (`--text-xl`) on bead enhancedchannelmanager-99o0x, PO
+     request: "the title text is oversized". The role SURVIVES at a distinct
+     step rather than collapsing into `--type-section-*`, and the reason is
+     hierarchy inside the dialog, not the number: a dialog's body carries
+     `.modal-section-title` at the 15px/600 section role, so a title set to
+     15px/600 would be typographically identical to the headings BELOW it and
+     the dialog would lose its own primary heading. That flattening is visible
+     in the dialogs that actually carry section titles — cp-rule-builder-modal,
+     settings-modal, norm-rule-editor, task-editor.
+     A 1px step reads thin, and that is a fair objection — but it is not
+     evidence of redundancy BY THIS SCALE'S OWN STANDARD. A role names the
+     KIND of text, not its size (docs/css_guidelines.md § Typography): body,
+     item title and label already share 13px exactly and separate on weight;
+     page title and metric already share 20px. Modal title at 16px against
+     section at 15px is more separated than either of those pairs, and it is
+     the only role that names "the primary heading of an overlay surface".
+     16px is `--text-xl`, a primitive the scale already carries.
+     Weight and line-height are unchanged: the PO asked for smaller, not
+     lighter, and dropping to 500 would put it below the section role's 600 —
+     inverting the hierarchy this step exists to protect. */
+  --type-modal-title-size: var(--text-xl);
   --type-modal-title-weight: 600;
   --type-modal-title-line-height: 1.3;
 
