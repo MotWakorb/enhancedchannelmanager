@@ -23,6 +23,27 @@
  * elements are excluded too: they are 1x1 clipped boxes, not visible text
  * (`e2e/sr-only-hidden.spec.ts` is what keeps them that way).
  *
+ * ONE SUBTREE IS EXCLUDED BY DOM POSITION AND SHOULD NOT BE: the notification
+ * panel. It is a child of `.notification-center`, which is a child of
+ * `.header-actions`, so `.header` catches it — but it is not the frozen band.
+ * The band exclusion exists for the band's OWN controls, whose sizes `-57pp3`
+ * and `-eupzi` deliberately froze at chrome values (a 20px glyph, a 28px
+ * control). The panel is a 380px content overlay that merely hangs off one of
+ * those controls: it holds item titles, running text, timestamps and status
+ * glyphs, which is exactly the vocabulary the P1 roles name. `RE_INCLUDED_
+ * ANCESTORS` below puts it back in scope. Bead
+ * `enhancedchannelmanager-9bpkk`, which found the panel rendering 16px
+ * inherited body text, 14.4px item titles and 22px status glyphs — none of it
+ * visible to any guard, because it is only in the DOM while it is open.
+ *
+ * THE PANEL HAS TO BE OPENED, AND IT HAS TO HAVE CONTENT. It is not in the
+ * 82-dialog harness (that harness opens modals; this is a popover), and it
+ * renders nothing at all until the bell is clicked. `ensurePanelOpen()` does
+ * the click; `MIN_PANEL_TEXT_ELEMENTS` is the non-vacuity floor, and it is set
+ * ABOVE what the empty state alone can produce on purpose — an empty panel
+ * renders one glyph and one line of text, both on scale, and would sail
+ * through a guard that only checked "did anything go off scale".
+ *
  * ─────────────────────────────────────────────────────────────────────────
  * WHY THERE IS AN ALLOWLIST, AND WHY IT CANNOT ROT
  *
@@ -103,11 +124,34 @@ const ON_SCALE_EPSILON = 0.01
 const EXCLUDED_ANCESTORS: readonly string[] = ['.primary-sidebar', '.header', '.sr-only', '.visually-hidden']
 
 /**
+ * Subtrees that sit inside an EXCLUDED_ANCESTORS match but are content anyway,
+ * and are therefore back in scope. Checked after the exclusion, so it wins.
+ * See the scope note in the file header for why the notification panel is one.
+ */
+const RE_INCLUDED_ANCESTORS: readonly string[] = ['.notification-panel']
+
+/**
  * Minimum visible text elements a route must yield. Observed lows on an
  * almost-empty instance: settings 48, channel-pipeline 81, channel-manager 90.
  * 25 is well under every one of those and well over "the route did not mount".
  */
 const MIN_TEXT_ELEMENTS = 25
+
+/**
+ * Minimum visible text elements the OPEN notification panel must yield.
+ *
+ * The empty state is two of them — the `notifications_none` ligature and the
+ * words "No notifications" — and after bead `-9bpkk` both are on scale, so a
+ * floor of 2 would let an instance with no notifications report green while
+ * measuring nothing that the bead is about. One real notification entry
+ * contributes at least four (status glyph, title, message, timestamp) plus the
+ * panel's own `<h3>` and the header action glyphs.
+ *
+ * 6 therefore means "the panel opened AND it has at least one real entry in
+ * it". If this fails, the instance's notification list is empty — generate one
+ * (any scheduled task completing does it) rather than lowering the floor.
+ */
+const MIN_PANEL_TEXT_ELEMENTS = 6
 
 interface Exception {
   /** Route hash id the site lives on. */
@@ -243,6 +287,8 @@ interface OffScaleSite {
 
 interface RouteScan {
   textElementCount: number
+  /** Of those, the ones inside the open notification panel. Its own floor. */
+  panelTextElementCount: number
   offScale: OffScaleSite[]
   /** entry index -> what its selector actually found on this route. */
   entryStatus: Array<{ matched: number; offScaleMatches: number }>
@@ -250,9 +296,11 @@ interface RouteScan {
 
 async function scanRoute(page: Page, entries: readonly Exception[]): Promise<RouteScan> {
   return page.evaluate(
-    ({ onScale, epsilon, excluded, selectors }) => {
+    ({ onScale, epsilon, excluded, reIncluded, selectors }) => {
       const isOnScale = (size: number) => onScale.some((value) => Math.abs(value - size) < epsilon)
-      const isExcluded = (element: Element) => excluded.some((ancestor) => element.closest(ancestor))
+      const isReIncluded = (element: Element) => reIncluded.some((ancestor) => element.closest(ancestor))
+      const isExcluded = (element: Element) =>
+        excluded.some((ancestor) => element.closest(ancestor)) && !isReIncluded(element)
       const isRendered = (element: Element) => {
         const rect = element.getBoundingClientRect()
         if (rect.width <= 0 || rect.height <= 0) return false
@@ -275,6 +323,7 @@ async function scanRoute(page: Page, entries: readonly Exception[]): Promise<Rou
       const visited = new Set<Element>()
       const bySignature = new Map<string, { fontSizePx: number; signature: string; sample: string; count: number }>()
       let textElementCount = 0
+      let panelTextElementCount = 0
       let node: Node | null
       while ((node = walker.nextNode())) {
         const text = (node.nodeValue || '').trim()
@@ -284,6 +333,7 @@ async function scanRoute(page: Page, entries: readonly Exception[]): Promise<Rou
         visited.add(element)
         if (isExcluded(element) || !isRendered(element)) continue
         textElementCount += 1
+        if (isReIncluded(element)) panelTextElementCount += 1
         const fontSizePx = Number.parseFloat(getComputedStyle(element).fontSize)
         if (isOnScale(fontSizePx)) continue
         const key = `${fontSizePx}|${signature(element)}`
@@ -324,6 +374,7 @@ async function scanRoute(page: Page, entries: readonly Exception[]): Promise<Rou
       }
       return {
         textElementCount,
+        panelTextElementCount,
         offScale: offScale.filter((site) => !claimedSignatures.has(`${site.fontSizePx}|${site.signature}`)),
         entryStatus,
       }
@@ -332,9 +383,29 @@ async function scanRoute(page: Page, entries: readonly Exception[]): Promise<Rou
       onScale: [...ON_SCALE_PX],
       epsilon: ON_SCALE_EPSILON,
       excluded: [...EXCLUDED_ANCESTORS],
+      reIncluded: [...RE_INCLUDED_ANCESTORS],
       selectors: entries.map((entry) => ({ selector: entry.selector, sizesPx: [...entry.sizesPx] })),
     }
   ) as Promise<RouteScan>
+}
+
+/**
+ * Click the bell if the panel is not already showing.
+ *
+ * Idempotent on purpose: the panel's own outside-click handler never fires for
+ * a hash navigation, so once it is open it STAYS open across the rest of the
+ * ten-route walk. A blind click per route would toggle it shut on route two
+ * and the walk would measure a closed panel from there on — silently, because
+ * a closed panel contributes no elements at all rather than wrong ones.
+ */
+async function ensurePanelOpen(page: Page): Promise<void> {
+  if (await page.locator('.notification-panel').count()) return
+  await page.locator('.notification-bell').click()
+  await page.waitForSelector('.notification-panel', { timeout: 15000 })
+  // The list is fetched when the panel mounts; measure the entries, not the
+  // frame that arrives before them.
+  await page.waitForLoadState('networkidle').catch(() => undefined)
+  await page.waitForTimeout(300)
 }
 
 test.describe('every route content pane stays on the P1 type scale', () => {
@@ -354,6 +425,7 @@ test.describe('every route content pane stays on the P1 type scale', () => {
 
     const newSites: string[] = []
     const thinRoutes: string[] = []
+    const thinPanels: string[] = []
     // entry index -> per-route tallies, so staleness is judged on the route the
     // entry actually names rather than on wherever the selector happens to hit.
     const entryTotals = ALLOWLIST.map(() => ({ matched: 0, offScaleMatches: 0 }))
@@ -361,8 +433,22 @@ test.describe('every route content pane stays on the P1 type scale', () => {
     try {
       for (const route of PRIMARY_ROUTES) {
         await goToRoute(page, route)
+        // The panel is the same component on all ten routes, so this is not ten
+        // different surfaces — it is the same surface asserted from each of the
+        // ten places it is reachable from, which is what makes a regression in
+        // one route's late-appended stylesheet visible here.
+        await ensurePanelOpen(page)
         const routeEntries = ALLOWLIST.filter((entry) => entry.route === route.id)
         const scan = await scanRoute(page, routeEntries)
+
+        if (scan.panelTextElementCount < MIN_PANEL_TEXT_ELEMENTS) {
+          thinPanels.push(
+            `  ${route.id}: the open notification panel yielded only ${scan.panelTextElementCount} visible ` +
+              `text element(s) (floor ${MIN_PANEL_TEXT_ELEMENTS}). Either the bell click did not open it, or the ` +
+              `instance has no notifications and only the empty state rendered — either way nothing this ` +
+              `guard cares about was measured.`
+          )
+        }
 
         if (scan.textElementCount < MIN_TEXT_ELEMENTS) {
           thinRoutes.push(
@@ -423,6 +509,16 @@ test.describe('every route content pane stays on the P1 type scale', () => {
         ? ''
         : `${thinRoutes.length} route(s) rendered too little to audit. This guard must never report ` +
             `green because a page failed to mount.\n${thinRoutes.join('\n')}`
+    ).toEqual([])
+
+    expect.soft(
+      thinPanels,
+      thinPanels.length === 0
+        ? ''
+        : `${thinPanels.length} route(s) measured a notification panel with nothing in it. The panel is ` +
+            `only in the DOM while it is open, so a guard that does not prove it had content is measuring ` +
+            `the empty state at best and nothing at all at worst (bead enhancedchannelmanager-9bpkk).\n` +
+            `${thinPanels.join('\n')}`
     ).toEqual([])
 
     expect.soft(
