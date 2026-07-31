@@ -1,112 +1,345 @@
-/* bd-3thyn: the wrapper carries the band's background/border so it still
-   spans full width even though `.tab-navigation` itself is now the
-   scrollable strip (and the chevrons sit outside it, sharing the band). */
-.tab-navigation-wrapper {
+.primary-sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  position: relative;
   display: flex;
-  align-items: stretch;
-  background-color: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-primary);
-  flex-shrink: 0;
-}
-
-.tab-navigation {
-  display: flex;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-behavior: smooth;
-  padding: 0 1rem;
-  gap: 0.25rem;
-  flex: 1 1 auto;
+  flex-direction: column;
+  width: 244px;
   min-width: 0;
-  scrollbar-width: thin;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  transition: width 150ms ease;
 }
 
-.tab-navigation::-webkit-scrollbar {
-  height: 4px;
+/* The sidebar/content divider starts below the top band, not at the top of the
+   page (bead eupzi): the brand block and the header are one continuous strip,
+   so nothing may cut between them. It is an overlay rather than a border on
+   .primary-navigation because the nav is remounted and slid in on every
+   drill-in, which would take the divider with it for the length of the
+   animation. As an overlay it also leaves the sidebar's 244px untouched. */
+.primary-sidebar::after {
+  content: '';
+  position: absolute;
+  top: var(--header-band-height);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-primary);
+  pointer-events: none;
 }
 
-.tab-navigation::-webkit-scrollbar-thumb {
-  background: var(--border-secondary, rgba(255, 255, 255, 0.25));
-  border-radius: 2px;
+.primary-sidebar.is-collapsed {
+  width: 68px;
+  contain: inline-size;
 }
 
-/* Scroll affordance chevrons — only rendered when the strip actually
-   overflows in that direction, so they never show up on wide viewports. */
-.tab-nav-scroll-btn {
-  flex-shrink: 0;
+/* Exactly as tall as the header, border included, so the two form one level
+   band. Both heights derive from --header-band-height on .app. */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex: 0 0 var(--header-band-height);
+  padding: 0 0.875rem;
+  overflow: hidden;
+}
+
+.sidebar-brand-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  background: var(--bg-tertiary);
-  border: none;
-  color: var(--text-secondary);
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
   cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition: background-color 0.15s, border-color 0.15s;
 }
 
-.tab-nav-scroll-btn:hover {
-  color: var(--button-text);
-  background-color: rgba(255, 255, 255, 0.05);
+.sidebar-brand-toggle:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-secondary);
 }
 
-.tab-nav-scroll-btn .material-icons {
-  font-size: 20px;
+.sidebar-brand-toggle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 
-.tab-nav-scroll-left {
-  box-shadow: 4px 0 6px -4px rgba(0, 0, 0, 0.4);
+/* Sized off the same token as every header control so the mark keeps pace with
+   the band it sits in (bead eupzi). The mark plus the toggle's 3px padding and
+   1px border is 36px, and its 2px focus ring at 2px offset reaches 44px — both
+   inside the 45px band, which a 38px mark was not. */
+.sidebar-logo {
+  width: var(--header-control-height);
+  height: var(--header-control-height);
+  flex: 0 0 var(--header-control-height);
+  display: block;
 }
 
-.tab-nav-scroll-right {
-  box-shadow: -4px 0 6px -4px rgba(0, 0, 0, 0.4);
+/* Brand mark colours. The schedule is drawn in ink so it sits with the sidebar's
+   own text, and the middle row takes the accent — which is what reveals the C in
+   the outer path and the M in the middle arm. The accent must therefore differ
+   clearly from the ink in every theme, including high contrast. */
+.ecm-logo-ink { fill: var(--ecm-logo-ink, rgba(255, 255, 255, 0.95)); }
+
+.ecm-logo-accent {
+  fill: var(--ecm-logo-accent, #818cf8);
+  stroke: var(--ecm-logo-accent, #818cf8);
 }
 
-.tab-button {
+.ecm-logo-accent-soft {
+  fill: var(--ecm-logo-accent, #818cf8);
+  opacity: 0.45;
+}
+
+/* The wordmark is an SVG, so it takes its colour from `currentColor` and needs
+   no font sizing here — its proportions live in the viewBox. `flex: 0 0 auto`
+   keeps the brand row from squeezing it as the sidebar animates. */
+.sidebar-product-name {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--ecm-logo-ink, var(--text-primary));
+}
+
+.primary-navigation {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: 0.5rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.navigation-group { margin: 0 0 0.5rem; }
+
+.navigation-group h2 {
+  margin: 0;
+  padding: 0.55rem 0.625rem 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.navigation-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Drill-in swipe. Transform only — never opacity: the sidebar is inside the
+   audited axe scope, and axe samples mid-animation, which is how the header
+   update badge reached 4.28:1 while measuring clean at rest. A pure slide
+   cannot change any computed colour. */
+@keyframes nav-slide-from-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes nav-slide-from-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.primary-navigation.nav-slide-forward {
+  animation: nav-slide-from-right 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.primary-navigation.nav-slide-back {
+  animation: nav-slide-from-left 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-navigation.nav-slide-forward,
+  .primary-navigation.nav-slide-back {
+    animation: none;
+  }
+}
+
+/* Only the Settings drill-in renders a Back control, so this rule needs no
+   .settings-navigation scope — and leaving it unscoped keeps :hover below at
+   equal specificity, so hover still wins the background. */
+.navigation-back {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.25rem;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 0.25rem;
+  padding: 1rem 0.625rem 0.5rem;
+  border: 0;
+  border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  margin-bottom: -1px;
-}
-
-.tab-button:hover:not(:disabled) {
-  color: var(--button-text);
-  background-color: rgba(255, 255, 255, 0.05);
-}
-
-.tab-button.active {
-  color: var(--accent-primary);
-  border-bottom-color: var(--accent-primary);
-}
-
-.tab-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.tab-button .material-icons {
-  font-size: 18px;
-}
-
-.tab-label {
+  font: inherit;
   font-size: 0.875rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+
+  /* PINNED, because Back is the only exit from Settings and it is the first
+     child of a scroll container (.primary-navigation, overflow-y: auto). Bead
+     enhancedchannelmanager-70u0r.4 measured the grouped drill-in at 1102px
+     against a 675px budget at 1280x720 — the minimum supported viewport — so
+     the rail genuinely scrolls, and an unpinned Back scrolls out of reach
+     exactly when the operator has gone looking for a destination further down.
+     This is the treatment the approved Settings IA nominated in advance:
+     sidebar-internal scrolling with the Back control kept in view.
+
+     top matches the container's own 0.5rem padding, negated: overflow clips at
+     the padding box, so scrolled rows are visible in that strip and a Back
+     pinned at top: 0 would have them sliding through the gap above it. Pinning
+     flush to the border box instead means Back sits at its sticky boundary at
+     rest, so it never jumps when scrolling starts. The negative margin keeps
+     the extra 0.5rem of padding-top out of the layout, and the padding puts the
+     label back where it was, so the rail's vertical budget is unchanged. */
+  position: sticky;
+  top: -0.5rem;
+  z-index: 1;
+  margin-top: -0.5rem;
+  /* Opaque, not transparent: rows must scroll BEHIND this, not through it.
+     Matches .primary-sidebar so the pinned strip reads as chrome. */
+  background: var(--bg-tertiary);
 }
 
-/* Edit mode active indicator on tab navigation */
-.tab-navigation.edit-mode-active {
-  border-bottom-color: #4a4a6a;
+.navigation-back:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
-.tab-navigation.edit-mode-active .tab-button.active {
+.navigation-back:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.navigation-back .material-icons {
+  flex: 0 0 20px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.primary-sidebar.is-collapsed .navigation-back {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
+  overflow-x: clip;
+}
+
+.navigation-destination {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.navigation-destination:hover:not([aria-disabled="true"]) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* The tint is 9%, not 14%, because the label and its own backdrop are the SAME
+   token: `color: var(--accent-primary)` on a tint of `--accent-primary`. In the
+   light theme #4f46e5 on the 14% composite (#d2d1e7 over --bg-tertiary) measured
+   4.20:1 against the WCAG AA 4.5 floor, on all ten non-Settings routes. At 9%
+   (#dad9e8) it measures 4.51. Darkening the token instead moves text and
+   backdrop together and buys much less than it appears to, and `--accent-primary`
+   is off limits regardless: 359 uses, 22 of them solid fills under white text, it
+   feeds `--button-primary-bg`, and fourteen declarations spell
+   `var(--accent-primary)33` — an 8-digit-hex trick that only parses while the
+   value stays a six-digit hex. PO decision on bead
+   `enhancedchannelmanager-dlavh`; measured by `e2e/contrast-aa.spec.ts`, which
+   carried this site as its first ALLOWLIST entry until this change.
+
+   The tint is a literal here, used by this one selector, so thinning it changes
+   nothing else. It does change the selected-row wash in ALL THREE themes, which
+   is the cost the PO accepted — the step moves each channel by 5% of the
+   distance between the tint colour and --bg-tertiary, so ~8 RGB units in light
+   and ~11 in dark and high-contrast, where the tint colour is further from the
+   surface. Label contrast rises everywhere (dark 9.05 -> 10.73, light
+   4.20 -> 4.51, high contrast 12.24 -> 14.31) because the backdrop moves away
+   from the ink; what shrinks is the wash's separation from the unselected rail.
+   Measured on the composited fills — selected row against `--bg-tertiary`:
+   dark 1.57 -> 1.32, light 1.22 -> 1.14, high contrast 1.44 -> 1.23; in CIE L*
+   the step drops 13.4 -> 8.6, 7.5 -> 4.8 and 14.9 -> 9.5. Every theme keeps
+   9/14 of the step, so dark and high contrast give up roughly twice as much
+   absolute wash as light gains — they were already passing, and that is the
+   trade the PO took. Selection is still carried by the 3px inset accent bar and
+   the accent-coloured label, not by the wash alone. Settings' drill-in is a
+   different rule (`SettingsTab.css`, `--accent-10` + `--accent-secondary`) and
+   is untouched. */
+.navigation-destination.active {
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.primary-sidebar.edit-mode-active .navigation-destination.active {
   color: var(--accent-secondary);
-  border-bottom-color: var(--accent-secondary);
+  box-shadow: inset 3px 0 0 var(--accent-secondary);
+}
+
+.navigation-destination[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+.navigation-destination:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.navigation-destination .material-icons {
+  flex: 0 0 20px;
+  font-size: 20px;
+  text-align: center;
+}
+
+.navigation-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.primary-sidebar.is-collapsed .sidebar-product-name,
+.primary-sidebar.is-collapsed .navigation-group h2,
+.primary-sidebar.is-collapsed .navigation-label { display: none; }
+
+.primary-sidebar.is-collapsed .sidebar-brand { justify-content: center; padding: 0; }
+
+.primary-sidebar.is-collapsed .navigation-destination {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
+  overflow-x: clip;
+}
+
+.primary-sidebar.is-collapsed .primary-navigation,
+.primary-sidebar.is-collapsed .navigation-group,
+.primary-sidebar.is-collapsed .navigation-group ul,
+.primary-sidebar.is-collapsed .navigation-group li {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* `.visually-hidden` is owned by shared/common.css § 2 COMMON UTILITIES.
+   Three identical copies of this a11y primitive existed — here, in
+   StatsTab.css and in UserStatsPanel.css — two of them `!important`
+   throughout, so whichever chunk was appended last decided which one applied
+   (bead enhancedchannelmanager-6z299). */
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-sidebar { transition: none; }
 }

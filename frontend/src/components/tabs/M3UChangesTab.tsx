@@ -1,11 +1,14 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './M3UChangesTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
+import { HttpError } from '../../services/httpClient';
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -60,12 +63,14 @@ function formatChangeType(changeType: M3UChangeType): string {
 // absolute); it now uses the same shared helper so both tables apply one
 // consistent rule instead of two independently-maintained ones.
 
-export function M3UChangesTab() {
+export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number }) {
   // Data state
   const [changes, setChanges] = useState<M3UChangeLog[]>([]);
   const [summary, setSummary] = useState<M3UChangeSummary | null>(null);
   const [accounts, setAccounts] = useState<M3UAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
+  const changesRequestGenerationRef = useRef(0);
   const notifications = useNotifications();
 
   // Pagination state
@@ -78,7 +83,7 @@ export function M3UChangesTab() {
   const [accountFilter, setAccountFilter] = useState<number | ''>('');
   const [changeTypeFilter, setChangeTypeFilter] = useState<M3UChangeType | ''>('');
   const [enabledFilter, setEnabledFilter] = useState<boolean | ''>('');
-  const [hoursFilter, setHoursFilter] = useState<number>(168); // Default 7 days
+  const [hoursFilter, setHoursFilter] = useState<number>(initialHours); // Default 7 days
 
   // Sort state
   const [sortBy, setSortBy] = useState<string>('change_time');
@@ -97,9 +102,10 @@ export function M3UChangesTab() {
 
   // Fetch changes
   const fetchChanges = useCallback(async () => {
+    const requestGeneration = ++changesRequestGenerationRef.current;
     setLoading(true);
-    try {
-      const [changesRes, summaryRes] = await Promise.all([
+    setRequestState('loading');
+    const [changesResult, summaryResult] = await Promise.allSettled([
         api.getM3UChanges({
           page,
           pageSize,
@@ -114,20 +120,44 @@ export function M3UChangesTab() {
           m3uAccountId: accountFilter || undefined,
         }),
       ]);
+    if (requestGeneration !== changesRequestGenerationRef.current) return;
+    try {
+      if (changesResult.status === 'rejected' || summaryResult.status === 'rejected') {
+        const errors = [changesResult, summaryResult]
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map(result => result.reason);
+        const permissionError = errors.find(
+          error => error instanceof HttpError && (error.status === 401 || error.status === 403),
+        );
+        throw permissionError ?? errors[0];
+      }
 
-      setChanges(changesRes.results);
-      setTotalCount(changesRes.total);
-      setTotalPages(changesRes.total_pages);
-      setSummary(summaryRes);
+      setChanges(changesResult.value.results);
+      setTotalCount(changesResult.value.total);
+      setTotalPages(changesResult.value.total_pages);
+      setSummary(summaryResult.value);
+      setRequestState('success');
     } catch (err) {
+      if (requestGeneration !== changesRequestGenerationRef.current) return;
+      const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
+      if (permission) {
+        setChanges([]);
+        setSummary(null);
+        setTotalCount(0);
+        setTotalPages(1);
+      }
+      setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to fetch changes', 'Changes');
     } finally {
-      setLoading(false);
+      if (requestGeneration === changesRequestGenerationRef.current) setLoading(false);
     }
   }, [page, pageSize, accountFilter, changeTypeFilter, enabledFilter, hoursFilter, sortBy, sortOrder, notifications]);
 
   useEffect(() => {
-    fetchChanges();
+    void fetchChanges();
+    return () => {
+      changesRequestGenerationRef.current += 1;
+    };
   }, [fetchChanges]);
 
   // Reset page when filters change
@@ -179,6 +209,20 @@ export function M3UChangesTab() {
     return sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
   };
 
+  const renderSortHeader = (column: string, label: string) => (
+    <span>
+      <button
+        type="button"
+        className="sortable"
+        onClick={() => handleSort(column)}
+        aria-label={`Sort by ${label}${sortBy === column ? `, currently ${sortOrder === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+      >
+        {label}
+        {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
+      </button>
+    </span>
+  );
+
   // Change type options for filter
   const changeTypeOptions = [
     { value: '', label: 'All Types' },
@@ -215,8 +259,8 @@ export function M3UChangesTab() {
     <div className="m3u-changes-tab">
       <div className="changes-header">
         <div className="header-left">
-          <h2>M3U Changes</h2>
-          {summary && (
+          <span className="visually-hidden">M3U Changes</span>
+          {summary && <RouteHeaderSlot name="status">
             <div className="header-stats">
               {/* bd-fzny4: this count is `total_changes` from the /changes/summary
                   endpoint, scoped to the selected Time Range filter below — a
@@ -233,27 +277,32 @@ export function M3UChangesTab() {
                 {summary.total_changes} changes ({(hoursOptions.find((o) => Number(o.value) === hoursFilter)?.label ?? 'selected range').toLowerCase()})
               </span>
             </div>
-          )}
+          </RouteHeaderSlot>}
         </div>
-        <div className="header-actions">
-          <button
+        <RouteHeaderSlot name="primary-action"><div className="header-actions">
+          {requestState !== 'permission' && <button
             className="btn-secondary"
             onClick={fetchChanges}
             disabled={loading}
           >
             <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
             Refresh
-          </button>
-        </div>
+          </button>}
+        </div></RouteHeaderSlot>
       </div>
 
       {/* Filters and Summary Row */}
+      <RouteHeaderSlot name="controls">
       <div className="filters-summary-row">
-        <div className="filters-bar">
+        <DenseToolbar label="M3U change filters" filters={<>
           <div className="filter-select">
             <CustomSelect
               value={String(hoursFilter)}
-              onChange={(val) => setHoursFilter(parseInt(val as string))}
+              onChange={(val) => {
+                const hours = parseInt(val as string);
+                setHoursFilter(hours);
+                window.history.replaceState(null, '', `#m3u-changes?hours=${hours}`);
+              }}
               options={hoursOptions}
               placeholder="Time Range"
             />
@@ -285,7 +334,7 @@ export function M3UChangesTab() {
               placeholder="Filter by Status"
             />
           </div>
-        </div>
+        </>} />
         {summary && (
           <div className="summary-cards">
             <div className="summary-card added">
@@ -327,9 +376,10 @@ export function M3UChangesTab() {
           </div>
         )}
       </div>
+      </RouteHeaderSlot>
 
       {/* Loading State */}
-      {loading && changes.length === 0 && (
+      {requestState === 'loading' && changes.length === 0 && (
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <span>Loading changes...</span>
@@ -337,7 +387,17 @@ export function M3UChangesTab() {
       )}
 
       {/* Empty State */}
-      {!loading && changes.length === 0 && (
+      {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
+        <p>{changes.length > 0
+          ? 'M3U changes refresh failed — showing previously loaded changes.'
+          : 'M3U changes could not be loaded.'}</p>
+        <button className="btn-secondary" onClick={() => void fetchChanges()}>Retry</button>
+      </div>}
+      {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
+        <p>You don't have permission to view M3U changes.</p>
+      </div>}
+
+      {requestState === 'success' && changes.length === 0 && (
         <div className="empty-state">
           <span className="material-icons">check_circle</span>
           <h3>No Changes Detected</h3>
@@ -349,42 +409,12 @@ export function M3UChangesTab() {
       {changes.length > 0 && (
         <div className="changes-list">
           <div className="list-header">
-            <span className="sortable" onClick={() => handleSort('change_time')}>
-              Time
-              {getSortIndicator('change_time') && (
-                <span className="material-icons sort-icon">{getSortIndicator('change_time')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('m3u_account_id')}>
-              M3U Account
-              {getSortIndicator('m3u_account_id') && (
-                <span className="material-icons sort-icon">{getSortIndicator('m3u_account_id')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('change_type')}>
-              Type
-              {getSortIndicator('change_type') && (
-                <span className="material-icons sort-icon">{getSortIndicator('change_type')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('group_name')}>
-              Group
-              {getSortIndicator('group_name') && (
-                <span className="material-icons sort-icon">{getSortIndicator('group_name')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('count')}>
-              Streams
-              {getSortIndicator('count') && (
-                <span className="material-icons sort-icon">{getSortIndicator('count')}</span>
-              )}
-            </span>
-            <span className="sortable" onClick={() => handleSort('enabled')}>
-              Enabled
-              {getSortIndicator('enabled') && (
-                <span className="material-icons sort-icon">{getSortIndicator('enabled')}</span>
-              )}
-            </span>
+            {renderSortHeader('change_time', 'Time')}
+            {renderSortHeader('m3u_account_id', 'M3U Account')}
+            {renderSortHeader('change_type', 'Type')}
+            {renderSortHeader('group_name', 'Group')}
+            {renderSortHeader('count', 'Streams')}
+            {renderSortHeader('enabled', 'Enabled')}
             <span></span>
           </div>
           <div className="changes-list-content">

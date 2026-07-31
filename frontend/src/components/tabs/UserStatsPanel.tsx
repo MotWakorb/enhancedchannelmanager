@@ -45,6 +45,7 @@ import { useAuth } from '../../hooks/useAuth';
 import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import { streamLabel, getDateLocale } from '../../utils/formatting';
+import { CHART_TICK_META, CHART_TEXT_FILL_STRONG } from '../../utils/chartTypography';
 import type {
   WatchTimeUserTotalRow,
   WatchTimeUserDayRow,
@@ -333,12 +334,12 @@ export function UserStatsPanel() {
               <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
               <XAxis
                 dataKey="label"
-                tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                 axisLine={{ stroke: 'var(--border-primary)' }}
                 tickLine={false}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                 axisLine={{ stroke: 'var(--border-primary)' }}
                 tickLine={false}
                 width={40}

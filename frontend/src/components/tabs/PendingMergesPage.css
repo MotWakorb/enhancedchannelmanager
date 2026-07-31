@@ -33,9 +33,15 @@
   flex-shrink: 0;
 }
 
+/* The section role. This is the heading over the page's own content block,
+   not the route title — the route title is the 20px/700 string in the frozen
+   header band, and at 1.5rem this <h2> was rendering LARGER than it
+   (bead enhancedchannelmanager-6z299.5, PO decision 3 of the P1 spec). */
 .pending-merges-header h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
@@ -51,10 +57,14 @@
   border-radius: var(--radius-lg);
 }
 
+/* Running text in a toolbar, so the body role's size. The 600 is kept
+   deliberately — this string is the live count the bulk buttons act on and
+   is the one thing in the strip that has to be readable at a glance. */
 .pending-merges-selection-count {
   min-width: 8rem;
   color: var(--text-secondary, #aaa);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   font-weight: 600;
 }
 
@@ -139,9 +149,26 @@
   }
 }
 
+/* The row's first grid cell, stretched to the row's height so the pointer
+   target is that cell rather than the 16px box (WCAG 2.5.8; bead
+   enhancedchannelmanager-m26f8). `min-width` is a TARGET floor, not a box
+   size — the box stays on --control-box-size. */
+.pending-merges-select-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 24px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+/* The 1.125rem box this rule used to declare was dead: the base
+   `input[type="checkbox"]` rule in index.css is (0,1,1) and outranks this
+   (0,1,0) selector, so the control has rendered at --control-box-size ever
+   since bead enhancedchannelmanager-7lwe0. Removed rather than left as a
+   literal waiting for someone to raise this selector's specificity. */
 .pending-merges-select {
-  width: 1.125rem;
-  height: 1.125rem;
   accent-color: var(--accent-color, #6c63ff);
   cursor: pointer;
 }
@@ -150,20 +177,31 @@
   cursor: not-allowed;
 }
 
+/* The tracked uppercase caption over each half of the row — the micro role,
+   the same idiom as `.micro-label` in shared/common.css § 24.
+   --text-secondary, not --text-muted: --text-muted measures 2.61:1 on
+   --bg-secondary in the light theme, below the AA floor. */
 .pending-merges-label {
   display: block;
-  font-size: 0.75rem;
-  color: var(--text-muted, #888);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  color: var(--text-secondary, #aaa);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.25rem;
 }
 
-.pending-merges-stream-name,
-.pending-merges-candidate-id {
+/* `.pending-merges-candidate-id` was in this selector list as well. It is
+   NOT fully shadowed by its own rule further down — that rule redeclares
+   only `color` and `font-size`, so the id was still taking this rule's
+   `font-weight: 500` and `word-break`. Both are restated on the id's own
+   rule below, so nothing about it is inherited from here any more and the
+   two owners are now one (bead enhancedchannelmanager-6z299.5). */
+.pending-merges-stream-name {
   color: var(--text-primary, #fff);
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   /* Long stream/channel ids should wrap rather than overflow horizontally. */
   word-break: break-word;
 }
@@ -190,19 +228,29 @@
 
 .pending-merges-candidate-name {
   color: var(--text-primary, #fff);
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   word-break: break-word;
 }
 
 .pending-merges-candidate-group {
   color: var(--text-secondary, #aaa);
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
+/* Secondary id text beside the candidate name — meta, on --text-secondary
+   rather than --text-muted (2.61:1 in the light theme). `font-weight` and
+   `word-break` are restated here because they used to arrive from the
+   combined rule above, which no longer names this class. */
 .pending-merges-candidate-id {
-  color: var(--text-muted, #888);
-  font-size: 0.75rem;
+  color: var(--text-secondary, #aaa);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  word-break: break-word;
 }
 
 /* Deleted-since-queuing state (bead 09x38.14) — the candidate channel no
@@ -210,7 +258,8 @@
  * ECM "stale reference" states rather than a blank cell. */
 .pending-merges-candidate-missing {
   color: var(--warning, #f0ad4e);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   font-style: italic;
 }
 
@@ -218,14 +267,34 @@
  * Confidence badge — scoped clone of StreamDedupModal.css's `.confidence-badge`.
  * See header note: if a third consumer lands, promote to common.css.
  */
+/* Text inside a pill — the badge role. This is the largest single shrink in
+   this file (12.8px/600 -> 10px/500); the pill's padding is unchanged, so it
+   loses width but not height. The StreamDedupModal clone this mirrors is
+   modal chrome and is out of the content-pane sweep, so the two will not
+   match until `.confidence-badge` is promoted to common.css — see the file
+   header note (bead enhancedchannelmanager-6z299.5). */
 .pending-merges-page .confidence-badge {
   flex-shrink: 0;
   padding: 0.25rem 0.625rem;
   background: var(--bg-tertiary, #1a1a2e);
   color: var(--text-secondary, #888);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   border-radius: var(--radius-2xl);
+}
+
+/* The bulk-confirm dialog spells its close button `.modal-close` where
+   ModalBase spells it `.modal-close-btn` (PendingMergesPage.tsx:844), so it
+   misses `.modal-close-btn .material-icons` and the glyph fell through to
+   index.css's base 24px. Sized here to --icon-status, the same value that rule
+   carries, so the two close buttons match. The class-name divergence itself is
+   a separate defect — this button also misses ModalBase's padding, hover and
+   colour — and is filed rather than fixed here, because renaming it would
+   change chrome this pass did not measure
+   (bead enhancedchannelmanager-7bsxj). */
+.pending-merges-page .modal-close .material-icons {
+  font-size: var(--icon-status);
 }
 
 .pending-merges-page .pending-merges-exact-badge {

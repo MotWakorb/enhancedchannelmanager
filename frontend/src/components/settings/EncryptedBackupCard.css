@@ -9,8 +9,12 @@
   margin-bottom: 0.875rem;
 }
 
+/* Label role — a form field's label, the same treatment shared/common.css
+   § 4 now gives `.form-group label` (bead enhancedchannelmanager-6z299.4). */
 .encrypted-backup-card .ebc-field label {
-  font-size: 0.8125rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary, #888);
 }
 
@@ -20,7 +24,7 @@
   color: var(--text-primary, #fff);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg, 8px);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .encrypted-backup-card .ebc-field input[type='password']:focus {
@@ -28,13 +32,17 @@
   border-color: var(--accent-primary, #6366f1);
 }
 
+/* Meta role, and --text-secondary rather than --text-muted: --text-muted
+   measures 2.61:1 on --bg-secondary in the light theme, below the AA floor. */
 .encrypted-backup-card .ebc-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted, #666);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary, #888);
 }
 
 .encrypted-backup-card .ebc-hint.is-error {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 .encrypted-backup-card .ebc-checkbox {
@@ -42,9 +50,10 @@
   align-items: flex-start;
   gap: 0.5rem;
   margin-bottom: 0.875rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -68,13 +77,14 @@
   border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: var(--radius-lg, 8px);
   margin-bottom: 0.875rem;
-  font-size: 0.8125rem;
-  color: var(--error, #ef4444);
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  color: var(--danger-text);
+  line-height: var(--type-body-line-height);
 }
 
 .encrypted-backup-card .ebc-unrecoverable-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.0625rem;
 }

@@ -226,7 +226,7 @@ Cause: per-rule normalization. The legacy `normalize_names: true` boolean was re
 
 Fix:
 
-1. **UI**: Channel Pipeline tab → edit the rule → **Normalization Groups** picker → select the groups you want this rule to apply (typically all enabled groups). Save. Re-run the rule.
+1. **UI**: Channel Pipeline page → edit the rule → **Normalization Groups** picker → select the groups you want this rule to apply (typically all enabled groups). Save. Re-run the rule.
 2. **API**: `PUT /api/channel-pipeline/rules/{id}` with body `{"normalization_group_ids": [<ids>]}`. To list available group IDs: `GET /api/normalization/groups`.
 
 Pre-existing channels created before you set the groups are not retroactively renamed by this change — they were stored with their original raw names. Use [Re-normalize existing channels](#re-normalize-existing-channels) (Settings UI or `POST /api/normalization/apply-to-channels`) for a one-shot cleanup.

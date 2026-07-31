@@ -1,11 +1,14 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams, MutationSource } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
+import { HttpError } from '../../services/httpClient';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -99,6 +102,9 @@ export function JournalTab() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [stats, setStats] = useState<JournalStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
+  const entriesRequestFailedRef = useRef(false);
+  const entriesRequestGenerationRef = useRef(0);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -123,7 +129,10 @@ export function JournalTab() {
 
   // Load entries
   const loadEntries = useCallback(async () => {
+    const requestGeneration = ++entriesRequestGenerationRef.current;
     setLoading(true);
+    setRequestState('loading');
+    entriesRequestFailedRef.current = false;
     try {
       const params: JournalQueryParams = {
         page,
@@ -135,13 +144,25 @@ export function JournalTab() {
       if (search) params.search = search;
 
       const result = await api.getJournalEntries(params);
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
       setEntries(result.results);
       setTotalPages(result.total_pages);
       setTotalCount(result.count);
+      setRequestState('success');
     } catch (err) {
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
+      entriesRequestFailedRef.current = true;
+      const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
+      if (permission) {
+        setEntries([]);
+        setTotalCount(0);
+        setTotalPages(1);
+        setStats(null);
+      }
+      setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to load journal entries', 'Journal');
     } finally {
-      setLoading(false);
+      if (requestGeneration === entriesRequestGenerationRef.current) setLoading(false);
     }
   }, [page, pageSize, category, actionType, mutationSource, search, notifications]);
 
@@ -149,14 +170,18 @@ export function JournalTab() {
   const loadStats = useCallback(async () => {
     try {
       const result = await api.getJournalStats();
-      setStats(result);
+      if (!entriesRequestFailedRef.current) setStats(result);
     } catch (err) {
+      setStats(null);
       logger.error('Failed to load journal stats:', err);
     }
   }, []);
 
   useEffect(() => {
-    loadEntries();
+    void loadEntries();
+    return () => {
+      entriesRequestGenerationRef.current += 1;
+    };
   }, [loadEntries]);
 
   useEffect(() => {
@@ -212,24 +237,13 @@ export function JournalTab() {
   };
 
   // Render loading state
-  if (loading && entries.length === 0) {
-    return (
-      <div className="journal-tab">
-        <div className="tab-loading">
-          <span className="material-icons spinning">sync</span>
-          <p>Loading journal...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="journal-tab">
       {/* Header with inline stats */}
       <div className="journal-header">
         <div className="header-left">
-          <h2>Journal</h2>
-          {stats && (
+          <span className="visually-hidden">Journal</span>
+          {stats && <RouteHeaderSlot name="status">
             <div className="header-stats">
               <span className="header-stat" title="Channel entries">
                 <span className="material-icons">tv</span>
@@ -261,47 +275,26 @@ export function JournalTab() {
               </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
-          )}
+          </RouteHeaderSlot>}
         </div>
-        <div className="header-actions">
-          <div className="journal-purge-control">
-            <input
-              type="number"
-              className="journal-purge-days-input"
-              min={1}
-              value={purgeDays}
-              onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
-              aria-label="Days to keep"
-              disabled={purging}
-            />
-            <span className="journal-purge-label">days</span>
-            <button
-              className="btn-secondary journal-purge-btn"
-              onClick={handlePurge}
-              disabled={purging || purgeDays < 1}
-              title="Delete journal entries older than the given number of days"
-            >
-              <span className={`material-icons ${purging ? 'spinning' : ''}`}>
-                {purging ? 'sync' : 'delete_sweep'}
-              </span>
-              {purging ? 'Purging…' : 'Purge Old Entries'}
-            </button>
-          </div>
-          <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
+        {requestState !== 'permission' && <RouteHeaderSlot name="primary-action">
+          <button className="btn-primary" onClick={handleRefresh} disabled={loading}>
             <span className="material-icons">refresh</span>
             Refresh
           </button>
-        </div>
+        </RouteHeaderSlot>}
       </div>
 
       {/* Filters */}
-      <div className="filters-bar">
+      <RouteHeaderSlot name="controls">
+      <DenseToolbar label="Journal entry controls" search={
         <div className="search-box">
           <span className="material-icons">search</span>
           <input
             type="text"
             placeholder="Search entries..."
             value={searchInput}
+            disabled={requestState === 'loading' && entries.length === 0}
             onChange={(e) => setSearchInput(e.target.value)}
           />
           {searchInput && (
@@ -311,15 +304,18 @@ export function JournalTab() {
               onClick={() => setSearchInput('')}
               title="Clear search"
               aria-label="Clear search"
+              disabled={requestState === 'loading' && entries.length === 0}
             >
               <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
+      } filters={<>
         <CustomSelect
           value={category}
           onChange={(val) => setCategory(val as JournalCategory | '')}
-          className="filter-select"
+          className="filter-select journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Categories' },
             { value: 'channel', label: 'Channel' },
@@ -334,7 +330,8 @@ export function JournalTab() {
         <CustomSelect
           value={actionType}
           onChange={(val) => setActionType(val as JournalActionType | '')}
-          className="filter-select"
+          className="filter-select journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Actions' },
             { value: 'create', label: 'Create' },
@@ -352,7 +349,8 @@ export function JournalTab() {
         <CustomSelect
           value={mutationSource}
           onChange={(val) => setMutationSource(val as MutationSource | '')}
-          className="filter-select"
+          className="filter-select journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Sources' },
             { value: 'ui', label: 'UI' },
@@ -361,16 +359,48 @@ export function JournalTab() {
             { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
-      </div>
+      </>} secondaryActions={requestState !== 'permission' ? <div className="journal-purge-control">
+        <input
+          type="number"
+          className="journal-purge-days-input"
+          min={1}
+          value={purgeDays}
+          onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
+          aria-label="Days to keep"
+          disabled={purging || (requestState === 'loading' && entries.length === 0)}
+        />
+        <span className="journal-purge-label">days</span>
+        <button
+          className="btn-secondary journal-purge-btn"
+          onClick={handlePurge}
+          disabled={purging || purgeDays < 1 || (requestState === 'loading' && entries.length === 0)}
+          title="Delete journal entries older than the given number of days"
+        >
+          <span className={`material-icons ${purging ? 'spinning' : ''}`}>{purging ? 'sync' : 'delete_sweep'}</span>
+          {purging ? 'Purging…' : 'Purge Old Entries'}
+        </button>
+      </div> : undefined} />
+      </RouteHeaderSlot>
+
+      {requestState === 'loading' && entries.length === 0 && <div className="tab-loading">Loading journal entries…</div>}
+      {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
+        <p>{entries.length > 0
+          ? 'Journal refresh failed — showing previously loaded entries.'
+          : 'Journal entries could not be loaded.'}</p>
+        <button className="btn-secondary" onClick={() => void loadEntries()}>Retry</button>
+      </div>}
+      {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
+        <p>You don't have permission to view journal entries.</p>
+      </div>}
 
       {/* Entries List */}
-      {entries.length === 0 ? (
+      {requestState === 'success' && entries.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">history</span>
           <h3>No journal entries</h3>
           <p>Changes to channels, EPG sources, and M3U accounts will appear here.</p>
         </div>
-      ) : (
+      ) : requestState === 'success' || entries.length > 0 ? (
         <>
           <div className="entries-list">
             <div className="list-header">
@@ -537,7 +567,7 @@ export function JournalTab() {
             </div>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

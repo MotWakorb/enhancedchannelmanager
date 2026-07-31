@@ -728,14 +728,21 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
             return (
               <li key={row.id} className="pending-merges-row">
                 <div className="pending-merges-row-main">
-                  <input
-                    type="checkbox"
-                    className="pending-merges-select"
-                    checked={selectedIds.has(row.id)}
-                    onChange={() => toggleSelected(row.id)}
-                    disabled={actionsDisabled}
-                    aria-label={`Select ${row.stream_name}`}
-                  />
+                  {/* The label is the row's first grid cell, stretched, so the
+                      pointer target is that cell and not the 16px box (WCAG
+                      2.5.8; bead enhancedchannelmanager-m26f8). It holds no
+                      text — the name is already on the input, and it names the
+                      stream rather than the two caption words beside it. */}
+                  <label className="pending-merges-select-target">
+                    <input
+                      type="checkbox"
+                      className="pending-merges-select"
+                      checked={selectedIds.has(row.id)}
+                      onChange={() => toggleSelected(row.id)}
+                      disabled={actionsDisabled}
+                      aria-label={`Select ${row.stream_name}`}
+                    />
+                  </label>
                   <div className="pending-merges-stream">
                     <label className="pending-merges-label">Incoming stream</label>
                     <span className="pending-merges-stream-name">{row.stream_name}</span>

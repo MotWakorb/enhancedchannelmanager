@@ -2,12 +2,15 @@
    Component-specific styles - base modal styles are in ModalBase.css */
 
 /* Task description box */
+/* Meta role. 14.4px -> 11px. */
 .task-editor-modal .task-description {
   background-color: var(--bg-secondary);
   padding: 1rem;
   border-radius: var(--radius-lg);
   margin-bottom: 1.5rem;
-  font-size: 0.9rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -24,8 +27,6 @@
 }
 
 .task-editor-modal .enable-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
 }
 
@@ -33,9 +34,12 @@
   font-weight: 500;
 }
 
+/* Meta role. 13.6px -> 11px. */
 .task-editor-modal .enable-hint {
   margin-left: 2rem;
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -47,6 +51,7 @@
 /* vkktd.4: "enabled but won't run" live warning — the task is enabled but no
    child schedule is. Amber (--warning tokens): nothing is broken, but the
    task will silently never fire until a schedule is enabled. */
+/* Body role. 13.6px -> 13px. */
 .task-editor-modal .schedule-wont-run-warning {
   display: flex;
   align-items: flex-start;
@@ -58,12 +63,14 @@
   border: 1px solid var(--warning);
   border-left: 4px solid var(--warning);
   color: var(--warning-text);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .task-editor-modal .schedule-wont-run-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -78,6 +85,7 @@
   font-weight: 500;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .task-editor-modal .add-schedule-btn {
   display: flex;
   align-items: center;
@@ -88,15 +96,16 @@
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .task-editor-modal .add-schedule-btn:hover {
   opacity: 0.9;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .task-editor-modal .add-schedule-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Empty schedules state */
@@ -108,14 +117,18 @@
   color: var(--text-muted);
 }
 
+/* Illustration glyph -> --icon-empty. 32px -> 64px. */
 .task-editor-modal .empty-schedules .material-icons {
-  font-size: 32px;
+  font-size: var(--icon-empty);
   margin-bottom: 0.5rem;
   display: block;
 }
 
+/* Meta role. 13.6px -> 11px. */
 .task-editor-modal .empty-schedules .hint {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Schedule list */
@@ -141,9 +154,26 @@
 }
 
 .task-editor-modal .schedule-item input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--success);
+}
+
+/* The enable toggle and the schedule's text are one pointer target rather
+   than a 16px box (WCAG 2.5.8; bead enhancedchannelmanager-m26f8). It takes
+   the flex properties `.schedule-info` used to hold, and `.schedule-info`
+   keeps them so the text column still absorbs the free space inside it. */
+.task-editor-modal .schedule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  /* MEASURED, not assumed: a schedule with a name but no description and no
+     next run puts one 18.13px line beside the box, and the label inherits
+     that height — 24x24 by width alone. This is the floor for the TARGET, not
+     for the box, which stays on --control-box-size. Rows with the usual two
+     or three lines already exceed it and are unmoved. */
+  min-height: 24px;
 }
 
 .task-editor-modal .schedule-info {
@@ -151,18 +181,26 @@
   min-width: 0;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .task-editor-modal .schedule-name {
-  font-weight: 500;
-  font-size: 0.9rem;
+  font-weight: var(--type-item-title-weight);
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
+/* Meta role. 12.8px -> 11px. */
 .task-editor-modal .schedule-description {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
+/* Meta role. 12px -> 11px. */
 .task-editor-modal .schedule-next-run {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -189,7 +227,7 @@
 }
 
 .task-editor-modal .schedule-action-btn.delete {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .task-editor-modal .schedule-action-btn.delete:hover {
@@ -213,8 +251,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .task-editor-modal .schedule-action-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Task config section */
@@ -231,8 +270,11 @@
   font-weight: 500;
 }
 
+/* Meta role. 13.6px -> 11px. */
 .task-editor-modal .config-hint {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-bottom: 0.75rem;
 }
@@ -259,8 +301,11 @@
   accent-color: var(--accent-primary);
 }
 
+/* Badge role. 12px -> 10px. */
 .task-editor-modal .config-checkbox .badge {
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   color: var(--text-muted);
 }
 
@@ -270,9 +315,12 @@
   gap: 0.75rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .task-editor-modal .retention-item label {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   margin-bottom: 0.25rem;
 }
 
@@ -328,8 +376,6 @@
 }
 
 .task-editor-modal .alert-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--accent-primary);
 }
 
@@ -348,30 +394,38 @@
   margin-top: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .task-editor-modal .alert-subsection-label {
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Meta role. 12px -> 11px. */
 .task-editor-modal .alert-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-left: auto;
 }
 
 /* Stale groups warning on schedule items */
+/* Meta role. 12px -> 11px. */
 .task-editor-modal .schedule-stale-warning {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--warning);
   margin-top: 0.25rem;
 }
+/* Status/panel glyph -> --icon-status. 14px -> 18px. */
 .task-editor-modal .schedule-stale-warning .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-status);
 }

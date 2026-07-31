@@ -5,6 +5,7 @@
   gap: 8px;
 }
 
+/* Body role. 13px -> 13px. */
 .psg-search {
   width: 100%;
   padding: 6px 10px;
@@ -12,7 +13,9 @@
   border-radius: 6px;
   background: var(--bg-input, var(--bg-secondary));
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .psg-list {
@@ -25,10 +28,13 @@
   border-radius: 6px;
 }
 
+/* Body role. 13px -> 13px. */
 .psg-empty {
   padding: 12px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   text-align: center;
 }
 
@@ -39,13 +45,16 @@
   border-bottom: none;
 }
 
+/* Body role. 13px -> 13px. */
 .psg-option {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 .psg-option input {
   flex-shrink: 0;
@@ -60,31 +69,41 @@
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .psg-streams {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
 }
 
+/* Meta role. 12px -> 11px. */
 .psg-disabled-hint {
   font-style: italic;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Sync status badges — text + icon, never color alone. */
+/* Badge role. 11.5px -> 10px. */
 .psg-sync-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid var(--border-primary);
   white-space: nowrap;
 }
+/* Glyph beside meta text or inside a chip -> --icon-badge. 15px -> 14px. */
 .psg-sync-badge .material-icons {
-  font-size: 15px;
+  font-size: var(--icon-badge);
 }
 .psg-sync-ok {
   color: var(--text-success, var(--text-secondary));
@@ -95,14 +114,18 @@
   border-color: var(--border-warning, var(--border-primary));
 }
 
+/* Meta role. 12px -> 11px. */
 .psg-mismatch {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 6px 12px 10px 34px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .psg-fix-btn {
   align-self: flex-start;
   padding: 4px 10px;
@@ -110,7 +133,7 @@
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   cursor: pointer;
 }
 
@@ -121,6 +144,7 @@
 .psg-group-node:last-child {
   border-bottom: none;
 }
+/* Body role. 13px -> 13px. */
 .psg-group-parent {
   display: flex;
   align-items: center;
@@ -130,21 +154,27 @@
   background: none;
   border: none;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   cursor: pointer;
   text-align: left;
 }
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .psg-group-parent .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 .psg-group-name {
   flex: 1;
   font-weight: 500;
 }
+/* Meta role. 12px -> 11px. */
 .psg-group-meta {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
 }
 .psg-sublist {
@@ -160,6 +190,7 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+/* Badge role. 12px -> 10px. */
 .psg-chip {
   display: inline-flex;
   align-items: center;
@@ -169,7 +200,9 @@
   border-radius: 12px;
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
 }
 .psg-chip-remove {
   background: none;

@@ -1,13 +1,24 @@
+/* Body role. Both of these declared no font-size at all, so they rendered at
+   the UA default 16px — larger than the card title above them. Same defect
+   the f4yc7 pilot found in `.account-name`
+   (bead enhancedchannelmanager-6z299.4). */
 .alert-methods-loading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary, #888);
   padding: 0.75rem 0;
 }
 
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added to
+   the element in AlertMethodsSection.tsx. Only the padding is local. It was
+   given the body role in bead enhancedchannelmanager-6z299.4, which put a
+   second treatment on an idiom that already had a shared one — corrected in
+   the 6z299.7 cleanup pass. */
 .alert-methods-empty {
-  color: var(--text-secondary, #888);
   padding: 0.75rem 0;
 }
 
@@ -35,13 +46,20 @@
   min-width: 0;
 }
 
+/* Item title. Had no font-size either, so a list row's name rendered at the
+   UA default 16px (bead enhancedchannelmanager-6z299.4). */
 .alert-method-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary, #ffffff);
 }
 
+/* Badge role — a bordered chip carrying one word ("email", "discord"). */
 .alert-method-type-badge {
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary, #888);
   background: var(--bg-primary, #1a1a2e);
   border: 1px solid var(--border-color, #3a3a5a);
@@ -63,6 +81,6 @@
 }
 
 .alert-method-delete:hover:not(:disabled) {
-  color: var(--error, #ff6b6b);
+  color: var(--danger-text);
   border-color: var(--error, #ff6b6b);
 }

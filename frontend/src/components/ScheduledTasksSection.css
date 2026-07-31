@@ -1,0 +1,22 @@
+/**
+ * Scheduled Tasks — the component's only stylesheet.
+ *
+ * ScheduledTasksSection is otherwise built entirely from inline `style`
+ * objects, including hardcoded colours (#3498db, #2ecc71) and a scatter of
+ * `fontSize: '16px'` literals on its icons. Those literals are the author
+ * fighting the symptom this bead names: an inline style is the one thing that
+ * beats index.css's base `.material-icons { font-size: 24px }` without
+ * touching specificity, so every glyph the author *noticed* got an inline
+ * size and every glyph they did not kept rendering at 24px.
+ *
+ * The card's status glyph is one of the ones that did not. It is a leading
+ * state indicator on a list row, which is the --icon-status role. Given a real
+ * class here rather than another inline literal, so the size lives on the
+ * token scale like the rest of the estate (bead enhancedchannelmanager-7bsxj).
+ *
+ * The wider migration of this component off inline styles is filed separately.
+ */
+
+.task-status-icon.material-icons {
+  font-size: var(--icon-status);
+}

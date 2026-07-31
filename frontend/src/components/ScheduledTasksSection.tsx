@@ -3,12 +3,15 @@ import * as api from '../services/api';
 import type { TaskStatus } from '../services/api';
 import type { ChannelGroup } from '../types';
 import { logger } from '../utils/logger';
+import { RouteHeaderSlot } from './RouteHeaderSlots';
 import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { TaskStatusPill } from './TaskStatusPill';
 import { getTaskPillState } from '../utils/taskPillState';
+import { sectionIdForTask } from '../utils/taskSectionId';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
+import './ScheduledTasksSection.css';
 import '../components/ModalBase.css';
 
 interface ScheduledTasksSectionProps {
@@ -70,21 +73,35 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
 
   const statusIcon = () => {
     if (isRunning || task.status === 'running') {
-      return <span className="material-icons" style={{ color: '#3498db', animation: 'spin 1s linear infinite reverse' }}>sync</span>;
+      return <span className="material-icons task-status-icon" style={{ color: '#3498db', animation: 'spin 1s linear infinite reverse' }}>sync</span>;
     }
     if (!task.enabled) {
-      return <span className="material-icons" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
+      return <span className="material-icons task-status-icon" style={{ color: 'var(--text-muted)' }}>pause_circle</span>;
     }
     // vkktd.4: keep the card icon coherent with the status pill — an
     // enabled-but-won't-run task must not show a reassuring green check.
     if (getTaskPillState(task) === 'wontRun') {
-      return <span className="material-icons" style={{ color: 'var(--warning)' }}>warning</span>;
+      return <span className="material-icons task-status-icon" style={{ color: 'var(--warning)' }}>warning</span>;
     }
-    return <span className="material-icons" style={{ color: '#2ecc71' }}>check_circle</span>;
+    return <span className="material-icons task-status-icon" style={{ color: '#2ecc71' }}>check_circle</span>;
   };
 
   return (
-    <div data-testid={`task-card-${task.task_id}`} style={{
+    // data-settings-section opts this card into the Settings section rail
+    // without inheriting `.settings-section` styling; the label is explicit
+    // because the card's title is a styled div rather than a heading.
+    //
+    // data-section-id PINS the anchor to `task_id` rather than letting
+    // StickySectionNav slug it from the label, which a rename can rewrite
+    // (bead de6u1). `discover()` reads `data-section-id` first and
+    // unconditionally; only the plain `id` attribute path discards a
+    // `settings-`-prefixed value. See utils/taskSectionId.ts for the scheme.
+    <div
+      data-testid={`task-card-${task.task_id}`}
+      data-settings-section=""
+      data-section-id={sectionIdForTask(task.task_id)}
+      data-section-label={task.task_name}
+      style={{
       backgroundColor: 'var(--bg-secondary)',
       border: '1px solid var(--border-color)',
       borderRadius: '8px',
@@ -92,21 +109,36 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       overflow: 'visible',
     }}>
       {/* Header */}
+      {/* The action group keeps its natural width and never wraps its labels
+          ("Run Now" was breaking across two lines); the title block absorbs the
+          remaining space and may wrap to its own row when that is not enough,
+          so the description always has room rather than being squeezed into a
+          narrow column. */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
+        flexDirection: 'column',
+        gap: '0.35rem',
         padding: '1rem',
         borderBottom: showHistory ? '1px solid var(--border-color)' : 'none',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+        }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 auto', minWidth: 0 }}>
           {statusIcon()}
-          <div>
-            <div style={{ fontWeight: 600, fontSize: '1rem' }}>{task.task_name}</div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{task.task_description}</div>
-          </div>
+          <div style={{ fontWeight: 600, fontSize: 'var(--type-item-title-size)', minWidth: 0 }}>{task.task_name}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+        }}>
           {/* Task status pill (vkktd.4) — bound to effective_enabled so a task
               whose child schedules are all disabled reads "Enabled, won't run"
               (amber, with a one-click Fix it) instead of a misleading bare
@@ -132,7 +164,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: 'var(--type-body-size)',
                 }}
               >
                 <span className="material-icons" style={{ fontSize: '16px' }}>stop</span>
@@ -151,7 +183,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '0.85rem',
+                  fontSize: 'var(--type-body-size)',
                 }}
               >
                 <span className="material-icons" style={{ fontSize: '16px' }}>play_arrow</span>
@@ -172,7 +204,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               border: '1px solid var(--border-color)',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '0.85rem',
+              fontSize: 'var(--type-body-size)',
             }}
           >
             <span className="material-icons" style={{ fontSize: '16px' }}>edit</span>
@@ -191,7 +223,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               border: '1px solid var(--border-color)',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '0.85rem',
+              fontSize: 'var(--type-body-size)',
             }}
           >
             <span className="material-icons" style={{ fontSize: '16px' }}>
@@ -200,6 +232,15 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
             History
           </button>
         </div>
+        </div>
+        {/* Full card width rather than sharing the title row: the action group
+            leaves the title column ~300px, which wrapped longer descriptions to
+            as many as eight lines. */}
+        {task.task_description && (
+          <div style={{ fontSize: 'var(--type-meta-size)', lineHeight: 1.45, color: 'var(--text-secondary)' }}>
+            {task.task_description}
+          </div>
+        )}
       </div>
 
       {/* Status info */}
@@ -209,7 +250,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
         gap: '1rem',
         padding: '1rem',
         backgroundColor: 'var(--bg-tertiary)',
-        fontSize: '0.85rem',
+        fontSize: 'var(--type-body-size)',
       }}>
         <div>
           <div style={{ color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Schedule</div>
@@ -220,7 +261,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
                 <div>
                   <div>{scheduleInfo.summary}</div>
                   {scheduleInfo.details.length > 0 && (
-                    <div style={{ marginTop: '0.25rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <div style={{ marginTop: '0.25rem', fontSize: 'var(--type-meta-size)', color: 'var(--text-secondary)' }}>
                       {scheduleInfo.details.map((detail, i) => (
                         <div key={i}>{detail}</div>
                       ))}
@@ -303,7 +344,7 @@ function RunNowDialog({ task, onRun, onCancel }: {
               <button
                 type="button"
                 className={`modal-btn modal-btn-${allSelected ? 'primary' : 'secondary'}`}
-                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                style={{ padding: '0.25rem 0.625rem', fontSize: 'var(--type-body-size)' }}
                 onClick={() => setSelectedGroups(groups.map(g => g.id))}
               >
                 Select All
@@ -311,7 +352,7 @@ function RunNowDialog({ task, onRun, onCancel }: {
               <button
                 type="button"
                 className={`modal-btn modal-btn-${noneSelected ? 'primary' : 'secondary'}`}
-                style={{ padding: '0.25rem 0.625rem', fontSize: '0.8rem' }}
+                style={{ padding: '0.25rem 0.625rem', fontSize: 'var(--type-body-size)' }}
                 onClick={() => setSelectedGroups([])}
               >
                 Select None
@@ -342,8 +383,8 @@ function RunNowDialog({ task, onRun, onCancel }: {
                       onChange={() => toggleGroup(group.id)}
                       style={{ accentColor: 'var(--accent)' }}
                     />
-                    <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{group.name}</span>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>
+                    <span style={{ flex: 1, fontSize: 'var(--type-body-size)', color: 'var(--text-primary)' }}>{group.name}</span>
+                    <span style={{ fontSize: 'var(--type-meta-size)', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>
                   </label>
                 ))}
               </div>
@@ -617,6 +658,20 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     }
   };
 
+  // NO PLACEHOLDER SECTIONS HERE, deliberately — this page is the one member
+  // of the section-rail load-window class (22fef24d / 4af8f487) that must not
+  // pre-render a rail. Those pages have a compile-time set of sections, so a
+  // placeholder carries the real label and the real id. Here every entry is
+  // the data: its count is unknown, its ids are unknowable, and a task card is
+  // ~180px, so placeholder geometry would land a deep-linked reader roughly a
+  // page-and-a-half away from the card they asked for. A rail with invented
+  // entries could not resolve a shared link during the load window either — it
+  // would not fix the thing it exists to fix.
+  //
+  // So the rail is absent until the count is known, and then appears complete
+  // in the same commit as the content it indexes (`tasks` feeds both), which
+  // is what keeps it from growing under the reader. Guarded in
+  // ScheduledTasksSection.sectionRail.test.tsx. Bead de6u1.
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
@@ -627,37 +682,19 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
 
   return (
     <div>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '1.5rem',
-      }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Scheduled Tasks</h2>
-          <p style={{ margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            Manage automated tasks like EPG refresh, M3U refresh, and database cleanup
-          </p>
-        </div>
+      {/* Heading and description live in the route breadcrumb
+          (SYSTEM / SETTINGS / SCHEDULED TASKS); the refresh control is
+          portalled up beside them rather than repeating a header row here. */}
+      <RouteHeaderSlot name="controls">
         <button
+          type="button"
+          className="btn-secondary"
           onClick={() => { loadTasks(); }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.25rem',
-            padding: '0.5rem 0.75rem',
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '0.85rem',
-          }}
         >
           <span className="material-icons" style={{ fontSize: '16px' }}>refresh</span>
           Refresh
         </button>
-      </div>
+      </RouteHeaderSlot>
 
       {tasks.length === 0 ? (
         <div style={{

@@ -2,7 +2,9 @@
 SQLite database setup for the Journal feature.
 Uses SQLAlchemy with async support via aiosqlite.
 """
+import ast
 import logging
+import re
 from pathlib import Path
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
@@ -496,6 +498,391 @@ def _integrity_check(engine) -> None:
     logger.info("[DATABASE] SQLite integrity check passed (quick_check=ok)")
 
 
+# --- Destructive-revision detection (enhancedchannelmanager-nywpw) --------
+#
+# The bd-5w6jz fast path below stamps ``alembic_version`` forward when
+# ``_schema_matches_head`` says the live schema already covers the model
+# shape. That predicate is a SUBSET check: every ``Base.metadata`` table and
+# column must EXIST in the live DB. It deliberately ignores extra tables and
+# columns the model no longer declares.
+#
+# A drop-only revision is therefore structurally invisible to it. Every model
+# artifact is present *precisely because* the pending migration's whole job is
+# to remove something the model no longer declares. Production hit this on
+# 2026-07-30: revision 0041 (drop ``lookup_tables``) logged
+# ``Running stamp_revision 0040 -> 0041``, ``alembic_version`` read 0041, the
+# table was still there, and 0041's pre-drop row dump — the safety net for the
+# only instances that have rows to lose — never ran.
+#
+# WHY AST INSPECTION AND NOT A DECLARATIVE MARKER
+#
+# The obvious alternative is a module-level ``destructive = True`` flag every
+# revision author sets by hand. It was rejected as the PRIMARY mechanism
+# because its failure mode is "the author forgot" — which is the exact failure
+# mode this fast path was introduced to END. bd-ax3uj / bd-5w6jz were a
+# whack-a-mole of per-migration idempotency guards that every future author
+# had to remember; the fast path is the strategic fix that stopped requiring
+# that. Reintroducing a remember-this-or-lose-data checkbox would trade one
+# forgettable per-migration discipline for another, and this one fails
+# SILENTLY: no test goes red, no log line fires, the migration is simply
+# stamped over and the data is gone.
+#
+# AST inspection inverts that. An author who writes ``op.drop_table(...)`` is
+# protected without knowing this machinery exists. Its failure mode is a
+# narrower, closable hole — a removal expressed in a form the scanner does not
+# recognise (dynamically-built SQL, a batch ``copy_from`` rebuild that simply
+# omits a constraint) — rather than an open-ended dependency on human memory.
+#
+# The explicit marker survives as an OVERRIDE, not as the mechanism:
+#   * ``destructive = True``  — opt IN for removals the scanner cannot see.
+#     Forgetting it leaves you at the AST baseline, not at zero.
+#   * ``destructive = False`` — opt OUT for a scanner false positive. Requires
+#     a justification in the revision docstring; it is the only way to lose
+#     data by forgetting nothing, so it should be rare.
+#
+# BIAS: over-detection is cheap here and under-detection loses data. A false
+# positive costs one extra (idempotent) migration actually running; a false
+# negative is silent data loss. When in doubt, flag.
+
+# Alembic operation helpers that REMOVE a schema object. Matched on the
+# attribute name alone so ``op.drop_column(...)`` and
+# ``batch_op.drop_column(...)`` are both caught regardless of the receiver.
+_DESTRUCTIVE_OP_NAMES = frozenset({
+    "drop_table",
+    "drop_column",
+    "drop_index",
+    "drop_constraint",
+})
+
+# Raw SQL that removes a schema object or deletes rows, matched against string
+# literals in the revision module (``op.execute("...")``, ``sa.text("...")``).
+# ``DELETE FROM`` / ``TRUNCATE`` are included because a data-only cleanup
+# revision is just as invisible to ``_schema_matches_head`` as a DDL drop —
+# migration 0012's interval-invariant cleanup is the live example.
+_DESTRUCTIVE_SQL_RE = re.compile(
+    r"\b(?:DROP\s+(?:TABLE|COLUMN|INDEX|VIEW|CONSTRAINT)|DELETE\s+FROM|TRUNCATE)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_docstrings(tree: ast.AST) -> None:
+    """Replace every docstring in ``tree`` with ``pass``.
+
+    Revision docstrings routinely *describe* the DDL ("SQLite has no ``ALTER
+    TABLE DROP CONSTRAINT``"), which would otherwise trip
+    ``_DESTRUCTIVE_SQL_RE`` on prose. Comments never reach the AST, so only
+    docstrings need removing.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body[0] = ast.Pass()
+
+
+def _revision_is_destructive(script) -> bool:
+    """True if ``script``'s upgrade path removes schema objects or rows.
+
+    ``script`` is an Alembic ``Script`` (anything exposing ``.revision`` and
+    ``.path``). The module is parsed, ``downgrade()`` is discarded — drops
+    there are the expected mirror of an upgrade's creates — and the remainder
+    is scanned for destructive operations. Module-level helpers are scanned
+    too, since an author can factor ``op.drop_table`` into one.
+
+    A module-level ``destructive`` boolean, when present, wins outright.
+
+    Fails SAFE: a module that cannot be read or parsed is reported destructive
+    so the fast path never stamps over something it could not inspect.
+    """
+    path = getattr(script, "path", None)
+    revision = getattr(script, "revision", "?")
+    if not path:
+        return True
+
+    try:
+        source = Path(path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError, ValueError) as exc:
+        logger.warning(
+            "[DATABASE] Could not inspect revision %s at %s (%s) — treating it "
+            "as destructive so the smart-bootstrap fast path will not stamp "
+            "over it",
+            revision, path, exc,
+        )
+        return True
+
+    # Explicit marker wins in both directions (see the rationale above).
+    for node in tree.body:
+        target = None
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if (
+            isinstance(target, ast.Name)
+            and target.id == "destructive"
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, bool)
+        ):
+            return node.value.value
+
+    tree.body = [
+        node for node in tree.body
+        if not (isinstance(node, ast.FunctionDef) and node.name == "downgrade")
+    ]
+    _strip_docstrings(tree)
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _DESTRUCTIVE_OP_NAMES
+        ):
+            return True
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and _DESTRUCTIVE_SQL_RE.search(node.value)
+        ):
+            return True
+    return False
+
+
+def _pending_revisions(script_dir, head_revision: str, current_rev: str) -> list:
+    """Revisions between ``current_rev`` (exclusive) and ``head`` (inclusive).
+
+    Returned in ASCENDING apply order. Returns ``[]`` when the range cannot be
+    resolved — e.g. ``current_rev`` names a revision this container's code no
+    longer ships (the rolled-back-container-code case the fast path's symmetric
+    guard already tolerated). Callers treat "cannot resolve" as "no destructive
+    work known", preserving the pre-existing behaviour for that case.
+    """
+    try:
+        return list(reversed(list(
+            script_dir.iterate_revisions(head_revision, current_rev)
+        )))
+    except Exception as exc:
+        logger.warning(
+            "[DATABASE] Could not enumerate revisions between %s and %s (%s) — "
+            "assuming no destructive migrations are pending",
+            current_rev, head_revision, exc,
+        )
+        return []
+
+
+def _replay_destructive_revisions(
+    alembic_cfg, command, pending: list, destructive: list,
+    current_rev: str, head_revision: str,
+) -> None:
+    """Run only the destructive pending revisions; stamp over the rest.
+
+    This is the narrowed fast path. For each destructive revision, in order:
+    stamp at its immediate predecessor in the pending walk, then ``upgrade`` to
+    that revision by id — which executes exactly one migration. Everything
+    between destructive revisions is stamped over, so the bd-5w6jz benefit
+    (never re-running migrations whose artifacts ``create_all()`` already
+    materialised) is preserved for the non-destructive majority.
+
+    Two alternatives were rejected:
+
+    * **Fall through to a plain ``upgrade head``** (the shape the bead
+      sketched). With a destructive revision at head, EVERY lagging instance
+      has one pending, so the fast path would never fire again for anyone —
+      that removes the fast path rather than narrowing it, and reopens
+      bd-ax3uj / bd-5w6jz across the whole pending range.
+    * **Stamp to just before the first destructive revision, then
+      ``upgrade head``.** Bounds the damage but still re-runs every revision
+      after the first drop. With 0010/0011/0012 destructive, an instance
+      lagging at 0009 would run 31 migrations for real.
+
+    Crash safety: if the process dies between the stamp-down and the upgrade,
+    ``alembic_version`` is left at an earlier revision than the physical
+    schema — which is the same state the next boot's fast path already
+    handles. The sequence is convergent, not corrupting.
+    """
+    logger.warning(
+        "[DATABASE] alembic_version=%s lags head=%s and the live schema matches "
+        "models, but %d pending revision(s) remove schema objects or rows: %s. "
+        "Running those for real and stamping over the rest "
+        "(enhancedchannelmanager-nywpw).",
+        current_rev, head_revision, len(destructive),
+        ", ".join(script.revision for script in destructive),
+    )
+
+    for script in destructive:
+        index = pending.index(script)
+        predecessor = pending[index - 1].revision if index > 0 else current_rev
+        logger.warning(
+            "[DATABASE] Applying destructive revision %s (from %s) instead of "
+            "stamping past it",
+            script.revision, predecessor,
+        )
+        command.stamp(alembic_cfg, predecessor)
+        command.upgrade(alembic_cfg, script.revision)
+
+    # Everything after the last destructive revision is non-destructive and
+    # already materialised by create_all() — stamp over it as the fast path
+    # would have done from the start.
+    command.stamp(alembic_cfg, head_revision)
+
+
+# --- Self-heal for installs already stamped past a drop --------------------
+#
+# The fix above stops the fast path CREATING this state. It does nothing for
+# the installs that are already in it: ``alembic_version`` at head, the
+# dropped table still physically present. On those, ``current_rev ==
+# head_revision``, the fast path never fires, ``upgrade head`` is a no-op, and
+# the drop would never happen — the fix would only ever help future
+# destructive migrations.
+#
+# WHY NOT THE _BOOTSTRAP_CANARIES SHAPE. That precedent re-stamps at baseline
+# and replays everything. It is the right hammer for its own problem (a whole
+# TAIL of migrations was skipped, so replaying the tail is the fix) and the
+# wrong one here: this state has exactly one revision's worth of work missing,
+# and replaying 40 revisions against a live schema to recover it multiplies
+# the blast radius for no gain.
+#
+# WHY A HAND-CURATED REGISTRY IS ACCEPTABLE HERE, having been rejected for the
+# forward-looking detector: this list is CLOSED BY CONSTRUCTION. It enumerates
+# drops that shipped BEFORE the fast path learned to refuse them. No future
+# migration can add to it, because no future migration can be stamped past.
+# The "every author must remember" failure mode that disqualified a
+# declarative marker for detection does not exist for a historical
+# remediation list — there are no future authors.
+#
+# SCOPE: table drops only. A table's absence is cheap, unambiguous physical
+# evidence that the revision ran. Dropped COLUMNS, CONSTRAINTS, INDEXES and
+# DELETEd rows (revisions 0010/0011/0012) have no equally cheap generic
+# probe, so they are NOT healed here — see the bead's follow-up note.
+_STAMPED_PAST_DROP_HEAL: dict[str, tuple[str, ...]] = {
+    # 0029 — FFMPEG-Builder + Export-tab tables. No row dump: the revision's
+    # author judged the data unreachable (both UIs were deleted). Replay
+    # honours that decision; row counts are logged first so any loss is
+    # visible in the upgrade log.
+    "0029": (
+        "publish_history",
+        "publish_configurations",
+        "playlist_profiles",
+        "ffmpeg_saved_configs",
+    ),
+    # 0041 — Lookup Tables. Carries its own pre-drop JSON row dump, which is
+    # the safety net that never ran on the stamped instances that needed it.
+    "0041": ("lookup_tables",),
+}
+
+
+def _heal_stamped_past_drops(
+    alembic_cfg, command, script_dir, engine, current_rev: str,
+) -> None:
+    """Replay applied-but-never-run table drops (enhancedchannelmanager-nywpw).
+
+    For each revision in ``_STAMPED_PAST_DROP_HEAL`` that ``alembic_version``
+    claims is applied but whose tables are still physically present, stamp back
+    to its predecessor and upgrade to it by id — running exactly that one
+    revision, with its own idempotency guards and its own safety nets intact.
+    ``alembic_version`` is restored to its original value afterwards.
+
+    Cost in the healthy steady state is one ``sqlite_master`` read, which the
+    bootstrap already performs elsewhere. No-ops entirely once healed.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    try:
+        live_tables = set(sa_inspect(engine).get_table_names())
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("[DATABASE] Could not inspect tables for drop heal: %s", exc)
+        return
+
+    candidates = {
+        rev: tables for rev, tables in _STAMPED_PAST_DROP_HEAL.items()
+        if live_tables.intersection(tables)
+    }
+    if not candidates:
+        return
+
+    try:
+        # Descending from current_rev to the base; reverse for apply order.
+        # Ordering by the walk rather than by sorting the ids avoids assuming
+        # revision ids are lexicographically sortable.
+        applied = [s.revision for s in script_dir.iterate_revisions(current_rev, "base")]
+        applied.reverse()
+    except Exception as exc:
+        logger.warning(
+            "[DATABASE] Could not enumerate applied revisions from %s (%s) — "
+            "skipping the stamped-past-drop heal",
+            current_rev, exc,
+        )
+        return
+
+    to_heal = [rev for rev in applied if rev in candidates]
+    if not to_heal:
+        # Tables present but the revision is genuinely not applied yet — the
+        # normal upgrade path will handle it. Nothing to heal.
+        return
+
+    healed_any = False
+    for revision in to_heal:
+        leftover = sorted(live_tables.intersection(_STAMPED_PAST_DROP_HEAL[revision]))
+        counts = []
+        try:
+            with engine.connect() as conn:
+                for table in leftover:
+                    total = conn.execute(
+                        text(f"SELECT COUNT(*) FROM {table}")  # noqa: S608 - fixed identifiers
+                    ).scalar()
+                    counts.append(f"{table}={total}")
+        except Exception as exc:  # pragma: no cover - defensive
+            counts = [f"<row counts unavailable: {exc}>"]
+
+        script = script_dir.get_revision(revision)
+        predecessor = script.down_revision
+        if not isinstance(predecessor, str):
+            logger.error(
+                "[DATABASE] Cannot heal revision %s — its down_revision is %r, "
+                "not a single revision id",
+                revision, predecessor,
+            )
+            continue
+
+        logger.error(
+            "[DATABASE] alembic_version claims revision %s is applied but its "
+            "tables are still present (%s) — this install was stamped past a "
+            "destructive migration by the pre-nywpw fast path. Re-running %s "
+            "now (rows: %s).",
+            revision, ", ".join(leftover), revision, ", ".join(counts),
+        )
+        command.stamp(alembic_cfg, predecessor)
+        command.upgrade(alembic_cfg, revision)
+        healed_any = True
+
+    if not healed_any:
+        return
+
+    # Restore the version row: the revisions between the last healed one and
+    # ``current_rev`` were legitimately applied and must not be re-run.
+    command.stamp(alembic_cfg, current_rev)
+
+    remaining = set(sa_inspect(engine).get_table_names()).intersection(
+        {table for revision in to_heal for table in _STAMPED_PAST_DROP_HEAL[revision]}
+    )
+    if remaining:
+        logger.error(
+            "[DATABASE] Stamped-past-drop heal did not remove %s — the "
+            "database still disagrees with alembic_version=%s",
+            sorted(remaining), current_rev,
+        )
+    else:
+        logger.warning(
+            "[DATABASE] Stamped-past-drop heal complete; alembic_version "
+            "restored to %s", current_rev,
+        )
+
+
 def _bootstrap_alembic(engine) -> None:
     """Ensure ``alembic_version`` tracks the deployed schema state.
 
@@ -571,6 +958,14 @@ def _bootstrap_alembic(engine) -> None:
     # AND the live schema covers the head model shape.
     head_revision = script_dir.get_current_head()
     current_rev = get_current_schema_revision(engine)
+
+    # enhancedchannelmanager-nywpw: heal installs the pre-fix fast path
+    # already stamped past. Runs before the fast-path branch below so it
+    # applies whether or not this boot also has pending revisions.
+    if current_rev:
+        _heal_stamped_past_drops(
+            alembic_cfg, command, script_dir, engine, current_rev,
+        )
     # The ``current_rev != head_revision`` guard fires symmetrically — it would
     # also match a "rolled-back container code" case where ``current_rev`` is
     # AHEAD of ``head_revision``. ``_schema_matches_head`` only verifies that
@@ -581,12 +976,35 @@ def _bootstrap_alembic(engine) -> None:
     # schema still supports every query the older head emits (the unused
     # extras are ignored), and the next forward upgrade will re-stamp on its
     # own. We accept the symmetric guard rather than complicate the predicate.
+    #
+    # What is NOT benign — and what this comment originally got wrong — is the
+    # FORWARD direction across a revision that removes something. That
+    # reasoning held for the rolled-back-container-code case it was written
+    # for and was silently extended to destructive migrations, which is how
+    # 0041 got stamped over in production. The destructive-revision walk below
+    # closes that (enhancedchannelmanager-nywpw).
     if (
         current_rev
         and head_revision
         and current_rev != head_revision
         and _schema_matches_head(engine)
     ):
+        # enhancedchannelmanager-nywpw: ``_schema_matches_head`` is a SUBSET
+        # check and cannot see work that REMOVES something — a drop-only
+        # revision looks satisfied precisely because the model no longer
+        # declares what it drops. Walk the pending revisions and refuse to
+        # stamp across any that remove schema objects or rows; those are run
+        # for real. See ``_revision_is_destructive`` for why detection is
+        # automatic rather than a per-revision flag.
+        pending = _pending_revisions(script_dir, head_revision, current_rev)
+        destructive = [s for s in pending if _revision_is_destructive(s)]
+        if destructive:
+            _replay_destructive_revisions(
+                alembic_cfg, command, pending, destructive,
+                current_rev, head_revision,
+            )
+            return
+
         # WARNING (not INFO) so operators see the recovery path the first time
         # it fires after upgrade — this is a one-shot self-heal, not steady-
         # state behavior. Subsequent restarts no-op (current_rev == head).
@@ -735,6 +1153,14 @@ def _schema_matches_head(engine) -> bool:
       are downgrade signals or dead-code remnants, not "missing migration"
       signals. The fast-path only cares whether the model shape is a
       subset of the live schema.
+
+      This blind spot is load-bearing and is why the caller must NOT treat a
+      ``True`` here as "there is no pending work". A drop-only revision
+      always satisfies this predicate — every model artifact is present
+      *because* the revision's job is to remove something the model no
+      longer declares. ``_bootstrap_alembic`` compensates by walking the
+      pending revisions for destructive operations; see
+      ``_revision_is_destructive`` (enhancedchannelmanager-nywpw).
     * Index / view / FK presence — column shape is the load-bearing
       surface that the bd-5w6jz failure cluster manifests on. Indexes are
       either re-creatable cheaply or covered by per-migration idempotency
@@ -834,7 +1260,7 @@ def init_db() -> None:
         _integrity_check(_engine)
 
         # Import models to register them with Base
-        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, ChannelPipelineRule, ChannelPipelineExecution, ChannelPipelineConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, LookupTable, PendingMerge, PendingMergeJournal  # noqa: F401
+        from models import JournalEntry, BandwidthDaily, ChannelWatchStats, HiddenChannelGroup, StreamStats, ScheduledTask, TaskSchedule, TaskExecution, Notification, AlertMethod, TagGroup, Tag, NormalizationRuleGroup, NormalizationRule, User, UserSession, PasswordResetToken, UserIdentity, ChannelPipelineRule, ChannelPipelineExecution, ChannelPipelineConflict, FFmpegProfile, DummyEPGProfile, DummyEPGChannelAssignment, PendingMerge, PendingMergeJournal  # noqa: F401
         from export_models import CloudStorageTarget  # noqa: F401
 
         # Apply Alembic migrations first so schema tracking is authoritative

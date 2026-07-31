@@ -23,7 +23,10 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  /* Body role, SIZE only. OUTER rule — `.custom-select-value` inside the
+     trigger declares no size and inherits from here. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e).
+     44 elements across 12 dialogs, the widest-reaching site in this pass. */
+  font-size: var(--type-body-size);
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -113,12 +116,13 @@
   color: var(--text-muted);
 }
 
+/* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .custom-select-search input {
   flex: 1;
   border: none;
   background: none;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -180,7 +184,8 @@
   padding: 0.5rem 0.75rem;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.875rem;
+  /* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
   color: var(--text-primary, rgba(255, 255, 255, 0.95));
   background: transparent;
   transition: background-color 0.15s;
@@ -213,10 +218,11 @@
 }
 
 /* No results message */
+/* Body role, SIZE only — an empty-state sentence. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .custom-select-no-results {
   padding: 0.75rem;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-muted);
   font-style: italic;
 }

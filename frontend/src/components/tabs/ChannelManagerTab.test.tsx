@@ -24,8 +24,20 @@ import { ChannelManagerTab, PENDING_MERGES_EVENT } from './ChannelManagerTab';
 import * as api from '../../services/api';
 
 vi.mock('../', () => ({
-  SplitPane: ({ left, right }: { left: React.ReactNode; right: React.ReactNode }) => (
-    <div data-testid="split-pane">
+  // `defaultLeftWidth` is surfaced as an attribute deliberately: the real
+  // SplitPane is mocked here, so a test asserting the rendered pane widths
+  // would be asserting against this stub. What IS worth pinning at this layer
+  // is that the call site passes the ratio at all — SplitPane's own default is
+  // 58, and Channel Manager is its only consumer, so an accidental removal of
+  // the prop silently restores the lopsided split nobody chose. SplitPane's own
+  // tests cover that the value is honoured and clamped.
+  SplitPane: ({ left, right, leftLabel, rightLabel, defaultLeftWidth }: { left: React.ReactNode; right: React.ReactNode; leftLabel?: string; rightLabel?: string; defaultLeftWidth?: number }) => (
+    <div
+      data-testid="split-pane"
+      data-left-label={leftLabel}
+      data-right-label={rightLabel}
+      data-default-left-width={defaultLeftWidth}
+    >
       <div>{left}</div>
       <div>{right}</div>
     </div>
@@ -169,6 +181,12 @@ describe('ChannelManagerTab — Pending Merges subnav (BD-J / bd-gfxrz)', () => 
 
     // The default split-pane is always rendered.
     expect(screen.getByTestId('split-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-left-label', 'Channels');
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-right-label', 'Streams');
+    // Even split. Dropping this prop falls back to SplitPane's own default of
+    // 58, which rendered 972px of channels against 698px of streams at 1920 —
+    // the imbalance bead enhancedchannelmanager-vh6hh was filed for.
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-default-left-width', '50');
 
     // Wait for the count poll to settle, then assert the subnav stays hidden.
     await waitFor(() => {
@@ -274,5 +292,75 @@ describe('ChannelManagerTab — Pending Merges subnav (BD-J / bd-gfxrz)', () => 
       expect(screen.getByTestId('pending-merges-page')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('split-pane')).toBeNull();
+  });
+});
+
+describe('ChannelManagerTab — workspace source states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getPendingMerges).mockResolvedValue({
+      merges: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+    });
+  });
+
+  it('keeps both panes present for populated and true-empty settled data', () => {
+    render(<ChannelManagerTab {...makeMinimalProps()} />);
+    expect(screen.getByTestId('channels-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('streams-pane')).toBeInTheDocument();
+  });
+
+  it('names a channel error and retries only that source', () => {
+    const onRetryChannels = vi.fn();
+    render(
+      <ChannelManagerTab
+        {...makeMinimalProps()}
+        channelsError="error"
+        onRetryChannels={onRetryChannels}
+      />,
+    );
+    expect(screen.getByText('Channels unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading channels' }));
+    expect(onRetryChannels).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('streams-pane')).toBeInTheDocument();
+  });
+
+  it('hides both protected panes and all pane actions for permission denial', () => {
+    render(<ChannelManagerTab {...makeMinimalProps()} streamsError="permission" />);
+    expect(screen.queryByTestId('channels-pane')).toBeNull();
+    expect(screen.queryByTestId('streams-pane')).toBeNull();
+    expect(screen.getAllByText('Channels require administrator access')).toHaveLength(1);
+    expect(screen.getAllByText('Streams require administrator access')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /Retry loading/i })).toBeNull();
+  });
+
+  it('retains cached pane content with an explicit stale label and retries every failed operation', async () => {
+    const retryGroups = vi.fn().mockResolvedValue(undefined);
+    const retryChannels = vi.fn().mockResolvedValue(undefined);
+    render(<ChannelManagerTab
+      {...makeMinimalProps()}
+      channelSources={[
+        { key: 'groups', label: 'channel groups', state: 'error', hasSnapshot: true, retry: retryGroups },
+        { key: 'channels', label: 'channels', state: 'error', hasSnapshot: true, retry: retryChannels },
+      ]}
+    />);
+    expect(screen.getByText('Channels unavailable — showing previously loaded data')).toBeInTheDocument();
+    expect(screen.getByTestId('channels-pane')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading channels' }));
+    await waitFor(() => {
+      expect(retryGroups).toHaveBeenCalledOnce();
+      expect(retryChannels).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('lets any independently failing protected source hide both panes', () => {
+    render(<ChannelManagerTab
+      {...makeMinimalProps()}
+      channelSources={[
+        { key: 'groups', label: 'channel groups', state: 'success', hasSnapshot: true, retry: vi.fn() },
+        { key: 'channels', label: 'channels', state: 'permission', hasSnapshot: false, retry: vi.fn() },
+      ]}
+    />);
+    expect(screen.queryByTestId('channels-pane')).toBeNull();
+    expect(screen.queryByTestId('streams-pane')).toBeNull();
   });
 });

@@ -23,17 +23,33 @@
   margin-bottom: 4px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 18px.
+   `text-transform` / `letter-spacing` are reset explicitly: until this bead
+   they came from StatsTab.css's bare `.section-title`, so every panel title
+   was rendering 15px/600 UPPERCASE — the section role's size with that
+   rule's case (bead enhancedchannelmanager-6z299.4). */
 .provider-stream-usage-panel .section-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
 }
 
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in the light
+   theme (bead enhancedchannelmanager-6z299.4). */
 .provider-stream-usage-panel .panel-description {
   margin: 0 0 12px 0;
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary);
 }
 
 /* Table --------------------------------------------------------------- */
@@ -41,7 +57,9 @@
 .provider-stream-usage-panel .provider-stream-usage-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
 }
 
@@ -88,7 +106,7 @@
 }
 
 .provider-stream-usage-panel .sort-icon {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .provider-stream-usage-panel tbody tr.unknown-bucket td {
@@ -101,7 +119,9 @@
 .provider-stream-usage-panel .empty-state {
   padding: 12px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   text-align: center;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
@@ -114,21 +134,14 @@
   background: var(--danger-bg);
   border: 1px solid var(--danger-text);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 12px;
 }
 
-/* WCAG-compliant visually-hidden utility — visible to screen readers,
- * removed from visual flow. Same recipe as sibling panels (each panel
- * scopes its own copy — no shared global class in this codebase). */
-.provider-stream-usage-panel .visually-hidden {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  padding: 0 !important;
-  margin: -1px !important;
-  overflow: hidden !important;
-  clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important;
-  border: 0 !important;
-}
+/* `.visually-hidden` is owned by shared/common.css § 2 COMMON UTILITIES. This
+ * scoped copy was byte-identical to it apart from the ancestor, and the
+ * comment that used to sit here — "no shared global class in this codebase" —
+ * has not been true since bead enhancedchannelmanager-6z299
+ * (bead enhancedchannelmanager-6z299.4). */

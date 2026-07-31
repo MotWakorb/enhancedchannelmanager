@@ -375,7 +375,7 @@ For each stream matched via the scored-fuzzy path, the executor writes a journal
 - `signal` — which scoring rung fired (`"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, `"fuzzy-no-callsign-floor"`)
 - The stream and channel callsigns (when parsed)
 
-This lets you audit exactly why a merge fired — accessible in the ECM journal tab or via `GET /api/journal`.
+This lets you audit exactly why a merge fired — accessible in the ECM Journal page or via `GET /api/journal`.
 
 ### Rollback
 

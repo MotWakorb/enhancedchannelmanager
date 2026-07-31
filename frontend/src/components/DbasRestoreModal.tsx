@@ -273,13 +273,13 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
 
         <div className="modal-footer">
           {step === 'upload' && (
-            <button className="modal-btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="modal-btn modal-btn-secondary" onClick={onClose}>Cancel</button>
           )}
           {step === 'configure' && (
             <>
-              <button className="modal-btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="modal-btn modal-btn-secondary" onClick={onClose}>Cancel</button>
               <button
-                className="modal-btn-primary"
+                className="modal-btn modal-btn-primary"
                 disabled={!canStart}
                 onClick={() => start(applyMode)}
               >
@@ -290,11 +290,11 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
           {step === 'results' && restoreReport && (
             <>
               {restoreReport.is_dry_run && (
-                <button className="modal-btn-primary" disabled={busy} onClick={() => start(true)}>
+                <button className="modal-btn modal-btn-primary" disabled={busy} onClick={() => start(true)}>
                   Apply these changes
                 </button>
               )}
-              <button className="modal-btn-secondary" onClick={onClose}>Done</button>
+              <button className="modal-btn modal-btn-secondary" onClick={onClose}>Done</button>
             </>
           )}
         </div>

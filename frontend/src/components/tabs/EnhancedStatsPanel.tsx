@@ -21,6 +21,7 @@ import type {
 import * as api from '../../services/api';
 import './EnhancedStatsPanel.css';
 import { formatBytes, formatWatchTime, getDateLocale } from '../../utils/formatting';
+import { CHART_TICK_META, CHART_TICK_MICRO, CHART_TEXT_FILL } from '../../utils/chartTypography';
 
 // Custom tooltip for charts
 interface TooltipPayload {
@@ -92,7 +93,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
 
   if (loading && !uniqueViewers) {
     return (
-      <div className="enhanced-stats-panel" id="stats-section-enhanced">
+      <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
         <div className="loading-state">Loading enhanced statistics...</div>
       </div>
     );
@@ -100,7 +101,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
 
   if (error) {
     return (
-      <div className="enhanced-stats-panel" id="stats-section-enhanced">
+      <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
         <div className="error-state">{error}</div>
       </div>
     );
@@ -113,7 +114,7 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
   })) || [];
 
   return (
-    <div className="enhanced-stats-panel" id="stats-section-enhanced">
+    <div className="enhanced-stats-panel" id="stats-section-enhanced" data-section-label="Enhanced Statistics">
       <div className="panel-header">
         <h3 className="section-title">Enhanced Statistics</h3>
         <div className="view-toggle">
@@ -162,12 +163,12 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
                 <LineChart data={dailyChartData} margin={{ top: 10, right: 20, bottom: 5, left: 10 }}>
                   <XAxis
                     dataKey="date"
-                    tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
+                    tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL }}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
                     width={40}
@@ -284,13 +285,13 @@ export function EnhancedStatsPanel({ refreshTrigger }: EnhancedStatsPanelProps) 
                 >
                   <XAxis
                     dataKey="channel_name"
-                    tick={{ fontSize: 10, fill: 'var(--text-muted)', angle: -45, textAnchor: 'end' } as Record<string, unknown>}
+                    tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL, angle: -45, textAnchor: 'end' } as Record<string, unknown>}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
                     height={60}
                   />
                   <YAxis
-                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                     axisLine={{ stroke: 'var(--border-primary)' }}
                     tickLine={false}
                     tickFormatter={(v) => {

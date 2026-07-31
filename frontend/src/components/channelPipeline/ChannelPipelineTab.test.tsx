@@ -42,10 +42,10 @@ describe('ChannelPipelineTab', () => {
       expect(screen.getByTestId('channel-pipeline-tab')).toBeInTheDocument();
     });
 
-    it('renders tab header with title', () => {
+    it('does not repeat the route title inside the tab body', () => {
       renderWithProviders(<ChannelPipelineTab />);
 
-      expect(screen.getByRole('heading', { name: 'Channel Pipeline' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Channel Pipeline' })).not.toBeInTheDocument();
     });
 
     it('renders rules section and execution section', () => {

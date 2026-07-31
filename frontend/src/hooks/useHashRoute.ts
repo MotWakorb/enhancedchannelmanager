@@ -1,19 +1,17 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { TabId } from '../components/TabNavigation';
+import { isSettingsPage, type SettingsPage } from '../components/settingsSections';
 
-export type SettingsPage = 'general' | 'channel-defaults' | 'normalization' | 'tag-engine' | 'lookup-tables' | 'appearance' | 'email' | 'integrations' | 'scheduled-tasks' | 'channel-pipeline' | 'm3u-digest' | 'maintenance' | 'linked-accounts' | 'auth-settings' | 'user-management' | 'tls-settings' | 'mcp-settings' | 'backup-restore';
+// The union and the set of routable settings ids used to be declared here, in
+// parallel with `SETTINGS_SECTIONS`. Both are now derived from that single
+// declaration (bead `enhancedchannelmanager-70u0r.7`); re-exported because most
+// of the app imports the type from the router rather than from the registry.
+export type { SettingsPage };
 
 const VALID_TABS: Set<string> = new Set([
-  'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
+  'dashboard', 'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
   'stats', 'settings',
-]);
-
-const VALID_SETTINGS_PAGES: Set<string> = new Set([
-  'general', 'channel-defaults', 'normalization', 'tag-engine', 'lookup-tables',
-  'appearance', 'email', 'integrations', 'scheduled-tasks', 'channel-pipeline',
-  'm3u-digest', 'maintenance', 'linked-accounts', 'auth-settings',
-  'user-management', 'tls-settings', 'mcp-settings', 'backup-restore',
 ]);
 
 /**
@@ -33,6 +31,12 @@ const LEGACY_SETTINGS_PAGE_ALIASES: Record<string, SettingsPage> = {
   // Restore. Bookmarked/shared #settings/security URLs keep resolving there
   // instead of silently falling back to settings/general.
   security: 'backup-restore',
+  // "Lookup Tables" page removed with the whole Lookup Tables feature (bead
+  // 70u0r.1, PO decision D2 — the |lookup: pipe, CRUD router, model and table
+  // went too). It has no successor page, so bookmarked #settings/lookup-tables
+  // URLs land on General deliberately rather than hitting the silent
+  // invalid-subpage fallback. Follows the `security` precedent above.
+  'lookup-tables': 'general',
 };
 
 const DEFAULT_TAB: TabId = 'channel-manager';
@@ -40,70 +44,99 @@ const DEFAULT_TAB: TabId = 'channel-manager';
 interface HashRoute {
   tab: TabId;
   settingsPage: SettingsPage | null;
+  m3uChangesHours?: number;
+  section?: string;
 }
 
 function parseHash(hash: string): HashRoute {
   // Strip leading '#'
   const raw = hash.replace(/^#/, '');
   if (!raw) return { tab: DEFAULT_TAB, settingsPage: null };
+  const [path, query = ''] = raw.split('?', 2);
+  const hoursParam = new URLSearchParams(query).get('hours');
+  const m3uChangesHours = hoursParam && ['24', '72', '168', '720', '2160'].includes(hoursParam)
+    ? Number(hoursParam) : null;
+  const sectionParam = new URLSearchParams(query).get('section');
+  const section = sectionParam && /^[a-z0-9-]+$/.test(sectionParam) ? sectionParam : undefined;
 
   // Check for settings/sub-page format
-  if (raw.startsWith('settings/')) {
-    const subPage = raw.slice('settings/'.length);
+  if (path.startsWith('settings/')) {
+    const subPage = path.slice('settings/'.length);
     if (subPage in LEGACY_SETTINGS_PAGE_ALIASES) {
-      return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage] };
+      return { tab: 'settings', settingsPage: LEGACY_SETTINGS_PAGE_ALIASES[subPage], ...(section ? { section } : {}) };
     }
-    if (VALID_SETTINGS_PAGES.has(subPage)) {
-      return { tab: 'settings', settingsPage: subPage as SettingsPage };
+    if (isSettingsPage(subPage)) {
+      return { tab: 'settings', settingsPage: subPage, ...(section ? { section } : {}) };
     }
     // Invalid settings sub-page → fall back to settings/general
     return { tab: 'settings', settingsPage: null };
   }
 
-  if (raw === 'settings') {
-    return { tab: 'settings', settingsPage: null };
+  if (path === 'settings') {
+    return { tab: 'settings', settingsPage: null, ...(section ? { section } : {}) };
   }
 
-  if (raw in LEGACY_TAB_ALIASES) {
-    return { tab: LEGACY_TAB_ALIASES[raw], settingsPage: null };
+  if (path in LEGACY_TAB_ALIASES) {
+    return { tab: LEGACY_TAB_ALIASES[path], settingsPage: null };
   }
 
-  if (VALID_TABS.has(raw)) {
-    return { tab: raw as TabId, settingsPage: null };
+  if (VALID_TABS.has(path)) {
+    return path === 'm3u-changes' && m3uChangesHours
+      ? { tab: path, settingsPage: null, m3uChangesHours }
+      : { tab: path as TabId, settingsPage: null, ...(section ? { section } : {}) };
   }
 
   // Invalid hash → default
   return { tab: DEFAULT_TAB, settingsPage: null };
 }
 
-function buildHash(tab: TabId, settingsPage?: SettingsPage | null): string {
+function buildHash(tab: TabId, settingsPage?: SettingsPage | null, m3uChangesHours?: number | null, section?: string): string {
+  const query = section ? `?section=${encodeURIComponent(section)}` : '';
   if (tab === 'settings' && settingsPage && settingsPage !== 'general') {
-    return `#settings/${settingsPage}`;
+    return `#settings/${settingsPage}${query}`;
   }
-  return `#${tab}`;
+  if (tab === 'm3u-changes' && m3uChangesHours) return `#${tab}?hours=${m3uChangesHours}`;
+  return `#${tab}${query}`;
 }
 
 export interface UseHashRouteReturn {
   activeTab: TabId;
   settingsPage: SettingsPage | null;
+  m3uChangesHours: number | null;
   setHash: (tab: TabId, settingsPage?: SettingsPage | null) => void;
   setSettingsPage: (page: SettingsPage) => void;
 }
 
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
+  const routeRef = useRef(route);
+  const acceptedHashRef = useRef(window.location.hash);
+  const acceptedHistoryIndexRef = useRef<number>(
+    typeof window.history.state?.ecmRouteIndex === 'number' ? window.history.state.ecmRouteIndex : 0,
+  );
+  const restoringRejectedHistoryRef = useRef(false);
+
+  const canNavigate = useCallback((nextHash: string) => window.dispatchEvent(new CustomEvent('ecm:before-route-change', {
+    cancelable: true,
+    detail: { from: acceptedHashRef.current, to: nextHash },
+  })), []);
 
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
     const nextSettingsPage = settingsPage ?? null;
-    setRoute((prev) => {
-      if (prev.tab === tab && prev.settingsPage === nextSettingsPage) {
-        return prev;
-      }
-      window.history.pushState(null, '', buildHash(tab, settingsPage));
-      return { tab, settingsPage: nextSettingsPage };
-    });
-  }, []);
+    if (routeRef.current.tab === tab && routeRef.current.settingsPage === nextSettingsPage) {
+      return;
+    }
+    const nextHash = buildHash(tab, settingsPage);
+    if (!canNavigate(nextHash)) return;
+    const nextHistoryIndex = acceptedHistoryIndexRef.current + 1;
+    window.history.pushState({ ...window.history.state, ecmRouteIndex: nextHistoryIndex }, '', nextHash);
+    acceptedHistoryIndexRef.current = nextHistoryIndex;
+    acceptedHashRef.current = nextHash;
+    const nextRoute = { tab, settingsPage: nextSettingsPage };
+    routeRef.current = nextRoute;
+    setRoute(nextRoute);
+  }, [canNavigate]);
 
   // Update just the settings sub-page
   const setSettingsPage = useCallback((page: SettingsPage) => {
@@ -112,23 +145,59 @@ export function useHashRoute(): UseHashRouteReturn {
 
   // Listen for popstate (back/forward buttons)
   useEffect(() => {
-    const handlePopState = () => {
+    const canonicalizeCurrentHash = () => {
       const parsed = parseHash(window.location.hash);
-      setRoute(parsed);
+      const canonicalHash = buildHash(parsed.tab, parsed.settingsPage, parsed.m3uChangesHours, parsed.section);
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(window.history.state, '', canonicalHash);
+      }
+      return parsed;
     };
 
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+    const handlePopState = () => {
+      if (restoringRejectedHistoryRef.current) {
+        restoringRejectedHistoryRef.current = false;
+        return;
+      }
+      const requestedHash = window.location.hash;
+      if (!canNavigate(requestedHash)) {
+        const requestedIndex = window.history.state?.ecmRouteIndex;
+        if (typeof requestedIndex === 'number') {
+          restoringRejectedHistoryRef.current = true;
+          window.history.go(acceptedHistoryIndexRef.current - requestedIndex);
+        } else {
+          window.history.replaceState(window.history.state, '', acceptedHashRef.current);
+        }
+        return;
+      }
+      const nextRoute = canonicalizeCurrentHash();
+      acceptedHashRef.current = window.location.hash;
+      if (typeof window.history.state?.ecmRouteIndex === 'number') {
+        acceptedHistoryIndexRef.current = window.history.state.ecmRouteIndex;
+      }
+      routeRef.current = nextRoute;
+      setRoute(nextRoute);
+    };
 
-  // Set initial hash if none present (so URL reflects current tab)
-  useEffect(() => {
-    if (!window.location.hash) {
-      window.history.replaceState(null, '', buildHash(DEFAULT_TAB));
+    const initialRoute = canonicalizeCurrentHash();
+    if (typeof window.history.state?.ecmRouteIndex !== 'number') {
+      window.history.replaceState({ ...window.history.state, ecmRouteIndex: 0 }, '', window.location.hash);
     }
-  }, []);
+    acceptedHashRef.current = window.location.hash;
+    routeRef.current = initialRoute;
+    setRoute(initialRoute);
+    window.addEventListener('popstate', handlePopState);
+    const handleRouteReplaced = () => {
+      acceptedHashRef.current = window.location.hash;
+    };
+    window.addEventListener('ecm:route-replaced', handleRouteReplaced);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('ecm:route-replaced', handleRouteReplaced);
+    };
+  }, [canNavigate]);
 
-  return { activeTab: route.tab, settingsPage: route.settingsPage, setHash, setSettingsPage };
+  return { activeTab: route.tab, settingsPage: route.settingsPage, m3uChangesHours: route.m3uChangesHours ?? null, setHash, setSettingsPage };
 }
 
 // Export for testing

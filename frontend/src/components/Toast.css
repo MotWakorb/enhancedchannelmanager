@@ -64,7 +64,7 @@
 }
 
 .toast.toast-error .toast-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Content */
@@ -73,15 +73,18 @@
   min-width: 0;
 }
 
+/* Section role, SIZE only — the toast's own heading; it already carries the
+   role's 600 weight. 0.95rem -> 15px (bead enhancedchannelmanager-haf9e). */
 .toast-title {
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--type-section-size);
   color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
 
+/* Body role, SIZE only — running text. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .toast-message {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   line-height: 1.4;
   word-wrap: break-word;
@@ -167,9 +170,11 @@
   text-align: right;
 }
 
+/* Body role, SIZE only. 0.8rem -> 13px (bead enhancedchannelmanager-haf9e). Not exercised by the harness (no
+   toast in the catalogue renders an action), converted with its family. */
 .toast-action-button {
   padding: 0.375rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   border: none;
   border-radius: var(--radius-md);
@@ -206,7 +211,7 @@
 
 .toast.toast-error .toast-action-button {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .toast.toast-error .toast-action-button:hover {

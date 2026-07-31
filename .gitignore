@@ -15,6 +15,12 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.dist_root/
+# CSS chunk-leak audit build output (vite.audit.config.ts). Was untracked AND
+# unignored, so it polluted `git status` and broke `npm run lint`.
+frontend/.audit-dist/
+# Dev-only modal harness build output (bead enhancedchannelmanager-xhldy.1).
+# Never deployed; produced by `vite build --config vite.harness.config.ts`.
+frontend/.modal-harness-dist/
 
 # IDE
 .idea/

@@ -9,6 +9,20 @@
   overflow-y: auto;
 }
 
+.channel-pipeline-compact-actions {
+  display: none;
+}
+
+@media (max-width: 1280px), (max-height: 800px) {
+  .channel-pipeline-secondary-action {
+    display: none;
+  }
+
+  .channel-pipeline-compact-actions {
+    display: inline-flex;
+  }
+}
+
 /* .tab-header, .header-actions are defined in shared/common.css */
 .channel-pipeline-tab .tab-header {
   align-items: center;
@@ -37,13 +51,25 @@
   align-items: center;
 }
 
-.stat-value {
+/* Scoped to the tile row, not left bare. `.stat-value` / `.stat-label` were
+   declared bare here AND in StatsTab.css, in two different lazy chunks, at
+   different values (24px/600 vs 14px/500; 13px vs 11.2px uppercase) — so
+   Pipeline's frozen-band tiles rendered at Stats' size once you had visited
+   Stats, and vice versa (bead enhancedchannelmanager-6z299.2).
+   `.channel-pipeline-stats` and not `.channel-pipeline-tab`: RouteHeaderSlot
+   portals this row out of the tab root into App's `.route-page-status-outlet`
+   (ChannelPipelineTab.tsx:1011). It is the only ancestor these three tiles
+   have, and it wraps every `.stat-value`/`.stat-label` in the Pipeline chunk.
+   `:where()` keeps the selectors at (0,1,0) — identical to the bare rules —
+   so nothing in this chunk's cascade moves and the band's geometry is
+   unchanged, which is the point of this wave. */
+:where(.channel-pipeline-stats) .stat-value {
   font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.stat-label {
+:where(.channel-pipeline-stats) .stat-label {
   font-size: 13px;
   color: var(--text-muted);
 }
@@ -75,10 +101,16 @@
   margin-bottom: 16px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px. */
 .section-header h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
@@ -112,6 +144,9 @@
   overflow: hidden;
 }
 
+/* Body role, not meta: the body role's definition covers buttons and other
+   interactive controls, and these menu items are buttons. 14px -> 13px
+   (bead enhancedchannelmanager-6z299). */
 .filter-menu button {
   display: block;
   width: 100%;
@@ -121,7 +156,9 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .filter-menu button:hover {
@@ -161,16 +198,33 @@
   font-size: 32px;
 }
 
-/* Rules table: selection column */
+/* Rules table: selection column.
+
+   The cell's padding lives on the `<label>` inside it, not on the cell, so
+   that the label's box IS the cell and the pointer target is 36x40 rather
+   than the 16px checkbox — WCAG 2.5.8 wants 24x24 and no checkbox in this
+   estate reaches it (bead enhancedchannelmanager-m26f8). Growing the box
+   instead was the one remedy ruled out: it would undo the single
+   `--control-box-size` that bead enhancedchannelmanager-7lwe0 established and
+   put an oversized control back beside 13px text.
+
+   `padding: 0` overrides the 12px 8px that `.rules-list th, .rules-list td`
+   sets below; the label restates it so the row's height is unchanged. Drag is
+   unaffected — `handleDragStart` bails unless the drag HANDLE armed
+   `dragAllowed`, so a press anywhere in this cell can never start a reorder. */
 .rules-list th.col-select,
 .rules-list td.col-select {
   width: 36px;
   text-align: center;
-  padding-left: 4px;
-  padding-right: 4px;
+  padding: 0;
 }
 
-.rules-list td.col-select input[type='checkbox'] {
+.rules-list .col-select-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 12px 4px;
   cursor: pointer;
 }
 
@@ -196,12 +250,39 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* The micro role, spelled out here rather than by adding `.micro-label` to the
+   six `<th>` elements in ChannelPipelineTab.tsx. `.micro-label` (common.css
+   § 24) exists because the same idiom was hand-written four different ways on
+   div-based fake table headers that already carried a class; this is a real
+   `<th>` in a real `<table>`, so one structural selector already reaches
+   exactly the right elements with no markup at all. Adding the class would not
+   even remove this rule — § 24 deliberately sets no `color`, so the colour
+   declaration below would have to stay behind, leaving the treatment split
+   across markup and CSS instead of consolidated. One rule, one place.
+   12px/600/0.5px -> 10px/700/0.08em, and --text-muted -> --text-secondary:
+   --text-muted measures 2.61:1 on --bg-secondary in the light theme, below the
+   AA floor (bead enhancedchannelmanager-6z299). */
 .rules-list th {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  letter-spacing: var(--type-micro-tracking);
+}
+
+/* Body role on the cell itself. The Priority and Matches columns are bare text
+   nodes inside `<td>` with no class of their own (ChannelPipelineTab.tsx:1193,
+   1199), so they inherited 16px from `body` — the same UA-default defect as
+   `.rule-name`, reached by inheritance instead of by an absent declaration.
+   Left alone it would have been made worse by this sweep, not better: with
+   `.rule-name` at 13px the two numeric columns would sit three pixels LARGER
+   than the row's own title. Everything else in a `td` (`.rule-name`,
+   `.rule-description`, `.badge`, `.action-btn`) declares its own size and is
+   unaffected (bead enhancedchannelmanager-6z299). */
+.rules-list td {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .rules-list tbody tr {
@@ -293,15 +374,26 @@
   flex-wrap: nowrap;
 }
 
-/* Rule Name */
+/* Rule Name — item title.
+   Had no font-size at all, so the name of every pipeline rule rendered at the
+   UA default 16px: the same defect the pilot found in `.account-name`
+   (bead enhancedchannelmanager-f4yc7). `.col-name` keeps its 200px min-width —
+   that is a column budget, not a measure derived from these font metrics. */
 .rule-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role. --text-secondary, not --text-muted: in the light theme
+   --text-muted measures 2.61:1 on --bg-secondary, below the AA floor
+   (bead enhancedchannelmanager-6z299). */
 .rule-description {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -314,13 +406,22 @@
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Executions List */
+/* Body role. Declared no font-size, so the "Loading executions..." line
+   rendered at the UA default 16px — larger than every other string in the
+   section it replaces. Same class of defect as `.rule-name` above; it was not
+   on the audit's worst-offender list because it only appears mid-fetch
+   (bead enhancedchannelmanager-6z299). --text-muted -> --text-secondary for
+   the light-theme AA failure. */
 .executions-loading {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 24px;
-  color: var(--text-muted);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary);
 }
 
 .executions-list {
@@ -350,22 +451,39 @@
   flex-wrap: wrap;
 }
 
+/* Badge role, not meta. `.execution-mode` is a chip — padding, background,
+   radius — rendered immediately beside the run's real `.badge` status chip
+   (ChannelPipelineTab.tsx:1329-1333). The badge role is what chip text is for,
+   and it keeps the two adjacent chips the same size instead of the mode chip
+   sitting a step larger than the status it qualifies.
+   --text-muted -> --text-secondary (light-theme AA), bead
+   enhancedchannelmanager-6z299. */
 .execution-mode {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  color: var(--text-secondary);
   padding: 2px 6px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
 }
 
+/* Meta role. The timestamp and the counts summary are the two secondary
+   descriptors of an execution row — the status badge is what identifies it —
+   so they take the same role and stay the same size as each other, as they
+   are today. */
 .execution-date {
-  font-size: 13px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
 .execution-stats {
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 .execution-actions {
@@ -391,8 +509,19 @@
   overflow: hidden;
 }
 
-/* Execution Details */
-.detail-row {
+/* Execution Details — scoped to the tab root.
+   `detail` is the single most over-claimed word in this tree: `.detail-row` was
+   bare here AND in StatsTab.css, and `.detail-label` bare here AND in
+   M3UChangesTab.css, all at divergent values, across three lazy chunks. So the
+   execution log's rows took Stats' 12px flex row (or Stats' took this file's
+   8px padding and border) depending on which tab you had visited last
+   (bead enhancedchannelmanager-6z299.2). Every `.detail-row`/`.detail-label`
+   in this chunk renders inside `.channel-pipeline-tab` — the execution log
+   viewer and the revert dialogs are ordinary in-tree children, not portals
+   (ModalOverlay renders a plain div; only RouteHeaderSlot portals). `:where()`
+   contributes no specificity, so `.error`/`.warning` still beat the base rule
+   exactly as they did and nothing this tab renders moves. */
+:where(.channel-pipeline-tab) .detail-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -400,22 +529,22 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
-.detail-row:last-child {
+:where(.channel-pipeline-tab) .detail-row:last-child {
   border-bottom: none;
 }
 
-.detail-label {
+:where(.channel-pipeline-tab) .detail-label {
   font-weight: 500;
   color: var(--text-secondary);
 }
 
-.detail-row.error {
+:where(.channel-pipeline-tab) .detail-row.error {
   color: var(--error-color, #dc3545);
 }
 
 /* Warning-styled counter row (e.g. Parse Failures > 0, Capped) in the
    event_sync execution summary (enhancedchannelmanager-7wuhd). */
-.detail-row.warning {
+:where(.channel-pipeline-tab) .detail-row.warning {
   color: var(--status-warning, #f59e0b);
 }
 
@@ -423,6 +552,7 @@
    (enhancedchannelmanager-7wuhd). Icon + text (never color alone) so an
    idempotent all-already-attached run reads as success, not "nothing
    matched". */
+/* Body role. 14px -> 13px. */
 .event-sync-sync-banner {
   display: flex;
   align-items: center;
@@ -432,19 +562,21 @@
   border: 1px solid rgba(34, 197, 94, 0.3);
   border-radius: var(--radius-lg);
   margin: 14px 0;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: var(--type-body-line-height);
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .event-sync-sync-icon {
   color: var(--status-success, #22c55e);
-  font-size: 20px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
 /* Import/Export textarea styling */
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .modal-body textarea {
   width: 100%;
   padding: 12px;
@@ -453,7 +585,7 @@
   border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-family: monospace;
-  font-size: 13px;
+  font-size: var(--type-body-size);
   resize: vertical;
 }
 
@@ -462,23 +594,33 @@
   border-color: var(--accent-primary);
 }
 
-.import-error {
+/* Scoped: `.import-error` is a generic name declared bare in a lazy chunk, so
+   it was in line to claim any future `.import-error` elsewhere in the app the
+   moment one appeared (bead enhancedchannelmanager-6z299.2). `:where()` keeps
+   it at (0,1,0). */
+/* Body role. 13px -> 13px. */
+:where(.channel-pipeline-tab) .import-error {
   margin-top: 12px;
   padding: 10px 14px;
   background: rgba(220, 53, 69, 0.1);
   border: 1px solid rgba(220, 53, 69, 0.3);
   border-radius: var(--radius-lg);
   color: var(--error-color, #dc3545);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 13px -> 13px. */
 .import-conflicts {
   margin-top: 12px;
   padding: 12px 14px;
   background: rgba(245, 158, 11, 0.08);
   border: 1px solid rgba(245, 158, 11, 0.3);
   border-radius: var(--radius-lg);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .import-conflicts-header {
@@ -505,6 +647,7 @@
   font-style: italic;
 }
 
+/* Body role. 13px -> 13px. */
 .import-success {
   margin-top: 12px;
   padding: 10px 14px;
@@ -512,7 +655,9 @@
   border: 1px solid rgba(40, 167, 69, 0.3);
   border-radius: var(--radius-lg);
   color: var(--success-color, #28a745);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Responsive Mobile */
@@ -594,18 +739,24 @@
   margin-bottom: 12px;
 }
 
+/* Section role. 15px -> 15px. */
 .execution-log-header h3 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .log-count {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
+/* Body role. 13px -> 13px. */
 .log-loading,
 .log-empty {
   display: flex;
@@ -613,7 +764,9 @@
   gap: 8px;
   padding: 16px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   justify-content: center;
 }
 
@@ -631,17 +784,19 @@
   border-radius: var(--radius-lg);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .log-search-bar > .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .log-search-input {
   flex: 1;
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -659,8 +814,9 @@
   align-items: center;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .log-search-clear .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Filter chips */
@@ -672,6 +828,7 @@
   flex-wrap: wrap;
 }
 
+/* Badge role. 12px -> 10px. */
 .log-filter-chip {
   display: inline-flex;
   align-items: center;
@@ -681,14 +838,17 @@
   border-radius: 999px;
   background: var(--input-bg);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .log-filter-chip .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .log-filter-chip:hover {
@@ -707,16 +867,22 @@
   border-color: var(--error-color, #ef4444);
 }
 
+/* Meta role. 11px -> 11px. */
 .log-filter-count {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   opacity: 0.7;
 }
 
+/* Meta role. 12px -> 11px. */
 .log-filter-clear {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   cursor: pointer;
   padding: 4px 6px;
 }
@@ -768,15 +934,18 @@
   outline-offset: -2px;
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .log-chevron {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
+/* Item-title role. 13px -> 13px. */
 .log-stream-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   flex: 1;
   min-width: 0;
@@ -792,8 +961,11 @@
   flex-shrink: 0;
 }
 
+/* Badge role. 11px -> 10px. */
 .log-rule-badge {
-  font-size: 11px;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   padding: 2px 6px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -804,8 +976,11 @@
   text-overflow: ellipsis;
 }
 
+/* Meta role. 11px -> 11px. */
 .log-action-count {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -826,29 +1001,33 @@
   margin-bottom: 8px;
 }
 
+/* Item-title role. 13px -> 13px. */
 .log-rule-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   margin-bottom: 4px;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .log-rule-title .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
+/* Micro role — the tracked uppercase label idiom. 10px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .log-winner-badge {
-  font-size: 10px;
+  font-size: var(--type-micro-size);
   padding: 1px 5px;
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
   border-radius: var(--radius-sm);
   text-transform: uppercase;
-  font-weight: 600;
-  letter-spacing: 0.5px;
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
 }
 
 /* Conditions */
@@ -859,16 +1038,20 @@
   padding-left: 22px;
 }
 
+/* Meta role. 12px -> 11px. */
 .log-condition {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 2px 0;
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .condition-icon {
-  font-size: 14px;
+  font-size: var(--icon-badge);
   flex-shrink: 0;
 }
 
@@ -880,20 +1063,29 @@
   color: var(--status-error, #ef4444);
 }
 
+/* Meta role. 11px -> 11px. */
 .log-condition-type {
   color: var(--text-secondary);
   font-family: monospace;
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
+/* Meta role. 11px -> 11px. */
 .log-condition-value {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
+/* Meta role. 11px -> 11px. */
 .log-condition-details {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-style: italic;
 }
 
@@ -902,11 +1094,12 @@
   padding: 1px 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 10px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .log-connector-label {
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-muted);
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .log-connector-label.connector-or {
@@ -920,25 +1113,30 @@
   border-top: 1px dashed var(--border-primary);
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .log-actions-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 4px;
 }
 
+/* Meta role. 12px -> 11px. */
 .log-action {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 2px 0;
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .action-icon {
-  font-size: 14px;
+  font-size: var(--icon-badge);
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -963,10 +1161,13 @@
   color: var(--text-primary);
 }
 
+/* Meta role. 11px -> 11px. */
 .log-action-error-msg {
   display: block;
   color: var(--status-error, #ef4444);
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-top: 2px;
 }
 
@@ -978,8 +1179,11 @@
   padding-left: 18px;
 }
 
+/* Meta role. 11px -> 11px. */
 .log-action-detail {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary, #aaa);
   font-style: italic;
 }
@@ -997,8 +1201,9 @@
   line-height: 1.4;
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 13px -> 14px. */
 .tip-icon {
-  font-size: 13px;
+  font-size: var(--icon-badge);
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -1017,15 +1222,31 @@
 }
 
 /* Legacy-run indicator: shown when has_snapshot=false and mode=execute.
-   Muted icon; not a button — just informational. */
+   Muted icon; not a button — just informational.
+   Content-pane, not modal: this renders inside `.execution-actions` in the
+   executions list (ChannelPipelineTab.tsx:1422), even though it is filed under
+   the snapshot-restore heading with the revert dialogs. Icon size tokenized to
+   --icon-status — on the wrapper only; see the rule below for why that did not
+   reach the glyph. The --text-muted stays
+   — this is a decorative glyph, not text, and the AA rule exempts those
+   (bead enhancedchannelmanager-6z299). */
 .execution-no-snapshot {
   display: inline-flex;
   align-items: center;
   padding: 4px;
   color: var(--text-muted);
   cursor: default;
-  font-size: 18px;
+  font-size: var(--icon-status);
   opacity: 0.5;
+}
+
+/* The token above sizes the WRAPPER, and the glyph never inherited it: a
+   `.material-icons` child sets its own 24px, so "it was already 18px, so
+   nothing moves" was true of the span and false of the icon inside it. The
+   glyph measured 24px. Sized here, one class of depth below the wrapper, so
+   it wins against index.css's base rule (bead enhancedchannelmanager-7bsxj). */
+.execution-no-snapshot .material-icons {
+  font-size: var(--icon-status);
 }
 
 /* Warning banner inside the revert-confirm modal (§D5 mandatory warning). */
@@ -1040,25 +1261,33 @@
   margin-bottom: 12px;
 }
 
+/* Body role. 14px -> 13px. */
 .revert-warning-banner p {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
-.revert-warning-icon {
+/* Status/panel glyph -> --icon-status. 20px -> 18px.
+   Scoped through the banner: bare, it tied index.css's base `.material-icons`
+   at 0-1-0 and lost on source order, so the glyph rendered at 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.revert-warning-banner .revert-warning-icon {
   color: var(--status-warning, #f59e0b);
-  font-size: 20px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 1px;
 }
 
+/* Body role. 13px -> 13px. */
 .revert-warning-detail {
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   margin: 0;
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 /* Partial-failure warning in the result summary. */
@@ -1073,11 +1302,13 @@
   margin-bottom: 12px;
 }
 
+/* Body role. 13px -> 13px. */
 .revert-partial-failure p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 /* Result stat rows — reuse .detail-row defined above. */
@@ -1095,12 +1326,13 @@
   margin-top: 8px;
 }
 
+/* Micro role — the tracked uppercase label idiom. 13px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .revert-failed-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
   margin: 0 0 6px;
 }
 
@@ -1115,6 +1347,7 @@
   overflow-y: auto;
 }
 
+/* Meta role. 12px -> 11px. */
 .revert-failed-item {
   display: flex;
   flex-direction: column;
@@ -1122,7 +1355,9 @@
   padding: 6px 10px;
   background: var(--bg-tertiary);
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .revert-failed-name {
@@ -1149,9 +1384,10 @@
   margin: 14px 0;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .norm-warning-icon {
   color: var(--status-warning, #f59e0b);
-  font-size: 20px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -1161,27 +1397,32 @@
   min-width: 0;
 }
 
+/* Section role. 14px -> 15px. */
 .norm-warning-title {
   margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: var(--type-section-line-height);
 }
 
+/* Body role. 13px -> 13px. */
 .norm-warning-detail {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
+/* Body role. 13px -> 13px. */
 .norm-warning-list {
   margin: 0;
   padding-left: 18px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
-  line-height: 1.6;
+  line-height: var(--type-body-line-height);
 }
 
 /* --- Rule kind (epic ti939: Event Sync) ---------------------------------- */
@@ -1198,6 +1439,7 @@
   padding: 20px;
 }
 
+/* Body role. 14px -> 13px. */
 .rule-kind-option {
   display: flex;
   align-items: flex-start;
@@ -1209,7 +1451,9 @@
   border-radius: 6px;
   padding: 14px 16px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .rule-kind-option:hover {
@@ -1221,8 +1465,9 @@
   outline-offset: 2px;
 }
 
+/* Status/panel glyph -> --icon-status. 24px -> 18px. */
 .rule-kind-option .material-icons {
-  font-size: 24px;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
@@ -1232,7 +1477,10 @@
   gap: 4px;
 }
 
+/* Body role. 13px -> 13px. */
 .rule-kind-option-text span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }

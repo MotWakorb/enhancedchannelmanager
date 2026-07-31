@@ -28,11 +28,36 @@
   color: var(--text-primary);
 }
 
+/* The bell glyph is HEADER CHROME, so it takes a literal 20px rather than an
+   --icon-* token: the icon scale is a CONTENT scale, and 20px is the frozen
+   value `.header-icon-link .material-icons` pins for the help and GitHub marks
+   sitting immediately beside it (beads 57pp3 / eupzi, guarded by
+   e2e/frozen-chrome.spec.ts). Same call, same reason, as `.user-menu-icon` in
+   bead 7bsxj.
+
+   THIS RULE HAS NEVER RENDERED. It said 24px and the bell has always drawn at
+   20px, because App.css `.header .notification-bell .material-icons` is (0,3,0)
+   and wins — not the index.css base-rule tie bead 3vjk2 describes, which is
+   what bead 9bpkk predicted; the shadow here comes from a MORE specific rule,
+   not a less specific one. 24 -> 20 is therefore render-neutral by
+   construction (measured: 20px before and after, all six viewport x theme
+   passes). It is made anyway so the component stops declaring a size it does
+   not have, and so the value survives if that App.css override is ever
+   removed. Bead enhancedchannelmanager-9bpkk. */
 .notification-bell .material-icons {
-  font-size: 24px;
+  font-size: 20px;
 }
 
-/* Badge */
+/* Badge — chrome on the bell, not panel content, so a literal like the glyph
+   above rather than --type-badge-*. Also never rendered at the 11px it
+   declared: App.css `.header .notification-badge` (0,2,0) resizes the whole
+   pill for the 28px button and sets 10px. 11 -> 10 aligns the component with
+   what draws and is render-neutral (measured 10px/600, 15x15 box, unmoved at
+   both viewports in all three themes) — which is why the ratio
+   e2e/contrast-aa.spec.ts FORCE_RENDERs for this selector needed no
+   re-baselining. Weight stays 600: App.css sets no weight, so 600 IS the
+   rendered value, and it is the legibility of a two-digit count in a 15px
+   pill. Bead enhancedchannelmanager-9bpkk. */
 .notification-badge {
   position: absolute;
   top: 2px;
@@ -43,7 +68,7 @@
   border-radius: 9px;
   background-color: var(--error);
   color: white;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -51,8 +76,18 @@
   line-height: 1;
 }
 
-/* Panel */
+/* Panel.
+   The panel is where the chrome stops and content starts, so it carries the
+   body role as its base. This is the ONE declaration in the file that is not a
+   conversion: the panel had no font-size at all and inherited the document's
+   16px root through `.header`, which put every element in it that declares
+   nothing — the empty state's "No notifications", "Loading...", and anything
+   added later — at 16px, three steps above the pane behind it. Container
+   first, leaves after (bead 5dda3e44's ordering); each leaf below still names
+   its own role, so nothing depends on this inheriting correctly.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-panel {
+  font-size: var(--type-body-size);
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
@@ -76,9 +111,19 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Modal-title role, SIZE only. "Notifications" is the primary heading of the
+   panel's OWN surface — a bordered, shadowed overlay with its own z-index —
+   which is the kind of text that role names (docs/css_guidelines.md §
+   Typography), not the section role's "a heading inside a page". Same call as
+   `.user-modal-header h3` and `.checkpoint-name-modal h4`; `.channel-picker-
+   panel-header h3` took SECTION instead precisely because it is a panel
+   heading INSIDE a dialog rather than a surface of its own.
+   RENDER-NEUTRAL: 1rem was already 16px, which is what the role carries. Taken
+   anyway — a raw rem that happens to land on-scale is latent, not safe (bead
+   5dda3e44). Bead enhancedchannelmanager-9bpkk. */
 .notification-panel-header h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--type-modal-title-size);
   font-weight: 600;
 }
 
@@ -105,8 +150,14 @@
   color: var(--text-primary);
 }
 
+/* Mark-all-read / clear-read / delete-all in the panel header. Icon-only
+   buttons that act on the list -> --icon-action ("row action buttons"), the
+   same role `.norm-engine-btn .material-icons` took in bead 7bsxj. 20 -> 16.
+   20px is a TEXT-role number that happens to sit on the guard's numeric
+   allowlist, which is why route-typography-scale never reported it — it is
+   still the wrong scale for a glyph. Bead enhancedchannelmanager-9bpkk. */
 .notification-action-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* List */
@@ -126,8 +177,14 @@
   gap: 0.5rem;
 }
 
+/* The empty/loading illustration -> --icon-empty. 48 -> 64, the one site in
+   this file that GROWS, and deliberately: 48px is not on any scale, and the
+   role exists so that every empty state in the app draws the same illustration
+   at the same size. The decorative-glyph exemption in docs/css_guidelines.md §
+   Colour is why the 0.5 opacity on --text-muted stays.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-empty .material-icons {
-  font-size: 48px;
+  font-size: var(--icon-empty);
   opacity: 0.5;
 }
 
@@ -169,8 +226,12 @@
   justify-content: center;
 }
 
+/* The per-notification info/success/warning/error glyph -> --icon-status,
+   which is literally "the status glyph in a list row". 22 -> 18. The 28x28
+   `.notification-icon` box is unchanged, so the glyph just stops crowding it.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-icon .material-icons {
-  font-size: 22px;
+  font-size: var(--icon-status);
 }
 
 .notification-item.notification-info .notification-icon {
@@ -186,7 +247,7 @@
 }
 
 .notification-item.notification-error .notification-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Content */
@@ -195,15 +256,23 @@
   min-width: 0;
 }
 
+/* Item-title role, SIZE only — this is the name of a row in a list, and the
+   authored 600 is already the role's weight. 0.9rem -> 13px.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-title {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
   color: var(--text-primary);
   margin-bottom: 0.125rem;
 }
 
+/* Body role, SIZE only — the notification's running text. 0.85rem -> 13px.
+   The authored 1.4 line-height is kept rather than taking the role's 1.5: this
+   block is clamped to two lines by -webkit-line-clamp, so line-height sets the
+   clamp height and is a layout number here, not a rhythm one.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-message {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   line-height: 1.4;
   display: -webkit-box;
@@ -212,8 +281,12 @@
   overflow: hidden;
 }
 
+/* Meta role, SIZE only — a timestamp under an item title is the role's own
+   example. 0.75rem -> 11px. `.notification-time-started` below declares no
+   size and inherits from here, so the collapsed started/completed pair moves
+   with it. Bead enhancedchannelmanager-9bpkk. */
 .notification-time {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   color: var(--text-muted);
   margin-top: 0.25rem;
 }
@@ -224,7 +297,12 @@
   opacity: 0.85;
 }
 
-/* Inline action button (e.g., Restart Services) */
+/* Inline action button (e.g., Restart Services).
+   Body role, SIZE only — docs/css_guidelines.md § Typography puts buttons on
+   body, and the authored 500 is kept per the size-only policy. 0.8rem -> 13px.
+   Note this is a <button>, so index.css's element rule already carries
+   --type-body-size at (0,0,1); the class rule was overriding it DOWN to
+   12.8px. Bead enhancedchannelmanager-9bpkk. */
 .notification-action-btn-inline {
   display: inline-flex;
   align-items: center;
@@ -235,7 +313,7 @@
   border-radius: var(--radius-md);
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.15s, background-color 0.15s;
@@ -250,8 +328,10 @@
   cursor: not-allowed;
 }
 
+/* The glyph inside that button -> --icon-action. RENDER-NEUTRAL: 16px is what
+   the role carries. Bead enhancedchannelmanager-9bpkk. */
 .notification-action-btn-inline .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Item actions */
@@ -286,11 +366,17 @@
 }
 
 .notification-item-action.delete:hover {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* Mark-read and delete on a row, revealed on hover -> --icon-action, the
+   role's own "row action buttons". 18 -> 16. --icon-status (18px) is taken
+   above by `.notification-icon`, which is the row's actual STATUS glyph; the
+   two roles were flattened onto one number before this and are now separate,
+   so the thing that means something is the larger of the two.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-item-action .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Probe Progress Styles */
@@ -323,10 +409,14 @@
   transition: width 0.3s ease;
 }
 
+/* Meta role, SIZE only — success/failed/black-screen counts under the probe's
+   progress bar, and "counts" is one of the role's named examples. 12 -> 11.
+   Set on the row so the five `.probe-stat` chips inherit one number.
+   Bead enhancedchannelmanager-9bpkk. */
 .notification-probe-stats {
   display: flex;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   color: var(--text-secondary);
 }
 
@@ -336,8 +426,11 @@
   gap: 2px;
 }
 
+/* The glyph inside one of those count chips -> --icon-badge, "a glyph inside a
+   chip or pill". RENDER-NEUTRAL: 14px is what the role carries.
+   Bead enhancedchannelmanager-9bpkk. */
 .probe-stat .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .probe-stat-success {
@@ -345,7 +438,7 @@
 }
 
 .probe-stat-failed {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .probe-stat-black-screen {
@@ -360,8 +453,11 @@
   color: var(--text-muted);
 }
 
+/* Meta role, SIZE only — the name of the stream currently being probed is
+   supporting detail under the item. RENDER-NEUTRAL: 11px is what the role
+   carries. Bead enhancedchannelmanager-9bpkk. */
 .notification-probe-current {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
   color: var(--text-muted);
   margin-top: 4px;
   white-space: nowrap;
@@ -384,8 +480,13 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
+/* Pause / resume / cancel on the running probe -> --icon-action, matching
+   `.notification-item-action` above rather than the status glyph. 18 -> 16.
+   The 24x24 button is unchanged and stays the pointer target — the guide's
+   note that --icon-badge is "sized to the chip, not to the pointer target"
+   cuts the same way here. Bead enhancedchannelmanager-9bpkk. */
 .probe-control-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .probe-pause-btn {
@@ -405,7 +506,7 @@
 }
 
 .probe-cancel-btn {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .probe-cancel-btn:hover {

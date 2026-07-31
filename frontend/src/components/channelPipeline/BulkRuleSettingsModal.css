@@ -7,9 +7,12 @@
   overflow-y: auto;
 }
 
+/* Body role. 14.4px -> 13px. */
 .bulk-rule-settings-intro {
   margin: 0 0 1rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #aaa);
 }
 
@@ -23,7 +26,11 @@
   border-bottom: none;
 }
 
-.bulk-apply-row {
+/* Scoped to this modal's root. `.bulk-apply-row` was declared bare here and
+   bare again in ChannelProfilesListModal.css:257 — a different chunk — so the
+   two rows traded treatments depending on which page you had visited
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps it at (0,1,0). */
+:where(.bulk-rule-settings-modal) .bulk-apply-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -37,9 +44,9 @@
   flex-wrap: wrap;
 }
 
-.norm-group-disabled {
-  opacity: 0.6;
-}
+/* `.norm-group-disabled` deleted — see the note in RuleBuilder.css: the class
+   has no render site anywhere in the tree
+   (bead enhancedchannelmanager-87o0c). */
 
 .bulk-rule-settings-modal .sort-config-row {
   display: flex;
@@ -48,7 +55,10 @@
   align-items: center;
 }
 
+/* Meta role. 13.6px -> 11px. */
 .bulk-rule-settings-modal .form-hint {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-top: 0.35rem;
 }

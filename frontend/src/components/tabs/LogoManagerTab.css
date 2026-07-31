@@ -11,32 +11,44 @@
   box-sizing: border-box;
 }
 
-/* .logo-header layout + .header-title/.header-description/.header-actions
-   are supplied by PageHeader.css / shared/common.css (bd-7l7wi). This tab
-   renders its header via <PageHeader className="logo-header" .../>. */
+/* This tab no longer renders a header of its own: the title/description come
+   from the shared route header and the controls are portaled into it through
+   <RouteHeaderSlot>. The `.logo-header` wrapper class it used to pass to
+   PageHeader (bd-7l7wi) is gone from the DOM, so no `.logo-header ...` rule
+   can match any more (bead enhancedchannelmanager-qlc4h). */
 
 /* .btn-primary, .btn-secondary are defined in shared/common.css */
 
 /* .search-box is defined in shared/common.css */
 
 /* View Toggle (icon-only list/grid switch)
-   bd-p5f70: scoped to `.logo-header` — this used to be a bare `.view-toggle`
-   / `.view-toggle button` selector, which (CSS has no per-file scoping)
-   matched ANY `.view-toggle` container anywhere in the app, including the
-   text-label view toggles in PopularityPanel and EnhancedStatsPanel. Those
-   panels' own `.toggle-btn` buttons don't set width/height, so this file's
-   `width: 36px; height: 36px; padding: 0` (sized for a bare icon) applied
-   to them uninvited and squeezed "Rankings"/"Trending" into an overlapping
-   mess. Prefixing with `.logo-header` keeps this icon-toggle sizing local
-   to Logo Manager, where it belongs. */
-.logo-header .view-toggle {
+   bd-p5f70: this used to be a bare `.view-toggle` / `.view-toggle button`
+   selector, which (CSS has no per-file scoping) matched ANY `.view-toggle`
+   container anywhere in the app, including the text-label view toggles in
+   PopularityPanel and EnhancedStatsPanel. Those panels' own `.toggle-btn`
+   buttons don't set width/height, so this file's `width: 36px; height: 36px;
+   padding: 0` (sized for a bare icon) applied to them uninvited and squeezed
+   "Rankings"/"Trending" into an overlapping mess. An ancestor selector is
+   what keeps this icon-toggle sizing local to Logo Manager.
+
+   bead enhancedchannelmanager-qlc4h: that ancestor used to be `.logo-header`,
+   which no longer exists — this tab stopped rendering its own PageHeader and
+   now portals its controls into the route header via
+   <RouteHeaderSlot name="controls"><DenseToolbar .../></RouteHeaderSlot>, so
+   every `.logo-header ...` rule below silently stopped matching and both
+   toggles shipped as bare UA buttons. Measured ancestry of the live button:
+   .route-page-header > .page-header-controls > .route-page-controls-outlet
+   > .dense-toolbar > .dense-toolbar-filters > button. `.dense-toolbar` is
+   the ancestor that still exists and still keeps p5f70's guarantee: neither
+   PopularityPanel nor EnhancedStatsPanel renders its toggle in a toolbar. */
+.dense-toolbar .view-toggle {
   display: flex;
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
-.logo-header .view-toggle button {
+.dense-toolbar .view-toggle button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -50,28 +62,41 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
-.logo-header .view-toggle button:first-child {
+.dense-toolbar .view-toggle button:first-child {
   border-right: 1px solid var(--border-secondary);
 }
 
-.logo-header .view-toggle button:hover:not(.active) {
+.dense-toolbar .view-toggle button:hover:not(.active) {
   background-color: var(--border-primary);
 }
 
-.logo-header .view-toggle button.active {
+.dense-toolbar .view-toggle button.active {
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 
-.logo-header .view-toggle button .material-icons {
+.dense-toolbar .view-toggle button .material-icons {
   font-size: 18px;
 }
 
 /* Unused-only filter toggle (bead enhancedchannelmanager-09x38.13) — same
    pill affordance as .btn-secondary, with an .active state that mirrors
    .view-toggle button.active so both binary toggles in this header read
-   consistently. */
-.logo-header .unused-only-toggle {
+   consistently.
+
+   Body role, size token only (§ "Adopting a role", rule 1: a control keeps the
+   weight it was authored with, and this one was authored with none).
+
+   It sits in the route header's controls slot, which is why the sweep skipped
+   it as frozen chrome. That was the wrong call, and the rule above says why:
+   the frozen band is the rail and the 45px application bar (§ "What is *not*
+   in this scale"), not `.route-page-header`, whose title is on the page-title
+   role and whose `.btn-primary` / `.btn-secondary` / `.btn-danger` are on the
+   body role via shared/common.css — measured live at 13px/500 in this very
+   toolbar. A rule whose stated intent is "same pill affordance as
+   .btn-secondary" was therefore 0.6px larger than the .btn-secondary beside
+   it. Bead enhancedchannelmanager-6z299, completion pass. */
+.dense-toolbar .unused-only-toggle {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -81,23 +106,23 @@
   border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
 
-.logo-header .unused-only-toggle:hover:not(.active) {
+.dense-toolbar .unused-only-toggle:hover:not(.active) {
   background-color: var(--border-primary);
 }
 
-.logo-header .unused-only-toggle.active {
+.dense-toolbar .unused-only-toggle.active {
   background-color: var(--button-primary-bg);
   border-color: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
 
-.logo-header .unused-only-toggle .material-icons {
+.dense-toolbar .unused-only-toggle .material-icons {
   font-size: 18px;
 }
 
@@ -105,6 +130,12 @@
    .sortable / .sort-icon pattern (docs/style_guide.md: follow the in-app
    precedent rather than inventing a new sort-header idiom). */
 .logos-list .list-header .sortable {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -146,18 +177,20 @@
   overflow: hidden;
 }
 
-.list-header {
-  display: grid;
+/* Layout only. shared/common.css § LIST HEADERS owns every `.list-header`
+   appearance property (background, border, font-size/weight, colour, case,
+   tracking); this rule adds the column layout that has to line up with
+   `.logo-row` and nothing else (bead enhancedchannelmanager-qlc4h).
+   It is scoped to `.logos-list` because a bare `.list-header` here is not
+   file-local: each tab is a lazily-imported chunk, so its stylesheet is
+   appended in visit order, and an equal-specificity bare rule from any tab
+   visited later wins on every other tab. Measured before this change:
+   visiting EPG Manager and then returning to Logo Manager rendered this
+   five-column header with EPG's seven-column template. */
+.logos-list .list-header {
   grid-template-columns: 60px 1fr 1fr 80px 100px;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .logo-row {
@@ -206,8 +239,12 @@
 }
 
 /* Logo Name */
+/* Had no font-size at all, so it rendered at the UA default 16px — the same
+   gap `.account-name` and `.source-name` had before the f4yc7 pilot. */
 .logo-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -223,7 +260,9 @@
 }
 
 .logo-url {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -253,13 +292,15 @@
 }
 
 .copy-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Logo Channel Count */
 .logo-count {
   text-align: center;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -274,39 +315,17 @@
   justify-content: flex-end;
 }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.action-btn:hover:not(:disabled) {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.action-btn.delete:hover:not(:disabled) {
-  background-color: rgba(239, 68, 68, 0.2);
-  color: var(--error);
-}
-
-.action-btn .material-icons {
-  font-size: 18px;
-}
+/* The whole `.action-btn` family is owned by shared/common.css § 18 ACTION
+   BUTTONS, including the 32x32 box this file used to declare — § 18 said
+   `padding: 0.375rem` and all three manager tabs overrode it identically,
+   so the shared rule described a geometry nothing rendered. The tabs' box
+   won and moved into § 18; row heights here are unchanged. The destructive
+   hover tint moved with it and became `--error-bg` rather than the literal
+   `rgba(239, 68, 68, 0.2)` this file hardcoded, so it now follows the theme.
+   Repeating any of it here is what made it chunk-order dependent: these
+   files are lazy chunks appended after common.css, so a bare copy in
+   whichever tab was visited last silently won app-wide (bead
+   enhancedchannelmanager-6z299). */
 
 /* ===================== */
 /* GRID VIEW             */
@@ -370,9 +389,12 @@
   margin-bottom: 0.375rem;
 }
 
+/* The card view's equivalent of `.logo-name` — same role, same values, so the
+   two views read as one list rather than two typefaces of the same data. */
 .card-name span {
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -389,8 +411,9 @@
   padding: 0 0.25rem;
   background-color: var(--border-primary);
   border-radius: var(--radius-xl);
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -421,7 +444,7 @@
 /* ===================== */
 
 @media (max-width: 900px) {
-  .list-header {
+  .logos-list .list-header {
     display: none;
   }
 
@@ -440,11 +463,9 @@
 }
 
 @media (max-width: 600px) {
-  .logo-header {
-    flex-direction: column;
-    gap: 1rem;
-  }
-
+  /* The `.logo-header` stacking rule that used to live here went with the
+     wrapper itself (bead enhancedchannelmanager-qlc4h); the route header
+     carries its own wrap policy. */
   .header-actions {
     flex-wrap: wrap;
     width: 100%;
@@ -473,21 +494,11 @@
   color: var(--text-primary);
 }
 
-.warning-message {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-lg);
-  color: var(--warning);
-  font-size: 0.9rem;
-}
-
-.warning-message .material-icons {
-  font-size: 20px;
-}
+/* `.warning-message` and its glyph are owned by shared/common.css § 8
+   ERROR/WARNING DISPLAYS. Declared bare here, in a lazy chunk, this copy
+   became the app-wide warning banner as soon as anyone opened Logo Manager —
+   including on Settings, where the shared banner is what the markup expects
+   (bead enhancedchannelmanager-6z299). */
 
 /* .btn-danger is defined in shared/common.css */
 
@@ -500,19 +511,18 @@
   border-top: 1px solid var(--border-primary);
   background: var(--bg-secondary);
   flex-shrink: 0;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
-.pagination-left,
-.pagination-center,
-.pagination-right {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.pagination-center {
+/* `.pagination-left/-center/-right` are owned by shared/common.css § 25
+   PAGINATION STRIP. Declared bare here they competed with the Journal and
+   M3U Changes copies across chunks, and the tighter centre gap this footer
+   wants leaked into both of them. Scoped, it stays local
+   (bead enhancedchannelmanager-6z299). */
+.logo-pagination .pagination-center {
   gap: 0.25rem;
 }
 
@@ -541,27 +551,13 @@
 }
 
 .logo-pagination .page-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
-.page-indicator {
-  padding: 0 0.5rem;
-  white-space: nowrap;
-}
-
-.page-size-label {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  white-space: nowrap;
-}
-
-.page-size-label select {
-  padding: 0.25rem 0.375rem;
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
+/* `.page-indicator`, `.page-size-label` and its native select moved to
+   shared/common.css § 25 PAGINATION STRIP alongside Journal's and M3U
+   Changes' equivalents — `.page-indicator` and `.page-info` are the same
+   "Page 3 of 12" string under two names, and the two `.page-size-label`
+   rules disagreed about whether the label was a flex row or a coloured
+   string. The indicator gains 0.25rem of padding a side from the reconciled
+   rule (bead enhancedchannelmanager-6z299). */

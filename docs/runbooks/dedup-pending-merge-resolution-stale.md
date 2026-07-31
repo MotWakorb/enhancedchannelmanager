@@ -11,7 +11,7 @@
 
 - `ECMDedupPendingMergeResolutionStale` (warning) — less than 95% of merge requests added to the pending queue in the last 24h have reached a terminal state (`success` or `dismissed`); sustained 1h
 
-**SLO:** [SLO-10b Pending Merge Resolution Rate](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+**SLO:** [SLO-10b Pending Merge Resolution Rate](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 
 ---
 
@@ -99,6 +99,6 @@ If the alert persists more than 24 hours after triage (one full evaluation windo
 
 ## References
 
-- [SLO-10b](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht--bd-ft3hk)
+- [SLO-10b](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 - bd-ft3hk (this runbook + alert), bd-1v4ht (dedup epic)
 - BD-E (merge endpoint), BD-F (pending-merges queue)

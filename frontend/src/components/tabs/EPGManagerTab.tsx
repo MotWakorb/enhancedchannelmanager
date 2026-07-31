@@ -24,6 +24,10 @@ import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
@@ -158,7 +162,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         <span className={`material-icons ${isRefreshing ? 'spinning' : ''}`}>
           {getStatusIcon(source.status)}
         </span>
-        <span className="status-label">{getStatusLabel(source.status)}</span>
+        <span className="status-label micro-label">{getStatusLabel(source.status)}</span>
         {isRefreshing && (
           <span className="status-hint">See Dispatcharr for progress</span>
         )}
@@ -815,6 +819,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [dummySources, setDummySources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSource, setEditingSource] = useState<EPGSource | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
@@ -836,6 +842,8 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   );
 
   const loadSources = useCallback(async () => {
+    setLoading(true);
+    setSourceLoadState('loading');
     try {
       const data = await api.getEPGSources();
       // Separate standard and dummy EPG sources, sort by priority (descending)
@@ -847,7 +855,10 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
         .sort((a, b) => a.name.localeCompare(b.name));
       setSources(standardSources);
       setDummySources(dummyEpgSources);
+      setHasLoadedSourceData(true);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load EPG sources', 'EPG Manager');
     } finally {
       setLoading(false);
@@ -1061,12 +1072,52 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     }
   };
 
-  if (loading) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="epg-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="EPG source controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading sources
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText=""
+          />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading EPG sources...</p>
+        </div>
+      </div>
+    );
+  }
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
+    return (
+      <div className="epg-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText=""
+            onRetry={loadSources}
+          />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="EPG sources"
+            successText=""
+            announce={false}
+          />
         </div>
       </div>
     );
@@ -1076,24 +1127,45 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
 
   return (
     <div className="epg-manager-tab">
-      <PageHeader
-        className="epg-header"
-        title="EPG Sources"
-        description="Manage your Electronic Program Guide sources. Click Reorder to change priority."
-        actions={(
-          <>
-            {sources.length > 1 && (
-              <button
-                className="btn-secondary"
-                onClick={() => setIsReorderMode((v) => !v)}
-                title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
-              >
-                <span className="material-icons">
-                  {isReorderMode ? 'check' : 'reorder'}
-                </span>
-                {isReorderMode ? 'Done' : 'Reorder'}
-              </button>
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddSource}>
+          <span className="material-icons">add</span>
+          Add Standard EPG
+        </button>
+      </RouteHeaderSlot>
+      {/* A healthy, loaded EPG Manager says nothing here — see the matching
+          comment in M3UManagerTab.tsx. "N EPG sources" restated the list
+          directly beneath it (bead enhancedchannelmanager-tygwm); the refresh
+          and stale-with-Retry states stay because the list cannot show them.
+          EPG Manager has no related links, so this is also the route that
+          leaves the header's meta row genuinely empty. */}
+      {(refreshingAll || sourceLoadState !== 'success') && (
+        <RouteHeaderSlot name="status">
+          {refreshingAll
+            ? <span>EPG refresh in progress</span>
+            : (
+              <SourceLoadStatus
+                state={sourceLoadState}
+                sourceName="EPG sources"
+                successText=""
+                stale={sourceLoadState === 'error'}
+                onRetry={loadSources}
+              />
             )}
+        </RouteHeaderSlot>
+      )}
+      <RouteHeaderSlot name="controls">
+        <DenseToolbar
+          label="EPG source controls"
+          sortView={sources.length > 1 ? <button
+            className="btn-secondary"
+            onClick={() => setIsReorderMode((v) => !v)}
+            title={isReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+          >
+            <span className="material-icons">{isReorderMode ? 'check' : 'reorder'}</span>
+            {isReorderMode ? 'Done' : 'Reorder'}
+          </button> : undefined}
+          secondaryActions={<>
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={refreshingAll}>
               <span className={`material-icons ${refreshingAll ? 'spinning' : ''}`}>sync</span>
               {refreshingAll ? 'Refreshing...' : 'Refresh All'}
@@ -1104,13 +1176,20 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
                 Migrate Guides
               </button>
             )}
-            <button className="btn-primary" onClick={handleAddSource}>
-              <span className="material-icons">add</span>
-              Add Standard EPG
-            </button>
-          </>
-        )}
-      />
+          </>}
+        />
+      </RouteHeaderSlot>
+
+      {/* The pane used to open on an unlabelled table — route title,
+          description, then straight into the list, while the section below it
+          was labelled "Dummy EPG Profiles" (bead
+          enhancedchannelmanager-7dxx0). Rendered through PageHeader rather
+          than a local h2 so it takes the same section role
+          (`.header-title h2`, 15px/600/1.3) as that heading, automatically.
+          Unconditional: the heading names the section, not the rows, and
+          keeping it over the empty state also stops the outline skipping from
+          the route h1 to the empty state's h3. */}
+      <PageHeader className="page-header-heading-only" title="EPG Sources" />
 
       {sources.length === 0 ? (
         <div className="empty-state">

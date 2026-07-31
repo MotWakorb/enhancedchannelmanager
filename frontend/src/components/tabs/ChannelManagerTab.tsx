@@ -6,6 +6,9 @@ import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { ChannelDefaults } from '../StreamsPane';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import type { SourceLoadState } from '../sourceLoadState';
+import { aggregateWorkspaceSources, retryFailedSources, type WorkspaceSource } from '../workspaceLoadState';
 import './ChannelManagerTab.css';
 
 /**
@@ -52,6 +55,9 @@ export interface ChannelManagerTabProps {
   onCreateChannel: (name: string, channelNumber?: number, groupId?: number, logoId?: number, tvgId?: string, logoUrl?: string) => Promise<Channel>;
   onDeleteChannel: (channelId: number) => Promise<void>;
   channelsLoading: boolean;
+  channelsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
+  onRetryChannels?: () => void;
+  channelSources?: WorkspaceSource[];
 
   // Channel Search & Filter
   channelSearch: string;
@@ -130,6 +136,10 @@ export interface ChannelManagerTabProps {
   providers: M3UAccount[];
   streamGroups: StreamGroupInfo[];
   streamsLoading: boolean;
+  streamsError?: Extract<SourceLoadState, 'error' | 'permission'> | null;
+  onRetryStreams?: () => void;
+  streamSources?: WorkspaceSource[];
+  streamMatchingTotal?: number | null;
 
   // Stream Search & Filter
   streamSearch: string;
@@ -181,7 +191,12 @@ export interface ChannelManagerTabProps {
   // Manual entry trigger (opens bulk create modal without pre-selected streams)
   externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
-  onStreamGroupDrop?: (groupNames: string[], streamIds: number[]) => void;
+  onStreamGroupDrop?: (
+    groupNames: string[],
+    streamIds: number[],
+    targetGroupId?: number,
+    suggestedStartingNumber?: number,
+  ) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
   // Includes target group ID and starting channel number for pre-filling the modal
   onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
@@ -244,6 +259,9 @@ export function ChannelManagerTab({
   onCreateChannel,
   onDeleteChannel,
   channelsLoading,
+  channelsError = null,
+  onRetryChannels,
+  channelSources,
 
   // Channel Search & Filter
   channelSearch,
@@ -322,6 +340,10 @@ export function ChannelManagerTab({
   providers,
   streamGroups,
   streamsLoading,
+  streamsError = null,
+  onRetryStreams,
+  streamSources,
+  streamMatchingTotal = null,
 
   // Stream Search & Filter
   streamSearch,
@@ -441,6 +463,39 @@ export function ChannelManagerTab({
   // operator is already on the page (so a single-resolve doesn't strand the
   // operator on a view with no way back to the default panes via the subnav).
   const showSubnavLink = pendingMergesCount > 0 || view === 'pending-merges';
+  const effectiveChannelSources = channelSources ?? [{
+    key: 'channels',
+    label: 'channels',
+    state: channelsError ?? (channelsLoading ? 'loading' : 'success'),
+    hasSnapshot: channelsError === 'error' && channels.length > 0,
+    retry: onRetryChannels ?? (() => undefined),
+  }];
+  const effectiveStreamSources = streamSources ?? [{
+    key: 'streams',
+    label: 'streams',
+    state: streamsError ?? (streamsLoading ? 'loading' : 'success'),
+    hasSnapshot: streamsError === 'error' && streams.length > 0,
+    retry: onRetryStreams ?? (() => undefined),
+  }];
+  const channelLoad = aggregateWorkspaceSources(effectiveChannelSources);
+  const streamLoad = aggregateWorkspaceSources(effectiveStreamSources);
+  const permissionDenied = channelLoad.state === 'permission' || streamLoad.state === 'permission';
+
+  const unavailablePane = (
+    heading: 'Channels' | 'Streams',
+    state: Extract<SourceLoadState, 'error' | 'permission'>,
+    onRetry?: () => void,
+  ) => (
+    <section className="channel-workspace-state" aria-labelledby={`${heading.toLowerCase()}-state-heading`}>
+      <h2 id={`${heading.toLowerCase()}-state-heading`}>{heading}</h2>
+      <SourceLoadStatus
+        state={state}
+        successText={`${heading} loaded`}
+        sourceName={heading.toLowerCase()}
+        onRetry={state === 'error' ? onRetry : undefined}
+      />
+    </section>
+  );
 
   return (
     <div className="channel-manager-tab">
@@ -478,10 +533,40 @@ export function ChannelManagerTab({
 
       {view === 'pending-merges' ? (
         <PendingMergesPage />
+      ) : permissionDenied ? (
+        <div className="channel-workspace-permission">
+          {unavailablePane('Channels', 'permission')}
+          {unavailablePane('Streams', 'permission')}
+        </div>
       ) : (
         <SplitPane
+      /* Even split, stated here rather than left to SplitPane's own default.
+         That default is 58, and Channel Manager is SplitPane's only consumer,
+         so 58 was in practice this page's ratio: measured at 1920 it rendered
+         972px of channels against 698px of streams. The panes hold comparable
+         amounts of information and neither earns the extra 137px, so the
+         starting point is even and the divider is still draggable across the
+         35-70% range (bead enhancedchannelmanager-vh6hh, PO decision). */
+      defaultLeftWidth={50}
+      leftLabel="Channels"
+      rightLabel="Streams"
       left={
-        <ChannelsPane
+        channelLoad.state === 'error' && !channelLoad.stale
+          ? unavailablePane('Channels', 'error', () => { void retryFailedSources(effectiveChannelSources); })
+          : <div className="channel-workspace-pane-content">
+          {channelLoad.state === 'error' && (
+            <SourceLoadStatus
+              state="error"
+              stale
+              successText="Channels loaded"
+              sourceName="channels"
+              onRetry={() => { void retryFailedSources(effectiveChannelSources); }}
+            />
+          )}
+          {channelLoad.state === 'success' && channels.length === 0 && channelGroups.length === 0 && (
+            <p className="channel-workspace-empty empty-inline" role="status">No channels are configured.</p>
+          )}
+          <ChannelsPane
           channelGroups={channelGroups}
           channels={channels}
           streams={allStreams}
@@ -562,10 +647,25 @@ export function ChannelManagerTab({
           gracenoteConflictMode={gracenoteConflictMode}
           externalChannelToEdit={externalChannelToEdit}
           onExternalChannelEditHandled={onExternalChannelEditHandled}
-        />
+        /></div>
       }
       right={
-        <StreamsPane
+        streamLoad.state === 'error' && !streamLoad.stale
+          ? unavailablePane('Streams', 'error', () => { void retryFailedSources(effectiveStreamSources); })
+          : <div className="channel-workspace-pane-content">
+          {streamLoad.state === 'error' && (
+            <SourceLoadStatus
+              state="error"
+              stale
+              successText="Streams loaded"
+              sourceName="streams"
+              onRetry={() => { void retryFailedSources(effectiveStreamSources); }}
+            />
+          )}
+          {streamLoad.state === 'success' && streams.length === 0 && streamGroups.length === 0 && (
+            <p className="channel-workspace-empty empty-inline" role="status">No source streams are available.</p>
+          )}
+          <StreamsPane
           streams={streams}
           providers={providers}
           streamGroups={streamGroups}
@@ -576,6 +676,12 @@ export function ChannelManagerTab({
           groupFilter={streamGroupFilter}
           onGroupFilterChange={onStreamGroupFilterChange}
           loading={streamsLoading}
+          matchingTotal={streamMatchingTotal}
+          channels={channels}
+          onBulkAddToChannel={(streamIds, channelId) => {
+            void onBulkStreamDrop(channelId, streamIds);
+          }}
+          onKeyboardCreateFromGroup={onStreamGroupDrop}
           selectedProviders={selectedProviders}
           onSelectedProvidersChange={onSelectedProvidersChange}
           selectedStreamGroups={selectedStreamGroups}
@@ -607,7 +713,7 @@ export function ChannelManagerTab({
           onGroupExpand={onStreamGroupExpand}
           defaultNormalizeOnCreate={defaultNormalizeOnCreate}
           dedupReturningStreamIds={dedupReturningStreamIds}
-        />
+        /></div>
       }
     />
       )}

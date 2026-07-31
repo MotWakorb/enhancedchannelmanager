@@ -115,13 +115,11 @@
 }
 
 /* .empty-state is defined in shared/common.css */
-/* Component-specific override for smaller padding */
-.loading {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 2rem 1rem;
-  font-size: 0.9rem;
-}
+/* `.loading` is owned by shared/common.css § 6 LOADING STATES. This copy
+   called itself a "component-specific override for smaller padding" but was
+   declared bare, so it was not scoped to this component at all — it was a
+   second app-wide `.loading`, and the one that won depended on load order
+   (bead enhancedchannelmanager-6z299). */
 
 .streams-list {
   display: flex;
@@ -204,5 +202,5 @@
 
 .remove-btn:hover {
   background-color: var(--error)33;
-  color: var(--error);
+  color: var(--danger-text);
 }

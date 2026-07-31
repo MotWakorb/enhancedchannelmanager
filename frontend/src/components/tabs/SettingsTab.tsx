@@ -11,9 +11,13 @@ import { LinkedAccountsSection } from '../settings/LinkedAccountsSection';
 import { TLSSettingsSection } from '../settings/TLSSettingsSection';
 import { BackupRestoreSection } from '../settings/BackupRestoreSection';
 import { MCPSettingsSection } from '../settings/MCPSettingsSection';
-import { LookupTableSection } from '../settings/LookupTableSection';
 import { AlertMethodsSection } from '../settings/AlertMethodsSection';
 import { EventSyncTeamAliasesSection } from '../settings/EventSyncTeamAliasesSection';
+import {
+  SettingsSectionHeader,
+  SettingsSectionPlaceholders,
+  type SettingsSectionMeta,
+} from '../settings/SettingsSectionHeader';
 import { useAuth } from '../../hooks/useAuth';
 import type { ChannelProfile, M3UDigestSettings, M3UDigestFrequency } from '../../types';
 import { logger } from '../../utils/logger';
@@ -28,6 +32,7 @@ import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { useScrollTopReset } from '../../hooks/useScrollTopReset';
+import { StickySectionNav } from '../StickySectionNav';
 import {
   DndContext,
   closestCenter,
@@ -167,44 +172,76 @@ function SortablePriorityItem({
       >
         <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
       </span>
-      <input
-        type="checkbox"
-        checked={enabled}
-        onChange={() => onToggleEnabled(id)}
-        style={{
-          width: '16px',
-          height: '16px',
-          cursor: 'pointer',
-          accentColor: 'var(--accent-primary)',
-          flexShrink: 0,
-        }}
-        title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
-      />
-      <span
+      {/* Everything to the right of the drag handle is one <label>, so the
+          pointer target for the toggle is the row rather than the 16px box
+          (WCAG 2.5.8; bead enhancedchannelmanager-m26f8). The handle stays
+          OUTSIDE it — dnd-kit's listeners are bound only there, and a label
+          wrapped around them would turn every drag start into a toggle.
+
+          `aria-label` rather than the label's own text: the region contains a
+          Material Icons ligature and the priority badge, whose text content
+          ("high_quality", "3") would otherwise be read as part of the name.
+          The box itself is sized by --control-box-size in index.css; this used
+          to restate 16px inline. */}
+      <label
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          width: '24px',
-          height: '24px',
-          borderRadius: '50%',
-          backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
-          color: 'var(--bg-primary, #1e1e23)',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          flexShrink: 0,
-          lineHeight: 1,
+          gap: '0.75rem',
+          flex: 1,
+          minWidth: 0,
+          cursor: 'pointer',
+          // This row sits inside a `.form-group`, whose `label` rule in
+          // shared/common.css would otherwise give the new element a block
+          // display, the label type role and a 0.375rem bottom margin. Inline
+          // wins over all of it, which is why the rest of this component is
+          // written inline too.
+          margin: 0,
+          font: 'inherit',
+          color: 'inherit',
         }}
       >
-        {enabled ? index + 1 : '-'}
-      </span>
-      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
-        {config.icon}
-      </span>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
-        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
-      </div>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={() => onToggleEnabled(id)}
+          aria-label={`${config.label} — use as a stream sort criterion`}
+          style={{
+            cursor: 'pointer',
+            accentColor: 'var(--accent-primary)',
+          }}
+          title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
+        />
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
+            color: 'var(--bg-primary, #1e1e23)',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          {enabled ? index + 1 : '-'}
+        </span>
+        <span
+          className="material-icons"
+          aria-hidden="true"
+          style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}
+        >
+          {config.icon}
+        </span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+          <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
+        </div>
+      </label>
     </div>
   );
 }
@@ -286,6 +323,35 @@ function SortableFailedCategoryItem({
   );
 }
 
+/**
+ * The M3U Digest page's sections, in render order. Single authority for both
+ * the loading placeholders and the loaded cards, so the Settings section rail
+ * is complete from first paint and its anchor ids never move (see
+ * settings/SettingsSectionHeader.tsx; bead enhancedchannelmanager-b32co).
+ *
+ * "Last Digest" is absent on purpose: it is gated on there having been one,
+ * which is data rather than a loading window.
+ */
+const M3U_DIGEST_SECTIONS = {
+  notifications: { icon: 'notifications', label: 'Digest Notifications' },
+  frequency: { icon: 'schedule', label: 'Frequency' },
+  contentFilters: { icon: 'filter_list', label: 'Content Filters' },
+  accountFilter: { icon: 'checklist', label: 'Account Filter' },
+  excludePatterns: { icon: 'filter_alt', label: 'Exclude Patterns' },
+  emailRecipients: { icon: 'mail', label: 'Email Recipients' },
+  discord: { icon: 'forum', label: 'Discord Notification' },
+} as const satisfies Record<string, SettingsSectionMeta>;
+
+const M3U_DIGEST_ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [
+  M3U_DIGEST_SECTIONS.notifications,
+  M3U_DIGEST_SECTIONS.frequency,
+  M3U_DIGEST_SECTIONS.contentFilters,
+  M3U_DIGEST_SECTIONS.accountFilter,
+  M3U_DIGEST_SECTIONS.excludePatterns,
+  M3U_DIGEST_SECTIONS.emailRecipients,
+  M3U_DIGEST_SECTIONS.discord,
+];
+
 interface SettingsTabProps {
   onSaved: () => void;
   onThemeChange?: (theme: Theme) => void;
@@ -300,6 +366,16 @@ import type { SettingsPage } from '../../hooks';
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
   const settingsContentRef = useRef<HTMLDivElement>(null);
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error' | 'revert-error'>('idle');
+  const [settingsBaselineVersion, setSettingsBaselineVersion] = useState(0);
+  const baselineSignatureRef = useRef<string | null>(null);
+  const adoptNextSignatureRef = useRef(false);
+  const auditedLongSettingsPages: ReadonlySet<SettingsPage> = new Set([
+    'general', 'channel-defaults', 'appearance', 'email',
+    'integrations', 'channel-pipeline', 'maintenance',
+  ]);
+  const supportsPageSave = auditedLongSettingsPages.has(activePage);
   // Reset scroll position when navigating between Settings sub-pages — the
   // content pane otherwise preserves scrollTop from the previously viewed
   // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
@@ -307,14 +383,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Wrap setActivePage to also notify parent for hash routing
   const setActivePage = (page: SettingsPage) => {
-    setActivePageInternal(page);
-    onSettingsPageChange?.(page);
+    if (onSettingsPageChange) {
+      onSettingsPageChange(page);
+    } else {
+      setActivePageInternal(page);
+    }
   };
 
   // Sync with external initialSettingsPage changes (e.g., browser back/forward)
   useEffect(() => {
-    if (initialSettingsPage && initialSettingsPage !== activePage) {
-      setActivePageInternal(initialSettingsPage);
+    const nextPage = initialSettingsPage || 'general';
+    if (nextPage !== activePage) {
+      setActivePageInternal(nextPage);
     }
     // Only re-run when initialSettingsPage changes, not activePage
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -322,6 +402,45 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const notifications = useNotifications();
   const { user } = useAuth();
   const restartToastIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasPendingChanges) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const protectRouteNavigation = (event: Event) => {
+      if (!hasPendingChanges) return;
+      if (!window.confirm('Discard unsaved settings and leave this page?')) {
+        event.preventDefault();
+      } else {
+        setHasPendingChanges(false);
+        void loadSettings().catch(() => {
+          // Navigation proceeds after explicit confirmation. A destination
+          // that keeps Settings mounted will retain its current values if the
+          // refresh fails and become dirty again on the next mutation.
+        });
+      }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('ecm:before-route-change', protectRouteNavigation);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener('ecm:before-route-change', protectRouteNavigation);
+    };
+  }, [hasPendingChanges]);
+
+  useEffect(() => {
+    if (!hasPendingChanges) return;
+    requestAnimationFrame(() => {
+      const container = settingsContentRef.current;
+      const focused = document.activeElement as HTMLElement | null;
+      const pending = container?.querySelector<HTMLElement>('.settings-pending-actions');
+      if (!container || !focused || !container.contains(focused) || !pending) return;
+      const overlap = focused.getBoundingClientRect().bottom - pending.getBoundingClientRect().top;
+      if (overlap >= 0) container.scrollTop += overlap + 12;
+    });
+  }, [hasPendingChanges]);
 
   // Listen for restart events from NotificationCenter to dismiss the restart toast
   useEffect(() => {
@@ -654,6 +773,57 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [, setRestarting] = useState(false);
 
   // DnD sensors for sort priority
+  // This inventory mirrors every value sent by handleSave. Comparing it to
+  // the last successful load/save makes dirty state independent of DOM event
+  // type (native inputs, portalled listboxes, buttons, and drag controls).
+  const savePayloadSignature = JSON.stringify([
+    url, authMethod, username, password, autoRenameChannelNumber,
+    includeChannelNumberInName, channelNumberSeparator, removeCountryPrefix,
+    includeCountryInName, countrySeparator, timezonePreference, showStreamUrls,
+    hideAutoSyncGroups, allowMultiProviderAutoSync, hideUngroupedStreams,
+    hideEpgUrls, hideM3uUrls, gracenoteConflictMode, theme, dateFormat,
+    defaultChannelProfileIds, epgAutoMatchThreshold, customNetworkPrefixes,
+    customNetworkSuffixes, normalizeOnChannelCreate, dedupThreshold,
+    dedupM3uToastSuppressed, embyEnabled, embyBaseUrl, embyApiKey, plexEnabled,
+    plexBaseUrl, plexToken, jellyfinEnabled, jellyfinBaseUrl, jellyfinApiKey,
+    trustedMediaNetworks, statsPollInterval, userTimezone, backendLogLevel,
+    frontendLogLevel, vlcOpenBehavior, streamPreviewMode, channelPipelineExcludedTerms,
+    channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
+    maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
+    streamProbeTimeout, bitrateSampleDuration, parallelProbingEnabled,
+    maxConcurrentProbes, profileDistributionStrategy, skipRecentlyProbedHours,
+    refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
+    probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
+    blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
+    streamSortPriority, streamSortEnabled, m3uAccountPriorities,
+    deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
+    failedStreamSortOrder, strikeThreshold, smtpHost, smtpPort, smtpUser,
+    smtpPassword, smtpFromEmail, smtpFromName, smtpUseTls, smtpUseSsl,
+    discordWebhookUrl, telegramBotToken, telegramChatId,
+  ]);
+
+  useEffect(() => {
+    if (settingsBaselineVersion > 0) {
+      baselineSignatureRef.current = savePayloadSignature;
+      setHasPendingChanges(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsBaselineVersion]);
+
+  useEffect(() => {
+    if (adoptNextSignatureRef.current) {
+      adoptNextSignatureRef.current = false;
+      baselineSignatureRef.current = savePayloadSignature;
+      setHasPendingChanges(false);
+      return;
+    }
+    if (supportsPageSave && baselineSignatureRef.current !== null) {
+      const changed = savePayloadSignature !== baselineSignatureRef.current;
+      setHasPendingChanges(changed);
+      if (changed) setSaveFeedback('idle');
+    }
+  }, [savePayloadSignature, supportsPageSave]);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -684,7 +854,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings().catch(() => {
+      // Revert callers surface failures inline; initial load retains the
+      // existing page-level error behavior.
+    });
     loadStreamCount();
     loadProbeHistory();
     checkForOngoingProbe();
@@ -1002,8 +1175,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       } finally {
         setSmtpAlertRecipientsLoading(false);
       }
+      setSettingsBaselineVersion((version) => version + 1);
     } catch (err) {
       logger.error('Failed to load settings:', err);
+      throw err;
     }
   };
 
@@ -1454,10 +1629,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         notifications.success('Settings saved successfully');
       }
       onSaved();
+      baselineSignatureRef.current = savePayloadSignature;
+      adoptNextSignatureRef.current = Boolean(password || smtpPassword);
+      setHasPendingChanges(false);
+      setSaveFeedback('success');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to save settings';
       logger.error('Failed to save settings', err);
       notifications.error(errorMessage, 'Save Failed');
+      setSaveFeedback('error');
     } finally {
       setLoading(false);
     }
@@ -2002,10 +2182,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderGeneralPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>General Settings</h2>
-        <p>Configure your Dispatcharr connection.</p>
-      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -2218,10 +2394,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderAppearancePage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Appearance</h2>
-        <p>Customize how the app displays information.</p>
-      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -2539,7 +2711,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   alert('Failed to clear notifications');
                 }
               }}
-              style={{ color: 'var(--error)' }}
+              style={{ color: 'var(--danger-text)' }}
             >
               <span className="material-icons" style={{ fontSize: '18px' }}>delete_sweep</span>
               Clear All
@@ -2560,10 +2732,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderChannelDefaultsPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Channel Defaults</h2>
-        <p>Configure default options for bulk channel creation.</p>
-      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -2936,10 +3104,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderNormalizationPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Channel Normalization</h2>
-        <p>Configure tag-based patterns for cleaning up channel names during bulk channel creation.</p>
-      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -3133,10 +3297,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderChannelPipelinePage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Channel Pipeline</h2>
-        <p>Configure global exclusion filters for the channel pipeline. Streams matching these filters will be excluded before any rules are evaluated.</p>
-      </div>
 
       {/* Stream Name Exclusion List */}
       <div className="settings-section">
@@ -3152,7 +3312,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </span>
             <div className="email-recipients-list">
               {channelPipelineExcludedTerms.length === 0 ? (
-                <span className="no-recipients">No excluded terms configured</span>
+                <span className="empty-inline">No excluded terms configured</span>
               ) : (
                 channelPipelineExcludedTerms.map((term) => (
                   <span key={term} className="email-recipient-tag">
@@ -3218,7 +3378,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             </span>
             <div className="email-recipients-list">
               {channelPipelineExcludedGroups.length === 0 ? (
-                <span className="no-recipients">No excluded groups configured</span>
+                <span className="empty-inline">No excluded groups configured</span>
               ) : (
                 channelPipelineExcludedGroups.map((group) => (
                   <span key={group} className="email-recipient-tag">
@@ -3352,10 +3512,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Notification Settings</h2>
-        <p>Configure notification channels (Email, Discord, Telegram) for alerts and reports.</p>
-      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -3528,7 +3684,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           Scheduled tasks use the Email alert channel to send notifications. Add one or more recipient email addresses here.
         </p>
         {!smtpAlertRecipientsPersisted.methodId && !smtpAlertRecipientsPersisted.recipients.trim() && (
-          <p className="settings-empty-state">
+          <p className="empty-inline">
             No recipients configured. Scheduled task email alerts won&apos;t be delivered until you add at least one recipient.
           </p>
         )}
@@ -3722,10 +3878,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // connection on the General page (the primary upstream).
   const renderIntegrationsPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Integrations</h2>
-        <p>Configure third-party server integrations for cross-referenced data (Stats user attribution, etc.).</p>
-      </div>
 
       {/* Emby Integration */}
       <div id="emby-integration" className="settings-section" data-testid="emby-integration-section">
@@ -4153,16 +4305,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderM3UDigestPage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>M3U Change Digest</h2>
-        <p>Configure email notifications for M3U playlist changes.</p>
-      </div>
 
+      {/* The placeholders are what keep this page's seven rail entries — and
+          the anchors a shared `?section=` link names — present while the fetch
+          is in flight. Without them the rail appears from nothing when it
+          settles, and a deep link scrolls the reader away from wherever they
+          were reading (bead enhancedchannelmanager-b32co). The error branch
+          below deliberately has none: a failed load has no sections to offer,
+          and it only becomes a loaded page through an explicit Retry. */}
       {digestLoading && (
-        <div className="loading-state">
-          <span className="material-icons spinning">sync</span>
-          <span>Loading digest settings...</span>
-        </div>
+        <>
+          <div className="loading-state">
+            <span className="material-icons spinning">sync</span>
+            <span>Loading digest settings...</span>
+          </div>
+          <SettingsSectionPlaceholders sections={M3U_DIGEST_ALWAYS_PRESENT} />
+        </>
       )}
 
       {digestError && !digestLoading && (
@@ -4185,10 +4343,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         <>
           {/* Enable/Disable Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">notifications</span>
-              <h3>Digest Notifications</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.notifications} />
 
             <div className="settings-group">
               <div className="checkbox-group">
@@ -4208,10 +4363,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Frequency Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">schedule</span>
-              <h3>Frequency</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.frequency} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4252,10 +4404,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Content Filters Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">filter_list</span>
-              <h3>Content Filters</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.contentFilters} />
 
             <div className="settings-group">
               <div className="checkbox-group">
@@ -4301,10 +4450,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Account Filter Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">checklist</span>
-              <h3>Account Filter</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.accountFilter} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4328,10 +4474,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Exclude Patterns Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">filter_alt</span>
-              <h3>Exclude Patterns</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.excludePatterns} />
 
             <div className="settings-group">
               <div className="form-group-vertical">
@@ -4341,7 +4484,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.exclude_group_patterns.length === 0 ? (
-                    <span className="no-recipients">No exclude patterns configured</span>
+                    <span className="empty-inline">No exclude patterns configured</span>
                   ) : (
                     digestSettings.exclude_group_patterns.map((pattern) => (
                       <span key={pattern} className="email-recipient-tag">
@@ -4394,7 +4537,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.exclude_stream_patterns.length === 0 ? (
-                    <span className="no-recipients">No exclude patterns configured</span>
+                    <span className="empty-inline">No exclude patterns configured</span>
                   ) : (
                     digestSettings.exclude_stream_patterns.map((pattern) => (
                       <span key={pattern} className="email-recipient-tag">
@@ -4444,10 +4587,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Recipients Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">mail</span>
-              <h3>Email Recipients</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.emailRecipients} />
 
             {!smtpConfigured && (
               <div className="warning-banner">
@@ -4473,7 +4613,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </span>
                 <div className="email-recipients-list">
                   {digestSettings.email_recipients.length === 0 ? (
-                    <span className="no-recipients">No recipients configured</span>
+                    <span className="empty-inline">No recipients configured</span>
                   ) : (
                     digestSettings.email_recipients.map((email) => (
                       <span key={email} className="email-recipient-tag">
@@ -4523,10 +4663,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
           {/* Discord Notification Section */}
           <div className="settings-section">
-            <div className="settings-section-header">
-              <span className="material-icons">forum</span>
-              <h3>Discord Notification</h3>
-            </div>
+            <SettingsSectionHeader section={M3U_DIGEST_SECTIONS.discord} />
 
             {!discordConfigured && (
               <div className="warning-banner">
@@ -4600,10 +4737,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderMaintenancePage = () => (
     <div className="settings-page">
-      <div className="settings-page-header">
-        <h2>Maintenance</h2>
-        <p>Stream probing and database cleanup tools.</p>
-      </div>
 
       {/* Stream Probing Section */}
       <div className="settings-section">
@@ -4896,9 +5029,20 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
-      {/* Probe Status Indicator - shows when probing */}
+      {/* Probe Status Indicator - shows when probing.
+          NOT a `.settings-section`: it is a transient status card with no
+          heading, present only while a probe runs. `.settings-section` is the
+          section rail's selector, so wearing it for card chrome put an
+          unlabelled element inside the rail's query — one that could never be
+          given an id and so could never be linked to or jumped to. Labelling
+          it instead would be worse: a rail entry that appears when a
+          background probe starts and vanishes when it finishes is exactly the
+          reflow bead enhancedchannelmanager-b32co exists to remove, and a
+          shared `?section=` link to it would be dead whenever no probe is
+          running. `.probe-progress-banner` carries the same card chrome and no
+          rail membership. */}
       {probingAll && (
-        <div className="settings-section" style={{ padding: '1rem' }}>
+        <div className="probe-progress-banner">
             <div style={{
               display: 'flex',
               flexDirection: 'column',
@@ -4971,50 +5115,78 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       )}
 
-      {/* Reset Stuck Probe Section - only show when NOT actively probing */}
-      {!probingAll && (
-        <div className="settings-section">
-          <div className="settings-section-header">
-            <span className="material-icons">restart_alt</span>
-            <h3>Reset Probe State</h3>
-          </div>
-          <p className="form-hint" style={{ marginBottom: '1rem' }}>
-            If a probe appears stuck or was interrupted (e.g., browser closed during probe),
-            use this button to clear the probe state and allow starting a new probe.
+      {/* Reset Probe State — rendered UNCONDITIONALLY, and that is the whole
+          point (bead enhancedchannelmanager-xg9gp).
+
+          It used to be `{!probingAll && …}`, which closed a loop: "Reset Stuck
+          Probe" calls `force_reset_probe_state()`, the only thing that clears
+          `StreamProber._probing_in_progress`; that flag is what the
+          probe-progress poll reports as `in_progress`; and that is what drives
+          `probingAll`. So a probe that wedged reported itself as running
+          forever and the one control that clears the flag was never rendered —
+          the section was hidden by exactly the condition its own copy says it
+          recovers from. The banner's Cancel is not a way out either:
+          `cancel_probe()` only sets `_probe_cancelled` for the probe loop to
+          observe, and a wedged loop never observes it.
+
+          So the recovery control stays ENABLED during a probe and the ordinary
+          one is disabled with the reason on screen. Reset takes no
+          confirmation: on a healthy probe its effect is the same stop that the
+          Cancel button one card above already performs unconfirmed, it
+          destroys no data (results already written stay written, and the run
+          can be started again), and a recovery control that argues with the
+          operator is worst exactly when they need it. */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">restart_alt</span>
+          <h3>Reset Probe State</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          If a probe appears stuck or was interrupted (e.g., browser closed during probe),
+          use this button to clear the probe state and allow starting a new probe.
+        </p>
+        {probingAll && (
+          <p className="form-hint" id="probe-running-reason" style={{ marginBottom: '1rem' }}>
+            A probe is running. &quot;Reset Stuck Probe&quot; stays available because a stuck
+            probe still reports itself as running — if this probe is healthy, resetting it
+            stops the run, the same as Cancel above. &quot;Clear All Probe Stats&quot; is
+            unavailable until the probe finishes.
           </p>
-          <div className="settings-group">
-            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleResetProbeState}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-              >
-                <span className="material-icons">refresh</span>
-                Reset Stuck Probe
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleClearAllProbeStats}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-                title="Delete all probe statistics from the database"
-              >
-                <span className="material-icons">delete_sweep</span>
-                Clear All Probe Stats
-              </button>
-            </div>
+        )}
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleResetProbeState}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span className="material-icons">refresh</span>
+              Reset Stuck Probe
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleClearAllProbeStats}
+              disabled={probingAll}
+              aria-describedby={probingAll ? 'probe-running-reason' : undefined}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+              title="Delete all probe statistics from the database"
+            >
+              <span className="material-icons">delete_sweep</span>
+              Clear All Probe Stats
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Probe History Section */}
       {probeHistory.length > 0 && (
@@ -5273,7 +5445,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <div className="settings-group" style={{ marginTop: '1rem' }}>
             <div className="settings-section-header" style={{ marginBottom: '0.5rem' }}>
               <span className="material-icons">warning_amber</span>
-              <h3 style={{ fontSize: '0.95rem' }}>Struck Out Streams</h3>
+              <h3 style={{ fontSize: 'var(--type-section-size)' }}>Struck Out Streams</h3>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -5754,149 +5926,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   return (
     <div className="settings-tab">
-      <nav className="settings-sidebar">
-        <ul className="settings-nav">
-          <li
-            className={`settings-nav-item ${activePage === 'general' ? 'active' : ''}`}
-            onClick={() => setActivePage('general')}
-          >
-            <span className="material-icons">settings</span>
-            General
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'channel-defaults' ? 'active' : ''}`}
-            onClick={() => setActivePage('channel-defaults')}
-          >
-            <span className="material-icons">tv</span>
-            Channel Defaults
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'normalization' ? 'active' : ''}`}
-            onClick={() => setActivePage('normalization')}
-          >
-            <span className="material-icons">auto_fix_high</span>
-            Channel Normalization
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'tag-engine' ? 'active' : ''}`}
-            onClick={() => setActivePage('tag-engine')}
-          >
-            <span className="material-icons">label</span>
-            Tags
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'lookup-tables' ? 'active' : ''}`}
-            onClick={() => setActivePage('lookup-tables')}
-          >
-            <span className="material-icons">table_view</span>
-            Lookup Tables
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'appearance' ? 'active' : ''}`}
-            onClick={() => setActivePage('appearance')}
-          >
-            <span className="material-icons">palette</span>
-            Appearance
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'email' ? 'active' : ''}`}
-            onClick={() => setActivePage('email')}
-          >
-            <span className="material-icons">notifications</span>
-            Notification Settings
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'integrations' ? 'active' : ''}`}
-            onClick={() => setActivePage('integrations')}
-            data-testid="settings-nav-integrations"
-          >
-            <span className="material-icons">extension</span>
-            Integrations
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'scheduled-tasks' ? 'active' : ''}`}
-            onClick={() => setActivePage('scheduled-tasks')}
-          >
-            <span className="material-icons">schedule</span>
-            Scheduled Tasks
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'channel-pipeline' ? 'active' : ''}`}
-            onClick={() => setActivePage('channel-pipeline')}
-          >
-            <span className="material-icons">auto_awesome</span>
-            Channel Pipeline
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'm3u-digest' ? 'active' : ''}`}
-            onClick={() => setActivePage('m3u-digest')}
-          >
-            <span className="material-icons">mail</span>
-            M3U Digest
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'maintenance' ? 'active' : ''}`}
-            onClick={() => setActivePage('maintenance')}
-          >
-            <span className="material-icons">build</span>
-            Maintenance
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'linked-accounts' ? 'active' : ''}`}
-            onClick={() => setActivePage('linked-accounts')}
-          >
-            <span className="material-icons">link</span>
-            Linked Accounts
-          </li>
-          <li
-            className={`settings-nav-item ${activePage === 'backup-restore' ? 'active' : ''}`}
-            onClick={() => setActivePage('backup-restore')}
-          >
-            <span className="material-icons">backup</span>
-            Backup & Restore
-          </li>
-          {user?.is_admin && (
-            <>
-              <li className="settings-nav-divider">Administration</li>
-              <li
-                className={`settings-nav-item ${activePage === 'auth-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('auth-settings')}
-              >
-                <span className="material-icons">security</span>
-                Authentication
-              </li>
-              <li
-                className={`settings-nav-item ${activePage === 'user-management' ? 'active' : ''}`}
-                onClick={() => setActivePage('user-management')}
-              >
-                <span className="material-icons">people</span>
-                User Management
-              </li>
-              <li
-                className={`settings-nav-item ${activePage === 'tls-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('tls-settings')}
-              >
-                <span className="material-icons">https</span>
-                TLS Certificates
-              </li>
-              <li
-                className={`settings-nav-item ${activePage === 'mcp-settings' ? 'active' : ''}`}
-                onClick={() => setActivePage('mcp-settings')}
-              >
-                <span className="material-icons">smart_toy</span>
-                MCP Integration
-              </li>
-            </>
-          )}
-        </ul>
-      </nav>
+      {/* Settings sections moved into the primary sidebar drill-in view
+          (see TabNavigation + settingsSections.ts). */}
 
-      <div className="settings-content" ref={settingsContentRef}>
+      <div
+        className="settings-content"
+        ref={settingsContentRef}
+      >
+        <div className="settings-content-main" data-settings-page={activePage}>
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
         {activePage === 'tag-engine' && <TagEngineSection />}
-        {activePage === 'lookup-tables' && <LookupTableSection />}
         {activePage === 'appearance' && renderAppearancePage()}
         {activePage === 'email' && renderEmailSettingsPage()}
         {activePage === 'integrations' && renderIntegrationsPage()}
@@ -5910,6 +5951,44 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'tls-settings' && <TLSSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'mcp-settings' && <MCPSettingsSection isAdmin={user?.is_admin ?? false} />}
         {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
+        {supportsPageSave && hasPendingChanges && <div className="settings-pending-actions" role="status" aria-label="Unsaved settings">
+          <span><span className="material-icons" aria-hidden="true">edit</span>Unsaved changes</span>
+          <button type="button" className="btn-secondary" disabled={loading} onClick={() => {
+            void loadSettings()
+              .then(() => {
+                setHasPendingChanges(false);
+                setSaveFeedback('idle');
+              })
+              .catch(() => setSaveFeedback('revert-error'));
+          }}>Cancel changes</button>
+          <button type="button" className="btn-primary" disabled={loading} onClick={() => void handleSave()}>
+            {loading ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>}
+        <div className="sr-only" role="status" aria-live="polite">
+          {saveFeedback === 'success'
+            ? 'Settings saved successfully'
+            : saveFeedback === 'error'
+              ? 'Settings could not be saved. Your changes are still available.'
+              : saveFeedback === 'revert-error'
+                ? 'Could not reload saved settings. Your changes are still available; retry Cancel or save them.'
+                : ''}
+        </div>
+        </div>
+        {/* Rail, not a top bar: the section list sits in the otherwise unused
+            right column so the content pane keeps its full height. */}
+        {/* Every section on every page, not just the audited-long allow-list:
+            as a rail the nav costs no vertical space, so the only reason to
+            withhold it is having too little to navigate. StickySectionNav
+            renders nothing below two sections, which handles that itself.
+            Deliberately NOT auditedLongSettingsPages — that set still gates
+            supportsPageSave, which is a different contract. */}
+        <StickySectionNav
+          placement="rail"
+          containerRef={settingsContentRef}
+          selector=".settings-section, [data-settings-section]"
+          routeKey={`settings-${activePage}`}
+        />
       </div>
 
       <DeleteOrphanedGroupsModal

@@ -11,11 +11,15 @@
   overflow-y: auto;
 }
 
-/* Radio button group */
-.radio-group {
-  display: flex;
-  gap: 0.5rem;
-}
+/* `.radio-group` is owned by shared/common.css § 20 CHECKBOX/RADIO GROUPS.
+   The copy that used to sit here declared `display: flex; gap: 0.5rem` —
+   byte-identical to the shared rule's two of three declarations, and it never
+   set `flex-direction`, so this modal's radio group has always taken
+   `column` from common.css anyway. Deleting it is therefore render-neutral
+   for this modal (the shared rule supplies all three values it resolved to)
+   and stops this lazy chunk donating them to the Settings page's TLS radio
+   group and StreamsPane's, which is what the bare copy was actually doing
+   (bead enhancedchannelmanager-mktnb). */
 
 .radio-label {
   display: flex;
@@ -25,27 +29,46 @@
 }
 
 .radio-label input[type="radio"] {
-  width: auto;
   margin: 0;
   margin-right: 0.4rem;
   cursor: pointer;
   accent-color: var(--accent-primary);
 }
 
+/* Body role. 14px -> 13px. */
 .radio-label span {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* "or" divider between input options */
+/* Body role. 13.6px -> 13px. */
 .form-or {
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin: 0.5rem 0;
 }
 
-/* Form row for multiple inline fields */
-.form-row {
+/* Form row for multiple inline fields.
+   Scoped to this modal's root, not bare. SettingsTab.css:305,1094 authors the
+   same class as a two-column `display: grid` in the Settings chunk, and both
+   chunks are appended after the eager bundle and never removed, so this
+   modal's inline row and Settings' Email grid each rendered whichever of the
+   two tabs the operator had opened last. `.m3u-account-modal` is this modal's
+   own root (M3UAccountModal.tsx:270) and encloses the row
+   (M3UAccountModal.tsx:474); `:where()` contributes zero specificity, so the
+   rule keeps its 0-1-0 (bead enhancedchannelmanager-mktnb).
+
+   `.form-row .modal-form-group` below stays BARE deliberately: M3UFiltersModal
+   rides this same chunk and relies on it for the `flex: 1` on the children of
+   its own `.filter-form .form-row` (M3UFiltersModal.tsx:211). Scoping it here
+   would break that row. It is not a cross-chunk collision — `.modal-form-group`
+   inside a `.form-row` occurs nowhere outside this chunk. */
+:where(.m3u-account-modal) .form-row {
   display: flex;
   gap: 1rem;
 }
@@ -83,8 +106,11 @@
   flex-shrink: 0;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .uploaded-file-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

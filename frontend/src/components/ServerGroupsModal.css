@@ -1,6 +1,9 @@
+/* Meta role. 13.6px -> 11px. */
 .server-groups-hint {
   color: var(--text-secondary, #888);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin: 0 0 0.75rem;
 }
 

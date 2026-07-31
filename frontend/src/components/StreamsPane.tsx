@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
+import { createPortal } from 'react-dom';
+import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
@@ -14,7 +15,6 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
 import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
-import { CatchupBadge } from './CatchupBadge';
 import { logger } from '../utils/logger';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
@@ -58,7 +58,15 @@ interface StreamsPaneProps {
   groupFilter: string | null;
   onGroupFilterChange: (group: string | null) => void;
   loading: boolean;
+  /** Total matches reported by the server; may exceed the loaded page. */
+  matchingTotal?: number | null;
   onBulkAddToChannel?: (streamIds: number[], channelId: number) => void;
+  channels?: Channel[];
+  onKeyboardCreateFromGroup?: (
+    groupNames: string[],
+    streamIds: number[],
+    targetGroupId?: number,
+  ) => void;
   // Multi-select support
   selectedProviders?: number[];
   onSelectedProvidersChange?: (providerIds: number[]) => void;
@@ -149,6 +157,10 @@ export function StreamsPane({
   groupFilter,
   onGroupFilterChange,
   loading,
+  matchingTotal = null,
+  onBulkAddToChannel,
+  channels = [],
+  onKeyboardCreateFromGroup,
   selectedProviders = [],
   onSelectedProvidersChange,
   selectedStreamGroups = [],
@@ -180,6 +192,82 @@ export function StreamsPane({
   defaultNormalizeOnCreate = false,
   dedupReturningStreamIds,
 }: StreamsPaneProps) {
+  const [keyboardDrag, setKeyboardDrag] = useState<
+    | { kind: 'stream'; label: string; streamIds: number[] }
+    | { kind: 'group'; label: string; groupNames: string[]; streamIds: number[] }
+    | null
+  >(null);
+  const [keyboardDragAnnouncement, setKeyboardDragAnnouncement] = useState('');
+  const keyboardDragTriggerRef = useRef<HTMLElement | null>(null);
+  const bulkCreateReturnFocusRef = useRef<HTMLElement | null>(null);
+  const keyboardDestinationRef = useRef<HTMLDivElement>(null);
+
+  const cancelKeyboardDrag = useCallback(() => {
+    const label = keyboardDrag?.label;
+    setKeyboardDrag(null);
+    setKeyboardDragAnnouncement(label ? `Cancelled dragging ${label}.` : 'Drag cancelled.');
+    requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+  }, [keyboardDrag]);
+
+  useEffect(() => {
+    if (!keyboardDrag) return;
+    requestAnimationFrame(() => {
+      keyboardDestinationRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+        ?.focus();
+    });
+  }, [keyboardDrag]);
+
+  const beginKeyboardDrag = (
+    event: React.KeyboardEvent<HTMLElement>,
+    drag:
+      | { kind: 'stream'; label: string; streamIds: number[] }
+      | { kind: 'group'; label: string; groupNames: string[]; streamIds: number[] },
+  ) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    keyboardDragTriggerRef.current = event.currentTarget;
+    setKeyboardDrag(drag);
+    setKeyboardDragAnnouncement(
+      `Picked up ${drag.label}. Use Up and Down Arrow keys to choose a destination, Enter to drop, or Escape to cancel.`,
+    );
+  };
+
+  const handleKeyboardDestinationKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = [
+      ...(keyboardDestinationRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []),
+    ];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelKeyboardDrag();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
+  };
+
+  const completeKeyboardDrag = (
+    destinationLabel: string,
+    action: () => void,
+    returnFocusToTrigger = true,
+  ) => {
+    const draggedLabel = keyboardDrag?.label ?? 'item';
+    action();
+    setKeyboardDrag(null);
+    setKeyboardDragAnnouncement(`Dropped ${draggedLabel} on ${destinationLabel}.`);
+    if (returnFocusToTrigger) {
+      requestAnimationFrame(() => keyboardDragTriggerRef.current?.focus());
+    }
+  };
   // BD-I / bd-1lznl: dedup integration for the single-stream "Add Stream"
   // surface (context-menu "Create channel(s) in group"). On a single-stream
   // selection the hook intercepts the click, checks for a candidate, and
@@ -736,12 +824,16 @@ export function StreamsPane({
   );
 
   // Bulk create handlers - apply settings defaults
-  const openBulkCreateModal = useCallback((group: StreamGroup, startingNumber?: number | null) => {
+  const openBulkCreateModal = useCallback((
+    group: StreamGroup,
+    startingNumber?: number | null,
+    targetGroupId?: number | null,
+  ) => {
     setBulkCreateGroup(group);
     setBulkCreateStreams([]);
     setBulkCreateStartingNumber(startingNumber != null ? startingNumber.toString() : '');
-    setBulkCreateGroupOption('same');
-    setBulkCreateSelectedGroupId(null);
+    setBulkCreateGroupOption(targetGroupId != null ? 'existing' : 'same');
+    setBulkCreateSelectedGroupId(targetGroupId ?? null);
     setBulkCreateNewGroupName('');
     // Apply settings defaults
     setBulkCreateTimezone((channelDefaults?.timezonePreference as TimezonePreference) || 'both');
@@ -849,6 +941,11 @@ export function StreamsPane({
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
+    const returnTarget = bulkCreateReturnFocusRef.current;
+    bulkCreateReturnFocusRef.current = null;
+    if (returnTarget) {
+      requestAnimationFrame(() => returnTarget.focus());
+    }
   }, []);
 
   // Open bulk create modal for manual entry (no streams pre-selected)
@@ -1125,7 +1222,11 @@ export function StreamsPane({
         // Single group - use single group modal
         const matchingGroup = groupedStreams.find(g => g.name === externalTriggerGroupNames[0]);
         if (matchingGroup) {
-          openBulkCreateModal(matchingGroup, externalTriggerStartingNumber);
+          openBulkCreateModal(
+            matchingGroup,
+            externalTriggerStartingNumber,
+            externalTriggerTargetGroupId,
+          );
         }
       } else {
         // Multiple groups - use multi-group modal
@@ -1137,7 +1238,7 @@ export function StreamsPane({
       // Signal that we've handled the trigger
       onExternalTriggerHandled?.();
     }
-  }, [externalTriggerGroupNames, externalTriggerStartingNumber, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
+  }, [externalTriggerGroupNames, externalTriggerStartingNumber, externalTriggerTargetGroupId, groupedStreams, openBulkCreateModal, openBulkCreateModalForMultipleGroups, onBulkCreateFromGroup, onExternalTriggerHandled]);
 
   // Handle external trigger to open bulk create modal for specific stream IDs
   useEffect(() => {
@@ -1511,8 +1612,22 @@ export function StreamsPane({
     await handleCopy(url, `stream URL for "${streamName}"`);
   };
 
+  const inventoryCount = searchTerm.trim()
+    ? matchingTotal ?? streams.length
+    : selectedStreamGroups.length > 0
+      ? streamGroups
+        .filter((group) => selectedStreamGroups.includes(group.name))
+        .reduce((total, group) => total + group.count, 0)
+      : streamGroups.reduce((total, group) => total + group.count, 0);
+  const inventoryCountKind = searchTerm.trim()
+    ? 'matching'
+    : selectedStreamGroups.length > 0
+      ? 'filtered'
+      : 'total';
+  const inventoryCountLabel = `${inventoryCount} ${inventoryCountKind} ${inventoryCount === 1 ? 'stream' : 'streams'}`;
+
   return (
-    <div className="streams-pane">
+    <div className="streams-pane" aria-labelledby="streams-pane-heading">
       {/* Copy feedback notifications */}
       {copySuccess && (
         <div className="copy-feedback copy-success">
@@ -1528,7 +1643,7 @@ export function StreamsPane({
       )}
 
       <div className="pane-header">
-        <h2>
+        <h2 id="streams-pane-heading">
           Streams
           {onRefreshStreams && (
             <button
@@ -1542,6 +1657,9 @@ export function StreamsPane({
             </button>
           )}
         </h2>
+        <span className="pane-item-count" aria-label={inventoryCountLabel}>
+          {inventoryCount}
+        </span>
         {selectedCount > 0 && (
           <div className="selection-info">
             <span className="selection-count">
@@ -1603,6 +1721,7 @@ export function StreamsPane({
             <input
               type="text"
               placeholder="Search streams..."
+              aria-label="Search streams"
               value={searchTerm}
               onChange={(e) => onSearchChange(e.target.value)}
               className="search-input"
@@ -1885,10 +2004,19 @@ export function StreamsPane({
                     }}
                   >
                     {isEditMode && onBulkCreateFromGroup && (
-                      <span
+                      <button
+                        type="button"
                         className="group-drag-handle"
-                        title="Drag to Channels pane to bulk create"
+                        aria-label={`Drag stream group ${group.name} to Channels pane to create channels`}
+                        title={`Drag stream group ${group.name} to Channels pane to create channels`}
                         draggable={true}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => beginKeyboardDrag(e, {
+                          kind: 'group',
+                          label: `stream group ${group.name}`,
+                          groupNames: [group.name],
+                          streamIds: group.streams.map((stream) => stream.id),
+                        })}
                         onDragStart={(e) => {
                           e.stopPropagation();
                           // Trigger lazy load for this group if streams not yet loaded
@@ -1899,8 +2027,8 @@ export function StreamsPane({
                           handleGroupDragStart(e, group);
                         }}
                       >
-                        <span className="material-icons">drag_indicator</span>
-                      </span>
+                        <span className="material-icons" aria-hidden="true">drag_indicator</span>
+                      </button>
                     )}
                     {isEditMode && onBulkCreateFromGroup && (() => {
                       // Semantic, keyboard-operable group select-all
@@ -1966,24 +2094,6 @@ export function StreamsPane({
                       <span className="group-name">{group.name}</span>
                     </button>
                     <span className="group-count">{streamGroupCounts.get(group.name) ?? group.streams.length}</span>
-                    {(() => {
-                      // bead enhancedchannelmanager-po78p / GH #696 — group-level
-                      // stale-count pill. Streams pane rows already carry
-                      // Dispatcharr's own `is_stale` flag verbatim, so no extra
-                      // fetch is needed here (unlike ChannelsPane, which resolves
-                      // against a fetched stale-id set for cross-pane consistency).
-                      const staleCount = group.streams.filter((s) => s.is_stale).length;
-                      if (staleCount === 0) return null;
-                      return (
-                        <span
-                          className="group-stale-count"
-                          title={`${staleCount} stream${staleCount === 1 ? '' : 's'} no longer listed by provider (stale)`}
-                        >
-                          <span className="material-icons" aria-hidden="true">history</span>
-                          {staleCount}
-                        </span>
-                      );
-                    })()}
                     {isEditMode && onBulkCreateFromGroup && (
                       <button
                         className="bulk-create-btn"
@@ -2012,7 +2122,7 @@ export function StreamsPane({
                         <div
                           key={stream.id}
                           data-stream-id={stream.id}
-                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''} ${stream.is_stale ? 'is-stale' : ''}`}
+                          className={`stream-item ${isSelected(stream.id) && isEditMode ? 'selected' : ''} ${isEditMode ? 'edit-mode' : ''} ${dedupReturningStreamIds?.has(stream.id) ? 'is-dedup-returning' : ''}`}
                           onClick={(e) => {
                             // In edit mode, clicking the row does nothing (use checkbox to select)
                             // Outside edit mode, clicking the row does nothing either
@@ -2021,14 +2131,23 @@ export function StreamsPane({
                         >
                           {/* Drag handle - only in edit mode, positioned first like channel groups */}
                           {isEditMode && (
-                            <span
+                            <button
+                              type="button"
                               className="drag-handle"
+                              aria-label={`Drag inventory stream ${stream.name} to assign it to a channel`}
+                              title={`Drag inventory stream ${stream.name} to assign it to a channel`}
                               draggable={true}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => beginKeyboardDrag(e, {
+                                kind: 'stream',
+                                label: `inventory stream ${stream.name}`,
+                                streamIds: [stream.id],
+                              })}
                               onDragStart={(e) => handleDragStart(e, stream)}
                               onDragEnd={() => clearStreamDragData()}
                             >
                               ⋮⋮
-                            </span>
+                            </button>
                           )}
                           {isEditMode && (
                             /* Semantic, keyboard-operable selector (bead
@@ -2059,31 +2178,20 @@ export function StreamsPane({
                               </span>
                             </button>
                           )}
-                          {stream.logo_url && (
-                            <img
-                              src={stream.logo_url}
-                              alt=""
-                              className="stream-logo"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                          )}
+                          <div className="stream-artwork-slot" aria-hidden="true">
+                            {stream.logo_url && (
+                              <img
+                                src={stream.logo_url}
+                                alt=""
+                                className="stream-logo"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            )}
+                          </div>
                           <div className="stream-info">
                             <span className="stream-name">{stream.name}</span>
-                            {stream.is_stale && (
-                              <span
-                                className="meta-tag stream-stale"
-                                title={stream.last_seen ? `No longer listed by provider — last seen ${stream.last_seen}` : 'No longer listed by provider (stale)'}
-                              >
-                                <span className="material-icons">history</span>
-                                STALE
-                              </span>
-                            )}
-                            {/* Catch-up (timeshift) support — bead
-                                enhancedchannelmanager-sy1sz. Renders only when
-                                Dispatcharr flags the stream is_catchup. */}
-                            <CatchupBadge isCatchup={stream.is_catchup} catchupDays={stream.catchup_days} />
                             {showStreamUrls && stream.url && (
                               <span className="stream-url" title={stream.url}>
                                 {stream.url}
@@ -2095,6 +2203,7 @@ export function StreamsPane({
                               </span>
                             )}
                           </div>
+                          <div className="stream-actions">
                           {stream.url && (
                             <>
                               <button
@@ -2132,6 +2241,7 @@ export function StreamsPane({
                               </button>
                             </>
                           )}
+                          </div>
                         </div>
                       ))}
                       {/* Incremental rendering sentinel (bd-bed9r) */}
@@ -2163,10 +2273,15 @@ export function StreamsPane({
 
       {/* Bulk Create Modal */}
       {bulkCreateModalOpen && (streamsToCreate.length > 0 || isManualEntry) && (
-        <ModalOverlay onClose={closeBulkCreateModal}>
+        <ModalOverlay
+          onClose={closeBulkCreateModal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-create-modal-title"
+        >
           <div className="bulk-create-modal">
             <div className="modal-header">
-              <h3>
+              <h3 id="bulk-create-modal-title">
                 {isManualEntry
                   ? 'Create Channel'
                   : isFromGroup
@@ -2891,7 +3006,7 @@ export function StreamsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => setBulkCreateShowConflict(false)}
                 disabled={bulkCreateLoading}
               >
@@ -2903,6 +3018,71 @@ export function StreamsPane({
       )}
 
       {/* Stream Preview Modal */}
+      <div
+        className="keyboard-drag-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {keyboardDragAnnouncement}
+      </div>
+      {keyboardDrag && createPortal(
+        <div
+          ref={keyboardDestinationRef}
+          className="keyboard-drag-destinations"
+          role="menu"
+          aria-label={keyboardDrag.kind === 'stream' ? 'Choose channel destination' : 'Choose channel group destination'}
+          onKeyDown={handleKeyboardDestinationKeyDown}
+        >
+          <div className="keyboard-drag-destinations-title">
+            {keyboardDrag.kind === 'stream' ? 'Assign to channel' : 'Create channels in group'}
+          </div>
+          {keyboardDrag.kind === 'stream'
+            ? channels.map((channel) => (
+                <button
+                  key={channel.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => completeKeyboardDrag(
+                    `channel ${channel.name}`,
+                    () => onBulkAddToChannel?.(keyboardDrag.streamIds, channel.id),
+                  )}
+                  disabled={!onBulkAddToChannel}
+                >
+                  <span className="material-icons" aria-hidden="true">live_tv</span>
+                  {channel.name}
+                </button>
+              ))
+            : channelGroups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => completeKeyboardDrag(
+                    `channel group ${group.name}`,
+                    () => {
+                      bulkCreateReturnFocusRef.current = keyboardDragTriggerRef.current;
+                      onKeyboardCreateFromGroup?.(
+                        keyboardDrag.groupNames,
+                        keyboardDrag.streamIds,
+                        group.id,
+                      );
+                    },
+                    false,
+                  )}
+                  disabled={!onKeyboardCreateFromGroup}
+                >
+                  <span className="material-icons" aria-hidden="true">folder</span>
+                  {group.name}
+                </button>
+              ))}
+          <button type="button" role="menuitem" onClick={cancelKeyboardDrag}>
+            <span className="material-icons" aria-hidden="true">close</span>
+            Cancel drag
+          </button>
+        </div>,
+        document.body,
+      )}
       <PreviewStreamModal
         isOpen={previewStream !== null}
         onClose={() => setPreviewStream(null)}

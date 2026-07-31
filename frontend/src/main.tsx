@@ -9,6 +9,7 @@ import {
   reportClientError,
 } from './services/clientErrorReporter'
 import { installSessionTracker } from './services/sessionTracker'
+import '@fontsource/material-icons'
 import './index.css'
 import './shared/common.css'
 

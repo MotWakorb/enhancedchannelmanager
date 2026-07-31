@@ -1,0 +1,28 @@
+.dense-toolbar {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+
+.dense-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.dense-toolbar-search { flex: 1 1 15rem; }
+.dense-toolbar-filters,
+.dense-toolbar-sort-view { flex: 0 1 auto; }
+.dense-toolbar-selection { margin-inline-start: auto; }
+.dense-toolbar-bulk-actions,
+.dense-toolbar-secondary-actions { flex: 0 0 auto; }
+
+@media (max-width: 800px) {
+  .dense-toolbar-search { flex-basis: 100%; }
+  .dense-toolbar-selection { margin-inline-start: 0; }
+}

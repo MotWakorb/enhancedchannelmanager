@@ -510,10 +510,6 @@ export function TagEngineSection() {
 
   return (
     <div className="tag-engine-section">
-      <div className="settings-page-header">
-        <h2>Tags</h2>
-        <p>Manage tag vocabularies used by normalization rules for pattern matching.</p>
-      </div>
 
       <div className="tag-engine-toolbar">
         <div className="search-box">
@@ -628,7 +624,7 @@ export function TagEngineSection() {
                   onChange={(e) => setImportYaml(e.target.value)}
                   placeholder="Paste YAML content here..."
                   rows={12}
-                  style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                  style={{ fontFamily: 'monospace', fontSize: 'var(--type-body-size)' }}
                 />
               </div>
               <label className="modal-checkbox-label">
@@ -656,9 +652,14 @@ export function TagEngineSection() {
         </ModalOverlay>
       )}
 
-      {/* Create Group Modal */}
+      {/* Create Group Modal.
+          `tag-engine-group-modal` scopes this modal's private chassis in
+          TagEngineSection.css. Without it those rules are bare and, because
+          Settings is a lazy chunk appended after the eager bundle, they
+          overrode ModalBase for every modal in the app once Settings had been
+          visited (bead enhancedchannelmanager-6z299.2). */}
       {showCreateModal && (
-        <ModalOverlay onClose={() => setShowCreateModal(false)}>
+        <ModalOverlay onClose={() => setShowCreateModal(false)} className="modal-overlay tag-engine-group-modal">
           <div className="modal-content">
             <div className="modal-header">
               <h3>Create Tag Group</h3>

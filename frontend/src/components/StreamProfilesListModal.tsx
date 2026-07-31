@@ -130,14 +130,14 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
               </label>
               <div className="stream-profile-create-actions">
                 <button
-                  className="modal-btn-secondary"
+                  className="modal-btn modal-btn-secondary"
                   onClick={() => setShowCreateForm(false)}
                   disabled={creating}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn-primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={handleCreate}
                   disabled={!canCreate || creating}
                 >
@@ -146,7 +146,7 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
               </div>
             </div>
           ) : (
-            <button className="modal-btn-primary" onClick={() => setShowCreateForm(true)}>
+            <button className="modal-btn modal-btn-primary" onClick={() => setShowCreateForm(true)}>
               <span className="material-icons">add</span>
               New Stream Profile
             </button>
@@ -154,7 +154,7 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onClose}>Close</button>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </ModalOverlay>

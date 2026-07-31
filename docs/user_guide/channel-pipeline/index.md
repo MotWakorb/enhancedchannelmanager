@@ -6,7 +6,7 @@
 
 ## Section purpose
 
-Cover the Channel Pipeline tab end-to-end: how rules are structured, what conditions and actions are available, how rules interact with normalization, how to test a rule before enabling it, and how to debug a rule that isn't firing the way you expected.
+Cover the Channel Pipeline page end-to-end: how rules are structured, what conditions and actions are available, how rules interact with normalization, how to test a rule before enabling it, and how to debug a rule that isn't firing the way you expected.
 
 ## Intended audience
 

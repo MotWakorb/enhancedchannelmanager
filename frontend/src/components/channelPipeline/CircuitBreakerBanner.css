@@ -30,29 +30,45 @@
   color: #6366f1;
 }
 
-.circuit-breaker-icon {
-  font-size: 20px;
+/* --icon-status: a state glyph beside a line of text is exactly what that
+   token is for, and 20px was one of the stray off-scale icon sizes the sweep
+   collapses (bead enhancedchannelmanager-6z299). 20px -> 18px; the 2px
+   margin-top optical nudge still holds against the 13px text below.
+
+   Scoped through `.circuit-breaker-banner` so the size actually wins. As a
+   bare `.circuit-breaker-icon` this tied index.css's base `.material-icons`
+   at 0-1-0 and lost on source order, so the glyph rendered at 24px while this
+   rule read 18px — measured, not inferred (bead
+   enhancedchannelmanager-7bsxj). See docs/css_guidelines.md § "Partial
+   redeclaration". */
+.circuit-breaker-banner .circuit-breaker-icon {
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 2px;
 }
 
+/* Body role — 14px -> 13px. */
 .circuit-breaker-text {
   flex: 1;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
-  line-height: 1.4;
 }
 
+/* Body role. Already 0.8125rem = 13px, so this only replaces the literal;
+   the button's own geometry comes from .btn-secondary in common.css. */
 .circuit-breaker-reset-btn {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
+/* Glyph inside a control — --icon-action, already 16px. */
 .circuit-breaker-reset-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Confirmation overlay — inline (not full-screen modal) */
@@ -76,16 +92,19 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
+/* Modal-title role, SIZE only — the confirm dialog's own title; it already
+   carries the role's 600 weight. 1rem -> 18px (bead enhancedchannelmanager-haf9e). */
 .circuit-breaker-confirm-dialog h3 {
   margin: 0 0 0.75rem;
-  font-size: 1rem;
+  font-size: var(--type-modal-title-size);
   font-weight: 600;
   color: var(--text-primary);
 }
 
+/* Body role, SIZE only — running text. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .circuit-breaker-confirm-dialog p {
   margin: 0 0 1.25rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   line-height: 1.5;
 }

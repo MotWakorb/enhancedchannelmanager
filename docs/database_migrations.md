@@ -47,6 +47,82 @@ Run `alembic` commands from `/app` inside `ecm-ecm-1`. Deploying a new revision 
 
 Both the app and the test suite depend on the `PRAGMA foreign_keys=ON` / `PRAGMA journal_mode=WAL` connect-listener registered in `database.py`. `alembic/env.py` inherits those PRAGMAs automatically because the listener attaches to the SQLAlchemy `Engine` class.
 
+### The smart-bootstrap fast path, and destructive migrations
+
+There is a fifth case the table above glosses over. On a long-running install
+`Base.metadata.create_all()` can materialise a table or column *before* the
+migration that was supposed to create it. `_bootstrap_alembic` detects that
+("`alembic_version` lags head but the live schema already covers the model
+shape") and **stamps forward instead of upgrading** — the migrations have
+nothing left to do. This is the bd-5w6jz fix; without it every release needs
+per-migration `inspect`-then-skip guards or startup crashes on
+`already exists`.
+
+The predicate behind it, `_schema_matches_head`, is a **subset check**: every
+`Base.metadata` table and column must exist in the live DB. It deliberately
+ignores extra tables and columns the model no longer declares.
+
+**A drop-only migration is therefore invisible to it.** Every model artifact is
+present *precisely because* the migration's job is to remove something the
+model no longer declares. Revision `0041` hit this in production on
+2026-07-30: the log read `Running stamp_revision 0040 -> 0041`,
+`alembic_version` said `0041`, `lookup_tables` was still there, and 0041's
+pre-drop row dump never ran (bead `enhancedchannelmanager-nywpw`).
+
+`_bootstrap_alembic` now walks the pending revisions and **refuses to stamp
+across any that remove a schema object or delete rows**. Those are replayed
+individually — stamp to the predecessor, `upgrade` to that revision by id —
+while everything else is still stamped over, so the fast path keeps its
+benefit for the non-destructive majority.
+
+Detection is automatic: `_revision_is_destructive` AST-parses the revision
+module (minus `downgrade()` and docstrings) looking for `op.drop_table` /
+`drop_column` / `drop_index` / `drop_constraint` (including `batch_op`
+equivalents) and for `DROP …` / `DELETE FROM` / `TRUNCATE` in SQL string
+literals. A module that will not parse is treated as destructive.
+
+**As an author you normally need to do nothing.** Two escape hatches exist for
+the cases static analysis cannot see:
+
+```python
+destructive = True   # opt IN: this revision removes something the scanner
+                     # cannot see (e.g. a batch_alter_table(copy_from=...)
+                     # rebuild that drops a constraint, or dynamically-built
+                     # SQL). Revision 0011 uses this.
+
+destructive = False  # opt OUT of a scanner false positive. Justify it in the
+                     # revision docstring — this is the only way to lose data
+                     # by forgetting nothing. Should be rare.
+```
+
+Bias toward over-detection: a false positive costs one extra (idempotent)
+migration actually running; a false negative is silent data loss.
+
+Two consequences for authoring:
+
+- **Keep destructive migrations idempotent** (`inspect`-guarded), like every
+  other revision. The replay path runs them by id, and the self-heal below may
+  run them a second time.
+- **Give a destructive migration its own safety net.** Revision 0041 writes
+  every row it is about to delete to `<db_dir>/lookup_tables_dropped_0041.json`
+  before dropping. That dump is what makes an unattended replay acceptable.
+
+#### Self-heal for installs already stamped past a drop
+
+Installs the *pre-fix* fast path already stamped past sit at
+`alembic_version == head` with the dropped table still present, so nothing
+above fires for them. `_heal_stamped_past_drops` handles that population: for
+each revision in `_STAMPED_PAST_DROP_HEAL` that `alembic_version` claims is
+applied but whose tables are still physically there, it stamps back to the
+predecessor, upgrades to that revision, and restores the version row.
+
+That registry is hand-curated, which is acceptable *because it is closed by
+construction* — no future migration can be stamped past, so no future
+migration can need an entry. It covers **table drops only**: a table's absence
+is cheap, unambiguous evidence that the revision ran. Dropped columns,
+constraints and indexes, and `DELETE`d rows, have no equally cheap generic
+probe and are not healed.
+
 Operators can read the applied revision at any time:
 
 ```bash
@@ -96,6 +172,8 @@ Autogenerate is a starting point, not a deliverable. It routinely misses:
 - **Data migrations** — autogenerate never writes DML. If the schema change requires backfill, add an explicit `op.execute(...)` or a loop against `op.get_bind()`.
 
 Open the generated file and make sure each `upgrade()` step has a mirroring `downgrade()` step. If a change is genuinely irreversible (dropping a table with data, for example), leave an explicit `raise NotImplementedError("cannot downgrade: ...")` and document why in the docstring — never fake a reversible migration with `pass`.
+
+If the revision **removes** anything — a table, column, index or constraint, or rows — read [The smart-bootstrap fast path, and destructive migrations](#the-smart-bootstrap-fast-path-and-destructive-migrations) before shipping it.
 
 ### 4. Test locally
 

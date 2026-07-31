@@ -101,6 +101,18 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
+# enhancedchannelmanager-nywpw. Explicit opt-in marker read by
+# ``database._revision_is_destructive``: this revision REMOVES the
+# ``session_telemetry.user_id`` foreign key, and it does so through
+# ``batch_alter_table(copy_from=..., recreate="always")`` — there is no
+# ``op.drop_constraint`` call for the AST scanner to find. Without this flag
+# the revision only flags by accident, via the transient
+# ``DROP VIEW IF EXISTS`` below. The FK removal is the load-bearing reason:
+# ``_schema_matches_head`` is column-only, so the smart-bootstrap fast path
+# cannot see that the FK is still there and would happily stamp past it,
+# leaving the bd-uqbob cross-namespace join bug in place.
+destructive = True
+
 
 # Verbatim copy of migration 0008's CHANNEL_WATCH_STATS_V_SQL (also held
 # locally in 0010 for the same reason: each migration is self-contained

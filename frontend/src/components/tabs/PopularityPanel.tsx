@@ -95,16 +95,20 @@ export function PopularityPanel({ refreshTrigger }: PopularityPanelProps) {
     setExpandedChannel(expandedChannel === channelId ? null : channelId);
   };
 
+  // `data-section-label` on both branches, not just the loaded one: the
+  // loading branch has no heading, so without it StickySectionNav skips this
+  // section entirely and the "On this page" entry pops in when the fetch
+  // settles (bead enhancedchannelmanager-mch8j).
   if (loading && rankings.length === 0) {
     return (
-      <div className="popularity-panel" id="stats-section-popularity">
+      <div className="popularity-panel" id="stats-section-popularity" data-section-label="Popularity Rankings">
         <div className="loading-state">Loading popularity data...</div>
       </div>
     );
   }
 
   return (
-    <div className="popularity-panel" id="stats-section-popularity">
+    <div className="popularity-panel" id="stats-section-popularity" data-section-label="Popularity Rankings">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Popularity Rankings</h3>

@@ -16,8 +16,25 @@
  * 9. Miscellaneous Patterns
  * ...
  * 22. Badges
+ * 23. Type Badges
+ * 24. Micro Labels
+ * 25. Pagination Strip
+ * 26. Field Messages
+ * 27. Group Rows
+ * 28. Route Header Stats
  *
  * CSS Variables are defined in index.css - do not duplicate here.
+ *
+ * LOAD ORDER — read before adding or "extracting" anything here.
+ * This file is emitted LAST inside the eager bundle, so against another
+ * eager stylesheet it wins at equal specificity. But every lazily imported
+ * tab chunk is appended AFTER the eager bundle and is never removed, so a
+ * bare rule in any visited tab beats this file permanently, for the rest of
+ * the session. Consequence: moving a class here only takes effect once
+ * EVERY page copy is deleted. A half-finished extraction leaves the shared
+ * rule dead on the pages that still declare it and live everywhere else —
+ * which is worse than not extracting at all, because the diff looks done.
+ * See docs/css_guidelines.md § Load order.
  */
 
 /* =============================================================================
@@ -65,6 +82,66 @@
    2. COMMON UTILITIES
    ============================================================================= */
 
+/* WCAG-compliant visually-hidden utility — reachable by a screen reader,
+   removed from visual flow. `clip` + 1px box is the recipe that still works
+   in every browser we target.
+   Three identical copies of this existed (TabNavigation.css, StatsTab.css,
+   UserStatsPanel.css), two of them `!important` throughout, and StatsTab's
+   carried a comment claiming "no shared global class in this codebase". An
+   a11y primitive declared bare in three different chunks is exactly the
+   shape that leaks: Stats is a lazy chunk, so its `!important` copy silently
+   became the app-wide winner the moment anyone opened Stats. One owner now
+   (bead enhancedchannelmanager-6z299). The `!important`s are kept because
+   the utility has to beat whatever layout rule is on the element it hides.
+
+   `.sr-only` IS THIS UTILITY UNDER A SECOND NAME, not a sibling of it. Its
+   only declaration lived in ConditionEditor.css and was property-for-property
+   identical to the block below — same nine declarations, same values, same
+   order, differing only by the `!important`s. It ships as an alias rather
+   than a second block because two blocks in one file is the same duplicate
+   shape beads 6z299 and 87o0c spent two passes deleting; and as an alias
+   rather than a rename because the five `.sr-only` call sites live in TSX
+   this bead does not own, and `sr-only` is the better-known ecosystem
+   spelling. Renaming them onto one name is follow-up work, not a fix.
+
+   WHY IT MOVED HERE (bead enhancedchannelmanager-zncyv): ConditionEditor.css
+   ships in the ChannelPipelineTab lazy chunk, but `.sr-only` is rendered by
+   OperatorDashboard.tsx (EAGER) and SettingsTab.tsx (Settings chunk) on
+   `role="status" aria-live="polite"` regions. Neither chunk carried the rule,
+   so until the operator happened to open Channel Pipeline those two
+   announcement regions had NO hiding styles at all — measured live at
+   `position: static; clip: auto; width: 1148px`, i.e. ordinary visible text —
+   and silently became correct for the rest of the session afterwards. Note
+   this is NOT the cross-chunk collision shape the three audit tiers in
+   cssAudits/sharedClassChunkLeak.audit.test.ts detect: there was only ever
+   ONE declaration, so nothing collided. The defect was declaration-site and
+   render-site sitting in different chunks, which those tiers do not model.
+
+   WHY `!important` IS SAFE FOR THE `.sr-only` SITES, measured not assumed:
+   all nine properties are hiding properties, so promoting them can only make
+   an element MORE hidden — a layout rule beating a visually-hidden utility is
+   the bug, never the intent. Of the five call sites, exactly one
+   (ActionEditor.tsx:683) sits under a higher-specificity rule,
+   `.action-field label` (0,1,1 vs 0,1,0). That rule declares only
+   font-size/font-weight/color, which are disjoint from the nine below, so it
+   contends with nothing here: that label measured `font-size: 13px` on a 1x1
+   clipped box before this change and must still measure exactly that after.
+   A site that genuinely needs to override still can, via the higher-
+   specificity + `!important` hatch already used by
+   `.chart-data-table.visually-hidden` in StatsTab.css. */
+.visually-hidden,
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 /* =============================================================================
    3. BUTTONS
    ============================================================================= */
@@ -82,7 +159,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -99,7 +176,7 @@
 }
 
 .btn-primary .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 .btn-secondary {
@@ -111,7 +188,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--border-primary);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -128,9 +205,14 @@
 }
 
 .btn-secondary .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
+/* The canonical --error FILL. Together with .notification-badge (which renders
+   on all 11 routes) this is what --error is toned for: white text on it, at
+   4.83:1 dark / 5.13 high contrast / 6.21 light after bead
+   enhancedchannelmanager-4l51b, up from 3.76 / 3.41 / 6.21. Red TEXT is
+   --danger-text — see .status-error. */
 .btn-danger {
   display: inline-flex;
   align-items: center;
@@ -140,7 +222,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--error);
   color: white;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -157,7 +239,7 @@
 }
 
 .btn-danger .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 .btn-cancel {
@@ -169,7 +251,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   white-space: nowrap;
   transition: background-color 0.15s, color 0.15s;
@@ -183,6 +265,153 @@
 .btn-cancel:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* `.btn-test` is a primary-styled button that reports its own result, used by
+   the Settings page and the Settings modal. Both declared it bare — SettingsTab
+   in the lazy Settings chunk, SettingsModal in the eager bundle — so which one
+   an app-wide `.btn-test` rendered as depended on whether Settings had been
+   opened yet. The base is this rule; SettingsModal keeps only its result-state
+   variants, scoped. Bead enhancedchannelmanager-6z299. */
+.btn-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border: none;
+  border-radius: var(--radius-lg);
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-test:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  border-color: var(--border-secondary);
+}
+
+.btn-test:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-test .material-icons {
+  font-size: var(--icon-status);
+}
+
+/* Size modifier, not a standalone button — it is worn alongside
+   `.btn-primary`/`.btn-secondary` at every call site but two, so it sets only
+   the geometry and the type. (M3UGroupsModal used it standalone and relied on
+   its own copy for the background; that markup now says
+   `btn-secondary btn-small`, which is what it already looked like.) */
+.btn-small {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.625rem;
+  font-size: var(--type-body-size);
+}
+
+.btn-small .material-icons {
+  font-size: var(--icon-action);
+}
+
+/* Icon-only button. Three bare copies existed — the since-removed
+   LookupTableSection.css and TagEngineSection.css in the SAME Settings chunk
+   (whichever imported later silently won) and M3ULinkedAccountsModal.css in
+   the eager bundle. They
+   disagreed on padding, colour and glyph size. This is the single treatment.
+   Like `.action-btn` in § 18 it is a control, so its glyph takes the action
+   size, not the status size. Bead enhancedchannelmanager-6z299. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.btn-icon:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* `.btn-icon-danger` and `.btn-icon.delete` are two spellings of the same
+   destructive variant, one per call site. Both are honoured rather than
+   renaming markup in six files. */
+.btn-icon-danger:hover,
+.btn-icon.delete:hover {
+  background-color: var(--error-bg);
+  color: var(--danger-text);
+}
+
+.btn-icon .material-icons {
+  font-size: var(--icon-action);
+}
+
+/* Segmented single-character choice (the bulk-create separator picker, the
+   Settings separator picker). StreamsPane.css and SettingsTab.css carried
+   byte-identical base rules in two different chunks; their `.active` rules
+   differed only because StreamsPane's said `var(--accent-primary)22`, which
+   is not valid CSS and was dropped by the parser — so it has been rendering
+   with no active background at all. The valid `--accent-15` wins. */
+.separator-btn {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+  color: var(--button-text);
+  font-size: var(--type-body-size);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+  min-width: 2rem;
+}
+
+.separator-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent-primary);
+}
+
+.separator-btn.active {
+  border-color: var(--accent-primary);
+  background-color: var(--accent-15);
+  color: var(--accent-primary);
+}
+
+/* The group-header row's expand/collapse hit area: a <button> stripped of its
+   default chrome so it looks like the non-interactive wrapper it replaced.
+   ChannelsPane.css:791 and StreamsPane.css:444 declared this bare and
+   BYTE-IDENTICALLY — one class, two owners, and both eager, so which file you
+   edited decided nothing and the two silently drifted apart the moment either
+   was touched. Given one owner here; values unchanged
+   (bead enhancedchannelmanager-6z299.2). */
+.group-toggle-btn {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.group-toggle-btn:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 
@@ -202,12 +431,15 @@
   margin-bottom: 0;
 }
 
+/* The label role exists for exactly this: a caption on a form control, at
+   the same 13px as an item title but at the button weight. */
 .form-group label {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--button-text);
   margin-bottom: 0.375rem;
-  font-weight: 500;
 }
 
 /* Override for checkbox labels to keep them inline with gap */
@@ -230,7 +462,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -259,7 +491,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   box-sizing: border-box;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -274,9 +506,15 @@
   color: var(--text-muted);
 }
 
+/* --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the AA floor. The ::placeholder
+   rules above keep --text-muted on purpose — placeholder contrast is a
+   separate question and is not bundled into this sweep. */
 .form-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 0.25rem;
 }
 
@@ -292,20 +530,45 @@
   color: var(--success);
 }
 
+/* --danger-text, not --error. This is the canonical red-status-TEXT rule and
+   it is the shape the whole app now follows: --error is the solid red FILL
+   (see .btn-danger above) and is never a foreground; --danger-text is the red
+   foreground, for status text, error messages and status glyphs alike. Bead
+   enhancedchannelmanager-4l51b moved all 94 `color: var(--error)` call sites
+   here after the two jobs proved irreconcilable in the dark and high-contrast
+   themes — as text --error measured 4.03:1 (dark, on --bg-secondary) and
+   wanted to go lighter, as a fill under white it measured 3.76:1 and wanted to
+   go darker. Now 5.48:1 dark, 5.81 high contrast, 5.70 light (unchanged there:
+   --danger-text was retoned to --error's light value so this theme's numbers
+   did not move). Full derivation in index.css beside each token.
+
+   Note the asymmetry with .status-success above, which keeps --success: green
+   is the token where BOTH jobs wanted the same value in every theme, so it was
+   never split. Do not "tidy" these two into the same shape. */
 .status-error {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* --warning-text, not --warning. --warning is the amber FILL colour and has
+   to stay light enough to carry the #1a1a1a text that sits on it; as a
+   foreground on --bg-secondary it measures 1.97:1 in the light theme.
+   --warning-text is the warning-coloured TEXT token and measures 5.42:1
+   there (9.08 dark, 10.37 high contrast). Same substitution the sweep already
+   made for .status-disabled / .status-idle just below.
+   Bead enhancedchannelmanager-dlavh. */
 .status-pending {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .status-pending .spinning {
   animation: spin 1s linear infinite reverse;
 }
 
+/* --text-secondary, not --text-muted: --text-muted is 2.61:1 on
+   --bg-secondary in the light theme, and "disabled" is a status word a user
+   has to be able to read. */
 .status-disabled {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .status-idle {
@@ -331,16 +594,19 @@
   color: var(--text-secondary);
 }
 
+/* The loading and empty illustrations are the same glyph at the same place
+   in the same layout; they were 48px and 64px. One token, one number. */
 .loading-state .material-icons {
-  font-size: 48px;
+  font-size: var(--icon-empty);
 }
 
 /* Simple loading text - used in pane content areas
-   Extracted from: ChannelsPane.css, StreamsPane.css */
+   Extracted from: ChannelsPane.css, StreamsPane.css.
+   --text-secondary, not --text-muted (2.61:1 in the light theme). */
 .loading {
   padding: 2rem;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 
@@ -365,24 +631,73 @@
   text-align: center;
 }
 
+/* --text-muted is deliberate and allowed here: this glyph is a decorative
+   illustration, not text, so the 4.5:1 text floor does not apply to it. */
 .empty-state .material-icons {
-  font-size: 64px;
+  font-size: var(--icon-empty);
   color: var(--text-muted);
 }
 
 .empty-state h3 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
+/* This declared no font-size at all, so the paragraph inside every empty
+   state in the app rendered at the UA default 16px — larger than the 15px
+   heading above it. */
 .empty-state p {
   margin: 0;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
 .empty-state .btn-primary {
   margin-top: 0.5rem;
+}
+
+/* The one-line "nothing here yet" string that sits inside a list or a card,
+   as opposed to the full-page `.empty-state` block above. It was spelled
+   eleven different ways at five different sizes, four of them italic. This is
+   the treatment they all resolve to; pages adopt it by putting `empty-inline`
+   on the element and keeping only their local geometry (padding/margin/
+   centring) in the page rule. No italic — it was the only italic body text in
+   the product and it made an already small string harder to read, the same
+   call the f4yc7 pilot made on `.status-hint`.
+
+   Absorbed outright — the page class was deleted and its call site now wears
+   `empty-inline` alone: `.no-epg-text` (GuideTab), `.no-recipients` and
+   `.settings-empty-state` (SettingsTab), `.no-providers-message`
+   (LinkedAccountsSection).
+
+   Absorbed for type, keeping only local geometry in the page rule:
+   `.empty-group-message`, `.group-filter-empty`, `.inline-streams-empty`,
+   `.inline-streams-loading` (ChannelsPane), `.channel-workspace-empty`
+   (ChannelManagerTab), and — sent to the body role by 6z299.4 and corrected
+   in the 6z299.7 cleanup pass, because two treatments for one idiom is the thing this class
+   exists to stop — `.alert-methods-empty`, `.team-aliases-empty`,
+   `.saved-backups-empty` (Settings).
+
+   Carrying these values inline instead of the class, each for a stated
+   reason in its own file: `.filter-dropdown-empty` (StreamsPane.css, also
+   rendered from another chunk) and `.popularity-panel .empty-trending`.
+
+   Deliberately NOT this idiom, so nobody "finishes" them: block empty states
+   with their own padding, background or glyph (`.empty-state`, `.no-streams`
+   in StatsTab, `.profile-list-empty`, `.heatmap-empty`, `.user-list-empty`,
+   the `*-no-access` panels) — those take the body role; and
+   `.tag-test-no-matches`, which keeps the body role because it is the other
+   branch of `.tag-test-match-count` and the two must read the same. */
+.empty-inline {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 
@@ -402,19 +717,24 @@
   background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
   border-radius: var(--radius-lg);
-  color: var(--error);
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 1rem;
 }
 
+/* 20px was one of two strays outside the two-value icon scale (the other was
+   `.test-result`). An inline notice glyph is a status glyph. */
 .error-banner .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .error-banner button {
   margin-left: auto;
   background: none;
   border: none;
-  color: var(--error);
+  color: var(--danger-text);
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0;
@@ -432,13 +752,15 @@
   border: 1px solid rgba(34, 197, 94, 0.3);
   border-radius: var(--radius-lg);
   color: var(--success);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 1rem;
   animation: slideInDown 0.3s ease-out;
 }
 
 .success-message .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 /* Warning message banner
@@ -452,12 +774,40 @@
   border: 1px solid rgba(234, 179, 8, 0.3);
   border-radius: var(--radius-lg);
   color: var(--warning, #eab308);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-top: 0.75rem;
 }
 
 .warning-message .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
+}
+
+/* Inline error notice. Structurally the same thing as `.error-banner` above
+   but with its own red and its own bottom margin, and it was declared bare
+   in two places: GuideTab.css (dead — Guide renders no `.error-message`) and
+   SettingsTab.css, in a lazy chunk. Every other consumer already scopes it
+   (`.watch-history-panel`, `.bandwidth-panel`, `.popularity-panel`), so
+   those keep winning inside their own panels. Bead
+   enhancedchannelmanager-6z299. */
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background-color: rgba(220, 38, 38, 0.15);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: var(--radius-lg);
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  margin-bottom: 1rem;
+}
+
+.error-message .material-icons {
+  font-size: var(--icon-status);
 }
 
 
@@ -494,7 +844,7 @@
 }
 
 .collapsible-header .expand-icon {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
   transition: transform 0.15s;
 }
@@ -504,19 +854,27 @@
 }
 
 .collapsible-header .material-icons:first-child {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Section role, SIZE only (bead enhancedchannelmanager-haf9e): a collapsible
+   header names the group beneath it, the same job as `.detail-section h4` and
+   `.settings-section-header h3`. The 500 weight is deliberately kept rather
+   than taking the role's 600 — this pass moves sizes only, so a geometry delta
+   is attributable to the size and nothing else. 0.9rem -> 15px. */
 .collapsible-title {
   font-weight: 500;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-section-size);
 }
 
+/* Badge role, SIZE only — this is a filled, padded, rounded chip carrying a
+   count, which is what the badge role names. Weight and colour kept as
+   authored. 0.8rem -> 10px (bead enhancedchannelmanager-haf9e). */
 .collapsible-summary {
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: var(--type-badge-size);
   color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
@@ -542,12 +900,22 @@
 /* Drag handle styles
    Extracted from: EPGManagerTab.css, ChannelsPane.css, StreamsPane.css, ChannelDetail.css */
 
+/* The `<button>` reset (padding/border/background/font) came from a second
+   `.drag-handle` rule in StreamsPane.css. Both files are eager, both rules
+   were bare, so every `.drag-handle` in the app — StreamsPane's, the pipeline
+   tab's, EPGManagerTab's — already rendered this merge; only `color: inherit`
+   was contended there and this file won it. Folded in so one file owns the
+   class (bead enhancedchannelmanager-87o0c). */
 .drag-handle {
   cursor: grab;
   color: var(--drag-handle-color);
   transition: color 0.15s;
   display: flex;
   align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
 }
 
 .drag-handle:hover {
@@ -566,6 +934,24 @@
 
 .drag-handle.disabled:active {
   cursor: not-allowed;
+}
+
+/* The handle glyph. `.drag-handle` sets `font: inherit`, which resets the size
+   for the `⋮⋮` character StreamsPane and ChannelDetail put in the handle but
+   does nothing for a Material Icons child — that has its own `.material-icons`
+   rule in index.css at 24px, and nothing overrode it. So EPG Manager's five
+   `drag_indicator` glyphs and Channel Pipeline's rules-table one both rendered
+   at 24px, the only untokenised icons left on those two routes.
+   `--icon-status` is the drag-handle glyph size everywhere it was already
+   spelled out — `.norm-engine-group-drag-handle`,
+   `.norm-engine-rule-drag-handle`, `.sub-pair-drag` — so this is the existing
+   idiom moved to the one file that owns the class rather than a new choice.
+   Two classes of depth on purpose: a single-class override ties with
+   index.css's base `.material-icons` at 0-1-0 and loses on byte order
+   (§ "Partial redeclaration").
+   Bead enhancedchannelmanager-6z299, completion pass. */
+.drag-handle .material-icons {
+  font-size: var(--icon-status);
 }
 
 
@@ -615,7 +1001,7 @@
 }
 
 .expand-collapse-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 .search-row .search-input {
@@ -623,6 +1009,10 @@
   min-width: 0;
 }
 
+/* Body role, SIZE only — an input is a control, so it keeps its authored weight.
+   0.9rem -> 13px (bead enhancedchannelmanager-haf9e). This is the single
+   highest-count site in the modal measurement: 12 dialogs rendered it at
+   14.4px. */
 .search-input {
   width: 100%;
   padding: 0.5rem;
@@ -630,7 +1020,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: border-color 0.15s;
 }
 
@@ -657,16 +1047,17 @@
 }
 
 .search-box .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Body role, SIZE only. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .search-box input {
   flex: 1;
   background: none;
   border: none;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -692,7 +1083,7 @@
 }
 
 .search-box .clear-search .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 
@@ -709,6 +1100,13 @@
   min-width: 0;
 }
 
+/* Body role, size token only (§ "Adopting a role", rule 1). It was 0.9rem —
+   a rem literal anchored to the root, not an em tracking a parent — so it
+   rendered 14.4px, and the `<span>` holding the selected value inherited that.
+   Channel Manager puts this control in the same filter row as
+   `.group-filter-button`, which the sweep already moved to `--type-body-size`;
+   the two read as a pair and were 1.4px apart.
+   Bead enhancedchannelmanager-6z299, completion pass. */
 .filter-dropdown-button {
   width: 100%;
   padding: 0.5rem;
@@ -716,7 +1114,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -733,6 +1131,18 @@
   border-color: var(--accent-primary);
 }
 
+/* Deliberately off the scale, and deliberately not changed by the completion
+   pass of bead enhancedchannelmanager-6z299. This is a `▼` character used as a
+   disclosure caret, not text: no text role fits it (adopting one would mean
+   taking a size and silently inheriting a weight and tracking that mean
+   nothing on a glyph — the § "Partial redeclaration" trap), and the icon
+   tokens start at 14px, which would enlarge the caret by 46%.
+   The real fix is to retire the `▼`-character idiom in favour of
+   `.custom-select-arrow`, which is the app's canonical disclosure indicator
+   and is an 18px Material Icons glyph. Five rules share this shape
+   (`.group-filter-button`, `.source-filter-button`, `.save-points-dropdown`
+   here at 0.6rem, `.searchable-dropdown` at 1.25rem) so that is its own
+   change, not a line in a type sweep. Backlog candidate, not an oversight. */
 .filter-dropdown-button .dropdown-arrow {
   font-size: 0.6rem;
   color: var(--text-secondary);
@@ -768,13 +1178,14 @@
   color: var(--text-muted);
 }
 
+/* Body role, SIZE only. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-search input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .filter-dropdown-search input::placeholder {
@@ -788,10 +1199,14 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Body role, SIZE only — "Select all" / "Clear" are buttons, and the scale puts
+   buttons on body. This one grows: 0.75rem (12px) -> 13px. The alternative was
+   meta (11px), which is the role for supporting DETAIL, not for an action
+   (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-actions button {
   flex: 1;
   padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
@@ -810,6 +1225,8 @@
   padding: 0.25rem;
 }
 
+/* Body role, SIZE only — a clickable option row in a listbox.
+   0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .filter-dropdown-option {
   display: flex;
   align-items: center;
@@ -817,7 +1234,7 @@
   padding: 0.375rem 0.5rem;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
 }
 
@@ -826,8 +1243,6 @@
 }
 
 .filter-dropdown-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
 }
 
@@ -870,15 +1285,32 @@
   min-width: 0;
 }
 
+/* A section heading inside a page, not a second page title. `.header-title`
+   is rendered only by PageHeader, and PageHeader emits an h2 for every
+   caller that does not pass `headingLevel={1}` — so this rule governs the
+   section headings and the route title is untouched (it is `.page-header
+   .header-title h1` in PageHeader.css, on the page-title role — 20px/700/1.3
+   since bead enhancedchannelmanager-tygwm, 24px before it).
+   At 1.5rem this was the same 24px as the route title one row above it,
+   which is why "Dummy EPG Profiles" read as a second page title once the P1
+   pilot shrank everything under it. The section role is the P1 answer to
+   exactly this text and had no consumer until now; `.header-description`
+   directly below already takes the body role, so the pair now reads as one
+   scale rather than a 24px heading over 13px copy. Bead
+   enhancedchannelmanager-meh0a. */
 .header-title h2 {
   margin: 0 0 0.25rem 0;
-  font-size: 1.5rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
 .header-description {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -903,6 +1335,14 @@
 /* Pane header styles
    Extracted from: ChannelsPane.css, StreamsPane.css */
 
+/* ChannelsPane.css and StreamsPane.css each carried a bare `.pane-header`
+   too. All three are eager and this file is emitted last, so its box (the
+   0.75rem 1rem padding, the secondary background) has been the live one all
+   along; the panes contributed only the properties this rule never declared —
+   the 56px strip height, `box-sizing`, `min-width`, `gap`, and ChannelsPane's
+   edit-mode transition. Those are folded in here so one file owns the class.
+   The panes' `padding: 1rem` stays discarded: it is not what renders today
+   (bead enhancedchannelmanager-87o0c). */
 .pane-header {
   display: flex;
   justify-content: space-between;
@@ -910,29 +1350,57 @@
   padding: 0.75rem 1rem;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
+  height: 56px;
+  box-sizing: border-box;
+  min-width: 0;
+  gap: 0.5rem;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
+/* Micro role, not section. A pane header caption is the same tracked
+   uppercase idiom as a list header, and micro is what it already renders as:
+   ChannelsPane.css and StreamsPane.css both declared `.pane-header h2` at
+   1.1rem, but both are eager and this file is emitted after them, so this
+   0.75rem/600/uppercase rule has been the live winner all along and their
+   two copies were dead. They are deleted rather than promoted — promoting
+   them would have been a 12px -> 17.6px regression nobody asked for.
+   Bead enhancedchannelmanager-6z299. */
 .pane-header h2 {
   margin: 0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--text-secondary);
 }
 
+/* `min-width` and `flex-shrink` come from ChannelsPane.css's bare copy of this
+   class, which was eager and therefore already applied to the only site that
+   renders it (ChannelsPane.tsx). Folded in, copy deleted
+   (bead enhancedchannelmanager-87o0c). */
 .pane-header-actions {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 /* Pane content area
    Extracted from: ChannelsPane.css, StreamsPane.css */
+/* `overflow-x`, the two `min-*: 0` flex-child guards and the edit-mode
+   transition come from ChannelsPane.css's bare copy. It was eager and bare, so
+   both panes' content areas already rendered this merge; this rule won the
+   three properties they shared (flex/overflow-y/padding) at identical values
+   (bead enhancedchannelmanager-87o0c). */
 .pane-content {
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem;
+  overflow-x: hidden;
+  min-width: 0;
+  min-height: 0;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 
@@ -943,17 +1411,17 @@
 /* List/table header styles
    Extracted from: EPGManagerTab.css, LogoManagerTab.css, JournalTab.css, M3UManagerTab.css */
 
+/* A list header is an instance of the micro-label idiom: § 24 owns its
+   size, weight, case and tracking for every `.list-header` in the app, so
+   this rule keeps only the things that are specific to a header strip —
+   the grid, the padding, the field and the rule under it. */
 .list-header {
   display: grid;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   background-color: var(--input-bg);
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.7rem;
-  font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 
@@ -993,7 +1461,10 @@
   gap: 0.75rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border-primary);
-  font-size: 0.875rem;
+  /* Body role, SIZE only — a row of running text in an import preview list;
+     its children inherit from here. 0.875rem -> 13px
+     (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
 }
 
 .preview-item:last-child {
@@ -1008,6 +1479,53 @@
   background-color: var(--success-bg);
 }
 
+/* The "… and N more" tail of a preview list. Promoted here from the two eager
+   files that both declared it bare — CSVImportModal.css and StreamsPane.css —
+   so one file owns the class. Values are exactly what rendered before:
+   StreamsPane won the three properties they shared (padding, font-size,
+   colour) and CSVImportModal's background and centring survived untouched,
+   which is the merge both render sites were already getting
+   (bead enhancedchannelmanager-87o0c). */
+.preview-more {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  text-align: center;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* The picked-file chip — filename over size, next to a preview or an upload
+   dropzone. CSVImportModal.css and LogoModal.css each declared the whole
+   family bare, in the eager bundle, and disagreed on the filename size
+   (16px vs 14.4px) and on the size string's colour. Only the divergent
+   layout bit stays behind, scoped, in each file. Bead
+   enhancedchannelmanager-6z299. */
+.file-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --text-secondary, not --text-muted (2.61:1 in the light theme). */
+.file-size {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
+}
+
 
 /* =============================================================================
    18. ACTION BUTTONS
@@ -1016,11 +1534,21 @@
 /* Small icon action button styles
    Extracted from: EPGManagerTab.css, LogoManagerTab.css, M3UManagerTab.css */
 
+/* 32x32 with no padding, not an intrinsic box. This file said
+   `padding: 0.375rem` and every one of the three manager tabs it was
+   "extracted from" overrode it with an explicit 32x32 square — so the
+   shared rule described a geometry that nothing in the app actually
+   rendered, and any NEW consumer of `.action-btn` got a row of buttons a
+   different size from every existing one. The three copies are deleted and
+   their geometry is the canonical one, which is why M3U, EPG and Logo row
+   heights do not move (PO decision, bead enhancedchannelmanager-6z299). */
 .action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.375rem;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   background: none;
   border: none;
   border-radius: var(--radius-md);
@@ -1029,22 +1557,42 @@
   transition: background-color 0.15s, color 0.15s;
 }
 
-.action-btn:hover {
-  background-color: var(--bg-hover);
+/* `:not(:disabled)` and the 0.4 disabled opacity come from the three manager
+   tabs along with the box — a disabled row action should not light up under
+   the pointer, and this file's version let it. */
+.action-btn:hover:not(:disabled) {
+  background-color: var(--border-primary);
   color: var(--text-primary);
 }
 
 .action-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
+/* An `.action-btn` is a control, so its glyph takes the action size, not the
+   status size. § 18 is the only place that number belongs: `.action-btn` was
+   "extracted from" the three manager tabs but the extraction never deleted
+   their copies, so a bare `.action-btn .material-icons` still existed in
+   EPGManagerTab.css, LogoManagerTab.css and M3UManagerTab.css at equal
+   specificity to this one. While all four said 18px that was invisible; the
+   moment the f4yc7 pilot moved two of them to 16px it became a live
+   chunk-order leak — visiting M3U Manager and then Logo Manager re-sized Logo
+   Manager's row actions. The three copies are now comments pointing here
+   (bead enhancedchannelmanager-6z299). */
 .action-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
-.action-btn.danger:hover {
-  color: var(--error);
+/* `.danger` and `.delete` are two spellings of the same destructive action —
+   `.delete` at eight call sites, `.danger` at two. Both are honoured rather
+   than renaming markup. The tint is `--error-bg`, the theme-aware token, not
+   the literal `rgba(239, 68, 68, 0.2)` that two of the three deleted tab
+   copies hardcoded. */
+.action-btn.danger:hover:not(:disabled),
+.action-btn.delete:hover:not(:disabled) {
+  background-color: var(--error-bg);
+  color: var(--danger-text);
 }
 
 /* Toggle button - green when active, grey when inactive */
@@ -1077,8 +1625,16 @@
   background: var(--accent-10);
 }
 
+.copy-url-btn:focus-visible,
+.vlc-btn:focus-visible,
+.preview-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .copy-url-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* VLC button - hidden by default, shown on hover
@@ -1124,7 +1680,7 @@
 }
 
 .preview-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 
@@ -1179,12 +1735,35 @@
   gap: 1rem;
 }
 
+/* `color` and `font-size` come from StreamsPane.css, which declared both of
+   these classes bare in the eager bundle. This file is emitted after it, so it
+   won the four properties they shared and StreamsPane's colour and size
+   survived on top — i.e. every checkbox and radio row in the app, including
+   the pipeline tab's, already rendered this exact merge. Folded in and the
+   StreamsPane copies deleted, so one file owns each class
+   (bead enhancedchannelmanager-87o0c). */
+/* Body role, SIZE only. A checkbox/radio row is an interactive control, so per
+   docs/css_guidelines.md § "Adopting a role" it takes the role's size and keeps
+   the weight it was authored with. This rule is also the OUTER half of a nested
+   pair — `.checkbox-option label` below sizes the caption inside it — so it is
+   converted first. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .checkbox-option,
 .radio-option {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+  color: var(--button-text);
+  font-size: var(--type-body-size);
+}
+
+/* Checkbox-only half of the same fold: StreamsPane's copy declared these two
+   and its radio copy did not, so only checkbox rows wrapped and carried
+   vertical padding. Kept asymmetric on purpose — matching the radios would be
+   a visible change, not a reconciliation (bead enhancedchannelmanager-87o0c). */
+.checkbox-option {
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
 }
 
 .checkbox-option input,
@@ -1195,10 +1774,14 @@
   cursor: pointer;
 }
 
+/* Label role, SIZE only — the caption on a form control, which is exactly what
+   the label role names. Inner half of the pair above; both land on 13px, so the
+   row and its caption now agree where before they were 14.4px over 14px.
+   0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .checkbox-option label,
 .radio-option label {
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
   color: var(--text-primary);
 }
 
@@ -1217,7 +1800,9 @@
   padding: 0.75rem 1rem;
   border-radius: var(--radius-lg);
   margin-top: 1rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .test-result.success {
@@ -1229,11 +1814,12 @@
 .test-result.error {
   background-color: var(--error-bg);
   border: 1px solid rgba(239, 68, 68, 0.3);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* The second of the two 20px strays. A result glyph is a status glyph. */
 .test-result .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 
@@ -1247,9 +1833,9 @@
   align-items: center;
   gap: var(--space-2, 0.25rem);
   padding: var(--space-1, 0.125rem) var(--space-4, 0.5rem);
-  font-size: var(--text-sm, 0.75rem);
-  font-weight: 500;
-  line-height: 1.4;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   border-radius: var(--radius-md, 4px);
   white-space: nowrap;
   vertical-align: middle;
@@ -1257,16 +1843,21 @@
   color: var(--text-secondary);
 }
 
-.badge .material-icons { font-size: 14px; }
+.badge .material-icons { font-size: var(--icon-badge); }
 
 /* Semantic variants */
 .badge-success { background: var(--success-bg); color: var(--success); }
-.badge-error   { background: var(--error-bg);   color: var(--error); }
+.badge-error   { background: var(--error-bg);   color: var(--danger-text); }
 .badge-warning { background: var(--warning-bg);  color: var(--warning-text, var(--warning)); }
 .badge-info    { background: var(--info-bg);     color: var(--info-text); }
 
-/* Size variants */
-.badge-sm { padding: var(--space-1, 0.125rem) var(--space-3, 0.375rem); font-size: 0.65rem; }
+/* Size variants. Now that `.badge` itself is on the badge role this differs
+   only in padding — kept as a named variant because the markup uses it, and
+   because a tighter chip is a real need. */
+.badge-sm {
+  padding: var(--space-1, 0.125rem) var(--space-3, 0.375rem);
+  font-size: var(--type-badge-size);
+}
 
 /* Shape variants */
 .badge-pill { border-radius: var(--radius-full, 9999px); }
@@ -1284,11 +1875,331 @@
   gap: var(--space-2, 0.25rem);
   padding: var(--space-1, 0.125rem) var(--space-4, 0.5rem);
   border-radius: var(--radius-md, 4px);
-  font-size: var(--text-xs, 0.6875rem);
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   text-transform: uppercase;
+  /* Uppercase at chip size needs the micro role's tracking to stay legible;
+     this rule uppercased without it. */
+  letter-spacing: var(--type-micro-tracking);
   white-space: nowrap;
-  line-height: 1.4;
 }
 
-.type-badge .material-icons { font-size: 14px; }
+.type-badge .material-icons { font-size: var(--icon-badge); }
+
+
+/* =============================================================================
+   24. MICRO LABELS
+   ============================================================================= */
+
+/* The tracked uppercase label idiom — list/table column headers, the word
+   under a status glyph, small section captions. Before bead
+   enhancedchannelmanager-f4yc7 the same idiom was written four different
+   ways (0.7rem/600/0.05em, 0.7rem/500/0.02em twice, 0.75rem/600/0.05em);
+   this is the single treatment they all resolve to.
+   `.list-header` is listed here rather than repeating the declarations in
+   § 15 so there is exactly one place the micro role is spelled out.
+   Deliberately no `color`: a micro label takes the colour of what it labels
+   (a status word is green or red; a column header is --text-secondary, set
+   on `.list-header` itself). Never colour one with --text-muted — in the
+   light theme that measures 2.61:1 on --bg-secondary. */
+/* `.detail-section h4` is the caption over a detail pane's JSON/field block
+   in the Journal and M3U Changes drawers. Both files spelled the idiom out
+   themselves, identically (0.75rem/600/0.05em) and bare, in two different
+   lazy chunks; it is the same micro label as everything else here. Bead
+   enhancedchannelmanager-6z299. */
+.micro-label,
+.list-header,
+.detail-section h4 {
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+}
+
+/* `.detail-section h4` is an element rule, so the heading's UA margin and
+   the colour it was carrying have to come with it — `.micro-label` on its
+   own deliberately sets neither. */
+.detail-section h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--text-secondary);
+}
+
+
+/* =============================================================================
+   25. PAGINATION STRIP
+   ============================================================================= */
+
+/* The list pagination footer: a count on one side, first/prev/page/next/last
+   in the middle, a page-size picker on the other.
+   JournalTab.css and M3UChangesTab.css carried byte-identical copies of this
+   entire block (two lazy chunks), and LogoManagerTab.css carried a third,
+   partial copy of `.pagination-left/-center/-right` and `.page-size-label`
+   with different values — so which gaps and which label colour you saw
+   depended on which of the three tabs you had visited most recently. One
+   owner (bead enhancedchannelmanager-6z299).
+
+   The strip carries the body role and the parts inherit it, which is how
+   Logo Manager already did it: one number for the whole footer instead of a
+   font-size on each of five spans. */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  margin-top: 0.5rem;
+  flex-shrink: 0;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary);
+}
+
+.pagination-left,
+.pagination-center,
+.pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The outer two are given a floor so the centre cluster stays centred as the
+   count text changes length. */
+.pagination-left,
+.pagination-right {
+  min-width: 120px;
+}
+
+.pagination-right {
+  justify-content: flex-end;
+}
+
+/* The paging buttons are square icon buttons, not the pill `.btn-secondary`
+   they share a class with. */
+.pagination .btn-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.pagination .btn-secondary:hover:not(:disabled) {
+  background-color: var(--border-primary);
+}
+
+.pagination .btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination .btn-secondary .material-icons {
+  font-size: var(--icon-action);
+}
+
+/* `.page-info` and `.page-indicator` are the same "Page 3 of 12" string under
+   two names — Journal/M3U Changes use the first, Logo Manager the second.
+   Reconciled to one rule at Journal's padding; Logo Manager gains 0.25rem a
+   side. */
+.page-info,
+.page-indicator {
+  padding: 0 0.75rem;
+  white-space: nowrap;
+}
+
+.entries-count {
+  white-space: nowrap;
+}
+
+/* Journal and M3U Changes hang this on a `<span>`; Logo Manager hangs it on a
+   `<label>` that also wraps a native select, which is why the flex row is
+   here. On a span with no children it costs nothing. --text-secondary, not
+   the --text-muted two of the three copies used (2.61:1 in the light
+   theme). */
+.page-size-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.page-size-label select {
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--type-body-size);
+  cursor: pointer;
+}
+
+/* Journal puts `page-size-select` on the CustomSelect itself, M3U Changes on
+   a wrapper div around it — the descendant rules match only in the second
+   case, and the `min-width` floor applies in both. Journal declared the
+   floor and M3U Changes declared `width: fit-content`; both are kept, which
+   is the behaviour Journal already had. */
+.page-size-select {
+  width: fit-content;
+  min-width: 70px;
+}
+
+.page-size-select .custom-select {
+  width: fit-content;
+  min-width: unset;
+}
+
+.page-size-select .custom-select-trigger {
+  width: auto;
+  min-width: unset;
+  padding: 0.375rem 0.5rem;
+  font-size: var(--type-body-size);
+}
+
+/* !important is inherited from both source copies: CustomSelect.css sets the
+   arrow size on a more specific selector. */
+.page-size-select .custom-select-arrow {
+  font-size: var(--icon-action) !important;
+  margin-left: 0.25rem;
+}
+
+
+/* =============================================================================
+   26. FIELD MESSAGES
+   ============================================================================= */
+
+/* The hint and the validation error that sit under a form control. Four bare
+   `.field-hint` copies (M3UProfileModal, ActionEditor, RuleBuilder,
+   SettingsTab) at 11px and 12px, and two bare `.field-error` copies
+   (RuleBuilder, SettingsTab) at 12px, spread over three different chunks —
+   a form's hint text changed size depending on which page you had opened
+   first. Bead enhancedchannelmanager-6z299.
+   `display: block` is required: several call sites hang these on a `<span>`
+   next to the input. */
+.field-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
+}
+
+/* Keeps a semantic red rather than taking a text colour from the scale: this
+   is the one field message whose colour is its meaning. The token is
+   --danger-text (the red FOREGROUND), not --error (the red FILL) — bead
+   enhancedchannelmanager-4l51b; see .status-error for why. */
+.field-error {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--danger-text);
+}
+
+
+/* =============================================================================
+   27. GROUP ROWS
+   ============================================================================= */
+
+/* A channel/provider group row: the group's name and how many things are in
+   it. `.group-name` was declared bare in four files across three chunks
+   (ChannelsPane, M3UGroupsModal, DeleteOrphanedGroupsModal, PrintGuideModal)
+   at 14px, 15.2px and — in DeleteOrphanedGroupsModal, which set no font-size
+   at all — the UA default 16px. `.group-count` was bare in two. The name of
+   a group in a list is a list-row name, so it takes the item-title role.
+   Consumers that need a different treatment scope it (`.stream-group-header
+   .group-name`, `.channel-group-header .group-name`) and keep winning.
+   Bead enhancedchannelmanager-6z299. */
+.group-name {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --text-secondary, not --text-muted (2.61:1 in the light theme). */
+.group-count {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
+}
+
+
+/* =============================================================================
+   28. ROUTE HEADER STATS
+   ============================================================================= */
+
+/* An icon + count chip in the route header band's `status` slot. Hoisted, not
+   scoped, because it CANNOT be scoped: `RouteHeaderSlot` is a real
+   `createPortal`, so the chips render inside App's `.route-page-status-outlet`
+   and the owning page's root class (`.journal-tab`, `.m3u-changes-tab`) is not
+   an ancestor of them. JournalTab.css:47,55 and M3UChangesTab.css:55,63
+   declared these bare, byte-identical, in two different lazy chunks, so
+   whichever tab you had visited last owned every other tab's header chips
+   (bead enhancedchannelmanager-6z299.2).
+
+   DO NOT REMAP THESE ONTO THE TYPE ROLES. The 0.875rem and the 16px below are
+   frozen, not unfinished. That same `createPortal` is why: these chips render
+   inside the route-header band, which is chrome and is explicitly outside the
+   P1 content-pane type scale (docs/css_guidelines.md § "What is *not* in this
+   scale"). Hoisting them here moved WHERE they are declared so that two tabs
+   stop overwriting each other; it did not move them into the scale's scope,
+   and no later wave inherits them. Changing these values changes the frozen
+   header band (the enhancedchannelmanager-6z299.7 cleanup pass).
+
+   Only JournalTab.tsx and M3UChangesTab.tsx render `.header-stat`; note that
+   SettingsTab.tsx's `.header-stats` (plural) row is a different class and is
+   unaffected. */
+.header-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.header-stat .material-icons {
+  font-size: 16px;
+  color: var(--text-muted);
+}
+
+
+/* =============================================================================
+   29. UPDATED TIMESTAMP
+   ============================================================================= */
+
+/* The "Updated: <when>" pair in a list row. Hoisted, not scoped, because the
+   two render sites are structurally the same thing and the two declarations
+   were byte-identical: EPGManagerTab.tsx:191 (`.source-updated`) and
+   M3UManagerTab.tsx:246 (`.account-updated`) both emit
+   `<span class="updated-label">Updated:</span><span class="updated-time">…`,
+   and EPGManagerTab.css:249,253 and M3UManagerTab.css:349,353 both set the
+   same colour. Two lazy chunks, so whichever tab you had visited last owned
+   the other's timestamp colour — harmless while the values matched, a defect
+   the first time either page recoloured only its own copy
+   (bead enhancedchannelmanager-mktnb).
+
+   The size and line-height still come from each page's own `.source-updated`
+   / `.account-updated` wrapper, which sets the meta role on the pair; only
+   the colour is shared.
+
+   --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the WCAG AA 4.5:1 floor. */
+.updated-label,
+.updated-time {
+  color: var(--text-secondary);
+}

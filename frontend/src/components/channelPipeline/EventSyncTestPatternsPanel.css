@@ -11,6 +11,7 @@
   gap: 12px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .event-sync-test-patterns textarea {
   width: 100%;
   background: var(--input-bg);
@@ -19,7 +20,7 @@
   border-radius: 4px;
   padding: 8px;
   font-family: monospace;
-  font-size: 13px;
+  font-size: var(--type-body-size);
   resize: vertical;
 }
 
@@ -39,10 +40,13 @@
   overflow-x: auto;
 }
 
+/* Body role. 13px -> 13px. */
 .test-patterns-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .test-patterns-table caption {
@@ -79,6 +83,7 @@
   gap: 4px;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .test-patterns-status .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }

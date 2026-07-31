@@ -4,22 +4,12 @@ import type { M3UAccount, M3UAccountType, M3UAccountCreateRequest, ServerGroup }
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
+import { isHDHomerunLineupUrl } from '../utils/hdhomerun';
 import './ModalBase.css';
 import './M3UAccountModal.css';
 
 // UI-only account type that includes HDHR (which gets converted to STD for API)
 type UIAccountType = M3UAccountType | 'HDHR';
-
-// Helper to detect if a URL is an HD Homerun lineup URL
-function isHDHomerunUrl(url: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.pathname === '/lineup.m3u' || parsed.pathname === '/lineup.m3u8';
-  } catch {
-    return false;
-  }
-}
 
 // Helper to extract IP/host from HD Homerun URL
 function extractHDHomerunIP(url: string): string {
@@ -99,8 +89,12 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setAutoEnableSeries(account.auto_enable_new_groups_series);
         setIsActive(account.is_active);
 
-        // Detect if this is an HD Homerun account (STD with lineup.m3u URL)
-        if (account.account_type === 'STD' && isHDHomerunUrl(account.server_url || '')) {
+        // Detect if this is an HD Homerun account (STD with lineup.m3u URL).
+        // Deliberately the narrow lineup test, not `isHDHomerunUrl` — HD
+        // Homerun mode rewrites the URL on save, so anything it opens must be
+        // a URL it can reconstruct from the host alone (bead
+        // enhancedchannelmanager-sccol).
+        if (account.account_type === 'STD' && isHDHomerunLineupUrl(account.server_url)) {
           setAccountType('HDHR');
           setHdhrIP(extractHDHomerunIP(account.server_url || ''));
           setServerUrl('');

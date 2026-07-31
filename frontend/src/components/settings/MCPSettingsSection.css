@@ -9,18 +9,26 @@
   gap: 0.5rem;
 }
 
+/* Body role, NOT the badge role, despite the name. This is a full-width
+   (`flex: 1`) status STRIP with 8/12px padding carrying a sentence — "MCP
+   server is running" — not a tight chip. The badge role's 10px inside this
+   much padding would read as sparse and mis-set the hierarchy against the
+   card title above it (bead enhancedchannelmanager-6z299.4). Same call for
+   `.mcp-key-badge` below. */
 .mcp-status-badge {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   flex: 1;
 }
 
 .mcp-status-badge .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 .mcp-status-online {
@@ -31,7 +39,7 @@
 
 .mcp-status-offline {
   background: rgba(239, 68, 68, 0.1);
-  color: var(--error);
+  color: var(--danger-text);
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
@@ -62,17 +70,20 @@
 }
 
 .mcp-status-row .btn-sm .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 /* Key status badges */
+/* Body role — see `.mcp-status-badge` above. */
 .mcp-key-badge {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .mcp-key-active {
@@ -88,7 +99,7 @@
 }
 
 .mcp-key-badge .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 /* Key display (code + copy button) */
@@ -103,6 +114,9 @@
   margin-top: 0.5rem;
 }
 
+/* `.mcp-key-display code` and `.mcp-config-block pre` keep their own sizes:
+   monospace key/config data is content, not UI chrome, and § 7 of the P1 spec
+   excludes it from the type scale. */
 .mcp-key-display code {
   flex: 1;
   font-family: 'JetBrains Mono', monospace;
@@ -129,7 +143,7 @@
 }
 
 .mcp-copy-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Action buttons */
@@ -146,12 +160,12 @@
 }
 
 .mcp-key-actions .btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .mcp-key-actions .btn-danger {
   background: rgba(239, 68, 68, 0.15);
-  color: var(--error);
+  color: var(--danger-text);
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
@@ -193,12 +207,14 @@
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
   border-left: 3px solid var(--accent-color, #4a9eff);
   border-radius: 4px;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .mcp-prereq-note .material-icons {
   color: var(--accent-color, #4a9eff);
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.1rem;
 }
@@ -229,19 +245,24 @@
 }
 
 .mcp-tool-card-header .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
   color: var(--accent, #646cff);
 }
 
+/* Item title — the name of one tool-group card. */
 .mcp-tool-card-title {
-  font-weight: 600;
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   flex: 1;
 }
 
+/* Badge role — a genuine pill: a bare tool count on a tinted rounded chip. */
 .mcp-tool-card-count {
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.05);
   padding: 0.1rem 0.4rem;
@@ -250,7 +271,8 @@
 
 .mcp-tool-card p {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.3;
+  line-height: var(--type-body-line-height);
 }

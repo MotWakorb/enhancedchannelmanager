@@ -14,6 +14,7 @@
   color: var(--text-primary);
 }
 
+/* Body role, SIZE only. RENDER-NEUTRAL: a more specific `.form-group input[...]` rule already won at 13px, so this declaration was dead. Converted anyway — a dead raw rem is a latent bug, not a safe one. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .form-input {
   width: 100%;
   padding: 0.5rem 0.75rem;
@@ -21,7 +22,7 @@
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .schedule-editor .form-input:focus {
@@ -41,8 +42,6 @@
 }
 
 .schedule-editor .checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.5rem;
   accent-color: var(--accent-primary);
 }
@@ -68,7 +67,9 @@
   color: var(--text-primary);
   cursor: pointer;
   transition: all 0.15s ease;
-  font-size: 0.8rem;
+  /* Body role, SIZE only. OUTER rule — the bare `<span>` caption inside each
+     tile inherits from it. 0.8rem -> 13px (bead enhancedchannelmanager-haf9e). */
+  font-size: var(--type-body-size);
 }
 
 .schedule-editor .type-button .material-icons {
@@ -117,6 +118,7 @@
   gap: 0.5rem;
 }
 
+/* Body role, SIZE only. A control. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .preset-button {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
@@ -124,7 +126,7 @@
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   transition: all 0.15s ease;
 }
 
@@ -170,15 +172,18 @@
   flex-wrap: wrap;
 }
 
+/* Body role, SIZE only. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .time-input {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
+/* Body role, SIZE only. OUTER rule — this wraps a `.custom-select`, whose
+   trigger and options inherit from it. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .timezone-select {
   flex: 1;
   min-width: 150px;
@@ -187,7 +192,7 @@
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 /* Day Quick Select */
@@ -197,6 +202,7 @@
   margin-bottom: 0.5rem;
 }
 
+/* Body role, SIZE only. A control; grows 12px -> 13px. 0.75rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .quick-button {
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--border-color);
@@ -204,7 +210,7 @@
   background-color: var(--bg-tertiary);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   transition: all 0.15s ease;
 }
 
@@ -220,6 +226,7 @@
   flex-wrap: wrap;
 }
 
+/* Body role, SIZE only. A control; grows 12px -> 13px. 0.75rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .day-button {
   width: 42px;
   height: 42px;
@@ -228,7 +235,7 @@
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   transition: all 0.15s ease;
 }
@@ -250,19 +257,21 @@
   gap: 0.5rem;
 }
 
+/* Body role, SIZE only. A control. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .day-select {
   padding: 0.5rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   min-width: 80px;
 }
 
+/* Body role, SIZE only. Reads on the same line as `.day-select`, so it takes the same role. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .day-suffix {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 /* Actions - now uses modal-footer from ModalBase.css */
@@ -276,17 +285,19 @@
   margin-bottom: 1.5rem;
 }
 
+/* Section role, SIZE only. A heading inside the dialog body. 0.95rem -> 15px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .parameters-section .section-title {
   margin: 0 0 1rem 0;
-  font-size: 0.95rem;
+  font-size: var(--type-section-size);
   font-weight: 600;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 0.5rem;
 }
 
+/* Meta role, SIZE only. Supporting detail under the section heading. 0.8rem -> 11px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .parameters-note {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
   color: var(--text-secondary);
   margin: 0 0 1rem 0;
   padding: 0.5rem 0.75rem;
@@ -295,8 +306,9 @@
   border-left: 3px solid var(--accent-primary);
 }
 
+/* Meta role, SIZE only. Supporting detail under a field. 0.8rem -> 11px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .param-description {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
   color: var(--text-secondary);
   margin: 0 0 0.5rem 0;
 }
@@ -305,8 +317,9 @@
   margin-top: 0.5rem;
 }
 
+/* Meta role, SIZE only. Supporting detail; the shared `.form-hint` equivalent. 0.8rem -> 11px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .array-hint {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
   font-style: italic;
@@ -345,24 +358,23 @@
 }
 
 .schedule-editor .option-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
+/* Body role, SIZE only. The clickable text of a checkbox row. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .option-checkbox span {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
 }
 
 /* Badge for option items (e.g., "auto" for auto-sync groups) */
+/* Badge role, SIZE only. A chip beside the option label. 0.65rem -> 10px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .option-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-left: 0.5rem;
-  font-size: 0.65rem;
+  font-size: var(--type-badge-size);
   font-weight: 500;
   color: #22d3ee;
   background-color: rgba(34, 211, 238, 0.15);

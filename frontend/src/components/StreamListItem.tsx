@@ -93,13 +93,17 @@ export const StreamListItem = memo(function StreamListItem({
 
   return (
     <div ref={setNodeRef} style={style} className="inline-stream-item">
-      <span
-        className={`stream-drag-handle ${!isEditMode ? 'disabled' : ''}`}
-        {...(isEditMode ? { ...attributes, ...listeners } : {})}
-        title={isEditMode ? 'Drag to reorder' : 'Enter Edit Mode to reorder streams'}
-      >
-        ⋮⋮
-      </span>
+      {isEditMode && (
+        <span
+          className="stream-drag-handle"
+          {...attributes}
+          {...listeners}
+          aria-label={`Drag assigned stream ${stream.name} to reorder`}
+          title={`Drag assigned stream ${stream.name} to reorder`}
+        >
+          ⋮⋮
+        </span>
+      )}
       {stream.logo_url && (
         <img
           src={stream.logo_url}
@@ -112,6 +116,7 @@ export const StreamListItem = memo(function StreamListItem({
       )}
       <div className="inline-stream-info">
         <span className="inline-stream-name">{stream.name}</span>
+        <div className="inline-stream-details">
         {/* Stream metadata tags */}
         {streamStats && streamStats.probe_status === 'success' && (
           <span className="stream-metadata">
@@ -166,10 +171,15 @@ export const StreamListItem = memo(function StreamListItem({
         {/* Probe status indicator for failed/timeout */}
         {streamStats && (streamStats.probe_status === 'failed' || streamStats.probe_status === 'timeout') && (
           <span
-            className={`meta-tag probe-${streamStats.probe_status}`}
+            className={`meta-tag probe-${streamStats.probe_status} probe-warning-summary`}
             title={streamStats.error_message || `Probe ${streamStats.probe_status}`}
+            aria-label={`Probe ${streamStats.probe_status}. ${streamStats.error_message || `Probe ${streamStats.probe_status}`}.${streamStats.consecutive_failures > 0 && strikeThreshold > 0 ? ` ${streamStats.consecutive_failures} of ${strikeThreshold} strikes.` : ''}`}
           >
-            <span className="material-icons">error_outline</span>
+            <span className="material-icons" aria-hidden="true">error_outline</span>
+            <span>Probe {streamStats.probe_status}</span>
+            {streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
+              <span aria-hidden="true"> • {streamStats.consecutive_failures}/{strikeThreshold}</span>
+            )}
           </span>
         )}
         {/* Black screen indicator */}
@@ -185,7 +195,7 @@ export const StreamListItem = memo(function StreamListItem({
           </span>
         )}
         {/* Strike count badge */}
-        {streamStats && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
+        {streamStats && streamStats.probe_status !== 'failed' && streamStats.probe_status !== 'timeout' && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span
             className={`meta-tag strike-count${streamStats.consecutive_failures >= strikeThreshold ? ' strike-exceeded' : ''}`}
             title={`${streamStats.consecutive_failures} consecutive failure${streamStats.consecutive_failures !== 1 ? 's' : ''} (threshold: ${strikeThreshold})`}
@@ -200,7 +210,9 @@ export const StreamListItem = memo(function StreamListItem({
           </span>
         )}
         {providerName && <span className="inline-stream-provider">{providerName}</span>}
+        </div>
       </div>
+      <div className="inline-stream-actions">
       {stream.url && onPreview && (
         <button
           className="preview-btn"
@@ -262,10 +274,12 @@ export const StreamListItem = memo(function StreamListItem({
             onRemove(stream.id);
           }}
           title="Remove stream"
+          aria-label="Remove stream"
         >
-          ✕
+          <span className="material-icons" aria-hidden="true">remove_circle</span>
         </button>
       )}
+      </div>
     </div>
   );
 });

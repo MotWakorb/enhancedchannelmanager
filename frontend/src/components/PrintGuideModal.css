@@ -6,11 +6,14 @@
   max-height: 80vh;
 }
 
+/* Running text — the body role. Was 14.4px with its own 1.4 line-height
+   (bead enhancedchannelmanager-6z299.3). */
 .print-guide-description {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 1rem;
-  line-height: 1.4;
 }
 
 /* Group list */
@@ -20,7 +23,20 @@
   gap: 0.5rem;
 }
 
-.group-item {
+/* Scoped to this modal's root, not bare. DeleteOrphanedGroupsModal.css:34
+   declares the same class as a flush, bottom-bordered list row with
+   `align-items: flex-start`; this file rides the Guide lazy chunk and that
+   one rides Settings', both appended after the eager bundle and never
+   removed, so the two modals' rows swapped box treatments depending on which
+   of Guide and Settings the operator had opened last — a divergent
+   `align-items` plus cross-donated border-bottom and cursor one way and
+   background, border, border-radius the other. `.print-guide-modal` is this
+   modal's own root (PrintGuideModal.tsx:303) and encloses the rows
+   (PrintGuideModal.tsx:356); `:where()` contributes zero specificity, so each
+   rule keeps the specificity it had — `.group-item.selected` stays 0-2-0 and
+   still beats the base rule — and only the match set narrows
+   (bead enhancedchannelmanager-mktnb). */
+:where(.print-guide-modal) .group-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -31,7 +47,7 @@
   transition: border-color 0.15s, background-color 0.15s;
 }
 
-.group-item.selected {
+:where(.print-guide-modal) .group-item.selected {
   border-color: var(--accent-primary);
   background-color: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
 }
@@ -46,11 +62,8 @@
 }
 
 .group-checkbox-area input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
 .group-color-swatch {
@@ -67,18 +80,27 @@
   min-width: 0;
 }
 
-.group-name {
-  font-weight: 500;
-  color: var(--text-primary);
-  font-size: 0.95rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* `.group-name` is owned by shared/common.css § 27 GROUP ROWS. It was
+   declared bare in four files across three chunks at 14px, 15.2px and — in
+   DeleteOrphanedGroupsModal.css, which set no size at all — the UA default
+   16px, so the same group row rendered at a different size depending on
+   which page you had opened (bead enhancedchannelmanager-6z299). */
 
-.group-details {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+/* Scoped to this modal's root. `.group-details` was declared bare here at
+   12.8px and bare in DeleteOrphanedGroupsModal.css at 13.6px, and those two
+   files live in different lazy chunks (Guide vs Settings), so both modals
+   rendered the row's detail line at whichever size the tab you had visited last
+   supplied (bead enhancedchannelmanager-6z299.2). `:where()` keeps the selector
+   at (0,1,0) — the bare rule's specificity — so nothing else in this modal
+   moves; only the leak into DeleteOrphanedGroupsModal stops.
+   The supporting line under `.group-name` is the meta role, and takes
+   --text-secondary rather than --text-muted (2.61:1 on --bg-secondary in the
+   light theme) — bead enhancedchannelmanager-6z299.3. */
+:where(.print-guide-modal) .group-details {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Mode toggle buttons */
@@ -88,12 +110,16 @@
   flex-shrink: 0;
 }
 
+/* A control, so the body role — the body role's own definition covers
+   buttons, which is why 12px goes up to 13px rather than down to the
+   numerically-nearer meta. Weight follows shared/common.css § 3, where every
+   shared button is body size at 500 (bead enhancedchannelmanager-6z299.3). */
 .mode-toggle .mode-btn {
   padding: 0.35rem 0.6rem;
   border: 2px solid var(--info-text);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-body-size);
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
   background: transparent;
@@ -119,12 +145,16 @@
   opacity: 0.8;
 }
 
-/* Inline field validation error (not in shared common.css) */
+/* Spacing only. `.field-error` IS in shared/common.css now (§ 26 FIELD
+   MESSAGES), which owns its size and its --error colour; the comment that
+   stood here claiming otherwise was true when it was written and is not any
+   more. The local literal was 13px and `var(--error-color, #ef4444)` — a
+   token that is not defined anywhere in the tree, so it always resolved to
+   the hardcoded hex rather than to the theme's --error
+   (bead enhancedchannelmanager-6z299.3). */
 .print-guide-modal .field-error {
   margin-top: 4px;
   margin-bottom: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--error-color, #ef4444);
 }
 
 /* Per-group controls area — wraps range inputs + mode toggle */
@@ -150,26 +180,32 @@
   gap: 0.15rem;
 }
 
+/* The tracked-uppercase caption idiom, written out a fifth way here
+   (11.2px/500/0.03em). It takes the micro role rather than the `.micro-label`
+   class because PrintGuideModal.tsx is outside this bead's file partition;
+   the tokens are the same treatment either way, and the selector is already
+   scoped so it cannot leak. --text-secondary, not --text-muted
+   (bead enhancedchannelmanager-6z299.3). */
 .print-guide-group-range-field label {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  font-weight: 500;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  color: var(--text-secondary);
 }
 
+/* An input — the body role, same as `.form-input` in shared/common.css § 4. */
 .print-guide-group-range-field input[type="number"] {
   width: 72px;
   padding: 0.2rem 0.35rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
-/* Per-group range error */
-.print-guide-group-range-error {
-  margin-top: 0;
-  margin-bottom: 0;
-  font-size: 0.75rem;
-}
+/* `.print-guide-group-range-error` deleted: PrintGuideModal.tsx:413 hangs it
+   on the same element as `.field-error`, and every property it set was
+   already losing to `.print-guide-modal .field-error` above — (0,2,0) beats
+   (0,1,0), so its margins and its 12px never applied. Fully-shadowed rules
+   are deleted rather than remapped (bead enhancedchannelmanager-6z299.3). */
 
 /* Empty-slots toggle row (bd-w532y) */
 .print-guide-empty-slots-row {
@@ -179,27 +215,32 @@
   margin-bottom: 0.75rem;
 }
 
+/* A caption on a form control — the label role, as in `.form-group label`
+   (shared/common.css § 4). Was 14.4px (bead enhancedchannelmanager-6z299.3). */
 .print-guide-empty-slots-label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-primary);
   user-select: none;
 }
 
 .print-guide-empty-slots-label input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
   cursor: pointer;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
+/* The hint under a control — the same meta treatment shared/common.css § 26
+   gives `.field-hint`, and --text-secondary rather than --text-muted. */
 .print-guide-empty-slots-hint {
-  font-size: 0.78rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   padding-left: 1.6rem;
 }
 
@@ -210,11 +251,22 @@
   align-items: center;
   gap: 0.5rem;
   padding: 1.5rem 1rem;
-  color: var(--text-muted);
-  font-size: 0.9rem;
+  /* Body role and --text-secondary — this is a sentence the operator has to
+     read, not a muted caption (bead enhancedchannelmanager-6z299.3). */
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
+/* Left at 32px on purpose. This is the decorative illustration glyph of an
+   inline empty state, and the icon scale has no 32px step: --icon-empty is
+   64px, the size shared/common.css § 7 gives the FULL-PAGE `.empty-state`
+   block, which inside a 550px modal would swamp the sentence under it.
+   Flagged on the bead rather than force-fitted to a token that means
+   something else (bead enhancedchannelmanager-6z299.3). */
+/* Illustration glyph -> --icon-empty. 32px -> 64px. */
 .print-guide-empty-range .material-icons {
-  font-size: 2rem;
+  font-size: var(--icon-empty);
   opacity: 0.5;
 }

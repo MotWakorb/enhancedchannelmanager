@@ -19,14 +19,16 @@
  * animation is suppressed.
  */
 
+/* Item-title role. 15.2px -> 13px. */
 .stream-dedup-modal .stream-dedup-stream-name {
   padding: 0.625rem 0.75rem;
   background: var(--bg-tertiary, #1a1a2e);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg);
   color: var(--text-primary, #fff);
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   /* Long stream names should wrap rather than overflow horizontally. */
   word-break: break-word;
 }
@@ -41,11 +43,13 @@
   border-radius: var(--radius-lg);
 }
 
+/* Item-title role. 15.2px -> 13px. */
 .stream-dedup-modal .stream-dedup-candidate-name {
   flex: 1;
   color: var(--text-primary, #fff);
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   word-break: break-word;
 }
 
@@ -55,13 +59,15 @@
  * stylesheet boundary. See header comment for the promote-to-common.css
  * trigger.
  */
+/* Badge role. 12.8px -> 10px. */
 .stream-dedup-modal .confidence-badge {
   flex-shrink: 0;
   padding: 0.25rem 0.625rem;
   background: var(--bg-secondary, #252540);
   color: var(--text-secondary, #888);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   border-radius: var(--radius-2xl);
 }
 

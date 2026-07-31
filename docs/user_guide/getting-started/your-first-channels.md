@@ -2,7 +2,7 @@
 
 > **Audience:** Operator who already has ECM connected to Dispatcharr and wants
 > one continuous, working example — from a live M3U source to channels you
-> can actually watch — before diving into any single tab's reference docs.
+> can actually watch — before diving into any single destination's reference docs.
 
 This walkthrough follows one path through the whole tool: add an M3U account,
 add an EPG source, choose which stream groups to sync, refresh, then build

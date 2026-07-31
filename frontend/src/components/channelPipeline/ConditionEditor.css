@@ -56,17 +56,19 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .condition-editor .reorder-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Order Number Input */
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .condition-editor .order-number-input {
   width: 36px;
   height: 28px;
   padding: 2px 4px;
   text-align: center;
-  font-size: 13px;
+  font-size: var(--type-body-size);
   font-weight: 600;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
@@ -122,6 +124,7 @@
   min-width: 150px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .condition-value-input {
   flex: 1;
   padding: 8px 12px;
@@ -129,7 +132,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
 }
 
 .condition-value-input:focus {
@@ -146,8 +149,11 @@
   border-color: var(--error-color, #dc3545);
 }
 
+/* Meta role. 11px -> 11px. */
 .condition-hint {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   padding: 2px 6px;
   background: var(--bg-tertiary);
@@ -172,10 +178,12 @@
     color: var(--accent-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .date-help-btn .material-icons {
-    font-size: 18px;
+    font-size: var(--icon-action);
 }
 
+/* Meta role. 12px -> 11px. */
 .date-help-box {
     width: 100%;
     margin-top: 4px;
@@ -183,9 +191,10 @@
     background: var(--bg-tertiary);
     border: 1px solid var(--border-primary);
     border-radius: var(--radius-lg);
-    font-size: 12px;
+    font-size: var(--type-meta-size);
+    font-weight: var(--type-meta-weight);
     color: var(--text-secondary);
-    line-height: 1.4;
+    line-height: var(--type-meta-line-height);
 }
 
 .date-help-box code {
@@ -212,11 +221,14 @@
   gap: 12px;
 }
 
+/* Meta role. 12px -> 11px. */
 .condition-option {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -226,10 +238,13 @@
 }
 
 /* Error Message */
+/* Meta role. 12px -> 11px. */
 .condition-error {
   width: 100%;
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--error-color, #dc3545);
 }
 
@@ -254,19 +269,14 @@
   color: var(--error-color, #dc3545);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .condition-remove-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
-/* Screen reader only */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.sr-only` is owned by shared/common.css § 2 COMMON UTILITIES, where it is an
+   alias of `.visually-hidden` (the two were property-for-property identical).
+   It lived here, in the ChannelPipelineTab lazy chunk, while being rendered by
+   OperatorDashboard.tsx and SettingsTab.tsx — so those two `aria-live` regions
+   had no hiding styles at all until the operator happened to open this tab
+   (bead enhancedchannelmanager-zncyv). */

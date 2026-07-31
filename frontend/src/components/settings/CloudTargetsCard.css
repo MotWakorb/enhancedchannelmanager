@@ -12,9 +12,16 @@
   margin-bottom: 1rem;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 18px. */
 .profile-list-header h3 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
 .profile-list-empty {
@@ -27,12 +34,29 @@
   color: var(--text-secondary);
 }
 
+/* Empty-state illustration glyph — the one 64px icon role. Was 48px; the
+   shared `.empty-state` glyph in common.css sets the same token
+   (bead enhancedchannelmanager-6z299.4). */
 .profile-list-empty .material-icons {
-  font-size: 3rem;
+  font-size: var(--icon-empty);
   opacity: 0.4;
 }
 
-.profile-card {
+/* Scoped to this card's root, not bare. M3UProfileModal.css:47 declares the
+   same class as a padded flex row at `border-radius: var(--radius-xl)`, in
+   the M3U Manager lazy chunk; this file rides Settings'. Both are appended
+   after the eager bundle and never removed, so a cloud-target card rendered
+   as a plain block or as a 1rem-padded flex row — with a different corner
+   radius — depending on which of Settings and M3U Manager the operator had
+   opened last. This rule is the authored one: `.profile-card-header` below
+   owns the row layout, so the card itself is a block on purpose.
+   `.cloud-target-list` is this component's own root
+   (CloudTargetsCard.tsx:125) and encloses the cards
+   (CloudTargetsCard.tsx:146, inside `.profile-list-items`); `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and the
+   `.is-disabled` opacity further down this file still layers over it on file
+   order exactly as before (bead enhancedchannelmanager-mktnb). */
+:where(.cloud-target-list) .profile-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 0.5rem;
@@ -61,17 +85,26 @@
   min-width: 0;
 }
 
+/* Item title. Had no font-size at all, so the target's name rendered at the
+   UA default 16px — bigger than the card heading above it
+   (bead enhancedchannelmanager-6z299.4). */
 .profile-card-name {
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role — the secondary descriptors sitting beside the name on the same
+   row, the same relationship `.account-meta` has to `.account-name`. */
 .profile-card-mode,
 .profile-card-size {
-  font-size: 0.8125rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -82,12 +115,26 @@
   gap: 0.25rem;
 }
 
+/* Icon-only row actions (test / enable / edit / delete) — the glyph IS the
+   affordance, so --icon-action. `.btn-icon` in common.css already sizes the
+   variants that carry it; the plain `.btn.btn-sm` test button does not, and
+   rendered at index.css's base 24px inside a 28px button
+   (bead enhancedchannelmanager-7bsxj). */
+.profile-card-actions .material-icons {
+  font-size: var(--icon-action);
+}
+
 .is-disabled {
   opacity: 0.6;
 }
 
-.cloud-target-icon {
-  font-size: 1.25rem;
+/* Status icon role — the leading provider glyph on a target row. Scoped
+   through the card's info block: bare, it tied index.css's base
+   `.material-icons { font-size: 24px }` at 0-1-0 and lost on source order, so
+   the glyph rendered at 24px against a 13px target name
+   (bead enhancedchannelmanager-7bsxj). */
+.profile-card-info .cloud-target-icon {
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
@@ -97,22 +144,30 @@
   margin-top: 0.5rem;
 }
 
+/* Meta role — the hint line under a credential field. */
 .export-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin-top: 0.25rem;
 }
 
-/* Status badges */
+/* Status badges.
+   Badge role. Weight stays 600 and the tracking moves to the micro role's
+   0.08em: uppercase at chip size needs both to stay legible, which is the
+   same call `.type-badge` and `.badge-uppercase` make in shared/common.css
+   (bead enhancedchannelmanager-6z299.4). */
 .status-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.125rem 0.5rem;
   border-radius: 1rem;
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .status-disabled {

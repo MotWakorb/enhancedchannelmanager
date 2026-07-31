@@ -9,8 +9,14 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
-  font-weight: 500;
+  /* The badge role from the P1 content-pane type scale (10px/500), replacing
+     the hand-set 11px this shipped with — the same move CatchupBadge.css made
+     in bead enhancedchannelmanager-sccol. These two are the only two badge
+     components in the tree and they should not disagree about what a badge is.
+     See index.css § Typography Roles (bead enhancedchannelmanager-6z299.5). */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 1px 6px;
   border-radius: 10px;
   background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
@@ -20,8 +26,18 @@
   vertical-align: middle;
 }
 
-.attribution-badge__icon {
-  font-size: 12px;
+/* Two classes deep, and `1em` rather than a number from the icon scale —
+   both for the reasons CatchupBadge.css records at length. Specificity: the
+   glyph span carries `material-icons` as well, and index.css's base
+   `.material-icons` rule (0,1,0) sets 24px; a single-class rule here only
+   wins because this stylesheet happens to be emitted after index.css, which
+   is a property of chunk order rather than of intent. Size: --icon-status
+   (18px) and --icon-action (16px) are both larger than the badge's own 10px
+   text and would inflate the pill; tying the glyph to the badge text keeps
+   the pill coherent if the badge role ever moves. */
+.attribution-badge .attribution-badge__icon {
+  font-size: 1em;
+  width: 1em;
   line-height: 1;
 }
 

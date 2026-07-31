@@ -30,8 +30,16 @@
   background: rgba(99, 102, 241, 0.04);
 }
 
-.brm-dropzone-icon {
-  font-size: 2.5rem;
+/* MEASURED DEAD, now fixed (bead enhancedchannelmanager-xhldy).
+   This was `.brm-dropzone-icon` — a single class, 0-1-0, in an EAGER
+   stylesheet. `index.css`'s base `.material-icons { font-size: 24px }` is
+   emitted near the end of the eager bundle, so it tied and won on byte order:
+   the harness measured this glyph rendering at 24px, not the 40px the source
+   claimed. An icon override needs two classes of depth
+   (docs/css_guidelines.md § Partial redeclaration). Scoped to `.brm-dropzone`
+   and put on --icon-empty, the dropzone-illustration role. 24px -> 64px. */
+.brm-dropzone .brm-dropzone-icon {
+  font-size: var(--icon-empty);
   color: var(--text-muted, #666);
 }
 
@@ -40,15 +48,21 @@
   color: var(--accent-primary, #6366f1);
 }
 
+/* Body role. 14px -> 13px. */
 .brm-dropzone-text {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
 }
 
+/* Meta role. 12px -> 11px. */
 .brm-dropzone-hint {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
 }
 
@@ -64,20 +78,26 @@
   margin-bottom: 1rem;
 }
 
+/* Status/panel glyph -> --icon-status. 24px -> 18px. */
 .brm-file-info .material-icons {
-  font-size: 1.5rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
   flex-shrink: 0;
 }
 
+/* Item-title role. 14px -> 13px. */
 .brm-file-name {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Meta role. 12px -> 11px. */
 .brm-file-meta {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
   margin-top: 0.125rem;
 }
@@ -90,9 +110,11 @@
   margin-bottom: 0.5rem;
 }
 
+/* Label role. 13px -> 13px. */
 .brm-section-label {
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary, #888);
 }
 
@@ -102,11 +124,12 @@
 }
 
 /* Uses modal-btn-text pattern from ModalBase for select all/none links */
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .brm-link-btn {
   background: none;
   border: none;
   color: var(--accent-primary, #6366f1);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   cursor: pointer;
   padding: 0;
 }
@@ -150,32 +173,37 @@
 
 .brm-section-item input[type="checkbox"] {
   accent-color: var(--accent-primary, #6366f1);
-  width: 1rem;
-  height: 1rem;
-  flex-shrink: 0;
 }
 
+/* Item-title role. 13px -> 13px. */
 .brm-section-name {
   flex: 1;
-  font-size: 0.8125rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Meta role. 12px -> 11px. */
 .brm-section-count {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
   white-space: nowrap;
 }
 
 /* Results display */
+/* Body role. 14px -> 13px. */
 .brm-results-banner {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem;
   border-radius: var(--radius-lg);
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 1rem;
 }
 
@@ -191,33 +219,39 @@
   color: var(--warning, #f59e0b);
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .brm-results-banner .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
 }
 
 .brm-result-group {
   margin-bottom: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .brm-result-group h4 {
   margin: 0 0 0.375rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary, #888);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 13px -> 13px. */
 .brm-result-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.3125rem 0;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .brm-result-item .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .brm-result-item.is-success {
@@ -225,7 +259,7 @@
 }
 
 .brm-result-item.is-error {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 .brm-result-item.is-warning {

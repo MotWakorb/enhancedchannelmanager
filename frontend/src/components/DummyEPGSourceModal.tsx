@@ -5,7 +5,6 @@ import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
 import { render as renderTemplate, TemplateSyntaxError } from '../utils/templateEngine';
 import * as api from '../services/api';
-import type { LookupTableSummary } from '../services/api';
 import { logger } from '../utils/logger';
 import { TemplateHelp } from './TemplateHelp';
 import './ModalBase.css';
@@ -102,11 +101,6 @@ function TraceStepView({ step }: { step: DummyEPGPreviewTraceStep }) {
                   {pipe.arg !== null && pipe.arg !== undefined ? `:${pipe.arg}` : ''}
                 </span>
                 <code>{pipe.output || <em>(empty)</em>}</code>
-                {pipe.transform === 'lookup' && (
-                  <span className={`trace-pipe-hit ${pipe.matched ? 'is-match' : 'is-miss'}`}>
-                    {pipe.matched ? 'hit' : 'miss'}
-                  </span>
-                )}
               </li>
             ))}
           </ol>
@@ -269,12 +263,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
   const [fallbackOpen, setFallbackOpen] = useState(false);
   const [logoUrlsOpen, setLogoUrlsOpen] = useState(false);
   const [epgTagsOpen, setEpgTagsOpen] = useState(false);
-  const [lookupsOpen, setLookupsOpen] = useState(false);
-
-  // Lookup tables attached to this source (inline + global IDs)
-  const [inlineLookups, setInlineLookups] = useState<Record<string, Record<string, string>>>({});
-  const [globalLookupIds, setGlobalLookupIds] = useState<number[]>([]);
-  const [globalLookupsList, setGlobalLookupsList] = useState<LookupTableSummary[]>([]);
 
   // Dropdown state
   const [nameSourceDropdownOpen, setNameSourceDropdownOpen] = useState(false);
@@ -338,12 +326,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
         setFallbackOpen(Boolean(props.fallback_title_template || props.fallback_description_template));
         setLogoUrlsOpen(Boolean(props.channel_logo_url || props.program_poster_url));
         setEpgTagsOpen(Boolean(props.include_date_tag || props.include_live_tag || props.include_new_tag));
-        setInlineLookups(props.inline_lookups || {});
-        setGlobalLookupIds(props.global_lookup_ids || []);
-        setLookupsOpen(Boolean(
-          (props.inline_lookups && Object.keys(props.inline_lookups).length) ||
-          (props.global_lookup_ids && props.global_lookup_ids.length)
-        ));
       } else {
         // Reset to defaults for new source
         setName('');
@@ -374,9 +356,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
         setFallbackOpen(false);
         setLogoUrlsOpen(false);
         setEpgTagsOpen(false);
-        setInlineLookups({});
-        setGlobalLookupIds([]);
-        setLookupsOpen(false);
       }
       setSampleChannelName('');
       clearError();
@@ -386,12 +365,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
       setServerPreview(null);
       setServerPreviewError(null);
       setExpandedTraces(new Set());
-
-      // Fetch the global lookup tables list whenever the modal opens so the
-      // multi-select stays in sync if tables were added since the last open.
-      api.listLookupTables()
-        .then(setGlobalLookupsList)
-        .catch((err) => logger.warn('Failed to load lookup tables for picker', err));
     }
   }, [isOpen, source, clearError]);
 
@@ -424,37 +397,18 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
     }
   }, []);
 
-  // Merge inline tables with the globals selected for this source. Inline
-  // entries override same-named globals so preview reflects the same merge
-  // order the backend performs in _resolve_lookups.
-  const effectiveLookups = useMemo(() => {
-    const merged: Record<string, Record<string, string>> = {};
-    const globalsById = new Map(globalLookupsList.map((t) => [t.id, t]));
-    for (const id of globalLookupIds) {
-      const g = globalsById.get(id);
-      if (!g) continue;
-      // Summary list doesn't include entries — preview won't resolve global
-      // keys until the user clicks Save+reopen with a full fetch. Flag it.
-      merged[g.name] = merged[g.name] || {};
-    }
-    for (const [name, entries] of Object.entries(inlineLookups)) {
-      merged[name] = entries;
-    }
-    return merged;
-  }, [globalLookupIds, globalLookupsList, inlineLookups]);
-
   // Apply template via the shared template engine. Falls back to the raw
   // template on syntax errors so the preview UI never blows up on a
   // half-typed expression.
   const applyTemplate = useCallback((template: string, groups: Record<string, string>): string => {
     if (!template) return '';
     try {
-      return renderTemplate(template, groups, effectiveLookups);
+      return renderTemplate(template, groups);
     } catch (err) {
       if (err instanceof TemplateSyntaxError) return template;
       throw err;
     }
-  }, [effectiveLookups]);
+  }, []);
 
   // Live preview computation
   const preview = useMemo(() => {
@@ -547,23 +501,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
       if (includeDateTag) customProperties.include_date_tag = true;
       if (includeLiveTag) customProperties.include_live_tag = true;
       if (includeNewTag) customProperties.include_new_tag = true;
-      // Drop empty/invalid inline tables so the payload stays compact.
-      const cleanedInlineLookups: Record<string, Record<string, string>> = {};
-      for (const [tableName, entries] of Object.entries(inlineLookups)) {
-        const trimmedName = tableName.trim();
-        if (!trimmedName || !entries) continue;
-        const cleanedEntries: Record<string, string> = {};
-        for (const [k, v] of Object.entries(entries)) {
-          if (k.trim()) cleanedEntries[k.trim()] = v;
-        }
-        if (Object.keys(cleanedEntries).length > 0) {
-          cleanedInlineLookups[trimmedName] = cleanedEntries;
-        }
-      }
-      if (Object.keys(cleanedInlineLookups).length > 0) {
-        customProperties.inline_lookups = cleanedInlineLookups;
-      }
-      if (globalLookupIds.length > 0) customProperties.global_lookup_ids = globalLookupIds;
 
       await onSave({
         name: name.trim(),
@@ -603,8 +540,6 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
         program_duration: programDuration,
         channel_logo_url_template: channelLogoUrl || undefined,
         program_poster_url_template: programPosterUrl || undefined,
-        inline_lookups: Object.keys(inlineLookups).length ? inlineLookups : undefined,
-        global_lookup_ids: globalLookupIds.length ? globalLookupIds : undefined,
         include_trace: true,
       });
       setServerPreview(result);
@@ -1121,190 +1056,13 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
               </div>
             </CollapsibleSection>
 
-            <CollapsibleSection
-              title="Lookup Tables"
-              isOpen={lookupsOpen}
-              onToggle={() => setLookupsOpen(!lookupsOpen)}
-            >
-              <p className="form-hint">
-                Reference tables in templates via <code>{'{key|lookup:<name>}'}</code>.
-                Unmatched keys pass through unchanged. Inline tables override globals of the same name.
-              </p>
-
-              {/* Global tables (from Settings > Lookup Tables) */}
-              <div className="modal-form-group">
-                <label>Global Tables</label>
-                {globalLookupsList.length === 0 ? (
-                  <p className="form-hint">
-                    No global tables yet. Create them in Settings → Lookup Tables.
-                  </p>
-                ) : (
-                  <div className="dummy-epg-lookup-global-list">
-                    {globalLookupsList.map((table) => {
-                      const checked = globalLookupIds.includes(table.id);
-                      return (
-                        <label key={table.id} className="dummy-epg-lookup-global-item">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              setGlobalLookupIds((prev) =>
-                                e.target.checked
-                                  ? [...prev, table.id]
-                                  : prev.filter((id) => id !== table.id)
-                              );
-                            }}
-                          />
-                          <span className="dummy-epg-lookup-global-name">{table.name}</span>
-                          <span className="dummy-epg-lookup-global-count">{table.entry_count} entries</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Inline tables */}
-              <div className="modal-form-group">
-                <div className="dummy-epg-lookup-inline-header">
-                  <label>Inline Tables (this source only)</label>
-                  <button
-                    type="button"
-                    className="btn-secondary btn-small"
-                    onClick={() => {
-                      // Find the next available default name.
-                      let n = 1;
-                      while (`table${n}` in inlineLookups) n += 1;
-                      setInlineLookups((prev) => ({ ...prev, [`table${n}`]: {} }));
-                    }}
-                  >
-                    <span className="material-icons">add</span> Add Table
-                  </button>
-                </div>
-                {Object.keys(inlineLookups).length === 0 ? (
-                  <p className="form-hint">No inline tables. Add one to define entries used only by this source.</p>
-                ) : (
-                  <div className="dummy-epg-lookup-inline-list">
-                    {Object.entries(inlineLookups).map(([tableName, entries]) => (
-                      <div key={tableName} className="dummy-epg-lookup-inline-table">
-                        <div className="dummy-epg-lookup-inline-name-row">
-                          <input
-                            type="text"
-                            value={tableName}
-                            onChange={(e) => {
-                              const newName = e.target.value;
-                              setInlineLookups((prev) => {
-                                if (newName === tableName) return prev;
-                                const next: Record<string, Record<string, string>> = {};
-                                for (const [k, v] of Object.entries(prev)) {
-                                  next[k === tableName ? newName : k] = v;
-                                }
-                                return next;
-                              });
-                            }}
-                            placeholder="table name"
-                            aria-label="Inline table name"
-                          />
-                          <button
-                            type="button"
-                            className="btn-icon btn-icon-danger"
-                            onClick={() => {
-                              setInlineLookups((prev) => {
-                                const next = { ...prev };
-                                delete next[tableName];
-                                return next;
-                              });
-                            }}
-                            aria-label={`Remove table ${tableName}`}
-                            title="Remove table"
-                          >
-                            <span className="material-icons">close</span>
-                          </button>
-                        </div>
-                        <div className="dummy-epg-lookup-inline-entries">
-                          {Object.entries(entries).map(([key, value], idx) => (
-                            <div className="dummy-epg-lookup-inline-entry" key={`${key}-${idx}`}>
-                              <input
-                                type="text"
-                                value={key}
-                                onChange={(e) => {
-                                  const newKey = e.target.value;
-                                  setInlineLookups((prev) => {
-                                    const nextEntries: Record<string, string> = {};
-                                    for (const [k, v] of Object.entries(prev[tableName] || {})) {
-                                      nextEntries[k === key ? newKey : k] = v;
-                                    }
-                                    return { ...prev, [tableName]: nextEntries };
-                                  });
-                                }}
-                                placeholder="key"
-                                aria-label="key"
-                              />
-                              <span className="dummy-epg-lookup-arrow">→</span>
-                              <input
-                                type="text"
-                                value={value}
-                                onChange={(e) => {
-                                  const newValue = e.target.value;
-                                  setInlineLookups((prev) => ({
-                                    ...prev,
-                                    [tableName]: { ...(prev[tableName] || {}), [key]: newValue },
-                                  }));
-                                }}
-                                placeholder="value"
-                                aria-label="value"
-                              />
-                              <button
-                                type="button"
-                                className="btn-icon btn-icon-danger"
-                                onClick={() => {
-                                  setInlineLookups((prev) => {
-                                    const next = { ...(prev[tableName] || {}) };
-                                    delete next[key];
-                                    return { ...prev, [tableName]: next };
-                                  });
-                                }}
-                                aria-label={`Remove ${key}`}
-                                title="Remove entry"
-                              >
-                                <span className="material-icons">close</span>
-                              </button>
-                            </div>
-                          ))}
-                          <button
-                            type="button"
-                            className="btn-secondary btn-small dummy-epg-lookup-add-entry"
-                            onClick={() => {
-                              setInlineLookups((prev) => {
-                                const existing = prev[tableName] || {};
-                                // Find a unique empty-key slot so repeat clicks don't collide.
-                                let newKey = '';
-                                let suffix = 0;
-                                while (newKey in existing) {
-                                  suffix += 1;
-                                  newKey = ' '.repeat(suffix);
-                                }
-                                return { ...prev, [tableName]: { ...existing, [newKey]: '' } };
-                              });
-                            }}
-                          >
-                            <span className="material-icons">add</span> Add Row
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </CollapsibleSection>
-
             {/* Test Your Configuration Section */}
             <div className="modal-section-divider">
               <span>Test Your Configuration</span>
             </div>
 
             <p className="modal-section-description">
-              Preview instantly in the browser or run through the full server pipeline to see pipe-by-pipe traces and resolve global lookup values.
+              Preview instantly in the browser or run through the full server pipeline to see pipe-by-pipe traces.
             </p>
 
             <TemplateHelp isOpen={templateHelpOpen} onToggle={() => setTemplateHelpOpen((v) => !v)} />
@@ -1325,7 +1083,7 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
                   className="btn-secondary btn-small"
                   onClick={handleServerPreview}
                   disabled={serverPreviewLoading || !sampleChannelName.trim()}
-                  title="Runs the full backend pipeline, resolves global lookups, and returns per-field traces."
+                  title="Runs the full backend pipeline and returns per-field traces."
                 >
                   <span className="material-icons">play_circle</span>
                   {serverPreviewLoading ? 'Running...' : 'Run Server Preview'}

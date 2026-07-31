@@ -56,11 +56,11 @@ Read the dominant `kind`. The branch you take next depends on it:
 
 | Dominant `kind` | Next step |
 |-|-|
-| `boundary` | [Common causes — boundary](#boundary--react-render-bug) |
-| `chunk_load` | [Common causes — chunk_load](#chunk_load--bundlechunk-404-from-cache) |
-| `resource` (with `release="bootstrap"`) | [Common causes — bootstrap resource](#resource-with-releasebootstrap--app-never-loaded) |
-| `resource` (with current `release`) | [Common causes — post-bootstrap resource](#resource-with-current-release--static-asset-404) |
-| `unhandled_rejection` | [Common causes — unhandled_rejection](#unhandled_rejection--promise-rejection-regression) |
+| `boundary` | [Common causes — boundary](#boundary-react-render-bug) |
+| `chunk_load` | [Common causes — chunk_load](#chunk_load-bundlechunk-404-from-cache) |
+| `resource` (with `release="bootstrap"`) | [Common causes — bootstrap resource](#resource-with-releasebootstrap-app-never-loaded) |
+| `resource` (with current `release`) | [Common causes — post-bootstrap resource](#resource-with-current-release-static-asset-404) |
+| `unhandled_rejection` | [Common causes — unhandled_rejection](#unhandled_rejection-promise-rejection-regression) |
 | `other` | Pull the structured logs (below) — the kind-collapse means the client sent a value the server didn't recognize. |
 
 **2. Confirm the `release` distribution.**

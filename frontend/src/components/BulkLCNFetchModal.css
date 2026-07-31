@@ -23,9 +23,12 @@
   color: var(--text-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .fetching-hint {
   margin-top: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -38,9 +41,10 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .section-actions .action-btn {
   padding: 0.375rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
@@ -54,21 +58,30 @@
   color: var(--text-primary);
 }
 
-/* Section Hint */
-.section-hint {
+/* Section Hint — scoped to this modal's root.
+   Declared bare, this competed with `.rule-section .section-hint`
+   (RuleBuilder.css:55) for any hint the Channel Pipeline rule editor left
+   unstyled, and stood to claim the next `.section-hint` anyone wrote
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps it at (0,1,0). */
+/* Meta role. 12.8px -> 11px. */
+:where(.bulk-lcn-modal) .section-hint {
   padding: 0.5rem 1rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   font-style: italic;
   border-bottom: 1px solid var(--border-secondary);
 }
 
 /* Selected count in header */
+/* Meta role. 12.8px -> 11px. */
 .selected-count {
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--accent-primary);
-  font-weight: normal;
+  font-weight: var(--type-meta-weight);
   padding-right: 0.5rem;
 }
 
@@ -113,17 +126,16 @@
   background-color: transparent;
 }
 
-.lcn-item input[type="checkbox"] {
-  flex-shrink: 0;
-}
-
+/* Body role. 13.6px -> 13px. */
 .lcn-item-content {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex: 1;
   min-width: 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .lcn-item-content .channel-name {
@@ -140,33 +152,45 @@
   flex-shrink: 0;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .lcn-item-content .lcn-value {
   color: var(--accent-primary);
   font-family: monospace;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   flex-shrink: 0;
 }
 
+/* Meta role. 12px -> 11px. */
 .lcn-item-content .lcn-source {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .lcn-item-content .tvg-id-hint {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   margin-left: auto;
 }
 
+/* Meta role. 12px -> 11px. */
 .lcn-item-content .existing-lcn {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-left: auto;
 }
 

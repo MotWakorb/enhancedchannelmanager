@@ -74,9 +74,6 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
-vi.mock('../settings/LookupTableSection', () => ({
-  LookupTableSection: () => <div data-testid="stub-lookup" />,
-}));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
 }));

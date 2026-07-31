@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0004",
+    version="0.18.1-0005",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1347,6 +1347,19 @@ async def startup_event():
 
     asyncio.create_task(_check_stale_groups_on_startup())
 
+    # Start the daily update-availability check (bead
+    # enhancedchannelmanager-nhkd4). This replaces the header's client-side
+    # "Update available" pill with a reconciling notification-centre entry.
+    # It sits below the `_is_https_subprocess` early return above, so exactly
+    # one process per container writes the row — the single-writer property the
+    # (unenforceable at the schema level) source/source_id dedup key relies on.
+    try:
+        from services.version_check import start_version_check_loop
+        start_version_check_loop()
+        logger.info("[MAIN] Update-availability check scheduled (every 24 hours)")
+    except Exception as e:
+        logger.warning("[MAIN] Failed to start update-availability check: %s", e)
+
     # Start TLS certificate renewal manager
     try:
         from tls.settings import get_tls_settings
@@ -1382,6 +1395,13 @@ async def shutdown_event():
         logger.info("[MAIN] HTTPS server stopped")
     except Exception as e:
         logger.error("[MAIN] Error stopping HTTPS server: %s", e)
+
+    # Stop the update-availability check
+    try:
+        from services.version_check import stop_version_check_loop
+        stop_version_check_loop()
+    except Exception as e:
+        logger.warning("[MAIN] Error stopping update-availability check: %s", e)
 
     # Stop TLS renewal manager
     try:

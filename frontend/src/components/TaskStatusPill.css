@@ -14,11 +14,14 @@
   gap: 0.35rem;
 }
 
+/* Badge role, SIZE only — a bordered, padded, rounded pill carrying a status
+   word, which is what the badge role names. 0.85rem -> 10px
+   (bead enhancedchannelmanager-haf9e). */
 .task-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  font-size: 0.85rem;
+  font-size: var(--type-badge-size);
   padding: 0.25rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--border-color);

@@ -7,7 +7,6 @@
  * Syntax:
  *   - Placeholders          {name}
  *   - Chained pipes         {name|uppercase|trim|strip:-}
- *   - Lookup pipes          {name|lookup:tablename}
  *   - Conditionals          {if:group}body{/if}
  *                           {if:group=value}body{/if}
  *                           {if:group~regex}body{/if}
@@ -20,8 +19,6 @@ export class TemplateSyntaxError extends Error {
     this.name = 'TemplateSyntaxError';
   }
 }
-
-export type LookupTables = Record<string, Record<string, string>>;
 
 // ---------------------------------------------------------------------------
 // Caps (mirror of the Python values)
@@ -104,21 +101,14 @@ export interface PipeStep {
   arg: string | null;
   input: string;
   output: string;
+  /** Provenance note for synthesised steps (e.g. the legacy _normalize suffix). */
   source?: string;
-  matched?: boolean;
 }
 
 export class TemplateEngine {
-  private lookups: LookupTables;
-
-  constructor(lookups?: LookupTables) {
-    this.lookups = lookups || {};
-  }
-
   render(
     template: string,
     groups: Record<string, unknown>,
-    lookups?: LookupTables,
   ): string {
     if (template === null || template === undefined) return '';
     if (template.length > MAX_TEMPLATE_LEN) {
@@ -127,18 +117,16 @@ export class TemplateEngine {
       );
     }
 
-    const effectiveLookups = lookups !== undefined ? lookups : this.lookups;
     const boundedGroups: Record<string, string> = {};
     for (const [k, v] of Object.entries(groups)) {
       boundedGroups[k] = truncate(String(v ?? ''));
     }
-    return this.renderSegment(template, boundedGroups, effectiveLookups);
+    return this.renderSegment(template, boundedGroups);
   }
 
   renderWithTrace(
     template: string,
     groups: Record<string, unknown>,
-    lookups?: LookupTables,
   ): { output: string; trace: TraceStep[] } {
     if (template === null || template === undefined) return { output: '', trace: [] };
     if (template.length > MAX_TEMPLATE_LEN) {
@@ -146,20 +134,18 @@ export class TemplateEngine {
         `Template exceeds maximum length of ${MAX_TEMPLATE_LEN} chars`,
       );
     }
-    const effectiveLookups = lookups !== undefined ? lookups : this.lookups;
     const boundedGroups: Record<string, string> = {};
     for (const [k, v] of Object.entries(groups)) {
       boundedGroups[k] = truncate(String(v ?? ''));
     }
     const trace: TraceStep[] = [];
-    const output = this.renderSegment(template, boundedGroups, effectiveLookups, trace);
+    const output = this.renderSegment(template, boundedGroups, trace);
     return { output, trace };
   }
 
   private renderSegment(
     template: string,
     groups: Record<string, string>,
-    lookups: LookupTables,
     traceOut?: TraceStep[],
   ): string {
     const out: string[] = [];
@@ -198,7 +184,6 @@ export class TemplateEngine {
           out.push(this.renderSegment(
             template.slice(bodyStart, bodyEnd),
             groups,
-            lookups,
             traceOut ? bodyTrace : undefined,
           ));
         }
@@ -220,7 +205,7 @@ export class TemplateEngine {
         throw new TemplateSyntaxError("Unmatched '{/if}'");
       }
 
-      out.push(this.renderPlaceholder(directive, groups, lookups, traceOut));
+      out.push(this.renderPlaceholder(directive, groups, traceOut));
       i = close + 1;
     }
 
@@ -283,7 +268,6 @@ export class TemplateEngine {
   private renderPlaceholder(
     body: string,
     groups: Record<string, string>,
-    lookups: LookupTables,
     traceOut?: TraceStep[],
   ): string {
     const parts = body.split('|');
@@ -327,25 +311,6 @@ export class TemplateEngine {
       const arg = colonIdx === -1 ? null : pipeSpec.slice(colonIdx + 1);
       const stepInput = value;
 
-      if (transform === 'lookup') {
-        if (arg === null) throw new TemplateSyntaxError('lookup transform requires a table name');
-        if (!(arg in lookups)) throw new TemplateSyntaxError(`Unknown lookup table: "${arg}"`);
-        const table = lookups[arg];
-        const matched = value in table;
-        value = matched ? table[value] : value;
-        if (traceOut) {
-          pipeSteps.push({
-            transform: 'lookup',
-            arg,
-            input: stepInput,
-            output: value,
-            source: arg,
-            matched,
-          });
-        }
-        continue;
-      }
-
       const fn = TRANSFORMS[transform];
       if (!fn) throw new TemplateSyntaxError(`Unknown transform: "${transform}"`);
       value = fn(value, arg);
@@ -376,7 +341,6 @@ function truncate(value: string): string {
 export function render(
   template: string,
   groups: Record<string, unknown>,
-  lookups?: LookupTables,
 ): string {
-  return new TemplateEngine().render(template, groups, lookups);
+  return new TemplateEngine().render(template, groups);
 }

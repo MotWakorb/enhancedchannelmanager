@@ -98,14 +98,14 @@ export function EventSyncAutoSyncFixDialog({
 
         <div className="modal-footer">
           <button
-            className="modal-btn-secondary"
+            className="modal-btn modal-btn-secondary"
             onClick={onCancel}
             disabled={busy}
           >
             Cancel
           </button>
           <button
-            className="modal-btn-danger"
+            className="modal-btn modal-btn-danger"
             onClick={onConfirm}
             disabled={busy}
             data-testid="autosync-fix-confirm"

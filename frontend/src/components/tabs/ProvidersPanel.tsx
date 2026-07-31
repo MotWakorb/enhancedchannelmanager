@@ -85,6 +85,7 @@ import * as api from '../../services/api';
 import { HttpError } from '../../services/httpClient';
 import { Heatmap } from '../charts/Heatmap';
 import { paletteColorAt } from '../../utils/chartPalette';
+import { CHART_TICK_META, CHART_TEXT_FILL_STRONG } from '../../utils/chartTypography';
 import { streamLabel, getDateLocale } from '../../utils/formatting';
 import type {
   ProviderStatsWindow,
@@ -618,11 +619,11 @@ export function ProvidersPanel() {
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
                 <XAxis
                   dataKey="time_bucket"
-                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                   tickFormatter={(v: string) => formatBucketTick(v, bucketSel)}
                   minTickGap={50}
                 />
-                <YAxis tick={{ fontSize: 11, fill: 'var(--text-primary)' }} width={40} />
+                <YAxis tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }} width={40} />
                 <Tooltip />
                 <Legend />
                 {providers.filter((p) => seenInBuffering.has(p.key)).map((p, idx) => (
@@ -719,11 +720,11 @@ export function ProvidersPanel() {
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
                 <XAxis
                   dataKey="provider"
-                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                   interval={0}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                   width={70}
                   tickFormatter={(v: number) => `${v}`}
                   allowDecimals={false}
@@ -732,7 +733,7 @@ export function ProvidersPanel() {
                     value="Watch minutes"
                     angle={-90}
                     position="insideLeft"
-                    style={{ textAnchor: 'middle', fill: 'var(--text-primary)', fontSize: 11 }}
+                    style={{ textAnchor: 'middle', fill: CHART_TEXT_FILL_STRONG, fontSize: CHART_TICK_META }}
                   />
                 </YAxis>
                 <Tooltip
@@ -908,12 +909,12 @@ export function ProvidersPanel() {
                 <CartesianGrid stroke="var(--border-primary)" strokeDasharray="3 3" />
                 <XAxis
                   dataKey="time_bucket"
-                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                   tickFormatter={(v: string) => formatBucketTick(v, bucketSel)}
                   minTickGap={50}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: 'var(--text-primary)' }}
+                  tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL_STRONG }}
                   width={80}
                   tickFormatter={(v: number) => formatBitrateBps(v)}
                 >
@@ -921,7 +922,7 @@ export function ProvidersPanel() {
                     value="Bitrate (auto-scaled)"
                     angle={-90}
                     position="insideLeft"
-                    style={{ textAnchor: 'middle', fill: 'var(--text-primary)', fontSize: 11 }}
+                    style={{ textAnchor: 'middle', fill: CHART_TEXT_FILL_STRONG, fontSize: CHART_TICK_META }}
                   />
                 </YAxis>
                 <Tooltip formatter={(v: number) => formatBitrateBps(v)} />

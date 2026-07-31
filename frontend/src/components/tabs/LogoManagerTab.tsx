@@ -4,7 +4,10 @@ import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
-import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
@@ -26,6 +29,8 @@ export function LogoManagerTab() {
   const [logos, setLogos] = useState<Logo[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
 
   // Search state
   const [searchInput, setSearchInput] = useState('');
@@ -60,6 +65,7 @@ export function LogoManagerTab() {
   // search/sort/unused-only filter composed into one request.
   const loadLogos = useCallback(async () => {
     setLoading(true);
+    setSourceLoadState('loading');
     setFailedImages(new Set());
     try {
       const response = await api.getLogos({
@@ -72,7 +78,10 @@ export function LogoManagerTab() {
       });
       setLogos(response.results);
       setTotalCount(response.count);
+      setHasLoadedSourceData(true);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load logos', 'Logos');
     } finally {
       setLoading(false);
@@ -111,6 +120,20 @@ export function LogoManagerTab() {
     if (sortBy !== column) return null;
     return sortOrder === 'asc' ? 'arrow_upward' : 'arrow_downward';
   };
+
+  const renderSortHeader = (column: SortColumn, label: string) => (
+    <span>
+      <button
+        type="button"
+        className="sortable"
+        onClick={() => handleSort(column)}
+        aria-label={`Sort by ${label}${sortBy === column ? `, currently ${sortOrder === 'asc' ? 'ascending' : 'descending'}` : ''}`}
+      >
+        {label}
+        {getSortIndicator(column) && <span className="material-icons sort-icon" aria-hidden="true">{getSortIndicator(column)}</span>}
+      </button>
+    </span>
+  );
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -161,12 +184,52 @@ export function LogoManagerTab() {
   };
 
   // Render loading state
-  if (loading && logos.length === 0 && totalCount === 0) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="logo-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="Logo inventory controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading logos
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText="0 total logos"
+          />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading logos...</p>
+        </div>
+      </div>
+    );
+  }
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
+    return (
+      <div className="logo-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText=""
+            onRetry={loadLogos}
+          />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="logos"
+            successText=""
+            announce={false}
+          />
         </div>
       </div>
     );
@@ -176,14 +239,25 @@ export function LogoManagerTab() {
 
   return (
     <div className="logo-manager-tab">
-      {/* Header */}
-      <PageHeader
-        className="logo-header"
-        title="Logos"
-        description={`Manage logos for your channels (${totalCount}${filtersActive ? ' matching' : ' total'})`}
-        actions={(
-          <>
-            {/* Search */}
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddLogo}>
+          <span className="material-icons">add</span>
+          Add Logo
+        </button>
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="status">
+        <SourceLoadStatus
+          state={sourceLoadState}
+          sourceName="logos"
+          successText={`${totalCount}${filtersActive ? ' matching' : ' total'} logos`}
+          stale={sourceLoadState === 'error'}
+          onRetry={loadLogos}
+        />
+      </RouteHeaderSlot>
+      <RouteHeaderSlot name="controls">
+        <DenseToolbar
+          label="Logo inventory controls"
+          search={
             <div className="search-box">
               <span className="material-icons">search</span>
               <input
@@ -204,8 +278,8 @@ export function LogoManagerTab() {
                 </button>
               )}
             </div>
-
-            {/* Unused-only filter toggle */}
+          }
+          filters={
             <button
               type="button"
               className={`unused-only-toggle${unusedOnly ? ' active' : ''}`}
@@ -217,8 +291,8 @@ export function LogoManagerTab() {
               <span className="material-icons" aria-hidden="true">filter_alt</span>
               Unused only
             </button>
-
-            {/* View Toggle */}
+          }
+          sortView={
             <div className="view-toggle">
               <button
                 className={viewMode === 'list' ? 'active' : ''}
@@ -239,15 +313,9 @@ export function LogoManagerTab() {
                 <span className="material-icons" aria-hidden="true">grid_view</span>
               </button>
             </div>
-
-            {/* Add Logo Button */}
-            <button className="btn-primary" onClick={handleAddLogo}>
-              <span className="material-icons">add</span>
-              Add Logo
-            </button>
-          </>
-        )}
-      />
+          }
+        />
+      </RouteHeaderSlot>
 
       {/* Content */}
       <div className="logos-container">
@@ -273,19 +341,9 @@ export function LogoManagerTab() {
           <div className="logos-list">
             <div className="list-header">
               <span>Logo</span>
-              <span className="sortable" onClick={() => handleSort('name')}>
-                Name
-                {getSortIndicator('name') && (
-                  <span className="material-icons sort-icon">{getSortIndicator('name')}</span>
-                )}
-              </span>
+              {renderSortHeader('name', 'Name')}
               <span>URL</span>
-              <span className="sortable" onClick={() => handleSort('channel_count')}>
-                Used By
-                {getSortIndicator('channel_count') && (
-                  <span className="material-icons sort-icon">{getSortIndicator('channel_count')}</span>
-                )}
-              </span>
+              {renderSortHeader('channel_count', 'Used By')}
               <span>Actions</span>
             </div>
             {logos.map((logo) => (

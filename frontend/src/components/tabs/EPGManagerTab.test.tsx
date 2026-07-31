@@ -10,9 +10,10 @@
  * a deprecation notice and NO new-creation affordance.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { EPGManagerTab, getTiedPriorities } from './EPGManagerTab';
 import type { EPGSource } from '../../types';
+import { HttpError } from '../../services/httpClient';
 
 vi.mock('../../services/api', () => ({
   getEPGSources: vi.fn(),
@@ -33,12 +34,14 @@ vi.mock('../DummyEPGSourceModal', () => ({
   DummyEPGSourceModal: () => null,
 }));
 
+const notificationMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
+}));
+
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: vi.fn(),
-    warning: vi.fn(),
-    error: vi.fn(),
-  }),
+  useNotifications: () => notificationMocks,
 }));
 
 import * as api from '../../services/api';
@@ -67,7 +70,7 @@ function makeSource(overrides: Partial<EPGSource>): EPGSource {
 
 describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('hides the legacy section entirely when there are zero legacy dummy sources', async () => {
@@ -132,6 +135,88 @@ describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
   });
 });
 
+describe('EPGManagerTab — source lifecycle', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('recovers from a transient failure through the scoped Retry action', async () => {
+    vi.mocked(api.getEPGSources)
+      .mockRejectedValueOnce(new Error('Network down'))
+      .mockResolvedValueOnce([makeSource({ name: 'Recovered EPG' })]);
+
+    render(<EPGManagerTab />);
+
+    expect(await screen.findByRole('status', { name: 'EPG sources unavailable' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading EPG sources' }));
+
+    expect(await screen.findByText('Recovered EPG')).toBeVisible();
+    // Same removal as M3U Manager (bead enhancedchannelmanager-tygwm): the
+    // healthy header no longer restates the source count, so recovery is
+    // proven by the failure status and its Retry going away.
+    expect(screen.queryByRole('status', { name: 'EPG sources unavailable' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry loading EPG sources' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d+ EPG sources?/)).not.toBeInTheDocument();
+    expect(api.getEPGSources).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not offer Retry or protected actions for a permission failure', async () => {
+    vi.mocked(api.getEPGSources).mockRejectedValue(new HttpError('Forbidden', 403));
+
+    render(<EPGManagerTab />);
+
+    expect(await screen.findByRole('status', { name: 'EPG sources access denied' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Retry loading/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add Standard EPG/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('EPGManagerTab — standard sources section heading', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  // Bead enhancedchannelmanager-7dxx0. The page opened on an unlabelled
+  // table: route title, description, then straight into the sources list —
+  // while the section below it was labelled "Dummy EPG Profiles". The
+  // heading is rendered by PageHeader, so asserting it sits inside
+  // `.header-title` is what pins it to the shared section role
+  // (15px/600/1.3, asserted from disk in PageHeader.test.tsx) rather than a
+  // hand-rolled h2 with per-page typography.
+  it('labels the sources table with a section heading rendered above it', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru XMLTV', source_type: 'xmltv' }),
+    ]);
+
+    render(<EPGManagerTab />);
+
+    const list = (await screen.findByText('Guru XMLTV')).closest('.epg-sources-list');
+    expect(list).not.toBeNull();
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'EPG Sources' });
+    expect(heading.closest('.header-title')).not.toBeNull();
+    expect(
+      heading.compareDocumentPosition(list as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  // The heading is not conditional on there being rows. Beyond keeping the
+  // pane's structure stable between states, it repairs an outline that
+  // skipped h1 -> h3: the empty state's "No EPG Sources" is an h3 and the
+  // route title is the page's only h1.
+  it('keeps the heading over the empty state so the outline never skips a level', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([]);
+
+    render(<EPGManagerTab />);
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'EPG Sources' });
+    const emptyState = screen.getByRole('heading', { level: 3, name: 'No EPG Sources' });
+    expect(
+      heading.compareDocumentPosition(emptyState) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+});
+
 describe('getTiedPriorities', () => {
   it('returns priorities shared by two or more sources', () => {
     const sources = [
@@ -156,7 +241,7 @@ describe('getTiedPriorities', () => {
 
 describe('EPGManagerTab — priority-tie badge (bead 09x38.15 item 1)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('renders a tie badge only on rows sharing a priority', async () => {

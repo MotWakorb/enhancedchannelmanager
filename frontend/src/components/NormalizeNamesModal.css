@@ -13,8 +13,11 @@
 
 
 /* Hint text in empty state */
+/* Meta role. 13px -> 11px. */
 .normalize-hint {
-  font-size: 0.8125rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-top: 0.25rem;
 }
@@ -30,6 +33,7 @@
 }
 
 /* Summary bar */
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .normalize-summary {
   display: flex;
   align-items: center;
@@ -39,12 +43,13 @@
   border-radius: var(--radius-lg);
   margin-bottom: 1rem;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .normalize-summary .material-icons {
   color: var(--accent-primary);
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* Select-all checkbox in summary */
@@ -104,18 +109,23 @@
   min-width: 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .normalize-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
   color: var(--text-muted);
   min-width: 50px;
   flex-shrink: 0;
 }
 
+/* Item-title role. 13px -> 13px. */
 .normalize-name {
   font-family: monospace;
-  font-size: 0.8125rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -127,11 +137,13 @@
 }
 
 /* Editable name input */
+/* Item-title role. 13px -> 13px. */
 .normalize-name-input {
   font-family: monospace;
-  font-size: 0.8125rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
   color: var(--success);
-  font-weight: 500;
+  font-weight: var(--type-item-title-weight);
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-sm);
@@ -171,8 +183,9 @@
   border-color: var(--warning);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .normalize-revert-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 .normalize-arrow {
@@ -182,7 +195,8 @@
   padding-left: 1.5rem;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .normalize-arrow .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }

@@ -173,7 +173,7 @@ execute the Resolution section below; do not wait for a second signal.
 
 The first four are the SLI-level triggers (they tie directly to
 [SLO-1 readiness](../sre/slos.md#slo-1-readiness-availability),
-[SLO-2 p95 latency](../sre/slos.md#slo-2-http-latency), and
+[SLO-2 p95 latency](../sre/slos.md#slo-2-http-request-latency), and
 [SLO-3 5xx rate](../sre/slos.md#slo-3-http-error-rate)). The test-count
 trigger is a leading indicator that surfaces *before* the SLI metrics
 shift, because the test suite exercises contract edges that production

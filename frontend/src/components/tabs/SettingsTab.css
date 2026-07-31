@@ -36,6 +36,11 @@
   color: var(--button-text);
 }
 
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .settings-nav-item.active {
   background-color: var(--accent-10);
   color: var(--accent-secondary);
@@ -67,10 +72,70 @@
   border-top: 1px solid var(--border-primary);
 }
 
+/* Two columns: the settings pane and the sticky "On this page" rail. The rail
+   is `align-self: start` inside this scroll container, so it stays put while
+   the content column scrolls beneath it. */
 .settings-content {
   flex: 1;
   overflow-y: auto;
   padding: 1.5rem 2rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1.5rem;
+}
+
+/* One measure for every section. `.settings-page` caps itself at 800px, but
+   sections with their own wrapper (Tags, Scheduled Tasks) never opted in and so
+   ran the full column width. Constraining the column instead makes the measure
+   a property of Settings rather than of each section remembering to set it. */
+.settings-content-main {
+  grid-column: 1;
+  min-width: 0;
+  max-width: 800px;
+}
+
+/* Scheduled Tasks packs a status pill, schedule summary and four controls onto
+   one card row, which the shared 800px measure squeezes. Widened rather than
+   left full-bleed so it still reads as the same page family. */
+.settings-content-main[data-settings-page="scheduled-tasks"] {
+  max-width: 1040px;
+}
+
+@media (max-width: 1100px) {
+  .settings-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+/* While the rail is in use nothing overlays the content from above, so the
+   scroll offset that cleared the old sticky bar would just leave a gap. */
+@media (min-width: 1101px) {
+  .settings-content .sticky-section-target {
+    scroll-margin-top: 12px;
+  }
+}
+
+.settings-pending-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  margin-top: 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  box-shadow: 0 -3px 12px rgba(0, 0, 0, .22);
+}
+.settings-pending-actions > span { display: inline-flex; align-items: center; gap: .4rem; margin-right: auto; font-weight: 600; color: var(--warning, #f0ad4e); }
+@media (max-width: 850px) {
+  .settings-pending-actions { flex-wrap: wrap; }
+  .settings-pending-actions > span { flex-basis: 100%; }
 }
 
 .settings-page {
@@ -102,6 +167,20 @@
   margin-bottom: 1.5rem;
 }
 
+/* The Maintenance page's running-probe banner. Same card chrome as
+   `.settings-section` (padding was an inline 1rem override), but deliberately
+   NOT that class: `.settings-section` is the Settings section rail's selector,
+   and this card is a transient, heading-less status readout that must not
+   enter the rail — see the comment at its call site in SettingsTab.tsx
+   (bead enhancedchannelmanager-b32co). */
+.probe-progress-banner {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
 .settings-section-header {
   display: flex;
   align-items: center;
@@ -111,14 +190,24 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Status icon role. Was 20px; the h3 beside it is now 15px, and 18px is what
+   every other panel-header glyph in Settings uses. The 20px rail glyph
+   (`.settings-nav-item .material-icons`) is deliberately NOT this — that one
+   mirrors the frozen primary rail (bead enhancedchannelmanager-6z299.4). */
 .settings-section-header .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px. */
 .settings-section-header h3 {
-  font-size: 1rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--button-text);
   margin: 0;
   flex: 1;
@@ -132,7 +221,7 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.35rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
@@ -148,7 +237,7 @@
 }
 
 .btn-edit-connection .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* Connection info display */
@@ -168,14 +257,21 @@
   gap: 0.75rem;
 }
 
+/* Label role — this is the field label in a read-only key/value row, the same
+   treatment shared/common.css § 4 now gives `.form-group label`
+   (bead enhancedchannelmanager-6z299.4). */
 .connection-label {
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
   min-width: 100px;
 }
 
+/* Body role for the value. The monospace family stays — it is a URL. */
 .connection-value {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   font-family: monospace;
 }
@@ -194,7 +290,7 @@
   align-items: center;
   gap: 0.35rem;
   padding: 0.5rem 1rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
@@ -215,19 +311,31 @@
 }
 
 .btn-reset-stats .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 /* .form-group and .form-hint are defined in shared/common.css */
 
-.form-row {
+/* Scoped to the route root, not bare. `.form-row` was declared bare in three
+   chunks: here (twice — see the Email Settings copy below), in
+   M3UAccountModal.css:48 as a `display: flex` inline row, and in
+   RuleBuilder.css as a flex row that the Channel Pipeline page did not
+   actually render. Every tab chunk is appended after the eager bundle and
+   never removed, so this two-column grid and the M3U account modal's inline
+   row each rendered whichever of the two the operator had opened last.
+   `.settings-tab` is this route's root (SettingsTab.tsx:5835) and encloses
+   every `.form-row` on the page (SettingsTab.tsx:3476,3509,3535, rendered via
+   `renderEmailSettingsPage` into `.settings-content-main`). `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and only its
+   match set narrows (bead enhancedchannelmanager-mktnb). */
+:where(.settings-tab) .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
 }
 
 @media (max-width: 600px) {
-  .form-row {
+  :where(.settings-tab) .form-row {
     grid-template-columns: 1fr;
   }
 }
@@ -247,11 +355,15 @@
   margin-bottom: 1.25rem;
 }
 
+/* Label role. Settings is the form-dense page and therefore this role's main
+   consumer; shared/common.css § 4 puts `.form-group label` on the same three
+   tokens (bead enhancedchannelmanager-6z299.4). */
 .form-group-vertical label {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--button-text);
-  font-weight: 500;
   margin-bottom: 0.25rem;
 }
 
@@ -263,12 +375,16 @@
   margin-bottom: 0;
 }
 
+/* Meta role, and --text-secondary rather than --text-muted: --text-muted
+   measures 2.61:1 on --bg-secondary in the light theme, below the AA floor.
+   Matches `.form-hint` in shared/common.css § 4. */
 .form-group-vertical .form-description {
   display: block;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-bottom: 0.5rem;
-  line-height: 1.4;
 }
 
 .form-group-vertical input,
@@ -281,7 +397,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .form-group-vertical input:focus,
@@ -322,11 +438,8 @@
 }
 
 .checkbox-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Settings-specific checkbox group with horizontal layout (checkbox + content side by side)
@@ -345,32 +458,33 @@
 }
 
 .settings-section .checkbox-group input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 .settings-section .checkbox-content {
   flex: 1;
 }
 
+/* Label role for the checkbox's own label, meta for the sentence under it —
+   the same pair as `.form-group-vertical label` / `.form-description`. */
 .settings-section .checkbox-content label {
   display: block;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-primary);
   cursor: pointer;
   margin-bottom: 0.25rem;
 }
 
 .settings-section .checkbox-content p {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin: 0;
-  line-height: 1.4;
 }
 
 .settings-actions {
@@ -385,53 +499,19 @@
   flex: 1;
 }
 
-.btn-test {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  border: none;
-  border-radius: var(--radius-lg);
-  background-color: var(--button-primary-bg);
-  color: var(--button-primary-text);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-test:hover:not(:disabled) {
-  background-color: var(--bg-hover);
-  border-color: var(--border-secondary);
-}
-
-.btn-test:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-test .material-icons {
-  font-size: 18px;
-}
+/* `.btn-test` is owned by shared/common.css § 3 BUTTONS — this file's copy
+   is what moved there. Declared bare in the lazy Settings chunk it competed
+   with SettingsModal.css's differently-styled bare copy in the eager bundle
+   (bead enhancedchannelmanager-6z299). */
 
 /* .btn-primary, .btn-secondary, .btn-danger, .btn-cancel are defined in shared/common.css */
 
-.error-message {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background-color: rgba(220, 38, 38, 0.15);
-  border: 1px solid rgba(220, 38, 38, 0.3);
-  border-radius: var(--radius-lg);
-  color: var(--error);
-  font-size: 0.875rem;
-  margin-bottom: 1rem;
-}
-
-.error-message .material-icons {
-  font-size: 18px;
-}
+/* `.error-message` and its glyph are owned by shared/common.css § 8
+   ERROR/WARNING DISPLAYS. Declared bare in the lazy Settings chunk, this
+   copy became the app-wide inline error banner for anyone who had opened
+   Settings — the panels that scope their own (`.watch-history-panel`,
+   `.bandwidth-panel`, `.popularity-panel`) were the only ones safe from it
+   (bead enhancedchannelmanager-6z299). */
 
 /* Styles moved to shared/common.css:
    - .test-result (use from common.css)
@@ -510,17 +590,22 @@
   color: #ff0000;
 }
 
+/* Item title / meta: `.theme-label` is the name of a selectable option card,
+   `.theme-description` is its explanatory line. Same pair as
+   `.radio-label` / `.radio-description` below. */
 .theme-label {
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
 .theme-description {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   text-align: center;
-  line-height: 1.3;
 }
 
 /* Separator row - for inline separator button selection */
@@ -541,10 +626,12 @@
   border: 1px solid var(--border-primary);
 }
 
+/* Label role — it labels the separator button group beside it. */
 .separator-row-label {
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
-  font-weight: 500;
 }
 
 .separator-buttons {
@@ -552,32 +639,18 @@
   gap: 0.25rem;
 }
 
-.separator-btn {
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-md);
-  background-color: var(--input-bg);
-  color: var(--button-text);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-  min-width: 2rem;
-}
+/* `.separator-btn` is owned by shared/common.css § 3 BUTTONS. This file and
+   StreamsPane.css carried byte-identical base rules in two different
+   chunks; the `--accent-15` active background from this copy is the one
+   that survived, because StreamsPane's said `var(--accent-primary)22`,
+   which is not valid CSS (bead enhancedchannelmanager-6z299). */
 
-.separator-btn:hover {
-  border-color: var(--accent-primary);
-}
-
-.separator-btn.active {
-  border-color: var(--accent-primary);
-  background-color: var(--accent-15);
-  color: var(--accent-primary);
-}
-
+/* Meta role, and --text-secondary rather than --text-muted (AA). */
 .separator-preview {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-style: italic;
 }
 
@@ -615,8 +688,6 @@
 .settings-section .radio-option input[type="radio"] {
   grid-row: 1;
   grid-column: 1;
-  width: 18px;
-  height: 18px;
   margin: 0;
   margin-top: 2px;
   accent-color: var(--accent-primary);
@@ -626,15 +697,18 @@
 .settings-section .radio-option .radio-label {
   grid-row: 1;
   grid-column: 2;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
 .settings-section .radio-option .radio-description {
   grid-row: 2;
   grid-column: 2;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin-top: 0.125rem;
 }
@@ -669,18 +743,18 @@
 }
 
 .profile-checkbox input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin: 0;
   margin-right: 0.5rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
   align-self: center;
 }
 
+/* Body role. The 18px line-height stays as authored — it is what centres the
+   text against the 18px checkbox beside it, not a typographic choice. */
 .profile-checkbox-label {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
   line-height: 18px;
   margin-left: 0.25rem;
@@ -711,7 +785,7 @@
   border-radius: var(--radius-lg);
   background-color: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   text-align: center;
   transition: border-color 0.15s, box-shadow 0.15s;
@@ -734,8 +808,10 @@
   -moz-appearance: textfield;
 }
 
+/* Body size; weight stays 600 — this is the unit suffix on the threshold and
+   it is deliberately heavier than the input beside it. */
 .threshold-percent {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
   color: var(--accent-primary);
 }
@@ -773,7 +849,7 @@
 }
 
 .probe-results-modal .modal-header h2.failed {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .probe-results-modal .modal-header h2.skipped {
@@ -843,8 +919,11 @@
   word-break: break-word;
 }
 
+/* Meta role. 12px -> 11px. */
 .probe-result-item-id {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -880,7 +959,26 @@
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  font-size: 0.8rem;
+  /* Badge role — a removable chip, the same object as `.tag-chip`. It is the
+     second-largest shrink in the sweep (12.8px -> 10px) and it carries
+     content the operator has to proofread character by character, so it was
+     re-examined in the running app in the enhancedchannelmanager-6z299.7
+     cleanup pass: legible at 10px in dark and light,
+     `--text-primary` on `--bg-tertiary`, no truncation, and the value is
+     always re-checkable in the input directly below. Kept on the role.
+
+     Note the earlier rationale here — "exempting it would leave two chip
+     sizes in one page" — was wrong and has been removed: `.tag-chip` renders
+     only in Tag Engine and `.alert-method-type-badge` only on the Email
+     Settings page, so this chip never shares a page with either. The reason
+     not to exempt is that ONE class serves three call sites — digest email
+     recipients, digest exclude patterns, and Channel Pipeline's excluded
+     terms/groups — and the last two are short tokens that belong at badge
+     size. An exemption would have to be a new class for the
+     identifier-carrying chip, not a size override on this one. */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--text-primary);
 }
 
@@ -892,28 +990,26 @@
   border: none;
   padding: 0;
   cursor: pointer;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   transition: color 0.15s;
 }
 
 .email-recipient-tag .remove-btn:hover {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .email-recipient-tag .remove-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-badge);
 }
 
 .email-recipient-tag code {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 0.8rem;
+  font-size: var(--type-badge-size);
 }
 
-.no-recipients {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
+/* `.no-recipients` was one of the six spellings of the small inline "nothing
+   here" string; those call sites now wear `.empty-inline` from
+   shared/common.css instead (bead enhancedchannelmanager-6z299.4). */
 
 .add-email-row {
   display: flex;
@@ -934,7 +1030,7 @@
 }
 
 .add-email-row .btn-secondary .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 .warning-banner {
@@ -943,7 +1039,9 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-radius: var(--radius-lg);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   background-color: var(--warning-bg);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.3);
@@ -951,7 +1049,7 @@
 }
 
 .warning-banner .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -996,9 +1094,12 @@
   line-height: 1.5;
 }
 
+/* Body role. 14px -> 13px. */
 .plex-token-modal .plex-token-ref-link {
   margin-top: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
@@ -1010,8 +1111,13 @@
    Email Settings Page
    ======================================== */
 
-/* Form rows for side-by-side inputs */
-.form-row {
+/* Form rows for side-by-side inputs.
+   Scoped to `.settings-tab` for the same reason as the copy further up this
+   file — see its comment. This is the later of the two Settings declarations,
+   so it is the one that wins for every `.form-row` on the page today; scoping
+   both keeps that unchanged and only stops them reaching the M3U account
+   modal (bead enhancedchannelmanager-mktnb). */
+:where(.settings-tab) .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
@@ -1019,18 +1125,16 @@
 }
 
 @media (max-width: 768px) {
-  .form-row {
+  :where(.settings-tab) .form-row {
     grid-template-columns: 1fr;
   }
 }
 
-/* Field hint text below inputs */
-.field-hint {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
-  line-height: 1.4;
-}
+/* `.field-hint` is owned by shared/common.css § 26 FIELD MESSAGES. Four
+   files declared it bare and two declared `.field-error` bare, across three
+   different chunks and at three different sizes — so the hint under a form
+   field changed size depending on which page had been opened first
+   (bead enhancedchannelmanager-6z299). */
 
 .checkbox-row {
   display: flex;
@@ -1063,60 +1167,37 @@
   border-color: rgba(34, 197, 94, 0.6);
 }
 
-.field-error {
-  font-size: 0.75rem;
-  color: var(--error, #ef4444);
-  margin-top: 0.25rem;
-  line-height: 1.4;
-}
+/* `.field-error` is owned by shared/common.css § 26 FIELD MESSAGES. */
 
-.settings-empty-state {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  margin-bottom: 1rem;
-}
+/* `.settings-empty-state` was one of the six spellings of the small inline
+   "nothing here" string; its call site now wears `.empty-inline` from
+   shared/common.css instead (bead enhancedchannelmanager-6z299.4). */
 
+/* Meta role, and --text-secondary rather than --text-muted (AA). */
 .settings-saved-at {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-left: 0.75rem;
 }
 
-/* Test result messages */
-.test-result {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-lg);
-  margin-top: 1rem;
-  font-size: 0.875rem;
-}
-
-.test-result.success {
-  background-color: var(--success-bg);
-  color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.test-result.error {
-  background-color: var(--error-bg);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.test-result .material-icons {
-  font-size: 20px;
-}
+/* Test result messages — `.test-result`, its success/error variants and its
+   glyph are owned by shared/common.css § 21 TEST RESULTS. This copy differed
+   only in using hardcoded #4ade80/#f87171 where the shared rule uses
+   --success/--error, and it rode the lazy Settings chunk, so it became the
+   app-wide winner as soon as anyone opened Settings
+   (bead enhancedchannelmanager-6z299). */
 
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Section description text */
 .section-description {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   margin-bottom: 1rem;
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
 /* Integration test-connection action block (bd-r5f0c.13 / W13)
@@ -1142,12 +1223,14 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
 .integration-test-result {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .integration-test-result--success {
@@ -1156,4 +1239,14 @@
 
 .integration-test-result--error {
   color: var(--accent-error);
+}
+
+/* Leading status glyph on a probe-history row (check_circle / error / warning)
+   — the --icon-status role. The row is built from inline styles in
+   SettingsTab.tsx:5110 and the glyph carries no class of its own, so it had no
+   rule and rendered at index.css's base 24px beside 14px text. Scoped through
+   the row so it clears that base rule's 0-1-0
+   (bead enhancedchannelmanager-7bsxj). */
+.probe-history-item .material-icons {
+  font-size: var(--icon-status);
 }

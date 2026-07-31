@@ -208,8 +208,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
   return (
     <div className="backup-restore-section">
-      <h2 className="settings-page-header">Backup & Restore</h2>
-
       {/* One-time "Backups are not scheduled yet" setup nudge (bead ikv8z).
           Scheduled DBAS backup ships OFF by default, so surface the unscheduled
           state prominently to prevent an operator silently keeping zero backups. */}
@@ -344,7 +342,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
             Loading...
           </div>
         ) : savedBackups.length === 0 ? (
-          <div className="saved-backups-empty">
+          <div className="saved-backups-empty empty-inline">
             No saved backups. Enable the YAML Backup scheduled task to create automatic backups.
           </div>
         ) : (

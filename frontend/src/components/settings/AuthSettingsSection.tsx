@@ -9,7 +9,28 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { AuthSettingsPublic, AuthSettingsUpdate } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
+import {
+  SettingsSectionHeader,
+  SettingsSectionPlaceholders,
+  type SettingsSectionMeta,
+} from './SettingsSectionHeader';
 import './AuthSettingsSection.css';
+
+/**
+ * The sections this page always has, in render order. Single authority for
+ * both the loading placeholders and the loaded cards, so the Settings section
+ * rail is complete from first paint and its anchor ids never move
+ * (see SettingsSectionHeader.tsx; bead enhancedchannelmanager-b32co).
+ */
+const SECTIONS = {
+  global: { icon: 'security', label: 'Global Settings' },
+  local: { icon: 'password', label: 'Local Authentication' },
+  dispatcharr: { icon: 'link', label: 'Dispatcharr SSO' },
+} as const satisfies Record<string, SettingsSectionMeta>;
+
+const ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [
+  SECTIONS.global, SECTIONS.local, SECTIONS.dispatcharr,
+];
 
 interface Props {
   isAdmin: boolean;
@@ -94,6 +115,12 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     );
   }
 
+  // The placeholders are what keep this page's three rail entries — and the
+  // anchors a shared `?section=` link names — present while the fetch is in
+  // flight. Without them the rail appears from nothing when it settles, and a
+  // deep link scrolls the reader away from wherever they were reading. The
+  // `!isAdmin` branch above deliberately has none: that page really has no
+  // sections, and it never resolves into one that does.
   if (loading) {
     return (
       <div className="auth-settings-section">
@@ -101,23 +128,17 @@ export function AuthSettingsSection({ isAdmin }: Props) {
           <span className="material-icons spinning">sync</span>
           Loading authentication settings...
         </div>
+        <SettingsSectionPlaceholders sections={ALWAYS_PRESENT} />
       </div>
     );
   }
 
   return (
     <div className="auth-settings-section">
-      <div className="settings-page-header">
-        <h2>Authentication</h2>
-        <p>Configure authentication providers and security settings.</p>
-      </div>
 
       {/* Global Settings */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">security</span>
-          <h3>Global Settings</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.global} />
         <div className="form-group-vertical">
           <label className="checkbox-label">
             <input
@@ -135,10 +156,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
       {/* Local Authentication */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">password</span>
-          <h3>Local Authentication</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.local} />
         <div className="form-group-vertical">
           <label className="checkbox-label">
             <input
@@ -171,10 +189,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
       {/* Dispatcharr SSO */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">link</span>
-          <h3>Dispatcharr SSO</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.dispatcharr} />
         <div className="form-group-vertical">
           <label className="checkbox-label">
             <input

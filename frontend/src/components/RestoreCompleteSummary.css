@@ -48,7 +48,7 @@
 }
 
 .rcs-tone-error .rcs-outcome-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-outcome-text {
@@ -85,7 +85,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-residue-list {
@@ -187,7 +187,7 @@
 }
 
 .rcs-detail-toggle.is-failure {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-detail-toggle .material-icons {

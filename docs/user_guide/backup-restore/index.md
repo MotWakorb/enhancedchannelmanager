@@ -47,5 +47,5 @@ If you create an encrypted backup, **a lost passphrase makes the artifact perman
 - [`docs/security/threat_model_dbas_import.md`](../../security/threat_model_dbas_import.md) — STRIDE analysis of the restore pipeline and cloud upload surface. Operators evaluating the trust boundary of a restore should read this.
 - [`docs/adr/ADR-012-dbas-absorption-approach.md`](../../adr/ADR-012-dbas-absorption-approach.md) — the design decisions behind the backup/restore subsystem (D1–D12).
 - [`docs/runbooks/disaster-recovery-restore.md`](../../runbooks/disaster-recovery-restore.md) — the SRE runbook for a full configuration restore under incident conditions.
-- [`docs/api.md`](../../api.md#backup--restore) — HTTP API reference for the Backup & Restore endpoints.
+- [`docs/api.md`](../../api.md#backup-restore) — HTTP API reference for the Backup & Restore endpoints.
 - [`docs/database_migrations.md`](../../database_migrations.md) — the migration story for the underlying SQLite schema, relevant when restoring across ECM versions.

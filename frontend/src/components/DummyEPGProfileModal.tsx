@@ -1158,7 +1158,7 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
                 onChange={(e) => setBatchInput(e.target.value)}
                 placeholder={"ESPN+ 17 : Ohio vs Notre Dame @ Feb 20 8:00PM ET\nPPV: UFC 300 Main Card\nNFL 12 : Cowboys VS Eagles @ Oct 17 1:00PM"}
                 rows={4}
-                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: '0.8rem' }}
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: 'var(--type-body-size)' }}
               />
             </div>
 

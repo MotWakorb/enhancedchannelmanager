@@ -30,6 +30,7 @@
   gap: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .create-input {
   flex: 1;
   padding: 0.375rem 0.75rem;
@@ -37,7 +38,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .create-input:focus {
@@ -64,7 +65,15 @@
   cursor: not-allowed;
 }
 
-/* Profiles List - scrollable */
+/* Profiles List - scrollable.
+   DELIBERATELY BARE — do not scope this to `.channel-profiles-modal`.
+   StreamsPane.tsx:2691 renders `checkbox-group profiles-list` inside the
+   bulk-create panel and takes its `flex: 1` and `overflow-y: auto` (its
+   scrollability) from this rule; `.bulk-create-modal .profiles-list` supplies
+   only display, direction and gap. The two live under no shared ancestor, so
+   there is no scope that covers both. The cross-chunk half of the collision
+   was M3UProfileModal.css:15, which is now scoped to its own modal and no
+   longer donates a 1rem gap here (bead enhancedchannelmanager-mktnb). */
 .profiles-list {
   display: flex;
   flex-direction: column;
@@ -105,16 +114,20 @@
   min-width: 0;
 }
 
+/* Body role. 14.4px -> 13px. */
 .profile-name .name-text {
   cursor: pointer;
   color: var(--accent-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .profile-name .name-text:hover {
   text-decoration: underline;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .profile-name input {
   width: 100%;
   padding: 0.375rem 0.5rem;
@@ -122,7 +135,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .profile-channels {
@@ -131,12 +144,15 @@
   flex-shrink: 0;
 }
 
+/* Meta role. 14px -> 11px. */
 .profile-channels .channel-count {
   cursor: pointer;
   padding: 0.25rem 0.5rem;
   background-color: var(--border-primary);
   border-radius: var(--radius-md);
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -145,7 +161,19 @@
   color: var(--text-primary);
 }
 
-.profile-actions {
+/* Scoped to this modal's root, not bare. This file is in the EAGER bundle and
+   M3UProfileModal.css:152 declares the same class at `gap: 0.375rem` in the
+   M3U Manager lazy chunk, which is appended after it and never removed — so
+   after one visit to M3U Manager this row rendered at that modal's gap and
+   picked up its `align-items: center` too, for the rest of the session.
+   `.channel-profiles-modal` is this modal's own root
+   (ChannelProfilesListModal.tsx:384) and encloses the row
+   (ChannelProfilesListModal.tsx:483); nothing else in the app renders
+   `.profile-actions` (DummyEPGManagerSection uses `dep-profile-actions`), so
+   unlike `.profiles-list` above this one can be scoped on both sides.
+   `:where()` contributes zero specificity, so the rule keeps its 0-1-0
+   (bead enhancedchannelmanager-mktnb). */
+:where(.channel-profiles-modal) .profile-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.25rem;
@@ -153,11 +181,12 @@
 }
 
 /* Hide disabled checkbox */
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .hide-disabled-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
@@ -174,8 +203,6 @@
 }
 
 .hide-disabled-checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   cursor: pointer;
   accent-color: var(--accent-primary);
 }
@@ -193,17 +220,18 @@
   border-bottom: none;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .channel-group-header {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1.25rem 0.75rem 0.5rem;
   background-color: var(--input-bg);
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   position: sticky;
   top: 0;
   z-index: 5;
@@ -223,30 +251,55 @@
   flex-direction: column;
 }
 
-.channel-item {
+/* Every `.channel-item` rule below is scoped to `.channel-profiles-modal`
+   (the enhancedchannelmanager-6z299.7 cleanup pass). `.channel-item` is not this
+   modal's class — it belongs to the Channel Manager's channel rows
+   (ChannelsPane.css:1003), and this modal reuses the name. Both files are in
+   the eager bundle, so the two rule sets were colliding in BOTH directions and
+   the winner was decided by byte order alone:
+
+   - Outward: this file's `.channel-item .channel-number` / `.channel-name`
+     (0-2-0) beat ChannelsPane's bare copies (0-1-0) and set the type on every
+     Channel Manager row — measured live at 12.8px in --text-muted, plus a
+     `min-width: 50px; text-align: right` that fought the number column's own
+     "display digits are centered" geometry.
+   - Inward: ChannelsPane.css is emitted after this file, so its
+     `.channel-item { display: grid; grid-template-columns: … }` overrode the
+     flex row below and squeezed this modal's channel names into a 32px grid
+     track — they rendered as "Fl…1", "Fl…2". That defect was live.
+
+   Scoping to the modal root (0-2-0 / 0-3-0) fixes both ends at once: these
+   rules stop applying outside the modal, and inside it they now outrank
+   ChannelsPane's bare 0-1-0 grid. `margin` and `border-radius` are declared
+   because ChannelsPane's rule sets them too and a scope that redeclares only
+   some of the colliding properties silently keeps the rest — see
+   docs/css_guidelines.md § "Partial redeclaration". */
+.channel-profiles-modal .channel-item {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 1.25rem 0.5rem 0.5rem;
+  margin: 0;
+  border-radius: 0;
   cursor: pointer;
   transition: background-color 0.1s;
 }
 
-.channel-item .modal-toggle {
+.channel-profiles-modal .channel-item .modal-toggle {
   margin-left: 1.25rem;
 }
 
-.channel-item:hover {
+.channel-profiles-modal .channel-item:hover {
   background-color: var(--input-bg);
 }
 
-.channel-item.changed {
+.channel-profiles-modal .channel-item.changed {
   background-color: var(--info-bg);
 }
 
 /* Bulk apply-to-selected (enhancedchannelmanager-hq3de.i) — a selection
    distinct from the enable/disable toggle. */
-.channel-item.bulk-selected {
+.channel-profiles-modal .channel-item.bulk-selected {
   background-color: var(--bg-tertiary, rgba(108, 142, 245, 0.12));
 }
 
@@ -260,16 +313,25 @@
   padding: 0.4rem 0.75rem;
 }
 
-.channel-item .channel-number {
+/* The right-aligned number gutter is this modal's own layout, not the Channel
+   Manager's centred number column — which is exactly why it has to be scoped
+   (the enhancedchannelmanager-6z299.7 cleanup pass). */
+/* Meta role. 12.8px -> 11px. */
+.channel-profiles-modal .channel-item .channel-number {
   min-width: 50px;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   text-align: right;
 }
 
-.channel-item .channel-name {
+/* Item-title role. 14px -> 13px. */
+.channel-profiles-modal .channel-item .channel-name {
   flex: 1;
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;

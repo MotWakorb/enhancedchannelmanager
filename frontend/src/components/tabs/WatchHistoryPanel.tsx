@@ -91,16 +91,20 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
     setExpandedId(expandedId === id ? null : id);
   };
 
+  // `data-section-label` on both branches, not just the loaded one: the
+  // loading branch has no heading, so without it StickySectionNav skips this
+  // section entirely and the "On this page" entry pops in when the fetch
+  // settles (bead enhancedchannelmanager-mch8j).
   if (loading && !data) {
     return (
-      <div className="watch-history-panel" id="stats-section-watch-history">
+      <div className="watch-history-panel" id="stats-section-watch-history" data-section-label="Watch History">
         <div className="loading-state">Loading watch history...</div>
       </div>
     );
   }
 
   return (
-    <div className="watch-history-panel" id="stats-section-watch-history">
+    <div className="watch-history-panel" id="stats-section-watch-history" data-section-label="Watch History">
       <div className="panel-header">
         <div className="header-left">
           <h3 className="section-title">Watch History</h3>
@@ -140,8 +144,9 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
       {/* Filters */}
       <div className="filters-bar">
         <div className="filter-group">
-          <label>Time Period:</label>
+          <label htmlFor="watch-history-time-period">Time Period:</label>
           <select
+            id="watch-history-time-period"
             value={daysFilter || 'all'}
             onChange={(e) => setDaysFilter(e.target.value === 'all' ? undefined : Number(e.target.value))}
           >
@@ -153,8 +158,9 @@ export function WatchHistoryPanel({ refreshTrigger }: WatchHistoryPanelProps) {
           </select>
         </div>
         <div className="filter-group">
-          <label>Channel:</label>
+          <label htmlFor="watch-history-channel-filter">Channel:</label>
           <input
+            id="watch-history-channel-filter"
             type="text"
             placeholder="Filter by channel ID"
             value={channelFilter}

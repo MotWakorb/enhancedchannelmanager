@@ -5,7 +5,7 @@
 >
 > **TL;DR:** Stats v2 metrics begin on the day you deploy v0.17.0.
 > History from before that point is not reconstructable into the new
-> view, and the Stats tab's v2 panels will start filling in from zero.
+> view, and the Stats page's v2 panels will start filling in from zero.
 
 ## What changed at v0.17.0
 
@@ -37,7 +37,7 @@ session_telemetry"](../../database_migrations.md#backfill-policy-for-session_tel
 
 ## What you will see
 
-- **Before v0.17.0 deploys:** the Stats tab reads from
+- **Before v0.17.0 deploys:** the Stats page reads from
   `channel_watch_stats`. All your historical data is still there.
 - **The day v0.17.0 deploys:** `session_telemetry` starts recording on
   the first stats-poll cycle (default: every 10 seconds).
@@ -95,9 +95,9 @@ What still happens with the opt-out on:
   (`BandwidthDaily`), per-channel bandwidth (`ChannelBandwidth`),
   unique-client connections (`UniqueClientConnection`). These pre-date
   Stats v2 and are not part of the opt-out surface. The original
-  Stats tab panels (bandwidth chart, total clients, peak bitrate) keep
+  Stats page panels (bandwidth chart, total clients, peak bitrate) keep
   working.
-- The Stats tab's v2 panels — top-watched, popularity ranking,
+- The Stats page's v2 panels — top-watched, popularity ranking,
   watch-time-by-user, buffering events by provider — show no data
   because there is no data to show. The panels render an empty state
   rather than erroring.

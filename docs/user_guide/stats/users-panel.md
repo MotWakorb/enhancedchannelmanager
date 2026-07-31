@@ -4,13 +4,13 @@
 >
 > **v0.17.0 and later.** The Users panel is part of the Stats v2 feature set introduced in v0.17.0.
 
-The Users panel is the fifth panel on the Stats tab. It shows watch-time totals for every Dispatcharr user in your installation. Use it to understand which users watch the most, which channels they watch, and when they last tuned in.
+The Users panel is the fifth panel on the Stats page. It shows watch-time totals for every Dispatcharr user in your installation. Use it to understand which users watch the most, which channels they watch, and when they last tuned in.
 
 ---
 
 ## Who can see it
 
-The Users panel is **admin-only**. If you open the Stats tab while logged in as a non-admin user you will see an "admin access required" notice in the panel area. Log out and back in with an admin account to access watch-time data.
+The Users panel is **admin-only**. If you open the Stats page while logged in as a non-admin user you will see an "admin access required" notice in the panel area. Log out and back in with an admin account to access watch-time data.
 
 When global authentication is disabled (no auth required to access ECM), the panel behaves as admin — all watch-time data is visible.
 

@@ -2048,7 +2048,7 @@ export function NormalizationEngineSection() {
                   onChange={(e) => setImportYaml(e.target.value)}
                   placeholder="Paste YAML content here..."
                   rows={12}
-                  style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }}
+                  style={{ fontFamily: 'monospace', fontSize: 'var(--type-body-size)' }}
                 />
               </div>
               <label className="modal-checkbox-label">
@@ -2400,7 +2400,7 @@ export function NormalizationEngineSection() {
 
             <div className="modal-footer">
               <button
-                className="modal-btn"
+                className="modal-btn modal-btn-secondary"
                 onClick={closeApplyModal}
                 type="button"
                 disabled={applyExecuting}
@@ -2491,7 +2491,7 @@ export function NormalizationEngineSection() {
             </div>
             <div className="modal-footer">
               <button
-                className="modal-btn"
+                className="modal-btn modal-btn-secondary"
                 type="button"
                 onClick={() => setShowApplyConfirm(false)}
                 disabled={applyExecuting}

@@ -5,7 +5,7 @@
  * badge in the expanded channel stream list.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import { StreamListItem } from './StreamListItem';
@@ -160,5 +160,68 @@ describe('StreamListItem — catch-up badge (bead enhancedchannelmanager-sy1sz)'
   it('does not show the catch-up badge when the fields are absent', () => {
     const { container } = renderItem();
     expect(container.querySelector('.catchup-badge')).not.toBeInTheDocument();
+  });
+});
+
+describe('StreamListItem — assigned stream row contract (enhancedchannelmanager-2896r.12)', () => {
+  it('keeps the assigned-stream drag handle out of the DOM outside Edit Mode', () => {
+    const { container } = renderItem({ isEditMode: false });
+    expect(container.querySelector('.stream-drag-handle')).not.toBeInTheDocument();
+  });
+
+  it('uses the approved row affordance with accessible drag instructions in Edit Mode', () => {
+    const { container } = renderItem({ isEditMode: true });
+    const handle = container.querySelector('.stream-drag-handle');
+    expect(handle).toHaveTextContent('⋮⋮');
+    expect(handle).toHaveAttribute('aria-label', 'Drag assigned stream ESPN Feed to reorder');
+    expect(handle).toHaveAttribute('title', 'Drag assigned stream ESPN Feed to reorder');
+  });
+
+  it('uses only the stream artwork, hides a broken image, and invents no fallback slot', () => {
+    const { container, rerender } = renderItem();
+    expect(container.querySelector('.stream-logo-small')).not.toBeInTheDocument();
+    expect(container.querySelector('.stream-logo-placeholder')).not.toBeInTheDocument();
+
+    const props = {
+      stream: {
+        id: 10, name: 'ESPN Feed', url: 'http://example.com/stream.m3u8',
+        m3u_account: 1, logo_url: '/stream-logo.png', tvg_id: null,
+        channel_group: null, channel_group_name: null, is_custom: false,
+      },
+      providerName: null, isEditMode: false, onRemove: vi.fn(),
+    };
+    rerender(<DndContext><SortableContext items={[10]}><StreamListItem {...props} /></SortableContext></DndContext>);
+    const artwork = container.querySelector('.stream-logo-small') as HTMLImageElement;
+    expect(artwork).toHaveAttribute('src', '/stream-logo.png');
+    fireEvent.error(artwork);
+    expect(artwork).toHaveStyle({ display: 'none' });
+  });
+
+  it('keeps identity/details before a fixed action group in DOM order', () => {
+    const { container } = renderItem({ onCopyUrl: vi.fn(), onPreview: vi.fn() });
+    const row = container.querySelector('.inline-stream-item')!;
+    const children = [...row.children];
+    expect(children.indexOf(row.querySelector('.inline-stream-info')!))
+      .toBeLessThan(children.indexOf(row.querySelector('.inline-stream-actions')!));
+    expect(row.querySelector('.inline-stream-actions'))
+      .toContainElement(within(row as HTMLElement).getByRole('button', { name: 'Preview stream in browser' }));
+  });
+
+  it('renders compact timeout wording with full accessible detail and strikes', () => {
+    renderItem({
+      strikeThreshold: 3,
+      streamStats: {
+        stream_id: 10, stream_name: 'ESPN Feed', resolution: null, fps: null,
+        video_codec: null, audio_codec: null, audio_channels: null, stream_type: null,
+        bitrate: null, video_bitrate: null, probe_status: 'timeout',
+        error_message: 'Probe exceeded the configured 30 second deadline',
+        last_probed: null, created_at: '2026-06-01T00:00:00Z',
+        consecutive_failures: 3, is_black_screen: false, is_low_fps: false,
+      },
+    });
+    const warning = screen.getByLabelText('Probe timeout. Probe exceeded the configured 30 second deadline. 3 of 3 strikes.');
+    expect(warning).toHaveTextContent('Probe timeout');
+    expect(warning).toHaveTextContent('3/3');
+    expect(warning).toHaveAttribute('title', 'Probe exceeded the configured 30 second deadline');
   });
 });

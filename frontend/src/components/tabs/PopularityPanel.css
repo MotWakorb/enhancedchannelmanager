@@ -23,16 +23,32 @@
   gap: 12px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 14px.
+   `text-transform` / `letter-spacing` are reset explicitly: until this bead
+   they came from StatsTab.css's bare `.section-title`, so every panel title
+   was rendering 15px/600 UPPERCASE — the section role's size with that
+   rule's case (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .section-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
   margin: 0;
 }
 
+/* Badge role: a count in a tinted, padded, rounded chip is a badge, whatever
+   it is called (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .total-count {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  color: var(--text-secondary);
   background: var(--bg-tertiary);
   padding: 3px 8px;
   border-radius: var(--radius-md);
@@ -55,8 +71,9 @@
 
 .popularity-panel .toggle-btn {
   padding: 8px 16px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   white-space: nowrap;
   border: none;
   border-radius: var(--radius-md);
@@ -78,8 +95,9 @@
 
 .popularity-panel .calculate-btn {
   padding: 8px 16px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   border: none;
   border-radius: var(--radius-lg);
   background: var(--button-primary-bg);
@@ -101,10 +119,12 @@
 .popularity-panel .error-message {
   background: var(--error-bg);
   border: 1px solid var(--error);
-  color: var(--error);
+  color: var(--danger-text);
   padding: 10px 14px;
   border-radius: var(--radius-lg);
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 12px;
 }
 
@@ -114,7 +134,9 @@
   color: #14b8a6;
   padding: 10px 14px;
   border-radius: var(--radius-lg);
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 12px;
 }
 
@@ -155,10 +177,14 @@
   gap: 12px;
 }
 
+/* Meta, not item title. A muted grey ordinal is metadata about the row; the
+   channel name beside it is the item title
+   (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .rank {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   min-width: 36px;
 }
 
@@ -171,8 +197,9 @@
 }
 
 .popularity-panel .channel-name {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -180,8 +207,9 @@
 }
 
 .popularity-panel .trend {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .popularity-panel .trend.trend-up {
@@ -189,11 +217,11 @@
 }
 
 .popularity-panel .trend.trend-down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .popularity-panel .trend.trend-stable {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 /* Score Bar */
@@ -218,9 +246,13 @@
   border-radius: var(--radius-sm);
 }
 
+/* Item title, not metric: this figure sits inline inside a 120px control
+   beside its progress bar, not in a tile of its own
+   (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .score-value {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   min-width: 32px;
   text-align: right;
@@ -246,21 +278,31 @@
 
 .popularity-panel .detail-label {
   display: block;
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
+  color: var(--text-secondary);
   margin-bottom: 2px;
 }
 
+/* Metric role (14px -> 20px). A real metric tile: four centred figures in a
+   `repeat(4, 1fr)` grid, each under a micro label — the same shape as
+   EnhancedStatsPanel's summary cards, which have carried 20px all along. The
+   grid drops to two columns at 768px, so the widest tier is ~225px per
+   figure (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .detail-value {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--text-primary);
 }
 
 .popularity-panel .rank-change {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   text-align: center;
   margin-top: 8px;
 }
@@ -270,7 +312,7 @@
 }
 
 .popularity-panel .rank-declined {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Trending Section */
@@ -292,14 +334,15 @@
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-primary);
 }
 
 .popularity-panel .trend-icon {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .popularity-panel .trend-icon.up {
@@ -307,7 +350,7 @@
 }
 
 .popularity-panel .trend-icon.down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .popularity-panel .trending-list {
@@ -327,23 +370,29 @@
 }
 
 .popularity-panel .trending-rank {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   min-width: 28px;
 }
 
 .popularity-panel .trending-name {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Keeps its 600 weight rather than taking the meta role's 400: the whole
+   point of this figure is that it is the delta, colour-coded up or down. */
 .popularity-panel .trending-change {
-  font-size: 11px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   font-weight: 600;
 }
 
@@ -352,14 +401,19 @@
 }
 
 .popularity-panel .trending-change.down {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* The inline "nothing here" string that shared/common.css § 7 calls
+   `.empty-inline` — meta, not the full-page empty-state block below
+   (bead enhancedchannelmanager-6z299.4). */
 .popularity-panel .empty-trending {
   padding: 20px;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 /* States */
@@ -367,8 +421,10 @@
 .popularity-panel .empty-state {
   padding: 32px;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Responsive */

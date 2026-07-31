@@ -31,11 +31,12 @@
   row-gap: 0.5rem;
 }
 
-.header-left h2 {
-  margin: 0;
-  font-size: 1.5rem;
-  color: var(--text-primary);
-}
+/* `.header-left h2` deleted, not remapped: this tab renders no <h2> any
+   more — the route title moved into the header band — and the same dead
+   rule sat in M3UChangesTab.css and StatsTab.css. Dead is not harmless when it
+   is bare in a lazy chunk: it competed with the real `.header-title h2` in
+   shared/common.css on every page visited afterwards
+   (bead enhancedchannelmanager-6z299). */
 
 .header-stats {
   display: flex;
@@ -43,18 +44,13 @@
   gap: 1rem;
 }
 
-.header-stat {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-}
-
-.header-stat .material-icons {
-  font-size: 16px;
-  color: var(--text-muted);
-}
+/* `.header-stat` and `.header-stat .material-icons` are owned by
+   shared/common.css § 28 ROUTE HEADER STATS. They were declared bare here and
+   byte-identically in M3UChangesTab.css, in two different lazy chunks, so the
+   tab you visited last owned the other tab's header chips. Hoisted rather than
+   scoped because `RouteHeaderSlot` portals these chips out of `.journal-tab`
+   into App's `.route-page-status-outlet` — there is no page-root ancestor to
+   scope to (bead enhancedchannelmanager-6z299.2). */
 
 .header-total {
   font-size: 0.8rem;
@@ -116,13 +112,26 @@
   width: fit-content;
 }
 
-.filter-select .custom-select-trigger {
+/* Scoped, not left bare. These two were declared bare here and in
+   M3UChangesTab.css — two different lazy chunks — and `.filter-select` is
+   ALSO a live class in the eager bundle: StreamsPane.tsx passes it to
+   CustomSelect for the Channel Manager stream/provider/group filters. So
+   after one visit to Journal, Channel Manager's filter triggers took this
+   file's 14px and its 18px !important arrow for the rest of the session
+   (bead enhancedchannelmanager-6z299.2).
+   `.journal-filter-select` lands on the SAME element as `.filter-select`
+   (CustomSelect merges `className` into its root), so it is written as a
+   compound and wrapped in `:where()` to contribute no specificity: these
+   selectors stay at (0,2,0), exactly what they were, and nothing about
+   Journal's own cascade moves. The page root cannot be used — this toolbar
+   is portaled out of `.journal-tab` by RouteHeaderSlot. */
+.filter-select:where(.journal-filter-select) .custom-select-trigger {
   width: fit-content;
   font-size: 0.875rem;
   gap: 0.25rem;
 }
 
-.filter-select .custom-select-arrow {
+.filter-select:where(.journal-filter-select) .custom-select-arrow {
   font-size: 18px !important;
   margin-left: 0;
 }
@@ -149,18 +158,16 @@
   overflow-y: auto;
 }
 
-.list-header {
-  display: grid;
+/* Layout only. shared/common.css § LIST HEADERS owns every `.list-header`
+   appearance property, and its gap/padding already match this list; what is
+   left here is the column template, the horizontal-scroll floor and the
+   sticky behaviour (bead enhancedchannelmanager-qlc4h). Scoped to
+   `.entries-list` because a bare `.list-header` here is not file-local: each
+   tab is a lazily-imported chunk, so its stylesheet is appended in visit
+   order, and an equal-specificity bare rule from any tab visited later wins
+   on every other tab. */
+.entries-list .list-header {
   grid-template-columns: 140px 120px 110px 180px 1fr 90px 40px;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   min-width: 800px;
   position: sticky;
   top: 0;
@@ -203,8 +210,13 @@
   outline-offset: -2px;
 }
 
+/* A timestamp beside a row's name — the meta role's own definition
+   ("supporting detail under an item title: type, URL, counts, timestamps").
+   Was 12.8px (bead enhancedchannelmanager-6z299.3). */
 .entry-time {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -213,29 +225,48 @@
   align-items: center;
 }
 
+/* Text inside a chip — the badge role. The three chip families in this row
+   (`.category-badge`, `.action-badge`, `.source-badge`) were spelled at 12px
+   and 11.2px; they are one idiom and now share one size
+   (bead enhancedchannelmanager-6z299.3). */
 .category-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   text-transform: capitalize;
 }
 
+/* Glyph inside a chip — the badge icon size, which is the 14px it already
+   was. */
 .category-badge .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
+/* All six chips are one idiom: a Tailwind 400-level ink on a 20%-alpha fill of
+   the same hue, declared once for every theme. That is a dark-theme palette,
+   and on a pale row it collapses — measured on the fill over --bg-secondary in
+   the light theme: channel 1.87, epg 1.91, m3u 1.36, watch 1.79, task 1.96,
+   auto_creation 1.44. The light-theme block below re-inks each one to the
+   800-level tone of the SAME hue, so the category colour coding survives
+   intact and only the tone moves.
+
+   Four of them are also marginal in the dark theme, on the --bg-tertiary rows:
+   channel 4.32, epg 4.26, watch 4.33, task 4.18. Those take a one-step
+   lightening (400 -> 300) in place. m3u (5.71) and auto_creation (5.47) pass
+   and are untouched. Bead enhancedchannelmanager-dlavh. */
 .category-channel {
   background-color: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  color: #93c5fd; /* was #60a5fa: 4.32 -> 6.09 on a dark --bg-tertiary row */
 }
 
 .category-epg {
   background-color: rgba(168, 85, 247, 0.2);
-  color: #c084fc;
+  color: #d8b4fe; /* was #c084fc: 4.26 -> 6.36 */
 }
 
 .category-m3u {
@@ -245,12 +276,12 @@
 
 .category-watch {
   background-color: rgba(251, 146, 60, 0.2);
-  color: #fb923c;
+  color: #fdba74; /* was #fb923c: 4.33 -> 5.82 */
 }
 
 .category-task {
   background-color: rgba(139, 92, 246, 0.2);
-  color: #a78bfa;
+  color: #c4b5fd; /* was #a78bfa: 4.18 -> 6.17 */
 }
 
 .category-auto_creation {
@@ -258,22 +289,33 @@
   color: #2dd4bf;
 }
 
+[data-theme="light"] .category-channel { color: #1e40af; } /* 1.87 -> 6.42 */
+[data-theme="light"] .category-epg { color: #6b21a8; } /* 1.91 -> 6.31 */
+[data-theme="light"] .category-m3u { color: #166534; } /* 1.36 -> 5.57 */
+[data-theme="light"] .category-watch { color: #9a3412; } /* 1.79 -> 5.78 */
+[data-theme="light"] .category-task { color: #5b21b6; } /* 1.96 -> 6.46 */
+[data-theme="light"] .category-auto_creation { color: #115e59; } /* 1.44 -> 5.87 */
+
 .entry-action {
   display: flex;
   align-items: center;
 }
 
+/* Badge role — see `.category-badge` above. This name is now unique to the
+   Journal: the M3U filter-mode chip that also called itself `.action-badge`
+   was renamed `.filter-mode-badge` in Wave 1 (M3UFiltersModal.css:166). */
 .action-badge {
   display: inline-flex;
   padding: 0.25rem 0.5rem;
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
 .action-create {
   background-color: var(--success-bg);
-  color: var(--success);
+  color: var(--button-text);
 }
 
 .action-update {
@@ -283,7 +325,7 @@
 
 .action-delete {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--button-text);
 }
 
 .action-refresh {
@@ -293,7 +335,7 @@
 
 .action-other {
   background-color: var(--border-primary);
-  color: var(--text-secondary);
+  color: var(--button-text);
 }
 
 /* Source column */
@@ -302,15 +344,23 @@
   align-items: center;
 }
 
+/* Badge role — see `.category-badge` above. */
 .source-badge {
   display: inline-flex;
   padding: 0.2rem 0.45rem;
   border-radius: var(--radius-md);
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   white-space: nowrap;
 }
 
+/* Same shape as `.category-*` above — a 400-level ink on a 15%-alpha fill,
+   declared once for all three themes. In the light theme they measured 1.98,
+   2.03, 1.86 and 1.50 on the fill over --bg-secondary. All four pass in dark
+   (4.64-5.98 on a --bg-tertiary row) and high contrast, so only the light
+   theme is re-inked, to the 800-level tone of the same hue.
+   Bead enhancedchannelmanager-dlavh. */
 .source-ui {
   background-color: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
@@ -331,20 +381,35 @@
   color: #2dd4bf;
 }
 
+[data-theme="light"] .source-ui { color: #1e40af; } /* 1.98 -> 6.80 */
+[data-theme="light"] .source-mcp_ai { color: #6b21a8; } /* 2.03 -> 6.70 */
+[data-theme="light"] .source-scheduler { color: #9a3412; } /* 1.86 -> 6.00 */
+[data-theme="light"] .source-auto_creation { color: #115e59; } /* 1.50 -> 6.12 */
+
+/* --text-secondary, not --text-muted (2.61:1 on --bg-secondary in light). */
 .source-unknown {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
+/* Declared no font-size at all, so the entity name — the name of the row —
+   rendered at the UA default 16px, bigger than every other cell in the row
+   and bigger than the 15px section headings on the page. It is the name of a
+   row in a list: the item-title role (bead enhancedchannelmanager-6z299.3). */
 .entry-entity {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Running text — the body role. Was 14px. */
 .entry-description {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -356,9 +421,12 @@
   justify-content: center;
 }
 
+/* A small inline row indicator — the action icon size. Was 20px, which is
+   the frozen rail's chrome size and does not belong in a content row
+   (bead enhancedchannelmanager-6z299.3). --text-secondary, not --text-muted. */
 .entry-expand .material-icons {
-  font-size: 20px;
-  color: var(--text-muted);
+  font-size: var(--icon-action);
+  color: var(--text-secondary);
 }
 
 /* Entry Details (expanded) */
@@ -368,21 +436,28 @@
   border-top: 1px solid var(--border-primary);
 }
 
-.details-grid {
+/* Scoped to the route root, not bare. Three lazy chunks declared
+   `.details-grid` with three different `grid-template-columns` — this file's
+   `1fr 1fr`, M3UChangesTab.css:407's `1fr 1fr` (no bottom margin) and
+   StatsTab.css:991's `repeat(auto-fit, minmax(180px, 1fr))` — and a tab chunk
+   is appended after the eager bundle and never removed, so the expanded-row
+   detail grid on all three pages rendered whichever column track the
+   last-visited tab had authored. `.journal-tab` is this route's root
+   (JournalTab.tsx:241) and encloses the grid (JournalTab.tsx:472, inside
+   `.entry-details`); `:where()` contributes zero specificity, so the rule
+   keeps its 0-1-0 and only its match set narrows
+   (bead enhancedchannelmanager-mktnb). */
+:where(.journal-tab) .details-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1rem;
   margin-bottom: 1rem;
 }
 
-.detail-section h4 {
-  margin: 0 0 0.5rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
+/* `.detail-section h4` is owned by shared/common.css § 24 MICRO LABELS —
+   it is the same tracked uppercase caption as a list header, and this file
+   and M3UChangesTab.css spelled it out identically and bare in two
+   different lazy chunks (bead enhancedchannelmanager-6z299). */
 
 .detail-section pre {
   margin: 0;
@@ -399,11 +474,15 @@
   overflow-y: auto;
 }
 
+/* The two supporting facts under the expanded drawer's JSON panes — meta
+   role, --text-secondary (bead enhancedchannelmanager-6z299.3). */
 .detail-meta {
   display: flex;
   gap: 1.5rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 .detail-meta span {
@@ -413,112 +492,32 @@
 }
 
 .detail-meta .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
-/* Pagination */
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  margin-top: 0.5rem;
-  flex-shrink: 0;
-}
+/* Pagination — the whole strip (`.pagination`, its three columns, the square
+   paging buttons, `.page-info`, `.entries-count`, `.page-size-label` and the
+   `.page-size-select` CustomSelect overrides) is owned by shared/common.css
+   § 25 PAGINATION STRIP. This file and M3UChangesTab.css carried byte-identical
+   copies of it in two different lazy chunks, and Logo Manager carried a
+   third with different gaps and a different label colour — so the footer you
+   saw depended on which tab you had opened most recently. Only genuinely
+   local geometry stays behind (bead enhancedchannelmanager-6z299). */
 
-.pagination-left {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 120px;
-}
-
-.pagination-center {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.pagination-right {
-  display: flex;
-  align-items: center;
-  min-width: 120px;
-  justify-content: flex-end;
-}
-
-/* CustomSelect for page size */
-.page-size-select {
-  min-width: 70px;
-}
-
-.page-size-select .custom-select-trigger {
-  padding: 0.375rem 0.5rem;
-  font-size: 0.8rem;
-}
-
-.page-size-select .custom-select-arrow {
-  font-size: 16px !important;
-  margin-left: 0.25rem;
-}
-
-.page-size-label {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.entries-count {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.pagination .btn-secondary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-lg);
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.pagination .btn-secondary:hover:not(:disabled) {
-  background-color: var(--border-primary);
-}
-
-.pagination .btn-secondary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.pagination .btn-secondary .material-icons {
-  font-size: 18px;
-}
-
-.page-info {
-  padding: 0 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
 
 /* Responsive */
 @media (max-width: 900px) {
-  .stats-summary {
-    flex-wrap: wrap;
-  }
+  /* The `.stats-summary` and `.stat-card` rules that stood here are deleted.
+     The Journal renders neither class and never has — there was no base rule
+     for either in this file, only these two media-query overrides — but they
+     were not harmless: EnhancedStatsPanel.tsx:138 DOES render both, in a
+     different lazy chunk. Its own rules are scoped and win where they
+     overlap, but they never declare `min-width`, so once the Journal had been
+     visited `.stat-card { min-width: 100px }` applied to the panel's grid
+     items below 900px and could push its `repeat(4, 1fr)` grid to overflow
+     (bead enhancedchannelmanager-6z299.3). */
 
-  .stat-card {
-    flex: 1;
-    min-width: 100px;
-  }
-
-  .list-header {
+  .entries-list .list-header {
     display: none;
   }
 
@@ -532,7 +531,10 @@
     display: inline-flex;
   }
 
-  .details-grid {
+  /* Scoped with its unconditional rule above — M3UChangesTab.css:539
+     declares the identical narrow-viewport override in a sibling lazy chunk
+     (bead enhancedchannelmanager-mktnb). */
+  :where(.journal-tab) .details-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -52,6 +52,8 @@ import { PreviewStreamModal } from './PreviewStreamModal';
 import { CSVImportModal } from './CSVImportModal';
 import { MergeChannelsModal } from './MergeChannelsModal';
 import { SelectionActionBar } from './SelectionActionBar';
+import { resolveChannelArtwork } from './channelRowPresentation';
+import { channelCapabilityTiers } from './channelCapabilities';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -336,7 +338,7 @@ interface PaneToolbarMenuProps {
   onRenumberAllGroups: () => void;
 }
 
-const PaneToolbarMenu = memo(function PaneToolbarMenu({
+export const PaneToolbarMenu = memo(function PaneToolbarMenu({
   isEditMode,
   onExportCSV,
   onDownloadTemplate,
@@ -350,6 +352,7 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
 }: PaneToolbarMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sortSubMenuOpen, setSortSubMenuOpen] = useState(false);
+  const [activeMenuItem, setActiveMenuItem] = useState('profiles');
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -373,14 +376,65 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
 
-  const close = () => {
+  const close = (returnFocus = false) => {
     setMenuOpen(false);
     setSortSubMenuOpen(false);
+    if (returnFocus) btnRef.current?.focus();
+  };
+
+  const runAction = (action: () => void, returnFocus: boolean) => {
+    action();
+    close(returnFocus);
+  };
+
+  const rovingProps = (id: string) => ({
+    'data-menu-id': id,
+    tabIndex: activeMenuItem === id ? 0 : -1,
+  });
+
+  useEffect(() => {
+    if (menuOpen && menuPosition) {
+      dropdownRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+    }
+  }, [menuOpen, menuPosition]);
+
+  useEffect(() => {
+    if (sortSubMenuOpen) {
+      dropdownRef.current
+        ?.querySelector<HTMLButtonElement>('.pane-toolbar-menu-submenu [role="menuitem"]:not(:disabled)')
+        ?.focus();
+    }
+  }, [sortSubMenuOpen]);
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const scope = (event.target as HTMLElement).closest<HTMLElement>('[role="menu"]') ?? dropdownRef.current;
+    const items = [...(scope?.querySelectorAll<HTMLButtonElement>(':scope > [role="menuitem"]:not(:disabled)') ?? [])];
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + delta + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    } else if (event.key === 'ArrowRight' && (event.target as HTMLElement).classList.contains('has-submenu')) {
+      event.preventDefault();
+      setSortSubMenuOpen(true);
+    } else if (event.key === 'ArrowLeft' && (event.target as HTMLElement).classList.contains('submenu-item')) {
+      event.preventDefault();
+      setSortSubMenuOpen(false);
+      dropdownRef.current?.querySelector<HTMLButtonElement>('.has-submenu')?.focus();
+    }
   };
 
   const handleSortAllClick = (mode: SortMode) => {
-    close();
-    onSortAllByMode(mode);
+    runAction(() => onSortAllByMode(mode), true);
   };
 
   return (
@@ -395,11 +449,14 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
           } else {
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
             setMenuPosition({ top: rect.bottom + 2, left: rect.right });
+            setActiveMenuItem('profiles');
             setMenuOpen(true);
           }
         }}
         title="More actions"
         aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
       >
         <span className={`material-icons ${anyLoading ? 'spinning' : ''}`} aria-hidden="true">
           {anyLoading ? 'sync' : 'more_vert'}
@@ -408,18 +465,25 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
       {menuOpen && menuPosition && createPortal(
         <div
           className="pane-toolbar-menu-dropdown"
+          role="menu"
+          aria-label="Channel pane actions"
           ref={dropdownRef}
           style={{ top: menuPosition.top, left: menuPosition.left }}
           onClick={(e) => e.stopPropagation()}
+          onFocus={(event) => {
+            const id = (event.target as HTMLElement).dataset.menuId;
+            if (id) setActiveMenuItem(id);
+          }}
+          onKeyDown={handleMenuKeyDown}
         >
           {/* Manage & Groups */}
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onOpenProfiles(); }}>
-            <span className="material-icons">group</span>
+          <button {...rovingProps('profiles')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onOpenProfiles, false)}>
+            <span className="material-icons" aria-hidden="true">group</span>
             <span>Channel Profiles</span>
           </button>
           {isEditMode && (
-            <button className="pane-toolbar-menu-item" onClick={() => { close(); onShowHiddenGroups(); }}>
-              <span className="material-icons">visibility_off</span>
+            <button {...rovingProps('hidden')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onShowHiddenGroups, false)}>
+              <span className="material-icons" aria-hidden="true">visibility_off</span>
               <span>Hidden Groups</span>
             </button>
           )}
@@ -431,63 +495,67 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
               {anySortEnabled && (
                 <>
                   <button
+                    {...rovingProps('sort')}
+                    role="menuitem"
+                    aria-haspopup="menu"
+                    aria-expanded={sortSubMenuOpen}
                     className={`pane-toolbar-menu-item has-submenu ${sortSubMenuOpen ? 'submenu-open' : ''} ${bulkSortingByQuality ? 'loading' : ''}`}
                     onClick={() => setSortSubMenuOpen(!sortSubMenuOpen)}
                     disabled={bulkSortingByQuality}
                   >
-                    <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`}>
+                    <span className={`material-icons ${bulkSortingByQuality ? 'spinning' : ''}`} aria-hidden="true">
                       {bulkSortingByQuality ? 'sync' : 'sort'}
                     </span>
                     <span>{bulkSortingByQuality ? 'Sorting...' : 'Sort All Streams'}</span>
-                    <span className="material-icons submenu-arrow">
+                    <span className="material-icons submenu-arrow" aria-hidden="true">
                       {sortSubMenuOpen ? 'expand_less' : 'expand_more'}
                     </span>
                   </button>
                   {sortSubMenuOpen && (
-                    <div className="pane-toolbar-menu-submenu">
-                      <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('smart')}>
-                        <span className="material-icons">auto_awesome</span>
+                    <div className="pane-toolbar-menu-submenu" role="menu" aria-label="Sort all streams">
+                      <button {...rovingProps('sort-smart')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('smart')}>
+                        <span className="material-icons" aria-hidden="true">auto_awesome</span>
                         <span>Smart Sort</span>
                       </button>
                       {sortEnabledCriteria.resolution && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('resolution')}>
-                          <span className="material-icons">aspect_ratio</span>
+                        <button {...rovingProps('sort-resolution')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('resolution')}>
+                          <span className="material-icons" aria-hidden="true">aspect_ratio</span>
                           <span>By Resolution</span>
                         </button>
                       )}
                       {sortEnabledCriteria.bitrate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('bitrate')}>
-                          <span className="material-icons">speed</span>
+                        <button {...rovingProps('sort-bitrate')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('bitrate')}>
+                          <span className="material-icons" aria-hidden="true">speed</span>
                           <span>By Bitrate</span>
                         </button>
                       )}
                       {sortEnabledCriteria.framerate && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('framerate')}>
-                          <span className="material-icons">slow_motion_video</span>
+                        <button {...rovingProps('sort-framerate')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('framerate')}>
+                          <span className="material-icons" aria-hidden="true">slow_motion_video</span>
                           <span>By Framerate</span>
                         </button>
                       )}
                       {sortEnabledCriteria.m3u_priority && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('m3u_priority')}>
-                          <span className="material-icons">low_priority</span>
+                        <button {...rovingProps('sort-priority')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('m3u_priority')}>
+                          <span className="material-icons" aria-hidden="true">low_priority</span>
                           <span>By M3U Priority</span>
                         </button>
                       )}
                       {sortEnabledCriteria.audio_channels && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('audio_channels')}>
-                          <span className="material-icons">surround_sound</span>
+                        <button {...rovingProps('sort-audio')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('audio_channels')}>
+                          <span className="material-icons" aria-hidden="true">surround_sound</span>
                           <span>By Audio Channels</span>
                         </button>
                       )}
                       {sortEnabledCriteria.custom_streams && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('custom_streams')}>
-                          <span className="material-icons">edit_note</span>
+                        <button {...rovingProps('sort-custom')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('custom_streams')}>
+                          <span className="material-icons" aria-hidden="true">edit_note</span>
                           <span>By Custom Streams</span>
                         </button>
                       )}
                       {sortEnabledCriteria.catchup && (
-                        <button className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
-                          <span className="material-icons">history</span>
+                        <button {...rovingProps('sort-catchup')} role="menuitem" className="pane-toolbar-menu-item submenu-item" onClick={() => handleSortAllClick('catchup')}>
+                          <span className="material-icons" aria-hidden="true">history</span>
                           <span>By Catch-up</span>
                         </button>
                       )}
@@ -495,8 +563,8 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
                   )}
                 </>
               )}
-              <button className="pane-toolbar-menu-item" onClick={() => { close(); onRenumberAllGroups(); }}>
-                <span className="material-icons">format_list_numbered</span>
+              <button {...rovingProps('renumber')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onRenumberAllGroups, true)}>
+                <span className="material-icons" aria-hidden="true">format_list_numbered</span>
                 <span>Renumber All Groups</span>
               </button>
             </>
@@ -504,17 +572,17 @@ const PaneToolbarMenu = memo(function PaneToolbarMenu({
 
           {/* CSV */}
           <div className="pane-toolbar-menu-divider" />
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onDownloadTemplate(); }}>
-            <span className="material-icons">description</span>
+          <button {...rovingProps('template')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onDownloadTemplate, true)}>
+            <span className="material-icons" aria-hidden="true">description</span>
             <span>CSV Template</span>
           </button>
-          <button className="pane-toolbar-menu-item" onClick={() => { close(); onExportCSV(); }}>
-            <span className="material-icons">download</span>
+          <button {...rovingProps('export')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onExportCSV, true)}>
+            <span className="material-icons" aria-hidden="true">download</span>
             <span>Export CSV</span>
           </button>
           {isEditMode && (
-            <button className="pane-toolbar-menu-item" onClick={() => { close(); onImportCSV(); }}>
-              <span className="material-icons">upload_file</span>
+            <button {...rovingProps('import')} role="menuitem" className="pane-toolbar-menu-item" onClick={() => runAction(onImportCSV, false)}>
+              <span className="material-icons" aria-hidden="true">upload_file</span>
               <span>Import CSV</span>
             </button>
           )}
@@ -780,9 +848,10 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         <span
           className="group-drag-handle"
           {...dragHandleProps}
-          title="Drag to reorder group"
+          aria-label={`Drag channel group ${groupName} to reorder`}
+          title={`Drag channel group ${groupName} to reorder`}
         >
-          ⋮⋮
+          <span className="material-icons" aria-hidden="true">drag_indicator</span>
         </span>
       )}
       {/* Expand/collapse toggle, restructured to a sibling <button> (round-2
@@ -1052,35 +1121,6 @@ const DroppableGroupEnd = memo(function DroppableGroupEnd({
     </div>
   );
 });
-
-/** Capability tiers in display order — highest resolution first. */
-const CAPABILITY_TIER_ORDER = ['4K', 'FHD', 'HD', 'SD'] as const;
-
-/**
- * Distinct resolution capability tiers among a channel's successfully-probed
- * streams, ordered highest-first (4K → FHD → HD → SD). Streams without a
- * successful probe or a parseable resolution contribute nothing; a channel
- * with no probed streams yields an empty array (no pills). Height buckets
- * mirror StreamListItem's formatResolution.
- */
-function channelCapabilityTiers(
-  streamIds: number[],
-  statsMap: Map<number, StreamStats>,
-): string[] {
-  const tiers = new Set<string>();
-  for (const streamId of streamIds) {
-    const stats = statsMap.get(streamId);
-    if (!stats || stats.probe_status !== 'success' || !stats.resolution) continue;
-    const match = stats.resolution.match(/(\d+)x(\d+)/);
-    if (!match) continue;
-    const height = parseInt(match[2], 10);
-    if (height >= 2160) tiers.add('4K');
-    else if (height >= 1080) tiers.add('FHD');
-    else if (height >= 720) tiers.add('HD');
-    else tiers.add('SD');
-  }
-  return CAPABILITY_TIER_ORDER.filter((tier) => tiers.has(tier));
-}
 
 export function ChannelsPane({
   channelGroups,
@@ -2173,14 +2213,8 @@ export function ChannelsPane({
 
   // Helper to get logo URL for a channel - uses logoMap for O(1) lookup
   const getChannelLogoUrl = useCallback((channel: Channel): string | null => {
-    // For staged channels (during edit mode), use the temporary logo URL
-    if (channel._stagedLogoUrl) {
-      return channel._stagedLogoUrl;
-    }
-    if (!channel.logo_id) return null;
-    const logo = logoMap.get(channel.logo_id);
-    return logo?.cache_url || logo?.url || null;
-  }, [logoMap]);
+    return resolveChannelArtwork(channel, logoMap, isEditMode);
+  }, [isEditMode, logoMap]);
 
   // Handle confirming channel deletion
   const handleConfirmDelete = async () => {
@@ -5077,7 +5111,7 @@ export function ChannelsPane({
         />
         {isExpanded && isEmpty && (
           <div className="group-channels empty-group-placeholder">
-            <div className="empty-group-message">
+            <div className="empty-group-message empty-inline">
               No channels in this group. Drag a channel here or create a new one.
             </div>
           </div>
@@ -5261,9 +5295,9 @@ export function ChannelsPane({
                         onDrop={(e) => handleStreamDrop(e, channel.id)}
                       >
                         {streamsLoading ? (
-                          <div className="inline-streams-loading">Loading streams...</div>
+                          <div className="inline-streams-loading empty-inline">Loading streams...</div>
                         ) : channelStreams.length === 0 ? (
-                          <div className="inline-streams-empty">
+                          <div className="inline-streams-empty empty-inline">
                             No streams assigned. Drag streams here to add.
                           </div>
                         ) : (
@@ -5374,7 +5408,7 @@ export function ChannelsPane({
   };
 
   return (
-    <div className="channels-pane">
+    <div className="channels-pane" aria-labelledby="channels-pane-heading">
       {/* Copy feedback notifications */}
       {copySuccess && (
         <div className="copy-feedback copy-success">
@@ -5391,7 +5425,10 @@ export function ChannelsPane({
 
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2>Channels</h2>
+          <h2 id="channels-pane-heading">Channels</h2>
+          <span className="pane-item-count" aria-label={`${channels.length} channels`}>
+            {channels.length}
+          </span>
           {(() => {
             const channelsMissingStreams = channels.filter(ch => ch.streams.length === 0);
             const missingStreamsCount = channelsMissingStreams.length;
@@ -5599,14 +5636,14 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCloseCreateGroupModal}
                 disabled={creatingGroup}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleCreateGroup}
                 disabled={creatingGroup || !newGroupName.trim()}
               >
@@ -5647,7 +5684,7 @@ export function ChannelsPane({
                         </div>
                       </div>
                       <button
-                        className="modal-btn primary"
+                        className="modal-btn modal-btn-primary"
                         onClick={() => handleRestoreGroup(group.id)}
                         style={{ marginLeft: '12px' }}
                       >
@@ -5660,7 +5697,7 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={() => hiddenGroupsModal.close()}
               >
                 Close
@@ -5729,14 +5766,14 @@ export function ChannelsPane({
             )}
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCancelDelete}
                 disabled={deleting}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn danger"
+                className="modal-btn modal-btn-danger"
                 onClick={handleConfirmDelete}
                 disabled={deleting}
               >
@@ -5784,14 +5821,14 @@ export function ChannelsPane({
               </div>
               <div className="modal-actions">
                 <button
-                  className="modal-btn cancel"
+                  className="modal-btn modal-btn-secondary"
                   onClick={handleCancelDeleteGroup}
                   disabled={deletingGroup}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn danger"
+                  className="modal-btn modal-btn-danger"
                   onClick={handleConfirmDeleteGroup}
                   disabled={deletingGroup}
                 >
@@ -5828,14 +5865,14 @@ export function ChannelsPane({
             </div>
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCancelRenameGroup}
                 disabled={renamingGroup}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleConfirmRenameGroup}
                 disabled={renamingGroup || !renameGroupName.trim()}
               >
@@ -5901,14 +5938,14 @@ export function ChannelsPane({
               </div>
               <div className="modal-actions">
                 <button
-                  className="modal-btn cancel"
+                  className="modal-btn modal-btn-secondary"
                   onClick={handleCancelBulkDelete}
                   disabled={bulkDeleting}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn danger"
+                  className="modal-btn modal-btn-danger"
                   onClick={handleConfirmBulkDelete}
                   disabled={bulkDeleting}
                 >
@@ -6266,13 +6303,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleCrossGroupMoveCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleMoveButtonClick}
                 disabled={!isMoveButtonEnabled()}
               >
@@ -6389,13 +6426,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleGroupReorderCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleGroupReorderConfirm}
                 disabled={
                   groupReorderNumberingOption === 'custom' &&
@@ -6537,13 +6574,13 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleSortRenumberCancel}
               >
                 Cancel
               </button>
               <button
-                className="modal-btn primary"
+                className="modal-btn modal-btn-primary"
                 onClick={handleSortRenumberConfirm}
                 disabled={!sortRenumberStartingNumber || isNaN(parseInt(sortRenumberStartingNumber, 10)) || parseInt(sortRenumberStartingNumber, 10) < 1}
               >
@@ -6654,14 +6691,14 @@ export function ChannelsPane({
 
             <div className="modal-actions">
               <button
-                className="modal-btn cancel"
+                className="modal-btn modal-btn-secondary"
                 onClick={handleMassRenumberCancel}
               >
                 Cancel
               </button>
               {getMassRenumberConflicts.hasConflicts ? (
                 <button
-                  className="modal-btn primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(true)}
                   disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
                   title={`Shift ${getMassRenumberConflicts.conflicts.length} conflicting channel(s) to numbers ${parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length} and up`}
@@ -6671,7 +6708,7 @@ export function ChannelsPane({
                 </button>
               ) : (
                 <button
-                  className="modal-btn primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(false)}
                   disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
                 >
@@ -6818,6 +6855,7 @@ export function ChannelsPane({
             <input
               type="text"
               placeholder="Search channels..."
+              aria-label="Search channels"
               value={searchTerm}
               onChange={(e) => onSearchChange(e.target.value)}
               className="search-input"
@@ -6970,7 +7008,7 @@ export function ChannelsPane({
                     </label>
                   ))}
                 {allGroupsSorted.filter((g) => g.name.toLowerCase().includes(groupFilterSearch.toLowerCase())).length === 0 && (
-                  <div className="group-filter-empty">No groups match "{groupFilterSearch}"</div>
+                  <div className="group-filter-empty empty-inline">No groups match "{groupFilterSearch}"</div>
                 )}
               </div>
             </div>
@@ -7116,6 +7154,11 @@ export function ChannelsPane({
         onDragLeave={handlePaneDragLeave}
         onDrop={handlePaneDrop}
       >
+        <div className={`channel-column-headers ${isEditMode ? 'edit-mode' : ''}`} aria-hidden="true">
+          <span className="channel-column-number">Number</span>
+          <span className="channel-column-identity">Channel / Guide</span>
+          <span className="channel-column-streams">Streams</span>
+        </div>
         {loading ? (
           <div className="loading">Loading channels...</div>
         ) : (

@@ -55,8 +55,13 @@
   text-align: center;
 }
 
-.drop-icon {
-  font-size: 48px;
+/* Same 0-1-0 shape as `.brm-dropzone-icon` and `.dropzone-icon`, both of which
+   the harness measured rendering at `index.css`'s base 24px. This one is not
+   reached by the harness stub, so it is fixed by inspection rather than by
+   measurement: scoped to `.drop-zone` for the required second class of depth,
+   on the --icon-empty illustration role (bead enhancedchannelmanager-xhldy). */
+.drop-zone .drop-icon {
+  font-size: var(--icon-empty);
   color: var(--text-muted);
 }
 
@@ -65,21 +70,29 @@
   color: var(--accent-primary);
 }
 
+/* Section role. 15.2px -> 15px. */
 .drop-text {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .drop-subtext {
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
+/* Meta role. 12px -> 11px. */
 .file-types {
   margin: 0.5rem 0 0 0;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -101,26 +114,13 @@
   padding: 4px;
 }
 
-.file-info {
+/* `.file-info`, `.file-name` and `.file-size` are owned by shared/common.css
+   § 17. Both this file and CSVImportModal.css declared the whole family bare
+   in the eager bundle and disagreed on the filename size (14.4px here, 16px
+   there) and on the size string's colour; only the layout bit that is
+   genuinely local to this row stays (bead enhancedchannelmanager-6z299). */
+.logo-modal .file-info {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.file-name {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-size {
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }
 
 .clear-file-btn {
@@ -140,11 +140,12 @@
 
 .clear-file-btn:hover {
   background-color: var(--error-bg);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .clear-file-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* ===================== */
@@ -164,9 +165,12 @@
   background-color: var(--border-primary);
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .or-text {
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
 }
 
@@ -194,15 +198,29 @@
 /* CURRENT LOGO (EDIT)   */
 /* ===================== */
 
-.current-logo-preview {
+/* The preview BOX — display, align-items, gap, padding, background,
+   border-radius — is owned by ChannelsPane.css:3277, which is eager and so
+   reaches this modal too; this rule only ever supplied a taller bottom
+   margin. Bare, it was also the app-wide winner for `margin-bottom`: this
+   file rides the Logo Manager lazy chunk, appended after the eager bundle and
+   never removed, so one visit to Logo Manager pushed EditChannelModal's
+   current-logo preview (EditChannelModal.tsx:845) from its authored 0.75rem
+   to 1rem for the rest of the session. `.logo-modal` is this modal's own root
+   (LogoModal.tsx:225) and `:where()` keeps the rule at the 0-1-0 it had, so
+   it still beats ChannelsPane's copy here on chunk order exactly as before
+   (bead enhancedchannelmanager-mktnb). */
+:where(.logo-modal) .current-logo-preview {
   margin-bottom: 1rem;
 }
 
+/* Label role. 14.4px -> 13px. */
 .current-logo-preview label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
 }
 
 .preview-image-container {
@@ -244,7 +262,7 @@
     text-align: center;
   }
 
-  .file-info {
+  .logo-modal .file-info {
     align-items: center;
   }
 }

@@ -11,23 +11,29 @@
   gap: 0.25rem;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .preview-stream-header-info h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .preview-stream-header-info h2 .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .preview-stream-channel {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
-  font-weight: 400;
+  font-weight: var(--type-body-weight);
 }
 
 /* Video Player Container */
@@ -57,10 +63,12 @@
   margin-bottom: 0.75rem;
 }
 
+/* Section role. 16px -> 15px. */
 .preview-stream-info-header h3 {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -71,12 +79,14 @@
   margin-left: 1rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .preview-stream-status span {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   padding: 0.25rem 0.625rem;
   border-radius: var(--radius-md);
 }
@@ -86,8 +96,9 @@
   background: var(--bg-tertiary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .preview-stream-status .status-loading .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
 .preview-stream-status .status-playing {
@@ -100,12 +111,13 @@
 }
 
 .preview-stream-status .status-error {
-  color: var(--error);
+  color: var(--danger-text);
   background: var(--error-bg);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .preview-stream-status .status-error .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }
 
 /* Metadata */
@@ -116,16 +128,20 @@
   margin-bottom: 1rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .metadata-item {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .metadata-item .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
@@ -150,30 +166,57 @@
   border: 1px solid var(--error);
   border-radius: var(--radius-lg);
   margin-bottom: 1rem;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* Status/panel glyph -> --icon-status. 24px -> 18px. */
 .preview-stream-error .material-icons {
-  font-size: 24px;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .preview-stream-error strong {
   display: block;
   margin-bottom: 0.25rem;
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
 }
 
+/* Body role. 13.6px -> 13px.
+   NO `opacity` here, deliberately — this is the sentence that tells the
+   operator why playback failed, and `opacity` fades text against the PAGE, not
+   against the panel it sits on (see `docs/css_guidelines.md` -> "opacity
+   de-emphasises the group, not the ink"). At the `opacity: .9` this rule used
+   to carry it measured 4.14 dark / 4.54 light / 4.05 high-contrast against the
+   4.5 AA floor — failing in two of three themes for the sake of a fade nobody
+   can see. At full opacity it is 4.74 / 5.01 / 4.70. The heading above it is
+   `<strong>` at 13px/600 and the detail line below is 11px, so the hierarchy is
+   carried by size and weight, which cost no contrast (bead
+   `enhancedchannelmanager-4pzvg`). */
 .preview-stream-error p {
   margin: 0;
-  font-size: 0.85rem;
-  opacity: 0.9;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Meta role. 12.8px -> 11px.
+   De-emphasised with an ink token, not with `opacity`. At `opacity: .7` the
+   detail line measured 3.09 dark / 3.41 light / 2.99 high-contrast — the worst
+   contrast anywhere in this dialog, on the most technical string in it.
+   `--text-secondary` is the house token for meta text (`docs/css_guidelines.md`
+   -> Colour) and reads as genuinely secondary here because it is neutral beside
+   the red heading and message: 5.59 / 5.00 / 12.12. `--text-muted` was measured
+   too and rejected — 4.17 dark, under the floor on this tint (bead
+   `enhancedchannelmanager-4pzvg`). */
 .preview-stream-error .error-details {
   margin-top: 0.25rem;
-  opacity: 0.7;
-  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 /* Fallback Options */
@@ -195,10 +238,12 @@
   color: var(--success);
 }
 
+/* Section role. 14.4px -> 15px. */
 .preview-stream-fallback h4 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-secondary);
 }
 
@@ -214,11 +259,13 @@
 }
 
 /* Channel preview note */
+/* Meta role. 13.6px -> 11px. */
 .channel-preview-note {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-meta-line-height);
 }
 
 /* Responsive */
