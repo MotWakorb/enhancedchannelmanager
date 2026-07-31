@@ -27,6 +27,10 @@
   --accent-secondary: #e0e0e8;
   --accent-hover: rgba(255, 255, 255, 0.2);
 
+  /* ECM brand mark */
+  --ecm-logo-ink: rgba(255, 255, 255, 0.95);
+  --ecm-logo-accent: #818cf8;
+
   /* Accent blue opacity scale (selection/highlight tints) */
   --accent-5: rgba(100, 108, 255, 0.05);
   --accent-8: rgba(100, 108, 255, 0.08);
@@ -342,6 +346,9 @@ input[type="radio"] {
   --accent-secondary: #3e41ee;
   --accent-hover: rgba(100, 108, 255, 0.1);
 
+  /* ECM brand mark — deeper indigo against the lighter sidebar */
+  --ecm-logo-ink: #17171f;
+  --ecm-logo-accent: #4f46e5;
 
   /* Accent blue opacity scale (selection/highlight tints) */
   --accent-5: rgba(100, 108, 255, 0.05);
@@ -471,6 +478,10 @@ input[type="radio"] {
   --accent-primary: #ffff00;
   --accent-secondary: #ffff88;
   --accent-hover: rgba(255, 255, 0, 0.2);
+
+  /* ECM brand mark — the accent must stay far from the ink here */
+  --ecm-logo-ink: #ffffff;
+  --ecm-logo-accent: #ffff00;
 
   /* Accent opacity scale (yellow-based for high contrast) */
   --accent-5: rgba(255, 255, 0, 0.05);

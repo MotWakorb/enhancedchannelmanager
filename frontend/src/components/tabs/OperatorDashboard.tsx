@@ -5,7 +5,15 @@ import { HttpError } from '../../services/httpClient';
 import './OperatorDashboard.css';
 
 type CardId = 'service' | 'lineup' | 'sources' | 'changes' | 'tasks' | 'journal';
-type CardData = { value: React.ReactNode; status: string; freshness: string };
+/** Semantic weight of a card's status line. Drives the status icon and its
+ *  colour only — status text keeps its inherited colour so the contrast repaired
+ *  in enhancedchannelmanager-rv84z is not disturbed. */
+type CardTone = 'ok' | 'warn' | 'danger' | 'neutral';
+type CardData = { value: React.ReactNode; status: string; freshness: string; tone?: CardTone };
+
+const toneIcon: Record<CardTone, string> = {
+  ok: 'check_circle', warn: 'warning', danger: 'error', neutral: 'info',
+};
 type CardState = { kind: 'loading' } | { kind: 'success'; data: CardData } | { kind: 'error'; permission: boolean };
 export type DashboardSnapshot<T> = {
   value: T;
@@ -20,13 +28,15 @@ export interface OperatorDashboardProps {
   providers: DashboardSnapshot<number>;
 }
 
-const cardMeta: Record<CardId, { label: string; href: string; error: string }> = {
-  service: { label: 'ECM service', href: '#settings/general', error: 'ECM service status' },
-  lineup: { label: 'Lineup inventory', href: '#channel-manager', error: 'lineup inventory' },
-  sources: { label: 'Source accounts', href: '#m3u-manager', error: 'source accounts' },
-  changes: { label: 'Recent M3U changes', href: '#m3u-changes?hours=24', error: 'recent M3U changes' },
-  tasks: { label: 'Scheduled work', href: '#settings/scheduled-tasks', error: 'scheduled tasks' },
-  journal: { label: 'Recent journal', href: '#journal', error: 'journal summary' },
+// `accent` is a stable per-card identity colour so the grid is scannable at a
+// glance; it is decorative and never the sole carrier of a card's meaning.
+const cardMeta: Record<CardId, { label: string; href: string; error: string; icon: string; accent: string }> = {
+  service: { label: 'ECM service', href: '#settings/general', error: 'ECM service status', icon: 'dns', accent: 'emerald' },
+  lineup: { label: 'Lineup inventory', href: '#channel-manager', error: 'lineup inventory', icon: 'live_tv', accent: 'blue' },
+  sources: { label: 'Source accounts', href: '#m3u-manager', error: 'source accounts', icon: 'playlist_play', accent: 'violet' },
+  changes: { label: 'Recent M3U changes', href: '#m3u-changes?hours=24', error: 'recent M3U changes', icon: 'compare_arrows', accent: 'amber' },
+  tasks: { label: 'Scheduled work', href: '#settings/scheduled-tasks', error: 'scheduled tasks', icon: 'schedule', accent: 'cyan' },
+  journal: { label: 'Recent journal', href: '#journal', error: 'journal summary', icon: 'history', accent: 'slate' },
 };
 
 const checked = () => `Checked ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date())}`;
@@ -71,6 +81,7 @@ const loadChanges = async (): Promise<CardData> => {
     value: `${summary.total_changes} ${summary.total_changes === 1 ? 'change' : 'changes'}`,
     status: summary.total_changes === 0 ? 'No recent M3U changes' : `${summary.streams_added} streams added · ${summary.streams_removed} removed`,
     freshness: `Since ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(summary.since))}`,
+    tone: summary.total_changes === 0 ? 'neutral' : 'ok',
   };
 };
 const loadTasks = async (): Promise<CardData> => {
@@ -84,6 +95,7 @@ const loadTasks = async (): Promise<CardData> => {
     value: `${enabled} enabled`,
     status: tasks.length === 0 ? 'No scheduled tasks configured' : `${running} running · ${failed} failed`,
     freshness: latest ? `Last run ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(latest))}` : checked(),
+    tone: failed > 0 ? 'danger' : tasks.length === 0 ? 'neutral' : 'ok',
   };
 };
 const loadJournal = async (): Promise<CardData> => {
@@ -94,6 +106,7 @@ const loadJournal = async (): Promise<CardData> => {
     status: stats.total_entries === 0 ? 'No journal entries' : `${categories} ${categories === 1 ? 'category' : 'categories'}`,
     freshness: stats.date_range.newest
       ? `Latest ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(stats.date_range.newest))}` : checked(),
+    tone: stats.total_entries === 0 ? 'neutral' : 'ok',
   };
 };
 
@@ -107,6 +120,7 @@ export function OperatorDashboard({ health, channels, streams, providers }: Oper
       value: healthData.status || 'Unknown',
       status: `${healthData.service || 'ECM'} ${healthData.version || 'Version unavailable'}${healthData.release_channel ? ` · ${healthData.release_channel}` : ''}`,
       freshness: 'Loaded this session',
+      tone: /^(ok|okay|healthy|up|running)$/i.test(healthData.status ?? '') ? 'ok' : 'warn',
     } } : health.state === 'loading' ? { kind: 'loading' } : asError(health.state),
     lineup: channels.state === 'loading' || streams.state === 'loading' ? { kind: 'loading' }
       : channels.state !== 'success' ? asError(channels.state)
@@ -115,11 +129,13 @@ export function OperatorDashboard({ health, channels, streams, providers }: Oper
         value: <><span>{channels.value} {channels.value === 1 ? 'channel' : 'channels'}</span><span>{streams.value} {streams.value === 1 ? 'stream' : 'streams'}</span></>,
         status: channels.value + streams.value === 0 ? 'No lineup configured' : 'Inventory available',
         freshness: 'Loaded this session',
+        tone: channels.value + streams.value === 0 ? 'warn' : 'ok',
       } },
     sources: providers.state === 'success' ? { kind: 'success', data: {
       value: `${providers.value} ${providers.value === 1 ? 'account' : 'accounts'}`,
       status: providers.value === 0 ? 'No M3U accounts configured' : 'Configured sources',
       freshness: 'Loaded this session',
+      tone: providers.value === 0 ? 'warn' : 'ok',
     } } : providers.state === 'loading' ? { kind: 'loading' } : asError(providers.state),
     changes: changes.state, tasks: tasks.state, journal: journal.state,
   };
@@ -141,15 +157,19 @@ export function OperatorDashboard({ health, channels, streams, providers }: Oper
         {(Object.keys(cardMeta) as CardId[]).map((id) => {
           const meta = cardMeta[id];
           const state = states[id];
-          return <article className="operator-dashboard-card" key={id} aria-labelledby={`dashboard-${id}`}>
-            <h3 id={`dashboard-${id}`}>{meta.label}</h3>
+          const tone: CardTone = state.kind === 'success' ? state.data.tone ?? 'neutral' : 'neutral';
+          return <article className={`operator-dashboard-card accent-${meta.accent}`} key={id} aria-labelledby={`dashboard-${id}`}>
+            <div className="dashboard-card-head">
+              <span className="dashboard-card-icon" aria-hidden="true"><span className="material-icons">{meta.icon}</span></span>
+              <h3 id={`dashboard-${id}`}>{meta.label}</h3>
+            </div>
             {state.kind === 'loading' ? <div className="dashboard-card-skeleton" aria-label={`Loading ${meta.label}`}><span /><span /></div>
               : state.kind === 'error' ? <div className="dashboard-card-error" role="alert">
                 <span className="material-icons" aria-hidden="true">error_outline</span>
                 <p>{state.permission ? 'You don’t have permission to view this summary' : `Couldn’t load ${meta.error}`}</p>
                 {!state.permission && <button type="button" onClick={retries[id]}>Retry</button>}
               </div>
-              : <><div className="dashboard-card-value">{state.data.value}</div><p className="dashboard-card-status"><span className="material-icons" aria-hidden="true">info</span>{state.data.status}</p><p className="dashboard-card-freshness">{state.data.freshness}</p></>}
+              : <><div className="dashboard-card-value">{state.data.value}</div><p className={`dashboard-card-status tone-${tone}`}><span className="material-icons" aria-hidden="true">{toneIcon[tone]}</span>{state.data.status}</p><p className="dashboard-card-freshness">{state.data.freshness}</p></>}
             {state.kind === 'error' && state.permission
               ? <span className="dashboard-card-link dashboard-card-link-unavailable">Destination unavailable with current permissions</span>
               : <a href={meta.href} className="dashboard-card-link">Open {meta.label}<span className="material-icons" aria-hidden="true">arrow_forward</span></a>}

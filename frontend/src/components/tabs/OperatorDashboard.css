@@ -2,12 +2,35 @@
 .operator-dashboard h2 { margin: 0; font-size: 1.05rem; }
 .operator-dashboard-intro { margin: .25rem 0 1rem; color: var(--text-secondary); font-size: .875rem; }
 .operator-dashboard-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
-.operator-dashboard-card { min-width: 0; min-height: 164px; padding: 1rem; display: flex; flex-direction: column; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); }
-.operator-dashboard-card h3 { margin: 0 0 .5rem; color: var(--text-secondary); font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
+.operator-dashboard-card { position: relative; min-width: 0; min-height: 164px; padding: 1rem; display: flex; flex-direction: column; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); overflow: hidden; }
+
+/* Per-card identity accent: a top rule plus a tinted icon chip. Decorative
+   only — every card states its meaning in text, so none of this colour is
+   load-bearing for comprehension. */
+.operator-dashboard-card::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--dashboard-accent); }
+.operator-dashboard-card.accent-emerald { --dashboard-accent: #10b981; }
+.operator-dashboard-card.accent-blue { --dashboard-accent: #3b82f6; }
+.operator-dashboard-card.accent-violet { --dashboard-accent: #8b5cf6; }
+.operator-dashboard-card.accent-amber { --dashboard-accent: #f59e0b; }
+.operator-dashboard-card.accent-cyan { --dashboard-accent: #06b6d4; }
+.operator-dashboard-card.accent-slate { --dashboard-accent: #94a3b8; }
+
+.dashboard-card-head { display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; }
+.dashboard-card-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px; background: color-mix(in srgb, var(--dashboard-accent) 16%, transparent); color: var(--dashboard-accent); }
+.dashboard-card-icon .material-icons { font-size: 19px; }
+.operator-dashboard-card h3 { margin: 0; color: var(--text-secondary); font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
 .dashboard-card-value { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: 1.45rem; font-weight: 700; }
 .dashboard-card-status { display: flex; align-items: center; gap: .35rem; margin: .5rem 0 .2rem; font-size: .82rem; }
+/* Only the icon takes the semantic colour. Status text keeps its inherited
+   colour so the >=4.5:1 result verified in enhancedchannelmanager-rv84z holds. */
 .dashboard-card-status .material-icons { font-size: 1rem; }
-.dashboard-card-freshness { margin: 0; color: var(--text-muted); font-size: .75rem; }
+.dashboard-card-status.tone-ok .material-icons { color: var(--success); }
+.dashboard-card-status.tone-warn .material-icons { color: var(--warning); }
+.dashboard-card-status.tone-danger .material-icons { color: var(--error); }
+.dashboard-card-status.tone-neutral .material-icons { color: var(--text-secondary); }
+/* --text-secondary, not --text-muted: muted renders 2.61:1 on --bg-secondary
+   under the light theme (enhancedchannelmanager-eo7er). */
+.dashboard-card-freshness { margin: 0; color: var(--text-secondary); font-size: .75rem; }
 .dashboard-card-link { margin-top: auto; min-height: 44px; display: inline-flex; align-items: center; gap: .25rem; width: fit-content; font-weight: 600; }
 .dashboard-card-link .material-icons { font-size: 1rem; }
 .dashboard-card-skeleton span { display: block; height: 1rem; margin: .45rem 0; border-radius: 4px; background: var(--bg-tertiary); }

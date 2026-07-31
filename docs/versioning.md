@@ -23,7 +23,7 @@ The version literal is hand-edited in **three** files. All three must move in lo
 
 | File | Line shape | Read by | Why it exists |
 | --- | --- | --- | --- |
-| [`frontend/package.json`](../frontend/package.json) | `"version": "X.Y.Z-NNNN"` | `build.yml` (`jq -r .version` → `ECM_VERSION` build-arg → `/api/version` env, UI footer, Docker label) | Canonical source. Baked into the image. |
+| [`frontend/package.json`](../frontend/package.json) | `"version": "X.Y.Z-NNNN"` | `build.yml` (`jq -r .version` → `ECM_VERSION` build-arg → `/api/version` env, UI header status pill, Docker label) | Canonical source. Baked into the image. |
 | [`backend/routers/backup.py`](../backend/routers/backup.py) | `APP_VERSION = "X.Y.Z-NNNN"` | Backup-export manifest (`version` field); also re-imported by `routers/channel_pipeline.py` for the rule-export `ecm_version` field | Stamps backups with the version that produced them so DBAS restore can gate on the source version. |
 | [`backend/main.py`](../backend/main.py) | `version="X.Y.Z-NNNN"` (kwarg to `FastAPI(...)`) | OpenAPI schema (`/api/openapi.json` → `info.version`) | Surfaces in the auto-generated docs at `/api/docs`. Picked up by API-contract tests that diff the schema. |
 
@@ -50,7 +50,7 @@ Three further releases have since been promoted: **0.17.0** (2026-05-16), **0.17
 
 Four places all show the same string:
 
-- **UI** — the footer (and About dialog) render `frontend/package.json` at build time.
+- **UI** — the header status pill (and About dialog) render `frontend/package.json` at build time.
 - **Docker image label** — `docker inspect ecm-ecm-1 --format '{{ index .Config.Labels "org.opencontainers.image.version" }}'`, or the GHCR tag itself.
 - **Build-arg inside the container** — `docker exec ecm-ecm-1 sh -c 'echo $ECM_VERSION'`.
 - **`package.json`** in the repo at the SHA the build was cut from.
