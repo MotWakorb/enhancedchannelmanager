@@ -540,6 +540,14 @@ export function ChannelManagerTab({
         </div>
       ) : (
         <SplitPane
+      /* Even split, stated here rather than left to SplitPane's own default.
+         That default is 58, and Channel Manager is SplitPane's only consumer,
+         so 58 was in practice this page's ratio: measured at 1920 it rendered
+         972px of channels against 698px of streams. The panes hold comparable
+         amounts of information and neither earns the extra 137px, so the
+         starting point is even and the divider is still draggable across the
+         35-70% range (bead enhancedchannelmanager-vh6hh, PO decision). */
+      defaultLeftWidth={50}
       leftLabel="Channels"
       rightLabel="Streams"
       left={

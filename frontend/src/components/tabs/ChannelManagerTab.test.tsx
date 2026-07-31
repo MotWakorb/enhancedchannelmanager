@@ -24,8 +24,20 @@ import { ChannelManagerTab, PENDING_MERGES_EVENT } from './ChannelManagerTab';
 import * as api from '../../services/api';
 
 vi.mock('../', () => ({
-  SplitPane: ({ left, right, leftLabel, rightLabel }: { left: React.ReactNode; right: React.ReactNode; leftLabel?: string; rightLabel?: string }) => (
-    <div data-testid="split-pane" data-left-label={leftLabel} data-right-label={rightLabel}>
+  // `defaultLeftWidth` is surfaced as an attribute deliberately: the real
+  // SplitPane is mocked here, so a test asserting the rendered pane widths
+  // would be asserting against this stub. What IS worth pinning at this layer
+  // is that the call site passes the ratio at all — SplitPane's own default is
+  // 58, and Channel Manager is its only consumer, so an accidental removal of
+  // the prop silently restores the lopsided split nobody chose. SplitPane's own
+  // tests cover that the value is honoured and clamped.
+  SplitPane: ({ left, right, leftLabel, rightLabel, defaultLeftWidth }: { left: React.ReactNode; right: React.ReactNode; leftLabel?: string; rightLabel?: string; defaultLeftWidth?: number }) => (
+    <div
+      data-testid="split-pane"
+      data-left-label={leftLabel}
+      data-right-label={rightLabel}
+      data-default-left-width={defaultLeftWidth}
+    >
       <div>{left}</div>
       <div>{right}</div>
     </div>
@@ -171,6 +183,10 @@ describe('ChannelManagerTab — Pending Merges subnav (BD-J / bd-gfxrz)', () => 
     expect(screen.getByTestId('split-pane')).toBeInTheDocument();
     expect(screen.getByTestId('split-pane')).toHaveAttribute('data-left-label', 'Channels');
     expect(screen.getByTestId('split-pane')).toHaveAttribute('data-right-label', 'Streams');
+    // Even split. Dropping this prop falls back to SplitPane's own default of
+    // 58, which rendered 972px of channels against 698px of streams at 1920 —
+    // the imbalance bead enhancedchannelmanager-vh6hh was filed for.
+    expect(screen.getByTestId('split-pane')).toHaveAttribute('data-default-left-width', '50');
 
     // Wait for the count poll to settle, then assert the subnav stays hidden.
     await waitFor(() => {
