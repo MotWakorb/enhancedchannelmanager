@@ -1207,7 +1207,11 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       // server-side, and the frontend no longer calls GitHub at all (so this
       // route is expected to go unrequested; it is left in place so the
       // assertion below cannot pass merely because the fixture went missing).
-      await page.route(/api\.github\.com\/repos\/.*\/releases\/latest/, (route) => route.fulfill({
+      // Anchored to the whole URL: an unanchored host pattern also matches a
+      // hostile URL that merely contains this text (https://evil.test/
+      // api.github.com/repos/x/y/releases/latest), so the fixture could fulfil
+      // a request it was never meant to speak for.
+      await page.route(/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/releases\/latest(?:[?#].*)?$/, (route) => route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ tag_name: 'v99.0.0' }),

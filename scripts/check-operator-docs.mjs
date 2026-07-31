@@ -40,10 +40,25 @@ const REQUIRED_WORKSPACE_IMAGES = new Map([
   ['docs/images/user_guide/operator-workspace/4-channel-manager-1920-edit-collapsed.png', [1920, 1080]],
 ])
 
+/** True for the errors that mean "this path is not there", however it is not there. */
+function isMissing(error) {
+  return error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EISDIR'
+}
+
 function markdownFiles(root) {
   const files = ['USER_GUIDE.md', 'docs/index.md']
+  // Optional directories are handled by attempting the read and treating the
+  // failure as absence. Probing with existsSync first is a check-then-use race
+  // (js/file-system-race) and answers a question the readdir already answers.
   const walk = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    let entries
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return
+      throw error
+    }
+    for (const entry of entries) {
       const absolute = path.join(directory, entry.name)
       if (entry.isDirectory()) walk(absolute)
       else if (entry.name.endsWith('.md')) files.push(path.relative(root, absolute))
@@ -53,13 +68,11 @@ function markdownFiles(root) {
   for (const entry of fs.readdirSync(docs, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith('.md')) files.push(`docs/${entry.name}`)
   }
-  for (const directory of ['user_guide', 'runbooks']) {
-    const target = path.join(docs, directory)
-    if (fs.existsSync(target)) walk(target)
-  }
+  for (const directory of ['user_guide', 'runbooks']) walk(path.join(docs, directory))
   return [...new Set(files)]
 }
 
+/** Dimensions, or null when the bytes are not a PNG. Throws when the file is unreadable. */
 function pngDimensions(file) {
   const header = fs.readFileSync(file).subarray(0, 24)
   if (header.length < 24 || header.toString('ascii', 1, 4) !== 'PNG') return null
@@ -74,6 +87,38 @@ function normalizedMarkdown(content) {
     .replace(/\s+/g, ' ')
 }
 
+/**
+ * Drop inline HTML so a heading's markup contributes no tokens to its anchor,
+ * matching what the renderers slug from the heading's text content.
+ *
+ * Repeated to a fixed point, which is the contract this function owes its
+ * caller: no tag-shaped span survives, whatever the pattern happens to be.
+ *
+ * A single global pass of THIS pattern already satisfies that — `<[^>]+>` is
+ * idempotent, because a `<` only survives when no `>` follows it anywhere, and
+ * then no `>` survives after it either, so a removal can never splice a new tag
+ * together. (Verified exhaustively over every string up to length 12 in
+ * `{<, >, a}`.) CodeQL's js/incomplete-multi-character-sanitization does not
+ * model that and reports it, so this is a false positive on today's pattern.
+ *
+ * The loop is here anyway rather than a per-alert dismissal, because the
+ * idempotence is a property of the pattern and not of the intent: narrowing it
+ * to something like `<[a-z][^>]*>` — a reasonable future edit — makes it
+ * genuinely incomplete, leaving `<b>` from `<<a>b>` on a single pass. Repeating
+ * to a fixed point costs one no-op pass per heading and makes the contract
+ * independent of the pattern. Anchors are unchanged for every heading in the
+ * docs tree.
+ */
+function stripInlineHtml(text) {
+  let current = text
+  let previous
+  do {
+    previous = current
+    current = current.replace(/<[^>]+>/g, '')
+  } while (current !== previous)
+  return current
+}
+
 function headingAnchors(content) {
   const anchors = new Set()
   const counts = new Map()
@@ -81,9 +126,7 @@ function headingAnchors(content) {
     const heading = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/)
     if (!heading) continue
     const explicit = heading[1].match(/\{#([^}]+)\}\s*$/)
-    let slug = explicit?.[1] ?? heading[1]
-      .replace(/\{#([^}]+)\}\s*$/, '')
-      .replace(/<[^>]+>/g, '')
+    let slug = explicit?.[1] ?? stripInlineHtml(heading[1].replace(/\{#([^}]+)\}\s*$/, ''))
       .replace(/[*`~]/g, '')
       .toLowerCase()
       .trim()
@@ -120,22 +163,41 @@ export function checkOperatorDocs(root = process.cwd()) {
       const [pathPart, fragmentPart] = rawTarget.split('#', 2)
       const target = decodeURIComponent(pathPart.split('?', 1)[0])
       const resolved = target ? path.resolve(path.dirname(absolute), target) : absolute
-      if (!fs.existsSync(resolved)) errors.push(`${relative}: missing local target: ${rawTarget}`)
-      else if (fragmentPart && fs.statSync(resolved).isFile() && resolved.endsWith('.md')) {
+      if (fragmentPart && resolved.endsWith('.md')) {
+        // One operation, not a check followed by a use: reading the target both
+        // proves it is there and yields the anchors. Testing existence first is
+        // the js/file-system-race shape and can disagree with the read.
+        let targetContent
+        try {
+          targetContent = fs.readFileSync(resolved, 'utf8')
+        } catch (error) {
+          // EISDIR is the old `statSync().isFile()` guard: a directory named
+          // `*.md` has no anchors but is not a broken link either.
+          if (error.code === 'EISDIR') continue
+          if (!isMissing(error)) throw error
+          errors.push(`${relative}: missing local target: ${rawTarget}`)
+          continue
+        }
         const fragment = decodeURIComponent(fragmentPart).toLowerCase()
-        const anchors = headingAnchors(fs.readFileSync(resolved, 'utf8'))
+        const anchors = headingAnchors(targetContent)
         if (!anchors.has(fragment)) errors.push(`${relative}: missing fragment #${fragmentPart} in ${rawTarget}`)
+      } else if (!fs.statSync(resolved, { throwIfNoEntry: false })) {
+        errors.push(`${relative}: missing local target: ${rawTarget}`)
       }
     }
   }
 
   for (const [relative, expected] of REQUIRED_WORKSPACE_IMAGES) {
-    const absolute = path.join(root, relative)
-    if (!fs.existsSync(absolute)) {
+    // Same check-then-use reasoning as the link targets above: the read is what
+    // decides both "is it there" and "is it the right size".
+    let actual
+    try {
+      actual = pngDimensions(path.join(root, relative))
+    } catch (error) {
+      if (!isMissing(error)) throw error
       errors.push(`${relative}: required workspace image is missing`)
       continue
     }
-    const actual = pngDimensions(absolute)
     if (!actual || actual[0] !== expected[0] || actual[1] !== expected[1]) {
       errors.push(`${relative}: expected ${expected.join('x')}, got ${actual?.join('x') ?? 'invalid PNG'}`)
     }

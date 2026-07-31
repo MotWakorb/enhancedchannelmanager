@@ -96,3 +96,43 @@ test('validates Markdown fragments', () => {
   assert.doesNotMatch(errors, /existing-heading/)
   assert.match(errors, /missing fragment #missing-heading/)
 })
+
+// Real headings carry inline HTML — `docs/runbooks/template.md` opens with
+// `# Runbook: <Alert or Scenario Name>`, and several runbooks use `dev-<sha>`.
+// The anchors below are the ones the whole docs tree is already linked against,
+// so this pins them rather than describing an aspiration.
+test('anchors ignore inline HTML in headings, however the tags nest', () => {
+  const root = fixture()
+  fs.writeFileSync(
+    path.join(root, 'docs/user_guide/target.md'),
+    [
+      '# Runbook: <Alert or Scenario Name>',
+      '## Mode A — rollback to `dev-<sha>`',
+      '### <Destination Name>',
+      '#### Nested <<span>tag> soup',
+    ].join('\n') + '\n',
+  )
+  fs.writeFileSync(
+    path.join(root, 'docs/user_guide/index.md'),
+    [
+      '[A](target.md#runbook)',
+      '[B](target.md#mode-a-rollback-to-dev-)',
+      '[C](target.md#nested-tag-soup)',
+    ].join('\n') + '\n',
+  )
+  assert.deepEqual(checkOperatorDocs(root), [])
+})
+
+test('reports a fragment link whose target file does not exist', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'docs/user_guide/index.md'), '[Gone](nowhere.md#some-heading)\n')
+  assert.match(checkOperatorDocs(root).join('\n'), /missing local target: nowhere\.md#some-heading/)
+})
+
+test('reports a required workspace image that is absent rather than malformed', () => {
+  const root = fixture()
+  fs.rmSync(path.join(root, 'docs/images/user_guide/operator-workspace/1-channel-manager-1280-collapsed.png'))
+  const errors = checkOperatorDocs(root).join('\n')
+  assert.match(errors, /1-channel-manager-1280-collapsed\.png: required workspace image is missing/)
+  assert.doesNotMatch(errors, /invalid PNG/)
+})

@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 const artifactDirectory = resolve(process.cwd(), 'test-results/operator-workspace-release')
@@ -38,8 +38,12 @@ const empty = []
 const invalidDimensions = []
 for (const name of expectedSorted.filter((candidate) => actual.includes(candidate))) {
   const path = resolve(artifactDirectory, name)
-  if ((await stat(path)).size === 0) empty.push(name)
+  // The read is the only file system operation: stat()-ing for the size and
+  // then reading is a check-then-use race (js/file-system-race) that can
+  // report the size of one file and the bytes of another. The buffer answers
+  // both questions from a single observation.
   const png = await readFile(path)
+  if (png.length === 0) empty.push(name)
   const expectedViewport = name.includes('--1280x720--') ? [1280, 720] : [1920, 1080]
   if (png.length < 24 || png.readUInt32BE(16) !== expectedViewport[0] || png.readUInt32BE(20) !== expectedViewport[1]) {
     invalidDimensions.push(name)
@@ -79,7 +83,6 @@ if (requireIconMetadata) {
     }
     const expectedCollapsed = name.includes('-collapsed.icons.json')
     const expectedBoundingWidth = expectedCollapsed ? 68 : 244
-    const expectedClientWidth = expectedBoundingWidth - 1
     const sidebarDiagnostic = `border-box=${metadata.sidebarBoundingWidth}, client=${metadata.sidebarClientWidth}, scroll=${metadata.sidebarScrollWidth}`
     if (metadata.sidebarCollapsed !== expectedCollapsed) {
       metadataProblems.push(`${name}: expected ${expectedCollapsed ? 'collapsed' : 'expanded'} sidebar class; ${sidebarDiagnostic}`)
@@ -88,9 +91,19 @@ if (requireIconMetadata) {
       || Math.abs(metadata.sidebarBoundingWidth - expectedBoundingWidth) > 0.5) {
       metadataProblems.push(`${name}: expected ${expectedBoundingWidth}px sidebar border-box; ${sidebarDiagnostic}`)
     }
+    // The content box must EQUAL the border box, because `.primary-sidebar`
+    // carries no border: the sidebar/content divider is an `::after` overlay
+    // chosen precisely so it leaves the 244px/68px box untouched
+    // (frontend/src/components/TabNavigation.css). Stating that as an
+    // invariant, rather than subtracting a hard-coded border width, is what
+    // makes the check survive: it previously asserted `border-box - 1` and had
+    // never run against this branch, so every artifact failed by exactly the
+    // 1px border the sidebar does not have. If a border is ever added, this
+    // fires with the three measured widths instead of silently absorbing it.
     if (typeof metadata.sidebarClientWidth !== 'number'
-      || Math.abs(metadata.sidebarClientWidth - expectedClientWidth) > 0.5) {
-      metadataProblems.push(`${name}: expected approximately ${expectedClientWidth}px sidebar client width; ${sidebarDiagnostic}`)
+      || typeof metadata.sidebarBoundingWidth !== 'number'
+      || Math.abs(metadata.sidebarClientWidth - metadata.sidebarBoundingWidth) > 0.5) {
+      metadataProblems.push(`${name}: sidebar content box must equal its border box — .primary-sidebar has no border; ${sidebarDiagnostic}`)
     }
     if (metadata.sidebarWidthSettled !== true
       || metadata.sidebarClientWidth !== metadata.sidebarScrollWidth) {
