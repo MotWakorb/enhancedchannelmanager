@@ -1,6 +1,7 @@
 """Bounded EPG-data response handling for migration callers."""
 
 import asyncio
+import threading
 import time
 from unittest.mock import patch
 
@@ -9,6 +10,12 @@ import pytest
 
 from config import DispatcharrSettings
 from dispatcharr_client import DispatcharrClient
+
+# Safety bound for the off-loop handshake below. It is a deadlock guard, not an
+# assertion threshold: the healthy path clears it in microseconds, and a value
+# this generous (10x the worst event-loop stall ever observed on a saturated CI
+# runner) cannot be reached by machine load alone.
+_LOOP_LIVENESS_TIMEOUT = 10.0
 
 
 def _client(handler) -> DispatcharrClient:
@@ -102,21 +109,59 @@ async def test_absent_or_identity_encoding_is_accepted(headers):
 
 @pytest.mark.asyncio
 async def test_large_json_decode_does_not_block_event_loop():
+    """A slow EPG decode must run off the event loop thread.
+
+    Asserted as a *mechanism*, not as a latency budget. The previous shape
+    measured the wall-clock scheduling latency of a 10ms sleep against a 50ms
+    budget, and that measurement cannot separate the two cases it needs to tell
+    apart. Measured on this suite (bead enhancedchannelmanager-kcyiq): a
+    genuinely broken inline decode costs ~0.10s, while the same *healthy* code
+    on a saturated GitHub runner produced 0.79s and 0.97s. Every threshold that
+    catches the regression is one the loaded runner blows through, so the old
+    assertion reported an identical failure for a real regression and for a busy
+    machine. Both assertions below are event-driven rather than clock-driven and
+    are therefore immune to machine load.
+    """
     client = _client(lambda request: httpx.Response(200, content=b'[{"id": 1}]'))
     real_loads = __import__("json").loads
 
+    loop_thread_ident = threading.get_ident()
+    decode_entered = threading.Event()
+    loop_advanced = threading.Event()
+    observed: dict = {}
+
     def slow_loads(payload):
-        time.sleep(0.1)
+        observed["thread_ident"] = threading.get_ident()
+        observed["thread_name"] = threading.current_thread().name
+        decode_entered.set()
+        # Hold the decode open until the event loop proves it is still running.
+        # This replaces a fixed sleep: the decode is guaranteed to still be in
+        # flight when liveness is observed, instead of racing a timer.
+        observed["loop_advanced_during_decode"] = loop_advanced.wait(
+            timeout=_LOOP_LIVENESS_TIMEOUT
+        )
         return real_loads(payload)
 
     try:
         with patch("dispatcharr_client.json.loads", side_effect=slow_loads):
             decode_task = asyncio.create_task(client.get_epg_data(max_results=1))
-            started = time.perf_counter()
-            await asyncio.sleep(0.01)
-            elapsed = time.perf_counter() - started
+            # Reaching this poll at all means the loop was not blocked by the
+            # decode. The deadline is a hang guard, not an assertion.
+            poll_deadline = time.monotonic() + _LOOP_LIVENESS_TIMEOUT
+            while not decode_entered.is_set() and time.monotonic() < poll_deadline:
+                await asyncio.sleep(0.001)
+            loop_advanced.set()
             result = await decode_task
-        assert elapsed < 0.05
+
+        assert decode_entered.is_set(), "the patched json.loads was never called"
+        assert observed["thread_ident"] != loop_thread_ident, (
+            "json.loads ran on the event loop thread "
+            f"({observed['thread_name']}) — the decode is blocking the loop"
+        )
+        assert observed["loop_advanced_during_decode"] is True, (
+            "the event loop did not advance while the decode was in flight — "
+            f"decode ran on {observed['thread_name']}"
+        )
         assert result == [{"id": 1}]
     finally:
         await client._client.aclose()
