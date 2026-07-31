@@ -93,8 +93,50 @@ label` — the one shared form treatment — had no role that fitted it.
 | `--icon-action` | 16px | row action buttons, small inline indicators |
 | `--icon-badge` | 14px | a glyph inside a chip or pill |
 | `--icon-empty` | 64px | the illustration glyph in an empty or loading state |
+| `--control-box-size` | 16px | the box of a checkbox or a radio |
 
 Rail icons are chrome, not content, and keep their own 20px.
+
+**`--control-box-size` is in this scale, not the type scale, because a
+checkbox is the same kind of object as `--icon-action`: a glyph-scale mark
+sitting inline in a row of 13px body text. It is a length, not a font-size —
+a control's *text* is still the body role set by the reset at the top of
+`index.css`.
+
+The number's justification is its relationship to the body role, not its
+roundness. Measured on the rendered page, a label row carrying 13px text has a
+line box of 18.2–18.5px and the text's own em box is 13px. 16px is 1.23em:
+above the em box, so the control reads as a control rather than as a
+letterform, and below the line box, so it does not drive the height of the row
+it sits in. 18px is almost exactly that line box, which is why Settings read
+oversized once body text moved to 13px in bead `enhancedchannelmanager-ul2tp` —
+at 18px the control fills the row and the label starts to read as a caption to
+the box. 13px is 1em, and it is also Chromium's own control size.
+
+Bead `enhancedchannelmanager-7lwe0` introduced it. Before it, 54 rule blocks
+across 26 component stylesheets each declared their own literal and 16 more
+selected a checkbox without sizing it at all, which rendered as **five** sizes
+for one control — 13, 14, 15, 16 and 18px. (The CSS *declared* seven; `1rem`
+and `0.875rem` collapse onto 16px and 14px, and the 13px population appears in
+no stylesheet at all — it is the user-agent default the unsized blocks
+inherited. Counting declarations gets this wrong in both directions.) Those
+literals are deleted and every block falls through to one base rule beside the
+token.
+
+The size is **not** a pointer target. WCAG 2.5.8 asks for 24×24 CSS px and no
+plausible checkbox beside 13px text reaches it; what carries the target is the
+`<label>`, which extends it to the whole row. 167 of the 211 controls measured
+for `7lwe0` have that association and 44 do not — for those the box *is* the
+target, and the remedy is markup, not a bigger box. `e2e/control-box-size.spec.ts`
+catalogues them in a ratcheted `ALLOWED_UNLABELLED` and fails on a new one.
+
+`accent-color` is unchanged by that bead and was re-measured under it, from
+rendered pixels in all three themes at both supported viewports: a checked
+box's accent fill against its adjacent surface is 8.70–15.15:1 (dark),
+3.86–6.29:1 (light) and 11.37–18.44:1 (high contrast); an unchecked box's
+border against the same surface is 3.08:1 at worst. All clear the 3:1 non-text
+floor in WCAG 1.4.11, the light theme's checked fill and the dark theme's
+unchecked border least comfortably.
 
 ### Colour
 
@@ -651,7 +693,14 @@ Always use `<h2>` (1.5rem/600 weight). Never use `<h3>` for settings headers.
   <span>Label text</span>
 </label>
 ```
-Uses 18px checkbox, 0.5rem gap, accent-primary color.
+0.5rem gap, accent-primary color. The box takes `--control-box-size` from the
+base rule in `index.css` — `.checkbox-label input[type="checkbox"]` must not
+restate a size (it declared 18px until bead `enhancedchannelmanager-7lwe0`).
+
+Wrapping the `<input>` in the `<label>` is not cosmetic: it is what makes the
+whole row the pointer target, which is the only reason a 16px box is
+acceptable under WCAG 2.5.8. A checkbox rendered without an associated label
+has no target but its own box.
 
 ## Modal Patterns (ModalBase.css)
 

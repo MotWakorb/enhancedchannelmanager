@@ -445,10 +445,6 @@
   background: var(--accent-10, rgba(100, 108, 255, 0.1));
 }
 
-.dep-group-item input[type="checkbox"] {
-  flex-shrink: 0;
-}
-
 .dep-group-name {
   flex: 1;
   overflow: hidden;

@@ -126,10 +126,6 @@
   background-color: transparent;
 }
 
-.lcn-item input[type="checkbox"] {
-  flex-shrink: 0;
-}
-
 /* Body role. 13.6px -> 13px. */
 .lcn-item-content {
   display: flex;

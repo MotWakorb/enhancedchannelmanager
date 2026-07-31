@@ -29,7 +29,6 @@
 }
 
 .radio-label input[type="radio"] {
-  width: auto;
   margin: 0;
   margin-right: 0.4rem;
   cursor: pointer;

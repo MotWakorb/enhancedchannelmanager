@@ -185,10 +185,7 @@
 }
 
 .checkbox-item input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Legacy checkbox-field support */
@@ -200,8 +197,6 @@
 }
 
 .checkbox-field input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
 }
 

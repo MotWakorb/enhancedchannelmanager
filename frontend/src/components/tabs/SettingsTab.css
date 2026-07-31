@@ -438,11 +438,8 @@
 }
 
 .checkbox-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Settings-specific checkbox group with horizontal layout (checkbox + content side by side)
@@ -461,12 +458,9 @@
 }
 
 .settings-section .checkbox-group input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 .settings-section .checkbox-content {
@@ -694,8 +688,6 @@
 .settings-section .radio-option input[type="radio"] {
   grid-row: 1;
   grid-column: 1;
-  width: 18px;
-  height: 18px;
   margin: 0;
   margin-top: 2px;
   accent-color: var(--accent-primary);
@@ -751,13 +743,10 @@
 }
 
 .profile-checkbox input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin: 0;
   margin-right: 0.5rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
   align-self: center;
 }
 

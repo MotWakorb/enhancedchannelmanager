@@ -273,8 +273,6 @@
 }
 
 .user-checkbox-label input[type="checkbox"] {
-  width: 0.875rem;
-  height: 0.875rem;
   cursor: pointer;
   accent-color: var(--button-primary-bg);
 }

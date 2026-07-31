@@ -141,11 +141,8 @@
 }
 
 .channel-picker-item input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Meta role, SIZE only — the channel number is supporting detail beside the

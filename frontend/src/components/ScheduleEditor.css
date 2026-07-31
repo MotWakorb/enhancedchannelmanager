@@ -42,8 +42,6 @@
 }
 
 .schedule-editor .checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.5rem;
   accent-color: var(--accent-primary);
 }
@@ -360,10 +358,7 @@
 }
 
 .schedule-editor .option-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
 /* Body role, SIZE only. The clickable text of a checkbox row. 0.875rem -> 13px (bead enhancedchannelmanager-haf9e). */

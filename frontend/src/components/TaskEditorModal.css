@@ -27,8 +27,6 @@
 }
 
 .task-editor-modal .enable-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
 }
 
@@ -156,8 +154,6 @@
 }
 
 .task-editor-modal .schedule-item input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--success);
 }
 
@@ -361,8 +357,6 @@
 }
 
 .task-editor-modal .alert-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--accent-primary);
 }
 

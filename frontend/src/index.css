@@ -190,6 +190,42 @@ textarea {
   font-size: var(--type-body-size);
 }
 
+/* The box of a checkbox or a radio, in one place.
+   Bead enhancedchannelmanager-7lwe0. The number and its justification live on
+   `--control-box-size` in the second :root block; this is the rule that
+   applies it.
+
+   WHAT IT REPLACES. 54 rule blocks across 26 component stylesheets each set
+   their own literal, and 16 more selected a checkbox without sizing it at all.
+   Rendered, that produced FIVE sizes — 13, 14, 15, 16 and 18px — for one
+   control; the 13px population is Chromium's own control size, inherited by
+   the blocks that declared nothing, and it appears in no stylesheet. Those
+   literals are deleted; every one of those blocks now falls through to here.
+
+   WHY IT SIZES BOTH AXES. `height` matters as much as `width`: the UA sizes a
+   control from its own metrics, and setting width alone leaves a rectangle.
+
+   `flex-shrink: 0` is part of the invariant, not a nicety. Most of these
+   controls sit in a flex row beside a label that can be long; without it the
+   box is the flex item that gives way and the token silently stops holding —
+   ten of the deleted blocks had already discovered this one at a time.
+
+   SPECIFICITY: (0,1,1), one step above the element reset above it, and low on
+   purpose. A component rule that genuinely needs a different box still wins —
+   but it should not want to. There is one token; a second size needs a second
+   TOKEN with its reason beside the first, not a literal here.
+
+   Guarded by e2e/control-box-size.spec.ts, which resolves the token through a
+   probe element and compares it against the RENDERED box on every route,
+   at both supported viewports and in all three themes. Deleting this rule
+   turns that guard red on the first route it walks. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: var(--control-box-size);
+  height: var(--control-box-size);
+  flex-shrink: 0;
+}
+
 .material-icons {
   display: inline-block;
   width: 1em;
@@ -643,6 +679,42 @@ textarea {
      the one place --text-muted is still allowed (see § Colour in
      docs/css_guidelines.md). */
   --icon-empty: 64px;
+
+  /* The box of a checkbox or a radio — 16px.
+     Bead enhancedchannelmanager-7lwe0. It lives in the ICON scale, not the
+     type scale, because that is what it is: a glyph-scale affordance sitting
+     inline in a row of body text, the same object as --icon-action, which is
+     also 16px and also a small inline mark next to 13px copy. It is a length,
+     not a font-size — nothing inherits it, and a control's TEXT is still the
+     body role set by the reset above.
+
+     THE RELATIONSHIP TO THE BODY ROLE, which is the number's actual
+     justification. Body is 13px. Measured on the rendered page, a label row
+     carrying that text has a line box of 18.2-18.5px, and the em box of the
+     text itself is 13px. 16px is 1.23em: above the em box, so the control
+     reads as a control and not as a letterform, and below the line box, so it
+     does not drive the height of the row it sits in.
+
+     WHY NOT THE TWO NUMBERS IT REPLACES. 18px was the loudest of the seven the
+     estate had declared, and it is almost exactly the row's line box — at that
+     size the control fills the row and the label starts to read as a caption
+     to the box rather than the box as a marker for the label. That is what the
+     PO saw on Settings once body text moved to 13px (bead ul2tp): the box did
+     not change, the text shrank underneath it. 13px is 1em, and it is also
+     Chromium's own control size — the 16 rule blocks that declared nothing
+     were rendering at it, and this project has just spent a bead establishing
+     that a UA default is a size nobody chose.
+
+     WHAT THIS IS NOT. It is NOT a pointer target. WCAG 2.5.8 asks for 24x24
+     CSS px and no plausible checkbox beside 13px text reaches it; what carries
+     the target is the <label>, which extends it to the whole row. 167 of the
+     211 controls measured for 7lwe0 have that association and 44 do not — for
+     those the box IS the target, they are catalogued in
+     e2e/control-box-size.spec.ts (ALLOWED_UNLABELLED), and the remedy is
+     markup rather than a bigger box.
+
+     ONE token, no per-component literals: see the base rule below. */
+  --control-box-size: 16px;
 
   /* Box Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);

@@ -929,8 +929,6 @@ button.group-selection-checkbox {
    (bead enhancedchannelmanager-87o0c). */
 
 .radio-option input[type="radio"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
@@ -1290,8 +1288,6 @@ button.group-selection-checkbox {
    All four moved to common.css (bead enhancedchannelmanager-87o0c). */
 
 .checkbox-option input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;

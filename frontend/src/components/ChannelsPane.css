@@ -490,8 +490,6 @@
 }
 
 .group-filter-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -584,8 +582,6 @@
 }
 
 .filter-settings-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -2385,8 +2381,6 @@
 }
 
 .modal-form .prefix-order-options .radio-option input[type="radio"] {
-  width: 14px;
-  height: 14px;
   margin: 0;
   cursor: pointer;
   accent-color: var(--accent-primary);
@@ -2548,8 +2542,6 @@
 }
 
 .modal-form .profile-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin: 0;
   padding: 0;
   cursor: pointer;
@@ -2781,8 +2773,6 @@
 }
 
 .delete-channels-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
   accent-color: var(--error);
 }
@@ -2810,10 +2800,7 @@
 }
 
 .delete-checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-top: 2px;
-  flex-shrink: 0;
   cursor: pointer;
   accent-color: var(--error);
 }
@@ -2893,8 +2880,6 @@
 }
 
 .renumber-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
 }
 
@@ -4018,11 +4003,8 @@
 }
 
 .move-option-radio input[type="radio"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
@@ -4111,8 +4093,6 @@
 }
 
 .source-renumber-option input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
@@ -4802,8 +4782,6 @@
 
 .sort-renumber-checkbox input[type="checkbox"],
 .sort-renumber-checkbox input[type="radio"] {
-  width: 16px;
-  height: 16px;
   margin: 0;
   cursor: pointer;
   accent-color: #22d3ee;

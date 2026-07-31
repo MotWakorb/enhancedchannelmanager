@@ -203,8 +203,6 @@
 }
 
 .hide-disabled-checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   cursor: pointer;
   accent-color: var(--accent-primary);
 }

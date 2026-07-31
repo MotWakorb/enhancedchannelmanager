@@ -488,8 +488,6 @@
 }
 
 .modal-checkbox-row input[type="checkbox"] {
-  width: 1rem;
-  height: 1rem;
   margin-right: 0.5rem;
   cursor: pointer;
 }
@@ -1012,8 +1010,6 @@
 }
 
 .dropdown-option input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   accent-color: var(--accent-primary, #6366f1);
   margin-right: 0.5rem;
 }
@@ -1949,8 +1945,6 @@
 }
 
 .modal-checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
   accent-color: var(--accent-primary, #6366f1);
 }

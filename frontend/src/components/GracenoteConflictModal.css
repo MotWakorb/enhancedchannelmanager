@@ -69,9 +69,6 @@
 .conflict-item input[type="checkbox"] {
   margin-top: 0.25rem;
   cursor: pointer;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
 }
 
 .conflict-item-content {

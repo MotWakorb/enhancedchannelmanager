@@ -173,9 +173,6 @@
 
 .brm-section-item input[type="checkbox"] {
   accent-color: var(--accent-primary, #6366f1);
-  width: 1rem;
-  height: 1rem;
-  flex-shrink: 0;
 }
 
 /* Item-title role. 13px -> 13px. */

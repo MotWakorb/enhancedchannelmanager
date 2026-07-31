@@ -1243,8 +1243,6 @@
 }
 
 .filter-dropdown-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
 }
 

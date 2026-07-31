@@ -62,11 +62,8 @@
 }
 
 .group-checkbox-area input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
 .group-color-swatch {
@@ -233,11 +230,8 @@
 }
 
 .print-guide-empty-slots-label input[type="checkbox"] {
-  width: 15px;
-  height: 15px;
   cursor: pointer;
   accent-color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
 /* The hint under a control — the same meta treatment shared/common.css § 26
