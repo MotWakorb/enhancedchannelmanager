@@ -86,6 +86,37 @@
  * `title` alone counts as a failure. It is the last resort of the accname
  * cascade and is never surfaced to touch or keyboard-only users.
  *
+ * ARM 4 — THE TARGET IS BIG ENOUGH TO HIT
+ *
+ * Added by `enhancedchannelmanager-3h2u1`. Arm 2 established that a label
+ * EXISTS, which is what makes the row rather than the box the target. This
+ * asks the question arm 2 stops one step short of: is that row actually 24x24?
+ *
+ * It was deliberately not added with arm 2, and the reason is visible in the
+ * numbers. MEASURED on the tree m26f8 left behind, at both viewports in all
+ * three themes, routes and dialogs together — 211 controls, every one of them
+ * labelled:
+ *
+ *   120 rows cleared 24x24        91 did not
+ *   0 of the 91 failed on WIDTH   all 91 failed on height, at 18.19 / 19.5 /
+ *                                 21.19 / 21.5px
+ *
+ * A row is as wide as the form it sits in, so width was never in question; the
+ * defect was only ever that a 13px line box is 18.2px tall. Landing this arm
+ * with arm 2 would have meant shipping it red on 91 sites, or shipping it with
+ * an allowlist holding nine tenths of the estate — which is not a ratchet, it
+ * is a record of a decision not taken.
+ *
+ * The remedy is `--control-target-min` and the `label:has(input)` base rule in
+ * `index.css`, plus one rule at the single site whose label uses `for` instead
+ * of wrapping. Like arm 1 this reads the token through a probe rather than
+ * repeating 24, so the spec cannot drift from the application's own number.
+ *
+ * WHAT IT MEASURES IS THE UNION of the control's rect and the rects of every
+ * VISIBLE label associated with it — that is the region a pointer can hit, and
+ * it is the only measurement that gives the same answer for a wrapping label
+ * and a `for` label sitting beside its box.
+ *
  * ─────────────────────────────────────────────────────────────────────────
  * WHAT THIS SPEC CANNOT SEE: dialogs. Like every guard in this set it walks
  * routes with no modal open, so the 136 dialog-side controls above are NOT
@@ -96,6 +127,17 @@
  * modal stylesheet re-introducing a literal `width: 18px`, would slip past.
  * Saying so is the point: `control-typeface.spec.ts` shipped without naming
  * its blind spot and stayed green through 516 mis-sized controls.
+ *
+ * ARM 4 INHERITS THAT BLIND SPOT AND IT IS WORSE THERE, because the arm's
+ * population is more lopsided: of the 91 short rows it was written for, 40 are
+ * on routes and 51 are inside dialogs. The `label:has(input)` base rule fixes
+ * both and deleting it turns this arm red on the routes at once, but a dialog
+ * that reintroduces a short row — a new modal stylesheet setting
+ * `min-height: 0`, or a new `for`-shaped label like the one in
+ * `.settings-section .checkbox-content` — is invisible to CI until bead
+ * `enhancedchannelmanager-48jr2` extends these guards into the harness. The 51
+ * dialog rows were proved fixed locally against the harness, at both viewports
+ * in all three themes. Nothing in CI repeats that.
  *
  * WHAT IT MEASURES. The build being SERVED, not the working tree. Against a
  * stale container this reports the stale CSS. Deploy first, or point
@@ -179,12 +221,46 @@ const ALLOWED_UNLABELLED: ReadonlyArray<{ route: string; site: string; note: str
 const ALLOWED_UNNAMED: ReadonlyArray<{ route: string; site: string; note: string }> = []
 
 /**
+ * Sites whose pointer TARGET is smaller than `--control-target-min`.
+ *
+ * Empty as of bead `enhancedchannelmanager-3h2u1`, which lifted all 91 short
+ * rows — 40 on routes, 51 in dialogs — to the WCAG 2.5.8 floor.
+ *
+ * An entry here is a claim that 24x24 is the wrong trade at that site, and it
+ * has to say why in terms of the row rather than the box: shrinking a target
+ * below the floor is only defensible when the same action has a second, larger
+ * target elsewhere (2.5.8's own "equivalent" exception) or when the row is
+ * genuinely inline in a sentence. "The list would get taller" is not a reason
+ * — the fix is a floor, so it costs nothing on any row that already clears it.
+ *
+ * Ratcheted in both directions, like the two lists above.
+ */
+const ALLOWED_SMALL_TARGET: ReadonlyArray<{ route: string; site: string; note: string }> = []
+
+/**
  * Sub-pixel slack. Box sizes are integral px here, and the loosest real
  * deviation observed is the 0.02px a modal's entry transform introduces — well
  * inside this, and far below the 1px that separates any two sizes in the
  * estate's old spread.
  */
 const SIZE_EPSILON = 0.25
+
+/**
+ * Sub-pixel slack for arm 4, and it is load-bearing rather than cosmetic.
+ *
+ * A `min-height` floor puts a compliant row at EXACTLY the token, so every row
+ * this arm passes sits on a knife edge: any transform in the ancestor chain —
+ * a modal's ~0.999 entry scale is the one in this codebase — reports 23.976px
+ * for a 24px row and turns a correct row into a failure. That is not
+ * hypothetical: the 121-of-167 figure in bead `3h2u1` is best explained by a
+ * measurement taken mid-entry-transition (bead `iotbh`), which counts the 33
+ * rows sitting at exactly 24px as breaches.
+ *
+ * A quarter of a CSS pixel is not a target-size question by any reading of
+ * 2.5.8, and it is two orders of magnitude below the 6px that separated the
+ * shortest failing row from the floor.
+ */
+const TARGET_EPSILON = 0.25
 
 /**
  * Minimum visible checkbox/radio controls the whole walk must yield.
@@ -216,6 +292,9 @@ interface Control {
   text: string
   widthPx: number
   heightPx: number
+  /** The pointer target: control rect ∪ every visible associated label rect. */
+  targetWidthPx: number
+  targetHeightPx: number
   labelled: boolean
   /** Which step of the accname cascade produced the name; `NONE` = unnamed. */
   nameFrom: 'aria-labelledby' | 'aria-label' | 'label' | 'title' | 'NONE'
@@ -223,7 +302,8 @@ interface Control {
 }
 
 /**
- * Resolve `--control-box-size` the way the browser does.
+ * Resolve a length token the way the browser does. Used for
+ * `--control-box-size` (arm 1) and `--control-target-min` (arm 4).
  *
  * Not `getPropertyValue()` alone: the token may be written in any unit, and a
  * declared string is not a rendered length. A probe element is given the
@@ -233,19 +313,20 @@ interface Control {
  * that is the pre-fix state, and it must fail loudly rather than quietly
  * comparing everything to zero.
  */
-async function resolveBoxToken(page: Page): Promise<{ declared: string; px: number | null }> {
-  return page.evaluate(() => {
-    const declared = getComputedStyle(document.documentElement)
-      .getPropertyValue('--control-box-size')
-      .trim()
+async function resolveLengthToken(
+  page: Page,
+  name: string
+): Promise<{ declared: string; px: number | null }> {
+  return page.evaluate((token) => {
+    const declared = getComputedStyle(document.documentElement).getPropertyValue(token).trim()
     const probe = document.createElement('div')
-    probe.style.cssText = 'position:absolute;left:-9999px;top:0;height:0;width:var(--control-box-size)'
+    probe.style.cssText = `position:absolute;left:-9999px;top:0;height:0;width:var(${token})`
     document.body.appendChild(probe)
     const used = getComputedStyle(probe).width
     probe.remove()
     const px = Number.parseFloat(used)
     return { declared, px: declared !== '' && Number.isFinite(px) && px > 0 ? px : null }
-  })
+  }, name)
 }
 
 /** The `#settings/<section>` sub-routes, read from the settings nav itself. */
@@ -305,14 +386,28 @@ const COLLECT = `(() => {
     const cs = getComputedStyle(el);
     const cls = (typeof el.className === 'string' ? el.className : '').trim().split(/\\s+/).filter(Boolean);
     // A label only extends the target if it can actually be pointed at.
-    const labelled = [...(el.labels || [])].some((l) => {
+    const pointable = [...(el.labels || [])].filter((l) => {
       const lcs = getComputedStyle(l);
       if (lcs.pointerEvents === 'none' || lcs.display === 'none' || lcs.visibility === 'hidden') return false;
       const lr = l.getBoundingClientRect();
       return lr.width > 1 && lr.height > 1;
     });
+    const labelled = pointable.length > 0;
+    // THE POINTER TARGET (arm 4): the smallest rect enclosing the control and
+    // every label that can be pointed at. Bounding rects, not used width — a
+    // target is measured where it lands on the screen, transform included,
+    // which is the opposite of the box measurement two lines down.
+    const own = el.getBoundingClientRect();
+    let l0 = own.left, t0 = own.top, r0 = own.right, b0 = own.bottom;
+    for (const lab of pointable) {
+      const lr = lab.getBoundingClientRect();
+      l0 = Math.min(l0, lr.left); t0 = Math.min(t0, lr.top);
+      r0 = Math.max(r0, lr.right); b0 = Math.max(b0, lr.bottom);
+    }
     const named = accName(el);
     out.push({
+      targetWidthPx: Math.round((r0 - l0) * 100) / 100,
+      targetHeightPx: Math.round((b0 - t0) * 100) / 100,
       signature: 'input[type=' + el.type + ']' + cls.map((c) => '.' + c).join(''),
       site: siteOf(el),
       text: ((el.labels && el.labels[0] ? el.labels[0].textContent : '') || '').trim().slice(0, 40),
@@ -336,12 +431,12 @@ test.describe('checkbox and radio boxes take one token, and their labels are par
   })
 
   /**
-   * ONE walk, both arms, one login.
+   * ONE walk, all four arms, one login.
    *
-   * Not two tests: `fullyParallel` would put them in separate workers, each
+   * Not four tests: `fullyParallel` would put them in separate workers, each
    * running `beforeAll` and so each logging in, against an endpoint
    * rate-limited at `5/minute` that every other guard in this set also draws
-   * on (`fixtures/css-guard.ts`, note 1). Both arms assert softly, so one run
+   * on (`fixtures/css-guard.ts`, note 1). Every arm asserts softly, so one run
    * reports every category at once and a size failure can never mask a label
    * failure.
    *
@@ -356,10 +451,12 @@ test.describe('checkbox and radio boxes take one token, and their labels are par
     const page = await openApp(browser, storageState, VIEWPORTS[0])
     const found: Control[] = []
     let token: { declared: string; px: number | null } = { declared: '', px: null }
+    let targetToken: { declared: string; px: number | null } = { declared: '', px: null }
     let settingsRoutes: RouteSpec[] = []
 
     try {
-      token = await resolveBoxToken(page)
+      token = await resolveLengthToken(page, '--control-box-size')
+      targetToken = await resolveLengthToken(page, '--control-target-min')
       settingsRoutes = await discoverSettingsRoutes(page)
       const routes = [...PRIMARY_ROUTES, ...settingsRoutes]
 
@@ -404,6 +501,20 @@ test.describe('checkbox and radio boxes take one token, and their labels are par
               `Every checkbox and radio in this application is sized by that token; without it there ` +
               `is nothing to compare a rendered box against and both arms below would pass vacuously.\n` +
               `Define it in the "Icon Size Scale" group of frontend/src/index.css, beside --icon-action.`
+      )
+      .not.toBeNull()
+
+    expect
+      .soft(
+        targetToken.px,
+        targetToken.px !== null
+          ? ''
+          : `--control-target-min does not resolve to a length on :root (declared: ` +
+              `${targetToken.declared === '' ? '<absent>' : `"${targetToken.declared}"`}).\n` +
+              `Arm 4 compares every rendered pointer target against that token; without it the arm ` +
+              `would compare every row against zero and pass vacuously.\n` +
+              `Define it in frontend/src/index.css beside --control-box-size (bead ` +
+              `enhancedchannelmanager-3h2u1).`
       )
       .not.toBeNull()
 
@@ -600,5 +711,74 @@ test.describe('checkbox and radio boxes take one token, and their labels are par
               staleUnnamed.map((a) => `  ${a.route} ${a.site} — ${a.note}`).join('\n')
       )
       .toEqual([])
+
+    // ── ARM 4: the target is big enough to hit ────────────────────────────
+    //
+    // Arm 2 asks whether a label extends the target; this asks whether the
+    // result clears WCAG 2.5.8's 24x24 CSS px floor. Independent again: on the
+    // pre-fix tree every one of the 91 short rows HAD a working label and
+    // passed arm 2, and none of them was under 24px wide.
+    if (targetToken.px !== null) {
+      const floor = targetToken.px
+      const tooSmall = found.filter(
+        (c) =>
+          c.targetWidthPx < floor - TARGET_EPSILON || c.targetHeightPx < floor - TARGET_EPSILON
+      )
+      const targetAllowed = (c: Control) =>
+        ALLOWED_SMALL_TARGET.some((a) => a.route === c.route && a.site === c.site)
+      const unexpectedSmall = tooSmall.filter((c) => !targetAllowed(c))
+      const staleSmall = ALLOWED_SMALL_TARGET.filter(
+        (a) => !tooSmall.some((c) => c.route === a.route && c.site === a.site)
+      )
+
+      const targetGroups = new Map<string, { cells: number; sample: Control }>()
+      for (const c of unexpectedSmall) {
+        const key = `${c.route}|${c.site}|${c.signature}|${c.targetWidthPx}x${c.targetHeightPx}`
+        const hit = targetGroups.get(key)
+        if (hit) hit.cells += 1
+        else targetGroups.set(key, { cells: 1, sample: c })
+      }
+
+      expect
+        .soft(
+          [...targetGroups.keys()],
+          unexpectedSmall.length === 0
+            ? ''
+            : `${targetGroups.size} checkbox/radio site(s) have a pointer target smaller than ` +
+                `--control-target-min (${targetToken.declared} = ${floor}px, resolved this run ` +
+                `through a probe element rather than hardcoded) — under the WCAG 2.5.8 (AA) ` +
+                `minimum.\n\n` +
+                [...targetGroups.values()]
+                  .sort((a, b) => b.cells - a.cells || a.sample.route.localeCompare(b.sample.route))
+                  .map(
+                    ({ cells, sample }) =>
+                      `  ${sample.route.padEnd(28)} ${sample.site.padEnd(26)} ` +
+                      `${sample.targetWidthPx}x${sample.targetHeightPx}px  ` +
+                      `(box ${sample.widthPx}x${sample.heightPx}, ${cells} viewport/theme cell(s))` +
+                      (sample.text ? `  e.g. "${sample.text}"` : '')
+                  )
+                  .join('\n') +
+                `\n\nThe height comes from the ROW, never from the box: --control-box-size stays at ` +
+                `${token.px}px because an 18px box beside 13px text is what made Settings read ` +
+                `oversized (bead enhancedchannelmanager-7lwe0), and 24px would be worse. If the label ` +
+                `WRAPS its input the base rule in frontend/src/index.css already gives it the floor, ` +
+                `so a failure here means a component rule is overriding min-height — delete that, ` +
+                `do not restate 24px. If the label points at the input with "for" the base rule ` +
+                `cannot see it (CSS cannot ask what a label points at) and the site needs its own ` +
+                `min-height, as .settings-section .checkbox-content does.\n`
+        )
+        .toEqual([])
+
+      expect
+        .soft(
+          staleSmall,
+          staleSmall.length === 0
+            ? ''
+            : `${staleSmall.length} ALLOWED_SMALL_TARGET entr(ies) now clear the floor — that is the ` +
+                `outcome the list exists to drive, so delete the entry:\n` +
+                staleSmall.map((a) => `  ${a.route} ${a.site} — ${a.note}`).join('\n')
+        )
+        .toEqual([])
+    }
   })
 })
