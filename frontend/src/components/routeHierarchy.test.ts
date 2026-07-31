@@ -135,7 +135,6 @@ describe('primary route hierarchy', () => {
   it('uses only current stable Settings hashes for directly related configuration', () => {
     const links = Object.values(ROUTE_HIERARCHY).flatMap((route) => route.settingsLinks ?? []);
     expect(links.map((link) => link.href)).toEqual([
-      '#settings/channel-defaults',
       '#settings/channel-pipeline',
       '#settings/m3u-digest',
     ]);
@@ -147,6 +146,12 @@ describe('primary route hierarchy', () => {
     // header link was a third path to a page that was never at risk of being
     // orphaned.
     expect(ROUTE_HIERARCHY['m3u-manager'].settingsLinks).toBeUndefined();
+    // Bead enhancedchannelmanager-mer2o removed Channel Manager's
+    // `#settings/channel-defaults` link on the same reasoning, and is pinned the
+    // same way: Channel Defaults carries its own Settings navigation entry, so
+    // the header link was a second path to a page never at risk of being
+    // orphaned.
+    expect(ROUTE_HIERARCHY['channel-manager'].settingsLinks).toBeUndefined();
   });
 
   it.each([

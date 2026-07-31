@@ -43,11 +43,18 @@ function route(
 
 export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
   dashboard: route('OVERVIEW', 'dashboard', 'Review ECM status and move directly to the workspace that needs attention.'),
+  // No related-settings link, on the same reasoning that removed M3U Manager's
+  // (see below, bead enhancedchannelmanager-hmr0e). Channel Defaults is a
+  // standing Settings destination with its own navigation entry, so the header
+  // link was a second path to a page that was never at risk of being orphaned.
+  // Removing it leaves this header's meta row with no occupant, so
+  // PageHeader.css collapses it here too — Channel Manager was the negative case
+  // in that rule's test and is now a second positive one
+  // (bead enhancedchannelmanager-mer2o).
   'channel-manager': route(
     'OPERATIONS',
     'channel-manager',
     'Build and maintain the channel lineup and its assigned streams.',
-    [{ href: '#settings/channel-defaults', label: 'Channel default settings' }],
   ),
   guide: route('INSIGHTS', 'guide', 'Review scheduled programming across the active channel lineup.'),
   // No related-settings link. `#settings/linked-accounts` is a standing Settings

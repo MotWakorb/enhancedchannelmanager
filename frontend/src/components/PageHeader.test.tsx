@@ -183,11 +183,20 @@ describe('PageHeader', () => {
   // way App.tsx composes it per route (status is the portal outlet div; the links
   // come from ROUTE_HIERARCHY) and run the stylesheet's own selector against the
   // rendered DOM. That fails if either the route data or the selector moves, and
-  // Channel Manager is carried alongside as the negative: it still has a link, so
-  // its row must keep standing.
+  // Channel Manager was carried alongside as the negative, because it still had a
+  // link. Bead enhancedchannelmanager-mer2o removed that link at the PO's request,
+  // so its row now collapses too and it is a second positive case.
+  //
+  // THAT LEAVES NO NEGATIVE CASE, and the gap is deliberate rather than
+  // overlooked: `#settings/channel-pipeline` and `#settings/m3u-digest` are the
+  // only surviving related links, and both belong to routes whose meta row also
+  // carries other occupants, so neither exercises "a link alone keeps the row
+  // standing". A route that reintroduces a lone related link should be added here
+  // as the negative — until then this asserts only that the selector matches an
+  // empty row, not that it declines to match a populated one.
   it.each([
     ['m3u-manager', true],
-    ['channel-manager', false],
+    ['channel-manager', true],
   ] as const)('collapses the empty %s meta row: %s', (tab, collapses) => {
     const header = readFileSync(resolve(process.cwd(), 'src/components/PageHeader.css'), 'utf8');
     const selector = /^(\.page-header-meta:has\([^{]*?)\s*\{/m.exec(header)?.[1];
