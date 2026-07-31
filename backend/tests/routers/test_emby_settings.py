@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.conftest import patch_ssrf_dns as _patch_ssrf_dns
+
 
 class TestEmbyTestConnection:
     """Tests for POST /api/settings/emby/test-connection (bd-8wc6q)."""
@@ -352,16 +354,23 @@ class TestEmbyTestConnectionSsrfMitigation:
 
 
 class TestEmbyTestConnectionLoopbackDenylist:
-    """Loopback / link-local SSRF denylist — security finding SEC-2
-    follow-up (bd-fbc50).
+    """Host SSRF policy on Test Connection — SEC-2 follow-up (bd-fbc50),
+    re-pointed at the mode-aware chokepoint by GH #754 / bead ``0yh70``.
 
     The scheme allowlist alone still permitted an authenticated admin to
     point Test Connection at the ECM host's own loopback services or at
-    the cloud instance-metadata IP (169.254.169.254). This suite is the
-    regression target for the host denylist added to
-    ``_sanitize_base_url``. RFC1918 LAN ranges are intentionally LEFT
-    reachable (Plex/Emby/Jellyfin run on the operator's LAN) — see the
-    ``Allowed`` cases below.
+    the cloud instance-metadata IP (169.254.169.254). ``_sanitize_base_url``
+    used to answer that with a hardcoded, non-mode-aware loopback +
+    link-local denylist; it now delegates to
+    ``security.ssrf.validate_outbound_url`` under the persisted
+    ``ssrf_outbound_mode``, so:
+
+    * link-local / IMDS stay denied in BOTH modes (always-on denylist),
+    * loopback and RFC1918 follow the wizard toggle — allowed under
+      ``lan_friendly`` (the shipped default, ADR-012 D4), denied under
+      ``public_only``,
+
+    and this endpoint now agrees with what POST /api/settings will accept.
 
     Denial coverage lives here on the shared helper (Emby path). Plex and
     Jellyfin get a single smoke each in their own files, since all three
@@ -372,20 +381,23 @@ class TestEmbyTestConnectionLoopbackDenylist:
         "base_url",
         [
             "http://169.254.169.254/latest/meta-data/",  # cloud metadata IMDS
-            "http://localhost",
-            "http://localhost:8096",
-            "http://127.0.0.1",
-            "http://127.0.0.5:8096",  # anywhere in 127.0.0.0/8
-            "http://[::1]",
-            "http://[fe80::1]",  # IPv6 link-local
+            "http://169.254.1.1",                        # 169.254.0.0/16
+            "http://[fe80::1]",                          # IPv6 link-local
+            "http://[fd12:3456:789a::1]",                # IPv6 ULA
+            "http://100.64.0.1",                         # CGNAT
         ],
     )
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
     @pytest.mark.asyncio
-    async def test_rejects_loopback_and_link_local(self, async_client, base_url):
-        """Loopback / link-local hosts are rejected inline before
-        EmbyClient is ever constructed — no HTTP probe is issued."""
+    async def test_rejects_always_on_denylist_in_both_modes(
+        self, async_client, base_url, mode,
+    ):
+        """Always-on denied hosts are rejected inline before EmbyClient is
+        ever constructed — no HTTP probe is issued, in EITHER mode."""
+        from security.ssrf import SSRFMode
         emby_constructor = AsyncMock()
-        with patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             patch("routers.settings.EmbyClient", side_effect=emby_constructor):
             response = await async_client.post(
                 "/api/settings/emby/test-connection",
                 json={"base_url": base_url, "api_key": "k"},
@@ -396,6 +408,70 @@ class TestEmbyTestConnectionLoopbackDenylist:
         assert body["ok"] is False
         assert "host" in body["error"].lower()
         emby_constructor.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://127.0.0.1",
+            "http://127.0.0.5:8096",  # anywhere in 127.0.0.0/8
+            "http://[::1]",
+            "http://192.168.1.50:8096",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_toggled_band_in_public_only(self, async_client, base_url):
+        """Loopback + RFC1918 are refused under the ``public_only`` opt-in."""
+        from security.ssrf import SSRFMode
+        emby_constructor = AsyncMock()
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": base_url, "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://127.0.0.1",
+            "http://127.0.0.5:8096",
+            "http://[::1]",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_allows_loopback_in_lan_friendly(self, async_client, base_url):
+        """GH #754: loopback is reachable under the shipped default.
+
+        An Emby sharing ECM's network namespace (gluetun, ``network_mode:
+        host``, a sidecar) is only addressable as loopback. This is the
+        same policy POST /api/settings now applies, so Test Connection can
+        no longer prove a connection the save path would refuse.
+        """
+        from security.ssrf import SSRFMode
+        mock_client = AsyncMock()
+        mock_client.get_sessions = AsyncMock(return_value=[])
+        mock_client.close = AsyncMock()
+
+        captured: dict = {}
+
+        def constructor_spy(base_url_arg, api_key):
+            captured["base_url"] = base_url_arg
+            return mock_client
+
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             patch("routers.settings.EmbyClient", side_effect=constructor_spy):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": base_url, "api_key": "k"},
+            )
+
+        assert response.status_code == 200, response.json()
+        assert response.json() == {"ok": True}
+        assert captured["base_url"] == base_url
 
     @pytest.mark.asyncio
     async def test_rejects_metadata_ip_explicitly(self, async_client):
@@ -472,20 +548,66 @@ class TestEmbyTestConnectionLoopbackDenylist:
         assert captured["base_url"] == "https://emby.example.com:8920"
 
     @pytest.mark.asyncio
-    async def test_resolved_name_pointing_at_loopback_is_blocked(self, async_client):
-        """A hostname that RESOLVES to a loopback/link-local IP is blocked
-        too (defense against DNS pointing an innocuous name at 127.0.0.1).
-        We patch getaddrinfo so the test does not depend on live DNS."""
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
+    @pytest.mark.asyncio
+    async def test_resolved_name_pointing_at_metadata_is_blocked(self, async_client, mode):
+        """A hostname that RESOLVES to IMDS is blocked in BOTH modes.
+
+        Defence against DNS pointing an innocuous name at the metadata
+        endpoint. We patch the chokepoint's resolver so the test does not
+        depend on live DNS. (Was ``..._pointing_at_loopback_...`` and patched
+        ``routers.settings.socket.getaddrinfo``; the router no longer resolves
+        anything itself — ``security.ssrf`` owns resolution — and loopback is
+        now mode-dependent, so the always-denied target is what proves the
+        rebinding guard unconditionally. The loopback half is below.)
+        """
+        from security.ssrf import SSRFMode
         emby_constructor = AsyncMock()
-        fake_getaddrinfo = lambda *a, **k: [  # noqa: E731 — test stub
-            (2, 1, 6, "", ("127.0.0.1", 0)),
-        ]
-        with patch("routers.settings.EmbyClient", side_effect=emby_constructor), patch(
-            "routers.settings.socket.getaddrinfo", side_effect=fake_getaddrinfo
-        ):
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             _patch_ssrf_dns("169.254.169.254"), \
+             patch("routers.settings.EmbyClient", side_effect=emby_constructor):
             response = await async_client.post(
                 "/api/settings/emby/test-connection",
                 json={"base_url": "http://sneaky.attacker.example", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resolved_name_pointing_at_loopback_is_blocked_in_public_only(
+        self, async_client,
+    ):
+        """The same rebinding guard covers the toggled band under public_only."""
+        from security.ssrf import SSRFMode
+        emby_constructor = AsyncMock()
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             _patch_ssrf_dns("127.0.0.1"), \
+             patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": "http://sneaky.attacker.example", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        emby_constructor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_one_denied_record_rejects_the_whole_host(self, async_client):
+        """Split-horizon DNS: one public + one IMDS record -> rejected.
+
+        §9.4 item 3 — never "pick the allowed one". Asserted here because the
+        settings surface now shares the chokepoint rather than carrying its
+        own resolver loop.
+        """
+        emby_constructor = AsyncMock()
+        with _patch_ssrf_dns("93.184.216.34", "169.254.169.254"), \
+             patch("routers.settings.EmbyClient", side_effect=emby_constructor):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": "http://split.attacker.example", "api_key": "k"},
             )
 
         assert response.status_code == 200

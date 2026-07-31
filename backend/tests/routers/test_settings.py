@@ -14,6 +14,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.conftest import closing_create_task_mock
+from tests.conftest import patch_ssrf_dns as _patch_ssrf_dns
 
 
 def _mock_settings(**overrides):
@@ -1125,6 +1126,130 @@ class TestTestConnection:
         body = response.json()
         assert body["success"] is False
         assert "api key" in body["message"].lower()
+
+
+class TestTestConnectionOutboundPolicy:
+    """POST /api/settings/test enforces the SAME outbound policy as save.
+
+    GH #754 / bead ``0yh70``. The reporter's Test Connection SUCCEEDED against
+    ``http://localhost:9191`` and the save was then refused — because this
+    endpoint carried its own inline scheme+netloc check and never consulted
+    the host policy at all, while POST /api/settings ran the full validator.
+    Proving a connection works and then being refused permission to store it
+    is its own defect; so is the security half of the same gap — this endpoint
+    POSTs the operator-supplied username/password (or GETs with ``X-API-Key``)
+    to any host the caller names, with no host policy whatsoever.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
+    async def test_metadata_host_rejected_without_probing(self, async_client, mode):
+        """IMDS is refused in BOTH modes and no HTTP request is issued."""
+        from security.ssrf import SSRFMode
+        http_client = MagicMock()
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             patch("httpx.AsyncClient", return_value=http_client) as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://169.254.169.254",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "host" in body["message"].lower()
+        # The credential never left the process.
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_localhost_accepted_in_lan_friendly(self, async_client):
+        """The GH #754 URL still tests fine under the shipped default."""
+        from security.ssrf import SSRFMode
+        me_response = MagicMock()
+        me_response.status_code = 200
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.get = AsyncMock(return_value=me_response)
+
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://localhost:9191",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json()["success"] is True
+        assert mock_http_client.get.await_args[0][0].startswith("http://localhost:9191/")
+
+    @pytest.mark.asyncio
+    async def test_localhost_rejected_in_public_only(self, async_client):
+        """...and is refused under ``public_only``, matching the save path."""
+        from security.ssrf import SSRFMode
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             patch("httpx.AsyncClient") as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://localhost:9191",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json()["success"] is False
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_rejected(self, async_client):
+        """Pre-existing scheme allowlist survives the rewire."""
+        with patch("httpx.AsyncClient") as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "file:///etc/passwd",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "scheme" in body["message"].lower()
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_host_is_not_a_policy_rejection(self, async_client):
+        """An offline/unknown host must still be testable (fail-open on DNS).
+
+        The chokepoint fails CLOSED on resolution failure, which is right for
+        the connect path but wrong here: the operator is testing a host that
+        may legitimately be down. It must reach the probe and report a normal
+        connection error, not a policy refusal.
+        """
+        import socket as _socket
+
+        import httpx
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.post = AsyncMock(side_effect=httpx.ConnectError("nope"))
+
+        from security import ssrf as _ssrf
+
+        def _boom(host, port):
+            raise _socket.gaierror("Name or service not known")
+
+        with patch.object(_ssrf, "_resolve", _boom), \
+             patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr.offline:8000",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "could not connect" in body["message"].lower()
 
 
 class TestTestSMTP:
@@ -2481,18 +2606,135 @@ class TestSettingsSsrfOnSave:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_loopback_host_rejected(self, async_client):
-        """Saving a loopback base URL -> 400."""
-        current = _mock_settings()
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
+    @pytest.mark.parametrize("field,enable_field", [
+        ("emby_base_url", "emby_enabled"),
+        ("url", None),
+    ])
+    async def test_link_local_metadata_rejected_in_both_modes(
+        self, async_client, mode, field, enable_field,
+    ):
+        """IMDS stays blocked in BOTH modes — GH #754 / ``0yh70``.
+
+        This is the half that is easy to lose while making loopback work.
+        Reasoning for the both-modes call is on
+        ``test_ssrf_guard.TestAlwaysOnDenylist
+        .test_link_local_denied_in_both_modes_deliberately``.
+        """
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode=mode)
         s1, s2, s3, s4, s5 = _save_mocks()
         with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload[field] = "http://169.254.169.254"
+            # Changing the connection URL re-requires the password; supplying
+            # it keeps the 400 attributable to the SSRF policy, not the gate.
+            payload["password"] = "secret"
+            if enable_field:
+                payload[enable_field] = True
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        detail = response.json()["detail"]
+        assert "169.254" in detail or "denied" in detail.lower(), detail
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gh754_localhost_dispatcharr_url_saves_in_lan_friendly(self, async_client):
+        """GH #754: ``http://localhost:9191`` saves under the shipped default.
+
+        The reporter runs Dispatcharr behind a shared gluetun network, so
+        ``localhost`` is the only address that reaches it. Test Connection
+        succeeded and the running app polls that URL happily — only the save
+        validator refused it.
+
+        DNS is patched with the record set a real container returns
+        (``::1`` first, then ``127.0.0.1`` — captured from ``docker run --rm
+        python:3.12-slim``), because Docker's generated ``/etc/hosts`` maps
+        ``localhost`` dual-stack and §9.4 item 3 rejects the whole request if
+        ANY record is denied. A v4-only fixture would pass without proving the
+        reported case.
+        """
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://localhost:9191"
+            # Changing the connection URL re-requires the password.
+            payload["password"] = "secret"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Round-trips verbatim — scheme + netloc, port preserved.
+        assert saved.url == "http://localhost:9191"
+
+    @pytest.mark.asyncio
+    async def test_gh754_localhost_dispatcharr_url_rejected_in_public_only(self, async_client):
+        """The same URL is still refused under ``public_only`` (the opt-in)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://localhost:9191"
+            payload["password"] = "secret"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", [
+        "http://127.0.0.1:8096",
+        "http://127.0.0.5:8096",
+        "http://[::1]:8096",
+    ])
+    async def test_loopback_literal_allowed_in_lan_friendly(self, async_client, base_url):
+        """Literal loopback saves under the shipped default (ADR-012 D4)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
              s1 as mock_save, s2, s3, s4, s5:
             payload = _full_payload(current)
             payload["emby_enabled"] = True
-            payload["emby_base_url"] = "http://127.0.0.1:8096"
+            payload["emby_base_url"] = base_url
             response = await async_client.post("/api/settings", json=payload)
 
-        assert response.status_code == 400
+        assert response.status_code == 200, response.json()
+        assert mock_save.call_args[0][0].emby_base_url == base_url
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", [
+        "http://127.0.0.1:8096",
+        "http://127.0.0.5:8096",
+        "http://[::1]:8096",
+    ])
+    async def test_loopback_literal_rejected_in_public_only(self, async_client, base_url):
+        """...and is still refused under ``public_only``."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = base_url
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio

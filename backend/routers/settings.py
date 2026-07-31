@@ -4,11 +4,9 @@ Settings router — Dispatcharr connection, preferences, and service management 
 Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import asyncio
-import ipaddress
 import logging
 import re
 import secrets
-import socket
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -216,24 +214,23 @@ def _validate_outbound_base_url_on_save(field_label: str, raw_url: str) -> str:
     stored key every few seconds — SSRF + key exfiltration. This closes that
     by validating EVERY non-empty outbound base URL on save.
 
-    Two-stage validation, reusing the existing chokepoints (no new policy):
+    Validation reuses the existing chokepoint — :func:`_sanitize_base_url` —
+    which applies the scheme allowlist, netloc-only reconstruction (strips any
+    path/query/fragment an attacker embedded) and the mode-aware host policy
+    from ``security.ssrf.validate_outbound_url`` under the persisted
+    ``ssrf_outbound_mode``.
 
-    1. :func:`_sanitize_base_url` — scheme allowlist (http/https only) and
-       netloc-only reconstruction (strips any path/query/fragment an attacker
-       embedded). Raises 400 on a bad scheme / missing host.
-    2. ``security.ssrf.validate_outbound_url`` under the persisted
-       ``ssrf_outbound_mode`` — the CANONICAL, mode-aware host validator
-       (PR #560 nngkg). LAN-friendly allows RFC1918; public-only blocks it;
-       the always-on denylist (loopback / link-local / IMDS / ULA / CGNAT /
-       multicast) is rejected in BOTH modes. Routing through it here means the
-       save path respects the same outbound policy as the DBAS cloud adapters.
+    GH #754 / bead ``0yh70``: this used to be two stages, and stage 1 carried
+    its OWN hardcoded loopback denylist that pre-empted the mode-aware stage 2
+    — so ``lan_friendly`` (the shipped default, ADR-012 D4) could never be
+    honoured for loopback and ``http://localhost:9191`` was un-saveable even
+    though the app ran fine on it. Policy now lives in exactly one place, and
+    the save path accepts precisely what the test-connection endpoints accept.
 
     Empty input is the caller's responsibility to skip (empty = operator
     disabling an integration; must remain allowed). Returns the sanitized URL
     (scheme + netloc only) for storage.
     """
-    from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
-
     sanitized, err = _sanitize_base_url(raw_url)
     if err is not None or sanitized is None:
         logger.info(
@@ -241,44 +238,6 @@ def _validate_outbound_base_url_on_save(field_label: str, raw_url: str) -> str:
         )
         raise HTTPException(
             status_code=400, detail=f"Invalid {field_label}: {err}"
-        )
-
-    try:
-        # Host validation under the active outbound mode. We persist the
-        # sanitized scheme+netloc URL (the runtime media-server client
-        # re-validates + connects-by-IP at request time); here we just refuse
-        # to STORE a base URL whose host the policy denies.
-        validate_outbound_url(sanitized, get_ssrf_mode())
-    except SSRFError as exc:
-        # The chokepoint fails CLOSED on DNS resolution failure (correct for
-        # the connect path). On the SAVE path that is too aggressive: a
-        # legitimate LAN media server that is simply offline right now would
-        # become un-saveable, and an unrelated pref edit could be blocked.
-        # So we ALLOW a save whose host could not be RESOLVED (the runtime
-        # client re-validates before it ever connects), but we REJECT a host
-        # that positively resolves to — or is a literal — denied address
-        # (loopback / link-local / IMDS / RFC1918-in-public-only / …). That
-        # keeps the SSRF block on the attack (point ECM at 169.254.169.254 /
-        # 127.0.0.1) while not breaking the offline-LAN-server save.
-        message = str(exc)
-        resolution_failure = (
-            "could not resolve host" in message.lower()
-            or "resolved to no usable address" in message.lower()
-        )
-        if resolution_failure:
-            logger.info(
-                "[SETTINGS] %s host did not resolve on save; allowing store "
-                "(runtime re-validates before connect): %s", field_label, exc
-            )
-            return sanitized
-        # Positively-denied host (or bad literal IP) — reject. Message is
-        # admin-safe and carries no secret; surface the policy reason inline.
-        logger.info(
-            "[SETTINGS] Rejected %s on save (SSRF policy): %s", field_label, exc
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid {field_label}: {exc}",
         )
     return sanitized
 
@@ -1322,19 +1281,32 @@ async def update_settings(
 
 @router.post("/test")
 async def test_connection(request: TestConnectionRequest):
-    """Test connection to Dispatcharr with provided credentials."""
+    """Test connection to Dispatcharr with provided credentials.
+
+    GH #754 / bead ``0yh70``: this endpoint used to carry its own inline
+    scheme + netloc check and NO host policy at all, while POST /api/settings
+    ran the full validator. Two consequences, both fixed by routing through
+    the shared :func:`_sanitize_base_url`:
+
+    * the reporter could prove ``http://localhost:9191`` worked here and then
+      be refused permission to save it — a connection you can test but not
+      store is its own defect, independent of the policy question;
+    * it was an unguarded credential-carrying SSRF sink. It POSTs the
+      operator-supplied username/password (or GETs with ``X-API-Key``) to any
+      host the caller names, and echoes the upstream status back — a working
+      internal port scanner that reached ``169.254.169.254`` while the
+      equivalent Emby / Plex / Jellyfin endpoints were guarded.
+    """
     import httpx
 
     logger.debug("[SETTINGS-TEST] POST /api/settings/test")
-    # Validate and reconstruct URL from parsed components to prevent SSRF
-    from urllib.parse import urlparse, urlunparse
-    parsed = urlparse(request.url)
-    if parsed.scheme not in ("http", "https"):
-        return {"success": False, "message": "Invalid URL scheme - must be http or https"}
-    if not parsed.hostname:
-        return {"success": False, "message": "Invalid URL - no hostname provided"}
-    # Reconstruct URL from validated components (scheme + netloc only)
-    base_url = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    # Scheme allowlist + netloc-only reconstruction + mode-aware host policy —
+    # the SAME chokepoint the save path uses, so test and save agree.
+    base_url, err = _sanitize_base_url(request.url)
+    if err is not None or base_url is None:
+        logger.info("[SETTINGS-TEST] Dispatcharr test rejected by SSRF guard: %s", err)
+        return {"success": False, "message": err}
+    parsed = urlparse(base_url)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if request.auth_method == "api_key":
@@ -1612,92 +1584,72 @@ async def test_telegram_bot(request: TelegramTestRequest):
         return {"success": False, "message": "Unexpected error during Telegram test"}
 
 
-def _ip_is_blocked(ip: ipaddress._BaseAddress) -> bool:
-    """Return True if ``ip`` is loopback or link-local (the SSRF denylist).
+def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
+    """Mode-aware host policy for an operator-supplied base URL.
 
-    Denylist (bd-fbc50 — SSRF hardening, security finding SEC-2 follow-up):
+    GH #754 / bead ``0yh70``. This replaces the hardcoded, non-mode-aware
+    loopback + link-local denylist that ``_sanitize_base_url`` used to carry
+    (bd-fbc50). That denylist pre-empted the canonical validator: it rejected
+    loopback unconditionally, so ``ssrf_outbound_mode`` — which ships as
+    ``lan_friendly`` and explicitly permits loopback + RFC1918 per ADR-012 D4 —
+    could never be honoured. A user running Dispatcharr behind a shared gluetun
+    network (``http://localhost:9191`` is the only address that reaches it) had
+    a working, testable connection that the save path refused to store.
 
-    * **Loopback** — ``127.0.0.0/8`` (IPv4) and ``::1`` (IPv6). Blocks
-      Test Connection from probing services bound to the ECM host itself.
-    * **Link-local** — ``169.254.0.0/16`` (IPv4) and ``fe80::/10`` (IPv6).
-      The IPv4 link-local range contains the cloud instance-metadata
-      endpoint ``169.254.169.254`` (AWS/GCP/Azure IMDS), the canonical
-      SSRF-to-credential-theft pivot.
+    Policy now comes from ONE place, ``security.ssrf.validate_outbound_url``
+    under the persisted mode:
 
-    We DELIBERATELY do NOT block RFC1918 private ranges (``10.0.0.0/8``,
-    ``172.16.0.0/12``, ``192.168.0.0/16``) or IPv6 ULA (``fc00::/7``):
-    Plex / Emby / Jellyfin legitimately run on the operator's LAN, so
-    blocking those would break the primary use case. The bead allowed
-    an "optionally RFC1918-aware" denylist; the right call here is to
-    leave private LAN ranges reachable. ``ipaddress`` stdlib is used for
-    all range checks (no regex — ReDoS-safe by construction).
+    * always-on denylist (link-local / IMDS / ULA / CGNAT / multicast /
+      ``0.0.0.0/8``) — rejected in BOTH modes, no opt-out;
+    * wizard-toggled band (RFC1918 + loopback) — allowed under
+      ``lan_friendly``, rejected under ``public_only``;
+    * every A/AAAA record is checked and ANY denied record rejects the whole
+      URL (the DNS-rebinding mitigation, threat model §9.4 item 3).
+
+    One deliberate adaptation for the settings surface: the chokepoint fails
+    CLOSED on DNS resolution failure, which is right for the connect path but
+    wrong here. A legitimate LAN media server that is simply powered off right
+    now would become both un-testable and un-saveable, and an unrelated
+    preference edit could be blocked by it. So a host that cannot be RESOLVED
+    is NOT a policy denial — the runtime client re-validates before it ever
+    connects. A host that positively resolves to (or literally is) a denied
+    address still fails here.
+
+    Args:
+        url: an already scheme-checked base URL (scheme + netloc).
+
+    Returns:
+        ``None`` when the host is permitted, else an admin-safe explanation of
+        why the active mode denied it (carries no secret).
     """
-    if ip.is_loopback:
-        # 127.0.0.0/8 and ::1
-        return True
-    if ip.is_link_local:
-        # 169.254.0.0/16 (incl. 169.254.169.254 metadata) and fe80::/10
-        return True
-    # IPv4-mapped IPv6 (e.g. ``::ffff:127.0.0.1``) reports neither
-    # is_loopback nor is_link_local on the mapped form — unwrap it and
-    # re-check so the v6 spelling of a blocked v4 address can't slip past.
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        return mapped.is_loopback or mapped.is_link_local
-    return False
+    from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
 
-
-def _host_is_blocked(hostname: str) -> bool:
-    """Return True if ``hostname`` resolves to / is a denylisted address.
-
-    Handles three cases (bd-fbc50):
-
-    1. ``hostname`` is a literal IP (v4 or v6) — check it directly.
-    2. ``hostname`` is the literal name ``localhost`` (any case) — block
-       it without resolving; it is the most common loopback alias and we
-       never want a DNS quirk to make it reachable.
-    3. ``hostname`` is some other name — resolve it (best-effort) and
-       block if ANY resolved address is loopback/link-local. This defends
-       against attacker-controlled DNS that points an innocuous-looking
-       name at ``127.0.0.1`` / ``169.254.169.254`` (DNS-rebinding-style
-       names). Resolution failures are NOT treated as blocks — an
-       unresolvable host simply fails later at the HTTP probe with a
-       normal connection error; failing closed here would reject
-       legitimate-but-currently-offline LAN servers.
-    """
-    name = hostname.strip().rstrip(".")
-    # Case 1: literal IP address.
     try:
-        return _ip_is_blocked(ipaddress.ip_address(name))
-    except ValueError:
-        pass
-    # Case 2: localhost alias — block without resolving.
-    if name.lower() == "localhost":
-        return True
-    # Case 3: resolve the name and check every returned address.
-    try:
-        infos = socket.getaddrinfo(name, None)
-    except (socket.gaierror, UnicodeError, OSError):
-        # Best-effort: don't block on resolution failure (see docstring).
-        return False
-    for info in infos:
-        sockaddr = info[4]
-        try:
-            if _ip_is_blocked(ipaddress.ip_address(sockaddr[0])):
-                return True
-        except ValueError:
-            continue
-    return False
+        validate_outbound_url(url, get_ssrf_mode())
+    except SSRFError as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if ("could not resolve host" in lowered
+                or "resolved to no usable address" in lowered):
+            logger.info(
+                "[SETTINGS] Outbound host did not resolve; not treating as a "
+                "policy denial (runtime re-validates before connect): %s", exc
+            )
+            return None
+        return message
+    return None
 
 
 def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
-    """Sanitize an operator-supplied base URL for media-server test endpoints.
+    """Sanitize + policy-check an operator-supplied outbound base URL.
 
-    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill,
-    extended in bd-fbc50 with a loopback/link-local host denylist).
-    Mirrors the Dispatcharr ``/test`` endpoint pattern (routers.settings.
-    test_connection, around the ``urlparse`` + scheme allowlist +
-    ``urlunparse((scheme, netloc, '', '', '', ''))`` reconstruction):
+    SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill, host policy
+    added in bd-fbc50, re-pointed at the canonical mode-aware chokepoint by
+    GH #754 / bead ``0yh70``). This is the single entry edge for every
+    operator-typed base URL: the Dispatcharr / Emby / Plex / Jellyfin
+    test-connection endpoints AND :func:`_validate_outbound_base_url_on_save`
+    all route through it, so what an operator can prove works is exactly what
+    they are allowed to store.
 
     1. Reject any scheme outside {http, https}. ``file://`` /
        ``gopher://`` / ``ftp://`` / etc. let an attacker pivot the
@@ -1706,19 +1658,16 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
     2. Reject when no hostname is present — without a hostname the
        client would either bind to a default loopback or raise late;
        fail-closed at the entry edge instead.
-    3. Reject loopback / link-local hosts (bd-fbc50). An admin could
-       otherwise point Test Connection at ``127.0.0.1`` / ``::1`` /
-       ``localhost`` (services on the ECM host) or at the cloud
-       instance-metadata IP ``169.254.169.254`` (credential theft).
-       RFC1918 LAN ranges are intentionally LEFT reachable — see
-       :func:`_ip_is_blocked`. Hostnames are resolved where feasible so a
-       name pointing at a blocked IP is also caught.
-    4. Reconstruct the URL from scheme + netloc ONLY, stripping any
+    3. Reconstruct the URL from scheme + netloc ONLY, stripping any
        path / params / query / fragment the operator typed (or an
        attacker tried to embed). The downstream client builds its own
        paths off the base URL — preserving the operator's path would
        let a crafted ``http://attacker.com/legit/path?bypass`` survive
        to the HTTP probe.
+    4. Apply the mode-aware host policy via
+       :func:`_host_denied_by_outbound_policy`. Loopback and RFC1918 follow
+       ``ssrf_outbound_mode``; link-local / IMDS / ULA / CGNAT are denied in
+       both modes.
 
     Returns:
         ``(sanitized_url, None)`` on success; ``(None, error_message)``
@@ -1736,16 +1685,15 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
         return None, "Invalid URL scheme — must be http or https"
     if not parsed.hostname:
         return None, "Invalid base URL — no hostname provided"
-    if _host_is_blocked(parsed.hostname):
-        return None, (
-            "Invalid host — loopback and link-local addresses are not "
-            "allowed (e.g. localhost, 127.0.0.1, ::1, 169.254.169.254)"
-        )
     # Reconstruct from (scheme, netloc, path='', params='', query='',
     # fragment=''). netloc carries hostname + optional port + optional
     # userinfo — the operator's port stays attached, but everything past
-    # the authority is dropped.
+    # the authority is dropped. The policy check runs on the RECONSTRUCTED
+    # URL so it never sees an attacker-embedded path.
     sanitized = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    denial = _host_denied_by_outbound_policy(sanitized)
+    if denial is not None:
+        return None, f"Invalid host — {denial}"
     return sanitized, None
 
 

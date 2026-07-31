@@ -231,10 +231,12 @@ following items extend the checklist; they are acceptance criteria for the Phase
 22. **Always-on denylist regardless of LAN-friendly choice (Addendum B)** — even when the
     first-run wizard (`0i2vt.5`) chose LAN-friendly mode, the validator ALWAYS rejects, with
     no opt-out: link-local `169.254.0.0/16` (incl. IMDS `169.254.169.254/32`), CGNAT
-    `100.64.0.0/10`, `0.0.0.0/8`, IPv6 loopback `::1`, IPv6 ULA `fc00::/7`, IPv6 link-local
+    `100.64.0.0/10`, `0.0.0.0/8`, IPv6 ULA `fc00::/7`, IPv6 link-local
     `fe80::/10`, IPv6 site-local `fec0::/10`, IPv4-mapped-IPv6 `::ffff:0:0/96`, and any
-    non-`http`/`https` scheme. `127.0.0.0/8` and RFC1918 ranges are rejected in public-only mode
-    and allowed in LAN-friendly mode; everything in the always-on list is rejected in **both**.
+    non-`http`/`https` scheme. Loopback (`127.0.0.0/8` **and `::1`**) and RFC1918 ranges are
+    rejected in public-only mode and allowed in LAN-friendly mode; everything in the always-on
+    list is rejected in **both**. *(`::1` moved from always-on to the toggled band by GH #754 /
+    bead `0yh70` — see §9.4 item 2.)*
     Test corpus: each denied range + an IPv4-mapped-IPv6 representation of the IMDS address + a
     `gopher://`/`file://`/`ftp://` scheme → all rejected in both modes. *(B2, B6 — Addendum B;
     ADR-012 D4)*
@@ -545,7 +547,7 @@ untrusted *and* treat the act of connecting as a capability that must be gated.
 | # | Surface | STRIDE | Threat | Attack scenario | Mitigation | Status | Sev |
 |---|---------|--------|--------|-----------------|------------|--------|-----|
 | B1 | CloudTarget config | Tampering / Spoofing | Operator-supplied S3/WebDAV **endpoint URL** is malicious | Admin (or hijacked admin session) sets the "S3 endpoint" to `http://169.254.169.254/` or `http://10.0.0.5:6379/` ("MinIO on the LAN"). ECM dutifully connects on the next backup upload. | Shared SSRF validator (§9.4) on **every** outbound URL before connect — endpoint URLs included, not just tokens. No adapter issues a raw `httpx`/`requests` call that bypasses the validator (single chokepoint). | to-build (`0i2vt.5` + `0i2vt.8`) | **High** |
-| B2 | Any outbound URL | Information Disclosure / EoP | SSRF to cloud metadata / link-local / internal ranges | Destination resolves to `169.254.169.254` → ECM fetches the instance's IAM credentials and (because it's a "backup destination") may even *upload to it* or surface the response in an error. Or destination is `127.0.0.1:<admin-port>` / `100.64.x.x` / `[::1]` and ECM is now an internal-network scanner/proxy. | **Always-on denylist** (regardless of wizard choice): `169.254.0.0/16` (incl. IMDS), `100.64.0.0/10`, `0.0.0.0/8`, `::1`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `::ffff:0:0/96`, non-`http(s)` schemes — *all rejected in both modes*. `127.0.0.0/8` + RFC1918 rejected in public-only mode, allowed in LAN-friendly. (§9.4 item 2.) | to-build (`0i2vt.5`) | **High** |
+| B2 | Any outbound URL | Information Disclosure / EoP | SSRF to cloud metadata / link-local / internal ranges | Destination resolves to `169.254.169.254` → ECM fetches the instance's IAM credentials and (because it's a "backup destination") may even *upload to it* or surface the response in an error. Or destination is `127.0.0.1:<admin-port>` / `100.64.x.x` / `[::1]` and ECM is now an internal-network scanner/proxy. | **Always-on denylist** (regardless of wizard choice): `169.254.0.0/16` (incl. IMDS), `100.64.0.0/10`, `0.0.0.0/8`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `::ffff:0:0/96`, non-`http(s)` schemes — *all rejected in both modes*. Loopback (`127.0.0.0/8` + `::1`) + RFC1918 rejected in public-only mode, allowed in LAN-friendly (`::1` moved to the toggled band by GH #754 / `0yh70`). (§9.4 item 2.) | to-build (`0i2vt.5`) | **High** |
 | B3 | Any outbound URL | Tampering | DNS rebinding / TOCTOU — hostname validated, then re-resolves to a denied IP at connect time (or a redirect lands on one) | Attacker controls `evil.example.com`; first DNS lookup (validation) returns a public IP, second lookup (the actual connect) returns `169.254.169.254`. Or the destination replies `302 → http://169.254.169.254/latest/meta-data/`. The naïve "validate the hostname then `requests.get(hostname)`" pattern is bypassed. | **Resolve-then-connect-by-IP:** resolve once, validate *every* returned A/AAAA against the denylist (any denied record → reject the whole request), connect by the validated IP with the hostname as SNI/`Host:`. **Redirect re-validation:** 3xx to a new host is not auto-followed; re-run the full denylist + resolve-by-IP on the redirect target, and reject `https→http` downgrades. (§9.4 items 3–4.) | to-build (`0i2vt.5`) | **High** |
 | B4 | Cloud adapters | EoP / bypass | An adapter (`s3_adapter.py` etc.) makes a raw HTTP call that skips the validator | The S3 SDK or a WebDAV client library opens its own connection straight from the endpoint URL string, never touching ECM's validator → SSRF protection is theatre. | The validator is the **single chokepoint**: either (a) all adapters route through one ECM-owned HTTP client that validates on every request and pins to the resolved IP, or (b) where an SDK insists on doing its own DNS, ECM pre-resolves + validates and hands the SDK an IP + `Host:` override. CI test: grep adapters for direct `httpx`/`requests`/`urllib` calls; any hit fails the build unless it's the validated client. (§9.4 item 1.) | to-build (`0i2vt.8`) | High |
 | B5 | CloudTarget/SyncTarget creds | Tampering / Repudiation | Scheduled backup uses a *stale* (rotated/revoked) cloud token; or `insecure=true` is set with no audit trail | (a) Admin rotates the Dropbox token; a backup schedule created earlier still fires with the old token — silently failing or, worse, hitting a now-attacker-controlled account that reused the old token. (b) Admin sets `insecure=true` for a self-signed WebDAV box; later that box is MITM'd and nobody knows ECM was talking to it without TLS verification. | (a) `credential_version` + `token_revoked_at` columns on the model (`0i2vt.4`); scheduler captures version at enqueue, worker re-checks at execute, aborts with WARN + audit row on mismatch (Security Mandatory #5). (b) `verify=True` default; `insecure=true` per-target escape hatch writes a `journal.log_entry` (`category='backup_outbound'`, host, `tls_verified=false`) on **every** request, not once at config time. (§9.4 items 5–6, checklist 25–26.) | to-build (`0i2vt.4` + `0i2vt.8`) | Med |
@@ -577,11 +579,27 @@ DNS-rebinding coverage that `zbt74` does not.)
    - Scheme: only `http` and `https`. Reject `file`, `ftp`, `gopher`, `data`, `dict`, etc.
    - Always-on deny (both wizard modes, no opt-out, no settings override, no allowlist):
      `0.0.0.0/8`, `169.254.0.0/16` (incl. `169.254.169.254/32` IMDS), `100.64.0.0/10` (CGNAT),
-     `::1/128`, `fc00::/7` (ULA), `fe80::/10` (link-local), `fec0::/10` (site-local),
+     `fc00::/7` (ULA), `fe80::/10` (link-local), `fec0::/10` (site-local),
      `::ffff:0:0/96` (IPv4-mapped — must be unwrapped and re-checked against the IPv4 rules so
      `::ffff:169.254.169.254` is caught), `::/128`, multicast (`224.0.0.0/4`, `ff00::/8`).
-   - Wizard-toggled: `127.0.0.0/8` and RFC1918 (`10/8`, `172.16/12`, `192.168/16`) + IPv6
-     equivalents — *allowed* in LAN-friendly (default), *rejected* in public-only.
+   - Wizard-toggled: loopback (`127.0.0.0/8` and `::1/128`) and RFC1918 (`10/8`, `172.16/12`,
+     `192.168/16`) — *allowed* in LAN-friendly (default), *rejected* in public-only. There is
+     still no LAN carve-out for an IPv6 *network*: ULA `fc00::/7` and link-local `fe80::/10`
+     stay always-on denied.
+
+     **Amendment (2026-07-31, GH #754 / bead `enhancedchannelmanager-0yh70`).** As originally
+     written this item contradicted itself: the always-on bullet listed `::1/128` while the
+     wizard-toggled bullet read "`127.0.0.0/8` and RFC1918 ... + IPv6 equivalents", and `::1`
+     *is* the IPv6 equivalent of `127.0.0.0/8`. Resolved in favour of the toggled bullet, for
+     loopback ONLY, because (a) `::1` and `127.0.0.1` are the same trust domain — this host's
+     own loopback interface — so denying one while permitting the other blocks no attacker
+     capability; and (b) Docker's generated `/etc/hosts` maps `localhost` to BOTH `::1` and
+     `127.0.0.1`, so with item 3's reject-if-any-record-denied rule an always-on `::1` makes
+     `http://localhost:<port>` unusable in LAN-friendly mode on every container that is not
+     `network_mode: host`. That was the reported GH #754 failure: a first-run operator whose
+     Dispatcharr shares a gluetun network namespace could not save the only address that
+     reaches it. Link-local (incl. IMDS) was re-affirmed as always-on in the same change — it
+     has no legitimate ECM use and is the highest-value target in the set.
 3. **Resolve-then-connect-by-IP (DNS-rebinding mitigation).** Resolve the hostname once; validate
    **every** returned A and AAAA record against the rules; if **any** record is denied, reject the
    whole request (do not "pick the allowed one"). Connect by the validated IP, with the original
