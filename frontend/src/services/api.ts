@@ -1063,116 +1063,12 @@ export async function getHealth(): Promise<HealthResponse> {
   return fetchJson(`${API_BASE}/health`);
 }
 
-// Version check types
-export interface UpdateInfo {
-  updateAvailable: boolean;
-  latestVersion?: string;
-  latestCommit?: string;
-  releaseUrl?: string;
-  releaseNotes?: string;
-}
-
-const GITHUB_REPO = 'MotWakorb/enhancedchannelmanager';
-
-// Compare versions to determine if an update is available
-// Handles build suffixes like "0.10.0-0001" properly
-// Returns true if latestVersion is newer than currentVersion
-function isNewerVersion(latestVersion: string, currentVersion: string): boolean {
-  // Extract base version (before any - suffix)
-  const getBaseVersion = (v: string) => v.split('-')[0];
-  const getBuildNumber = (v: string) => {
-    const parts = v.split('-');
-    return parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
-  };
-
-  const latestBase = getBaseVersion(latestVersion);
-  const currentBase = getBaseVersion(currentVersion);
-
-  // Parse semver parts
-  const parseVersion = (v: string) => {
-    const parts = v.split('.').map(p => parseInt(p, 10) || 0);
-    return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
-  };
-
-  const latest = parseVersion(latestBase);
-  const current = parseVersion(currentBase);
-
-  // Compare major.minor.patch
-  if (latest.major !== current.major) return latest.major > current.major;
-  if (latest.minor !== current.minor) return latest.minor > current.minor;
-  if (latest.patch !== current.patch) return latest.patch > current.patch;
-
-  // Base versions are equal - check build numbers
-  // If current has a build number (e.g., 0.10.0-0001) and latest doesn't (0.10.0),
-  // then current is at or after latest, so no update available
-  const latestBuild = getBuildNumber(latestVersion);
-  const currentBuild = getBuildNumber(currentVersion);
-
-  // Only newer if latest has a higher build number
-  return latestBuild > currentBuild;
-}
-
-// Check for updates based on release channel
-export async function checkForUpdates(
-  currentVersion: string,
-  releaseChannel: string
-): Promise<UpdateInfo> {
-  try {
-    if (releaseChannel === 'dev') {
-      // For dev channel, check package.json version on dev branch
-      const response = await fetch(
-        `https://raw.githubusercontent.com/${GITHUB_REPO}/dev/frontend/package.json`,
-        { cache: 'no-store' }  // Always fetch fresh
-      );
-      if (!response.ok) {
-        throw new Error(`GitHub fetch error: ${response.status}`);
-      }
-      const packageJson = await response.json();
-      const latestVersion = packageJson.version || 'unknown';
-
-      // Compare versions using semantic version comparison
-      const updateAvailable = currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown' &&
-        isNewerVersion(latestVersion, currentVersion);
-
-      return {
-        updateAvailable,
-        latestVersion,
-        releaseUrl: `https://github.com/${GITHUB_REPO}/tree/dev`,
-      };
-    } else {
-      // For latest/stable channel, check GitHub releases
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-        { headers: { 'Accept': 'application/vnd.github.v3+json' } }
-      );
-      if (!response.ok) {
-        if (response.status === 404) {
-          // No releases yet
-          return { updateAvailable: false };
-        }
-        throw new Error(`GitHub API error: ${response.status}`);
-      }
-      const data = await response.json();
-      const latestVersion = data.tag_name?.replace(/^v/, '') || 'unknown';
-
-      // Compare versions using semantic version comparison
-      const updateAvailable = currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown' &&
-        isNewerVersion(latestVersion, currentVersion);
-
-      return {
-        updateAvailable,
-        latestVersion,
-        releaseUrl: data.html_url,
-        releaseNotes: data.body,
-      };
-    }
-  } catch (error) {
-    logger.warn('Failed to check for updates:', error);
-    return { updateAvailable: false };
-  }
-}
+// The update check used to live here (UpdateInfo / isNewerVersion /
+// checkForUpdates) and fed the header's "Update available" pill. Bead
+// enhancedchannelmanager-nhkd4 moved it to backend/services/version_check.py,
+// which reconciles a single notification-centre entry instead: one writer per
+// container rather than one per open tab, and the notice retires itself once
+// the operator has updated. Nothing in the frontend calls GitHub any more.
 
 // Settings
 export type Theme = 'dark' | 'light' | 'high-contrast';

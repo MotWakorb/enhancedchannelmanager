@@ -129,7 +129,6 @@ function App() {
   const [health, setHealth] = useState<api.HealthResponse | null>(null);
   const [healthSourceState, setHealthSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [error, setError] = useState<string | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
 
   // Channels state
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -710,17 +709,11 @@ function App() {
             setHealth(healthData);
             setHealthSourceState({ state: 'success', hasSnapshot: true });
             logger.info('Health check passed', healthData);
-            // Check for updates after health check succeeds
-            if (healthData.version && healthData.release_channel) {
-              api.checkForUpdates(healthData.version, healthData.release_channel)
-                .then(update => {
-                  setUpdateInfo(update);
-                  if (update.updateAvailable) {
-                    logger.info('Update available', update);
-                  }
-                })
-                .catch(err => logger.warn('Update check failed', err));
-            }
+            // No update check here any more (bead nhkd4). It used to run in the
+            // browser to drive the header pill; it now runs server-side
+            // (backend/services/version_check.py) and reconciles a single
+            // notification-centre entry, so every open tab no longer races to
+            // ask GitHub the same question.
           })
           .catch((err) => {
             setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
@@ -2559,22 +2552,14 @@ function App() {
     <div className="app">
       <SkipToMainContent />
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        {/* Reading order (bead 57pp3): the two status indicators sit left of the
-            action icons, upgrade-first, so the row reads "what changed" ->
-            "what is running" -> the controls that act on it. */}
+        {/* Reading order (bead 57pp3, amended by nhkd4): the status indicator
+            sits left of the action icons, so the row reads "what is running"
+            -> the controls that act on it. The "what changed" slot used to be
+            an "Update available" pill; the PO moved that signal into the
+            notification centre (the bell further along this same row), so the
+            upgrade prompt now arrives where every other system message does
+            instead of as a second, differently-shaped status chip. */}
         <div className="header-actions">
-          {updateInfo?.updateAvailable && (
-            <a
-              href={updateInfo.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="header-update-available"
-              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
-            >
-              <span className="material-icons" aria-hidden="true">system_update_alt</span>
-              <span>Update available</span>
-            </a>
-          )}
           <span
             className={`service-status service-status-${serviceStatus.tone}`}
             role="status"

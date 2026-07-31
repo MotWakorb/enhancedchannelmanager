@@ -1201,7 +1201,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         contentType: 'application/json',
         body: JSON.stringify({ status: 'healthy', service: 'ECM', version: '1.0.0', release_channel: 'stable', git_commit: 'fixture' }),
       }))
-      // Drives the header update notice so it is covered rather than skipped.
+      // Hostile fixture for bead nhkd4: GitHub is made to advertise a release
+      // far ahead of the running 1.0.0. The header must STILL show no update
+      // pill — that signal now lives in the notification centre, written
+      // server-side, and the frontend no longer calls GitHub at all (so this
+      // route is expected to go unrequested; it is left in place so the
+      // assertion below cannot pass merely because the fixture went missing).
       await page.route(/api\.github\.com\/repos\/.*\/releases\/latest/, (route) => route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -1236,7 +1241,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await page.getByRole('link', { name: 'Dashboard' }).click()
       await expect(page.getByRole('region', { name: 'System summary' })).toBeVisible()
       await expect(page.locator('.operator-dashboard-card')).toHaveCount(6)
-      await expect(page.locator('.header-update-available')).toBeVisible()
+      await expect(page.locator('.header-update-available')).toHaveCount(0)
       // Proves this test's own journal fixture is the one being served, so the
       // failure override below is known to reach the same handler.
       await expect(page.getByText('9 entries', { exact: true })).toBeVisible()
@@ -1252,7 +1257,6 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
         '.dashboard-card-link',
         '.service-status-label',
         '.service-status-version',
-        '.header-update-available',
       ] as const
 
       for (const state of ['populated', 'partial-failure'] as const) {
@@ -1271,7 +1275,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           await dismissFirstRunPromptIfPresent(page)
           await page.getByRole('link', { name: 'Dashboard', exact: true }).click()
           await expect(page.locator('.dashboard-card-error')).toHaveCount(1)
-          await expect(page.locator('.header-update-available')).toBeVisible()
+          await expect(page.locator('.header-update-available')).toHaveCount(0)
         }
 
         for (const theme of ['dark', 'light', 'high-contrast'] as const) {

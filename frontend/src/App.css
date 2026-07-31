@@ -389,37 +389,6 @@
   border: 0;
 }
 
-.header-update-available {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  height: var(--header-control-height);
-  padding: 0 0.5rem;
-  border-radius: 999px;
-  background-color: var(--warning);
-  color: #1a1a1a;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-decoration: none;
-  animation: pulse-update-ring 2s ease-in-out infinite;
-}
-
-.header-update-available .material-icons {
-  font-size: 16px;
-}
-
-.header-update-available:hover {
-  background-color: var(--warning-hover, #e6a000);
-  color: #1a1a1a;
-  text-decoration: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .header-update-available {
-    animation: none;
-  }
-}
-
 /* NotificationCenter and UserMenu are shared components rendered at their own
    comfortable size elsewhere; only the top bar wants them compact, so these
    overrides are scoped to .header rather than pushed into
@@ -459,19 +428,6 @@
 
 .header .user-menu-arrow {
   font-size: 16px;
-}
-
-/* The ring pulses, not the badge. The previous opacity pulse dropped the label
-   to 4.28:1 against the light-theme header at its 0.7 trough — axe samples
-   mid-animation, and a static full-opacity reading misses it entirely. Nothing
-   here touches text or background colour. */
-@keyframes pulse-update-ring {
-  0%, 100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 55%, transparent);
-  }
-  70% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--warning) 0%, transparent);
-  }
 }
 
 /* Tab Loading Styles */

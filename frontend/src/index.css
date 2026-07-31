@@ -351,8 +351,9 @@ textarea {
                  .rule-kind-badge, .direction-icon.inbound).
 
      --warning itself is deliberately NOT darkened. It is a fill that carries
-     #1a1a1a text (.header-update-available, .task-status-pill-fix-btn,
-     ChannelPipelineTab's running pill) at 8.10:1; darkening it to pass as
+     #1a1a1a text (.task-status-pill-fix-btn, ChannelPipelineTab's running
+     pill; .header-update-available was a third until bd-nhkd4) at 8.10:1;
+     darkening it to pass as
      text would break that. Warning-coloured TEXT takes --warning-text, which
      is what that token is for — see .status-pending in shared/common.css. */
   --success: #137035;
