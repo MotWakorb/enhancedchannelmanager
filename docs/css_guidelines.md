@@ -129,6 +129,61 @@ plausible checkbox beside 13px text reaches it; what carries the target is the
 for `7lwe0` have that association and 44 do not — for those the box *is* the
 target, and the remedy is markup, not a bigger box. `e2e/control-box-size.spec.ts`
 catalogues them in a ratcheted `ALLOWED_UNLABELLED` and fails on a new one.
+Bead `enhancedchannelmanager-m26f8` emptied that list; the target floor itself
+is `--control-target-min` below.
+
+### The pointer target: `--control-target-min`
+
+| Token | Value | Used for |
+|-|-|-|
+| `--control-target-min` | 24px | the minimum height of a checkbox/radio **row** |
+
+`--control-box-size` is what a control looks like; `--control-target-min` is
+how big it is to hit. They are a pair and they are deliberately different
+numbers — the box cannot carry the target, because a 24px box beside 13px text
+would be nearly twice the height of its own label, which is the defect the PO
+reported in `7lwe0`. **The height comes from the row.**
+
+Applied by one base rule in `index.css`:
+
+```css
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  min-height: var(--control-target-min);
+  align-content: center;
+}
+```
+
+A **floor, not an increment**, and that is the whole design. Measured before
+bead `enhancedchannelmanager-3h2u1`, of 211 rows across routes and dialogs at
+both viewports in all three themes: 120 already cleared 24×24 — several at
+34–91px, where a card or a description line makes the row tall on its own —
+and 91 did not, at 18.19 / 19.5 / 21.19 / 21.5px. **None failed on width**; a
+row is as wide as the form it sits in. A padding increment would have to be
+sized for the 18px rows, would over-grow the 21px ones, and would grow all 120
+that were never in breach. `min-height` moves each short row by exactly what it
+lacks and is inert on every row above it, so the vertical rhythm gets *more*
+regular: every short checkbox row lands on one number instead of a four-way
+spread.
+
+`align-content: center` rides along because a floor without alignment is half a
+fix — a row that gains height has to put the extra space somewhere. Where the
+label wraps its input, the box and its text are both inside and move together,
+so centring preserves their alignment. It is inert on the labels that are
+already `display: flex; align-items: center` (a single-line flex container
+ignores `align-content`) and inert on any row taller than the floor.
+
+**`:has()` is the whole population CSS can own.** A label extends the target
+two ways — by wrapping the input, or by pointing at it with `for` — and only
+the first is expressible: `label[for]` cannot ask what it points *at*. 71 of
+the 91 short rows wrap their input and the base rule fixes them; the other 20
+are the `for` shape in `.settings-section .checkbox-content`, which carries its
+own `min-height` with the reason stated at that rule. A new site that wraps its
+input inherits the floor; a new `for` site does not, and arm 4 of
+`e2e/control-box-size.spec.ts` is what catches it. That arm measures the
+**union** of the control's rect and every visible associated label's rect —
+the region a pointer can actually hit — and resolves the token through a probe
+element rather than repeating 24.
 
 `accent-color` is unchanged by that bead and was re-measured under it, from
 rendered pixels in all three themes at both supported viewports: a checked
@@ -700,7 +755,9 @@ restate a size (it declared 18px until bead `enhancedchannelmanager-7lwe0`).
 Wrapping the `<input>` in the `<label>` is not cosmetic: it is what makes the
 whole row the pointer target, which is the only reason a 16px box is
 acceptable under WCAG 2.5.8. A checkbox rendered without an associated label
-has no target but its own box.
+has no target but its own box. Wrapping also picks up the `--control-target-min`
+floor automatically — a `<label for>` beside its input does not, and has to
+declare the floor itself.
 
 ## Modal Patterns (ModalBase.css)
 

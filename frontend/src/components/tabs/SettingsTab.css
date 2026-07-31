@@ -468,15 +468,36 @@
 }
 
 /* Label role for the checkbox's own label, meta for the sentence under it —
-   the same pair as `.form-group-vertical label` / `.form-description`. */
+   the same pair as `.form-group-vertical label` / `.form-description`.
+
+   THE `min-height` IS THE POINTER TARGET, not typography (bead
+   enhancedchannelmanager-3h2u1). This is the one shape in the estate where the
+   label does NOT wrap its input — the markup is
+   `<input id><div class="checkbox-content"><label for>…<p>` — so the base rule
+   in index.css cannot see it: `label[for]` cannot ask what it points at. 20 of
+   the 91 short rows are this shape, and they were 18.19px tall because the
+   target is the input's box unioned with this label's line box, and the `<p>`
+   under it is not part of the target at all.
+
+   TOP-ALIGNED, deliberately, where the base rule centres. The input is OUTSIDE
+   this label and is pinned to the top of the flex row above (`align-items:
+   flex-start` plus its own 2px nudge). Centring the title in a 24px box would
+   drop it ~3px while the box stayed put and pull the two out of line. Growing
+   downwards leaves the box/title relationship exactly as it renders today and
+   spends the 5.81px on the gap above the description — which is why the
+   explicit margin below drops from 0.25rem to 0.125rem: the floor already
+   supplies 5.81px of separation, more than the margin ever did, so the pair
+   still reads as a pair (7.81px apart inside the group, against the 16px
+   between groups) and the row grows by 3.81px rather than 5.81px. */
 .settings-section .checkbox-content label {
   display: block;
+  min-height: var(--control-target-min);
   font-size: var(--type-label-size);
   font-weight: var(--type-label-weight);
   line-height: var(--type-label-line-height);
   color: var(--text-primary);
   cursor: pointer;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.125rem;
 }
 
 .settings-section .checkbox-content p {

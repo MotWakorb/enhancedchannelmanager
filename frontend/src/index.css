@@ -230,6 +230,52 @@ input[type="radio"] {
   flex-shrink: 0;
 }
 
+/* The pointer TARGET of a checkbox or a radio, in one place.
+   Bead enhancedchannelmanager-3h2u1. The number and its justification live on
+   `--control-target-min` in the second :root block; this is the rule that
+   applies it.
+
+   WHAT IT REPLACES. Nothing — this is new, and it is the other half of the box
+   rule above. 4429a46f gave every control one box; m26f8 (24049628) gave every
+   control a label, so the row is the target everywhere. This gives the row a
+   floor. Measured before it landed: 91 of the 211 rows were under 24px tall,
+   at 18.19 / 19.5 / 21.19 / 21.5, and NOT ONE was under 24px wide — the defect
+   was only ever height, because a row is as wide as its form.
+
+   WHY `:has`, AND WHY THAT IS THE WHOLE POPULATION IT CAN OWN. A label extends
+   the target two ways: by WRAPPING the input, or by pointing at it with `for`.
+   Only the first is expressible in CSS — `label[for]` cannot ask what it
+   points AT, so a `for`-label on a text field would match too. 71 of the 91
+   short rows wrap their input and are fixed here; the remaining 20 are the
+   `for` shape in `.settings-section .checkbox-content`, fixed at that site
+   with the reason stated there. A new site that wraps its input inherits this
+   automatically; a new `for` site does not, and the guard is what catches it.
+
+   WHY `align-content` RIDES ALONG. A floor without alignment is half a fix: on
+   a row that gains height, the content has to go somewhere. Where the label
+   wraps the input, the box and its text are BOTH inside, so centring them
+   moves them together and their mutual alignment is preserved — which is why
+   this is safe here and deliberately NOT applied to the `for` shape, where the
+   box sits outside the label and would be left behind. It is inert on the
+   labels that are already `display: flex; align-items: center` (single-line
+   flex containers ignore `align-content`) and inert on any row taller than the
+   floor, which has no free space to distribute.
+
+   SPECIFICITY: (0,1,2) — `:has()` takes the specificity of its most specific
+   argument. That is above the component classes that style these labels, on
+   purpose and only for these two properties: the floor is not a suggestion. A
+   row that genuinely needs a different one needs a second TOKEN with its
+   reason beside the first.
+
+   Guarded by arm 4 of e2e/control-box-size.spec.ts, which measures the rendered
+   union of each control and its label and resolves this token through a probe
+   element rather than hardcoding 24. */
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  min-height: var(--control-target-min);
+  align-content: center;
+}
+
 .material-icons {
   display: inline-block;
   width: 1em;
@@ -718,14 +764,34 @@ input[type="radio"] {
 
      WHAT THIS IS NOT. It is NOT a pointer target. WCAG 2.5.8 asks for 24x24
      CSS px and no plausible checkbox beside 13px text reaches it; what carries
-     the target is the <label>, which extends it to the whole row. 167 of the
-     211 controls measured for 7lwe0 have that association and 44 do not — for
-     those the box IS the target, they are catalogued in
-     e2e/control-box-size.spec.ts (ALLOWED_UNLABELLED), and the remedy is
-     markup rather than a bigger box.
+     the target is the <label>, which extends it to the whole row. All 211
+     controls measured for 7lwe0 now have that association — 44 of them gained
+     it in bead m26f8 — and the row's floor is --control-target-min below.
 
      ONE token, no per-component literals: see the base rule below. */
   --control-box-size: 16px;
+
+  /* The floor on a checkbox/radio ROW — 24px, the WCAG 2.5.8 (AA) minimum.
+     Bead enhancedchannelmanager-3h2u1.
+
+     THE PAIR. --control-box-size is what the control looks like;
+     --control-target-min is how big it is to hit. They are deliberately
+     different numbers and they must stay that way: the box is 16px because
+     18px filled the 18.2px line box and made the 13px label read as a caption
+     to it (the defect the PO reported in 7lwe0), and a 24px box beside 13px
+     text would be nearly twice the height of its own label. So the target
+     comes from the ROW, not from the box — see the base rule below.
+
+     A FLOOR, NOT AN INCREMENT. Measured on this tree, the failing rows sat at
+     18.19, 19.5, 21.19 and 21.5px, and 120 of the 211 rows already cleared 24
+     — several at 34-91px, where a card or a description line makes the row
+     tall on its own. A uniform padding bump would have to be sized for the
+     18px rows, would over-grow the 21px ones, and would grow all 120 that were
+     never in breach. min-height moves each failing row by exactly what it
+     lacks and is a no-op on every row already above it, which is also why the
+     rhythm gets MORE regular rather than less: every short checkbox row lands
+     on one number instead of a 18/19.5/21.19/21.5 spread. */
+  --control-target-min: 24px;
 
   /* Box Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
