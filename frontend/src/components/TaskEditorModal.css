@@ -157,6 +157,25 @@
   accent-color: var(--success);
 }
 
+/* The enable toggle and the schedule's text are one pointer target rather
+   than a 16px box (WCAG 2.5.8; bead enhancedchannelmanager-m26f8). It takes
+   the flex properties `.schedule-info` used to hold, and `.schedule-info`
+   keeps them so the text column still absorbs the free space inside it. */
+.task-editor-modal .schedule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  /* MEASURED, not assumed: a schedule with a name but no description and no
+     next run puts one 18.13px line beside the box, and the label inherits
+     that height — 24x24 by width alone. This is the floor for the TARGET, not
+     for the box, which stays on --control-box-size. Rows with the usual two
+     or three lines already exceed it and are unmoved. */
+  min-height: 24px;
+}
+
 .task-editor-modal .schedule-info {
   flex: 1;
   min-width: 0;

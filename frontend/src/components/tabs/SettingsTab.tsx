@@ -172,44 +172,76 @@ function SortablePriorityItem({
       >
         <span className="material-icons" style={{ fontSize: '20px' }}>drag_indicator</span>
       </span>
-      <input
-        type="checkbox"
-        checked={enabled}
-        onChange={() => onToggleEnabled(id)}
-        style={{
-          width: '16px',
-          height: '16px',
-          cursor: 'pointer',
-          accentColor: 'var(--accent-primary)',
-          flexShrink: 0,
-        }}
-        title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
-      />
-      <span
+      {/* Everything to the right of the drag handle is one <label>, so the
+          pointer target for the toggle is the row rather than the 16px box
+          (WCAG 2.5.8; bead enhancedchannelmanager-m26f8). The handle stays
+          OUTSIDE it — dnd-kit's listeners are bound only there, and a label
+          wrapped around them would turn every drag start into a toggle.
+
+          `aria-label` rather than the label's own text: the region contains a
+          Material Icons ligature and the priority badge, whose text content
+          ("high_quality", "3") would otherwise be read as part of the name.
+          The box itself is sized by --control-box-size in index.css; this used
+          to restate 16px inline. */}
+      <label
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          width: '24px',
-          height: '24px',
-          borderRadius: '50%',
-          backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
-          color: 'var(--bg-primary, #1e1e23)',
-          fontSize: '0.75rem',
-          fontWeight: 600,
-          flexShrink: 0,
-          lineHeight: 1,
+          gap: '0.75rem',
+          flex: 1,
+          minWidth: 0,
+          cursor: 'pointer',
+          // This row sits inside a `.form-group`, whose `label` rule in
+          // shared/common.css would otherwise give the new element a block
+          // display, the label type role and a 0.375rem bottom margin. Inline
+          // wins over all of it, which is why the rest of this component is
+          // written inline too.
+          margin: 0,
+          font: 'inherit',
+          color: 'inherit',
         }}
       >
-        {enabled ? index + 1 : '-'}
-      </span>
-      <span className="material-icons" style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}>
-        {config.icon}
-      </span>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
-        <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
-        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
-      </div>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={() => onToggleEnabled(id)}
+          aria-label={`${config.label} — use as a stream sort criterion`}
+          style={{
+            cursor: 'pointer',
+            accentColor: 'var(--accent-primary)',
+          }}
+          title={enabled ? 'Click to disable this sort criterion' : 'Click to enable this sort criterion'}
+        />
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '24px',
+            height: '24px',
+            borderRadius: '50%',
+            backgroundColor: enabled ? 'var(--accent-primary, #3b82f6)' : 'var(--text-muted, #6b7280)',
+            color: 'var(--bg-primary, #1e1e23)',
+            fontSize: '0.75rem',
+            fontWeight: 600,
+            flexShrink: 0,
+            lineHeight: 1,
+          }}
+        >
+          {enabled ? index + 1 : '-'}
+        </span>
+        <span
+          className="material-icons"
+          aria-hidden="true"
+          style={{ fontSize: '20px', color: 'var(--text-secondary)', flexShrink: 0 }}
+        >
+          {config.icon}
+        </span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.125rem', minWidth: 0 }}>
+          <span style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)' }}>{config.label}</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{config.description}</span>
+        </div>
+      </label>
     </div>
   );
 }

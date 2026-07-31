@@ -495,29 +495,37 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     key={schedule.id}
                     className={`schedule-item ${!schedule.enabled ? 'disabled' : ''}`}
                   >
-                    {/* Enable toggle */}
-                    <input
-                      type="checkbox"
-                      checked={schedule.enabled}
-                      onChange={() => handleToggleSchedule(schedule)}
-                    />
+                    {/* Enable toggle. The toggle and the schedule's own text
+                        are one <label>: before, the checkbox had no
+                        accessible name at all and the 16px box was the entire
+                        pointer target (bead
+                        enhancedchannelmanager-m26f8). The actions and the
+                        stale-groups warning stay outside it — they carry
+                        buttons and an icon ligature. */}
+                    <label className="schedule-toggle">
+                      <input
+                        type="checkbox"
+                        checked={schedule.enabled}
+                        onChange={() => handleToggleSchedule(schedule)}
+                      />
 
-                    {/* Schedule info */}
-                    <div className="schedule-info">
-                      <div className="schedule-name">
-                        {schedule.name || schedule.description}
+                      {/* Schedule info */}
+                      <div className="schedule-info">
+                        <div className="schedule-name">
+                          {schedule.name || schedule.description}
+                        </div>
+                        {schedule.name && (
+                          <div className="schedule-description">
+                            {schedule.description}
+                          </div>
+                        )}
+                        {schedule.enabled && schedule.next_run_at && (
+                          <div className="schedule-next-run">
+                            Next: {formatNextRun(schedule.next_run_at)}
+                          </div>
+                        )}
                       </div>
-                      {schedule.name && (
-                        <div className="schedule-description">
-                          {schedule.description}
-                        </div>
-                      )}
-                      {schedule.enabled && schedule.next_run_at && (
-                        <div className="schedule-next-run">
-                          Next: {formatNextRun(schedule.next_run_at)}
-                        </div>
-                      )}
-                    </div>
+                    </label>
 
                     {/* Stale groups warning */}
                     {Array.isArray(schedule.parameters?._stale_groups) &&

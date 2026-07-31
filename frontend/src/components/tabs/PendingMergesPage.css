@@ -149,9 +149,26 @@
   }
 }
 
+/* The row's first grid cell, stretched to the row's height so the pointer
+   target is that cell rather than the 16px box (WCAG 2.5.8; bead
+   enhancedchannelmanager-m26f8). `min-width` is a TARGET floor, not a box
+   size — the box stays on --control-box-size. */
+.pending-merges-select-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 24px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+/* The 1.125rem box this rule used to declare was dead: the base
+   `input[type="checkbox"]` rule in index.css is (0,1,1) and outranks this
+   (0,1,0) selector, so the control has rendered at --control-box-size ever
+   since bead enhancedchannelmanager-7lwe0. Removed rather than left as a
+   literal waiting for someone to raise this selector's specificity. */
 .pending-merges-select {
-  width: 1.125rem;
-  height: 1.125rem;
   accent-color: var(--accent-color, #6c63ff);
   cursor: pointer;
 }

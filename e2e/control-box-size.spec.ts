@@ -68,9 +68,23 @@
  *   routes    65 of 75 associated      10 not
  *   dialogs  102 of 136 associated     34 not
  *
- * The 10 route sites are seeded into `ALLOWED_UNLABELLED` below. This arm does
- * not fix them — it stops the number growing, and ratchets so that fixing one
- * forces its entry to be deleted.
+ * `ALLOWED_UNLABELLED` was seeded with the 3 route SITES behind those 10, and
+ * is EMPTY as of bead `enhancedchannelmanager-m26f8`, which fixed all five
+ * source sites behind the 44. It ratchets: a new site fails, and a fixed site
+ * whose entry survives fails too.
+ *
+ * ARM 3 — THE CONTROL SAYS WHAT IT IS
+ *
+ * Added by `enhancedchannelmanager-m26f8`. Arm 2 asks whether the label
+ * extends the POINTER target; this asks whether the control has an accessible
+ * NAME at all. They are independent, and the census that produced arm 2 did
+ * not measure this one: of its 44 unlabelled controls, 30 carried `aria-label`
+ * and announced perfectly well, 8 were named only by `title` — and named the
+ * action rather than the control, "Click to disable this sort criterion" — and
+ * 6 had no name whatsoever and announced as a bare "checkbox".
+ *
+ * `title` alone counts as a failure. It is the last resort of the accname
+ * cascade and is never surfaced to touch or keyboard-only users.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * WHAT THIS SPEC CANNOT SEE: dialogs. Like every guard in this set it walks
@@ -122,31 +136,47 @@ const ALLOWED_DIFFERENT_BOX: ReadonlyArray<{ route: string; site: string; bead: 
  * Sites where no `<label>` is associated with the control, so the box is the
  * only pointer target.
  *
- * Every entry is a WCAG 2.5.8 gap that this bead did NOT fix: the remedy is
- * markup (wrap the input in a `<label>`, or give it an `id` and a
- * `<label for>`), not CSS, and it spans nine dialogs and two routes. Seeded
- * from the 2026-07-30 census so the number cannot grow unnoticed.
+ * Every entry is a WCAG 2.5.8 gap: the remedy is markup (wrap the input in a
+ * `<label>`, or give it an `id` and a `<label for>`), not CSS.
  *
- * Ratcheted in both directions. Adding a label to one of these sites FAILS the
- * run until its entry is deleted here, so the list can only shrink.
+ * EMPTY as of bead `enhancedchannelmanager-m26f8`, which fixed all five source
+ * sites behind the 2026-07-30 census's 44 unlabelled instances. The three
+ * entries that used to sit here — `div.sort-priority-list`, `th.col-select`
+ * and `td.col-select` — are the route-visible ten of that 44; the other 34 are
+ * the same five sites rendered inside dialogs, which this spec cannot reach.
+ *
+ * Ratcheted in both directions. A new unlabelled site fails; adding a label to
+ * an allowed site FAILS the run until its entry is deleted, so the list can
+ * only shrink.
  */
-const ALLOWED_UNLABELLED: ReadonlyArray<{ route: string; site: string; note: string }> = [
-  {
-    route: 'settings/channel-defaults',
-    site: 'div.sort-priority-list',
-    note: 'x8 stream-sort priority toggles; the row renders its own text, no <label> element at all',
-  },
-  {
-    route: 'channel-pipeline',
-    site: 'th.col-select',
-    note: 'select-all in the rule table header; shared with 9 cp-* dialogs',
-  },
-  {
-    route: 'channel-pipeline',
-    site: 'td.col-select',
-    note: 'per-row select in the rule table; shared with 9 cp-* dialogs',
-  },
-]
+const ALLOWED_UNLABELLED: ReadonlyArray<{ route: string; site: string; note: string }> = []
+
+/**
+ * Sites whose control has no usable ACCESSIBLE NAME.
+ *
+ * A SECOND defect that shares the first's cause and was not measured by the
+ * 2026-07-30 census (bead `enhancedchannelmanager-m26f8`). That census asked
+ * "does clicking the label text toggle the control" — a hit-target question.
+ * A control can fail that and still announce correctly, if it carries
+ * `aria-label`; and a control can pass it and still announce nothing useful.
+ * The two are independent, and an unnamed checkbox is the worse defect: the
+ * operator hears "checkbox, unchecked" and has no idea what it governs.
+ *
+ * MEASURED across all 211 controls on 2026-07-31, of the 44 unlabelled:
+ *   30  named by `aria-label`     — announce correctly, only the target is small
+ *    8  named by `title` ONLY     — settings/channel-defaults sort priorities
+ *    6  NO ACCESSIBLE NAME AT ALL — 3 print-guide rows, 3 task-dialog toggles
+ *
+ * `title` alone counts as a FAILURE here, not a pass. It is a name of last
+ * resort in the accname cascade, it is not surfaced to touch or keyboard-only
+ * users at all, and the eight that relied on it were all naming the ACTION
+ * ("Click to disable this sort criterion") rather than the control, so a
+ * screen-reader user heard an instruction where the name belonged.
+ *
+ * Empty on purpose. Naming a control costs one attribute; there is no site
+ * that cannot have one.
+ */
+const ALLOWED_UNNAMED: ReadonlyArray<{ route: string; site: string; note: string }> = []
 
 /**
  * Sub-pixel slack. Box sizes are integral px here, and the loosest real
@@ -187,6 +217,9 @@ interface Control {
   widthPx: number
   heightPx: number
   labelled: boolean
+  /** Which step of the accname cascade produced the name; `NONE` = unnamed. */
+  nameFrom: 'aria-labelledby' | 'aria-label' | 'label' | 'title' | 'NONE'
+  accessibleName: string
 }
 
 /**
@@ -246,6 +279,26 @@ const COLLECT = `(() => {
     }
     return el.parentElement ? el.parentElement.tagName.toLowerCase() : '(detached)';
   };
+  // The accessible name of a checkbox or radio, and WHICH cascade step gave
+  // it. Those two types take no name from content and have no placeholder
+  // step, so accname 1.2 reduces to exactly these four in this order — which
+  // is why this is computed here rather than approximated from one attribute.
+  const accName = (el) => {
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) {
+      const parts = lb.split(/\\s+/).map((id) => document.getElementById(id)).filter(Boolean)
+        .map((n) => (n.textContent || '').trim()).filter(Boolean);
+      if (parts.length) return { name: parts.join(' '), from: 'aria-labelledby' };
+    }
+    const al = el.getAttribute('aria-label');
+    if (al && al.trim()) return { name: al.trim(), from: 'aria-label' };
+    const fromLabel = [...(el.labels || [])]
+      .map((l) => (l.textContent || '').trim()).filter(Boolean).join(' ');
+    if (fromLabel) return { name: fromLabel, from: 'label' };
+    const ti = el.getAttribute('title');
+    if (ti && ti.trim()) return { name: ti.trim(), from: 'title' };
+    return { name: '', from: 'NONE' };
+  };
   const out = [];
   for (const el of document.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
     if (hidden(el)) continue;
@@ -258,10 +311,13 @@ const COLLECT = `(() => {
       const lr = l.getBoundingClientRect();
       return lr.width > 1 && lr.height > 1;
     });
+    const named = accName(el);
     out.push({
       signature: 'input[type=' + el.type + ']' + cls.map((c) => '.' + c).join(''),
       site: siteOf(el),
       text: ((el.labels && el.labels[0] ? el.labels[0].textContent : '') || '').trim().slice(0, 40),
+      nameFrom: named.from,
+      accessibleName: named.name.slice(0, 60),
       // The USED width, not the bounding rect: a modal's entry transform
       // scales the rect by ~0.1% and would report 15.99px for a 16px box.
       widthPx: parseFloat(cs.width),
@@ -486,6 +542,62 @@ test.describe('checkbox and radio boxes take one token, and their labels are par
               `association. That is the outcome the list exists to drive — delete the entry so the ` +
               `census keeps shrinking:\n` +
               staleUnlabelled.map((a) => `  ${a.route} ${a.site} — ${a.note}`).join('\n')
+      )
+      .toEqual([])
+
+    // ── ARM 3: the control says what it is ────────────────────────────────
+    //
+    // Independent of arm 2 and measured separately for that reason: arm 2 is
+    // about the POINTER, this is about the ANNOUNCEMENT. Of the 44 controls
+    // arm 2 flagged on 2026-07-30, 30 announced perfectly well.
+    const unnamed = found.filter((c) => c.nameFrom === 'NONE' || c.nameFrom === 'title')
+    const nameAllowed = (c: Control) =>
+      ALLOWED_UNNAMED.some((a) => a.route === c.route && a.site === c.site)
+    const unexpectedUnnamed = unnamed.filter((c) => !nameAllowed(c))
+    const staleUnnamed = ALLOWED_UNNAMED.filter(
+      (a) => !unnamed.some((c) => c.route === a.route && c.site === a.site)
+    )
+
+    const nameGroups = new Map<string, { cells: number; sample: Control }>()
+    for (const c of unexpectedUnnamed) {
+      const key = `${c.route}|${c.site}|${c.signature}|${c.nameFrom}`
+      const hit = nameGroups.get(key)
+      if (hit) hit.cells += 1
+      else nameGroups.set(key, { cells: 1, sample: c })
+    }
+
+    expect
+      .soft(
+        [...nameGroups.keys()],
+        unexpectedUnnamed.length === 0
+          ? ''
+          : `${nameGroups.size} checkbox/radio site(s) have no usable accessible name. A screen ` +
+              `reader announces these as an unnamed checkbox, or reads a tooltip where the name ` +
+              `belongs — a defect independent of the target size above, and a worse one.\n\n` +
+              [...nameGroups.values()]
+                .map(
+                  ({ cells, sample }) =>
+                    `  ${sample.route.padEnd(28)} ${sample.site.padEnd(26)} ` +
+                    `name from: ${sample.nameFrom.padEnd(6)} (${cells} cell(s))` +
+                    (sample.accessibleName ? `  "${sample.accessibleName}"` : '')
+                )
+                .join('\n') +
+              `\n\nGive the control a name: wrap it in a <label> whose text describes it, or set ` +
+              `aria-label where the surrounding text is decorative (an icon ligature, a priority ` +
+              `badge) and would name it wrongly. "title" alone does not count — it is invisible to ` +
+              `touch and keyboard users, and every site that relied on it was naming the action ` +
+              `rather than the control (bead enhancedchannelmanager-m26f8).\n`
+      )
+      .toEqual([])
+
+    expect
+      .soft(
+        staleUnnamed,
+        staleUnnamed.length === 0
+          ? ''
+          : `${staleUnnamed.length} ALLOWED_UNNAMED entr(ies) now have a real accessible name — ` +
+              `delete the entry:\n` +
+              staleUnnamed.map((a) => `  ${a.route} ${a.site} — ${a.note}`).join('\n')
       )
       .toEqual([])
   })

@@ -1117,16 +1117,23 @@ export function ChannelPipelineTab() {
                 <thead>
                   <tr>
                     <th className="col-select" scope="col">
-                      <input
-                        ref={selectAllCheckboxRef}
-                        type="checkbox"
-                        checked={
-                          filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
-                        }
-                        onChange={toggleSelectAllVisible}
-                        aria-label="Select all visible rules"
-                        title="Select all visible rules"
-                      />
+                      {/* The label carries the cell's padding so the pointer
+                          target is the whole cell rather than the 16px box —
+                          see .col-select-target in ChannelPipelineTab.css
+                          (bead enhancedchannelmanager-m26f8). It holds no text
+                          of its own; the name comes from aria-label. */}
+                      <label className="col-select-target">
+                        <input
+                          ref={selectAllCheckboxRef}
+                          type="checkbox"
+                          checked={
+                            filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
+                          }
+                          onChange={toggleSelectAllVisible}
+                          aria-label="Select all visible rules"
+                          title="Select all visible rules"
+                        />
+                      </label>
                     </th>
                     <th className="col-drag"></th>
                     <th className="col-name">Name</th>
@@ -1154,12 +1161,14 @@ export function ChannelPipelineTab() {
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedRuleIds.has(rule.id)}
-                          onChange={() => toggleRuleSelected(rule.id)}
-                          aria-label={`Select ${rule.name}`}
-                        />
+                        <label className="col-select-target">
+                          <input
+                            type="checkbox"
+                            checked={selectedRuleIds.has(rule.id)}
+                            onChange={() => toggleRuleSelected(rule.id)}
+                            aria-label={`Select ${rule.name}`}
+                          />
+                        </label>
                       </td>
                       <td className="col-drag">
                         <span

@@ -198,16 +198,33 @@
   font-size: 32px;
 }
 
-/* Rules table: selection column */
+/* Rules table: selection column.
+
+   The cell's padding lives on the `<label>` inside it, not on the cell, so
+   that the label's box IS the cell and the pointer target is 36x40 rather
+   than the 16px checkbox — WCAG 2.5.8 wants 24x24 and no checkbox in this
+   estate reaches it (bead enhancedchannelmanager-m26f8). Growing the box
+   instead was the one remedy ruled out: it would undo the single
+   `--control-box-size` that bead enhancedchannelmanager-7lwe0 established and
+   put an oversized control back beside 13px text.
+
+   `padding: 0` overrides the 12px 8px that `.rules-list th, .rules-list td`
+   sets below; the label restates it so the row's height is unchanged. Drag is
+   unaffected — `handleDragStart` bails unless the drag HANDLE armed
+   `dragAllowed`, so a press anywhere in this cell can never start a reorder. */
 .rules-list th.col-select,
 .rules-list td.col-select {
   width: 36px;
   text-align: center;
-  padding-left: 4px;
-  padding-right: 4px;
+  padding: 0;
 }
 
-.rules-list td.col-select input[type='checkbox'] {
+.rules-list .col-select-target {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 12px 4px;
   cursor: pointer;
 }
 

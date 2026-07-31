@@ -355,12 +355,21 @@ function PrintGuideModalInner({
                   key={group.id}
                   className={`group-item ${settings.selected ? 'selected' : ''}`}
                 >
-                  <div className="group-checkbox-area" onClick={() => toggleGroup(group.id)}>
+                  {/* A <label>, not a <div> with onClick: the row already
+                      behaved as the hit area, but the checkbox had no
+                      accessible name at all and announced as a bare
+                      "checkbox" (bead enhancedchannelmanager-m26f8). The
+                      label associates the group's own text with the control,
+                      which is the shape DeleteOrphanedGroupsModal's
+                      `label.group-item` already uses for the same row. The
+                      manual onClick pair goes with it — the label's native
+                      activation replaces both, so there is nothing left to
+                      double-fire. */}
+                  <label className="group-checkbox-area">
                     <input
                       type="checkbox"
                       checked={settings.selected}
                       onChange={() => toggleGroup(group.id)}
-                      onClick={(e) => e.stopPropagation()}
                     />
                     <div
                       className="group-color-swatch"
@@ -376,7 +385,7 @@ function PrintGuideModalInner({
                             : 'No channels in range'}
                       </span>
                     </div>
-                  </div>
+                  </label>
 
                   <div className="group-item-controls">
                     {/* Per-group From/To range inputs */}
