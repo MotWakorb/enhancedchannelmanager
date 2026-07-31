@@ -1252,6 +1252,31 @@ class TestReorderChannelPipelineRules:
         assert test_session.query(ChannelPipelineRule).get(r2.id).priority == 0
         assert test_session.query(ChannelPipelineRule).get(r1.id).priority == 1
 
+    @pytest.mark.asyncio
+    async def test_reorders_rules_on_canonical_path(self, async_client, test_session):
+        """The canonical /api/channel-pipeline path reorders too (GH #755).
+
+        The rules list reorders and copies through this one endpoint rather than
+        a PUT per rule, so every drag and every copy in the UI depends on this
+        exact path resolving. The pre-existing coverage above only exercised the
+        deprecated /api/auto-creation alias.
+        """
+        r1 = _create_rule(test_session, name="A", priority=0)
+        r2 = _create_rule(test_session, name="B", priority=1)
+        r3 = _create_rule(test_session, name="C", priority=2)
+
+        response = await async_client.post(
+            "/api/channel-pipeline/rules/reorder",
+            json=[r3.id, r1.id, r2.id],
+        )
+        assert response.status_code == 200
+        assert response.json()["rule_ids"] == [r3.id, r1.id, r2.id]
+
+        test_session.expire_all()
+        assert test_session.query(ChannelPipelineRule).get(r3.id).priority == 0
+        assert test_session.query(ChannelPipelineRule).get(r1.id).priority == 1
+        assert test_session.query(ChannelPipelineRule).get(r2.id).priority == 2
+
 
 class TestToggleChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules/{rule_id}/toggle."""

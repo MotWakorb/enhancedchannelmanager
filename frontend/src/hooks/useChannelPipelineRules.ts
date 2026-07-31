@@ -142,35 +142,45 @@ export function useChannelPipelineRules(
     return rules.filter(r => r.enabled);
   }, [rules]);
 
+  /**
+   * Reorder rules. `orderedIds` is the new order; each listed rule takes a
+   * priority equal to its index, exactly as the server does.
+   *
+   * GH #755: this used to issue one `PUT /rules/{id}` per rule inside a single
+   * `Promise.all`. One reorder on a 120-rule instance therefore put 120 writes
+   * in flight at once, which exceeded uvicorn's `--limit-concurrency`
+   * (`backend/entrypoint.sh`, `ECM_LIMIT_CONCURRENCY`, default 100); the
+   * refused writes came back 503 and the operator got an error toast for an
+   * operation that had partly succeeded. The amplification scaled with rule
+   * count, so it is fixed by writing once, not by raising the limit.
+   */
   const reorderRules = useCallback(async (orderedIds: number[]): Promise<void> => {
     setLoading(true);
     try {
-      // Update each rule's priority based on position in orderedIds
-      const updates = orderedIds.map((id, index) =>
-        api.updateChannelPipelineRule(id, { priority: index })
-      );
-      await Promise.all(updates);
+      await api.reorderChannelPipelineRules(orderedIds);
 
-      // Update local state
+      // Mirror the server's own semantics: listed rules take their index as
+      // priority, rules outside the list keep the priority they already had.
       setRules(prev => {
-        const ruleMap = new Map(prev.map(r => [r.id, r]));
-        return orderedIds
-          .map((id, index) => {
-            const rule = ruleMap.get(id);
-            if (rule) {
-              return { ...rule, priority: index };
-            }
-            return null;
-          })
-          .filter((r): r is ChannelPipelineRule => r !== null);
+        const newPriority = new Map(orderedIds.map((id, index) => [id, index]));
+        return prev.map(rule => {
+          const priority = newPriority.get(rule.id);
+          return priority === undefined ? rule : { ...rule, priority };
+        });
       });
     } catch (err) {
+      // GH #755 (second defect): the list must never be left showing an order
+      // the server does not have. The old code updated local state only after
+      // the writes resolved, so a failure left the copy stranded at the bottom
+      // until the operator reloaded the page. Resync first, then surface the
+      // failure — the caller still gets its error toast.
+      await fetchRules();
       const message = err instanceof Error ? err.message : 'Failed to reorder rules';
       throw new Error(message, { cause: err });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchRules]);
 
   const duplicateRule = useCallback(async (id: number): Promise<ChannelPipelineRule> => {
     const originalRule = rules.find(r => r.id === id);

@@ -976,6 +976,18 @@ export const handlers = [
     return HttpResponse.json(newRule, { status: 201 })
   }),
 
+  // Bulk reorder (GH #755). Body is a bare JSON array of rule IDs in their new
+  // order; the server assigns each listed rule a priority equal to its index
+  // and leaves rules outside the list untouched.
+  http.post(`${API_BASE}/channel-pipeline/rules/reorder`, async ({ request }) => {
+    const ruleIds = await request.json() as number[]
+    ruleIds.forEach((id, index) => {
+      const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
+      if (rule) rule.priority = index
+    })
+    return HttpResponse.json({ status: 'reordered', rule_ids: ruleIds })
+  }),
+
   http.get(`${API_BASE}/channel-pipeline/rules/:id`, ({ params }) => {
     const id = parseInt(params.id as string)
     const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
