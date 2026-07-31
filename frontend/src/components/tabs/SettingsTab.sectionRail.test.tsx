@@ -235,8 +235,13 @@ describe('Settings section rail — the probe-progress banner is not a section (
     const unlabelled = matches.filter((el) => !el.id);
     expect(unlabelled.map((el) => el.className)).toEqual([]);
 
+    // "Reset Probe State" is in this list BECAUSE a probe is running: the
+    // section is unconditional since bead enhancedchannelmanager-xg9gp, so the
+    // rail no longer loses an entry — and shift every entry below it — when a
+    // backend-scheduled probe starts under the reader.
     await expectRail(container, [
       ['Stream Probing', 'settings-maintenance-section-stream-probing'],
+      ['Reset Probe State', 'settings-maintenance-section-reset-probe-state'],
       ['Orphaned Channel Groups', 'settings-maintenance-section-orphaned-channel-groups'],
       ['Strike Rule', 'settings-maintenance-section-strike-rule'],
       ['Stale Streams', 'settings-maintenance-section-stale-streams'],
@@ -244,5 +249,82 @@ describe('Settings section rail — the probe-progress banner is not a section (
       ['Channel Groups Diagnostic', 'settings-maintenance-section-channel-groups-diagnostic'],
       ['Channel Groups With Streams', 'settings-maintenance-section-channel-groups-with-streams'],
     ]);
+  });
+});
+
+/**
+ * bead enhancedchannelmanager-xg9gp — the recovery control must not be hidden
+ * by the condition it recovers from.
+ *
+ * THE LOOP THIS PINS SHUT. "Reset Stuck Probe" calls
+ * `force_reset_probe_state()`, the only thing in the backend that clears
+ * `StreamProber._probing_in_progress`. That flag is what the probe-progress
+ * poll reports as `in_progress`, which is what drives `probingAll`, which used
+ * to gate the whole section behind `{!probingAll && …}`. So a probe that wedges
+ * reports `in_progress: true` forever, and the section that clears the flag is
+ * never rendered. The banner's Cancel is not an escape hatch either:
+ * `cancel_probe()` only sets `_probe_cancelled = True` for the probe loop to
+ * observe, and a wedged loop never observes it.
+ *
+ * THE PROBE-PROGRESS FETCH RESOLVES HERE, deliberately — `in_progress: true` IS
+ * the failure state under test, so it has to arrive. Every OTHER fetch on the
+ * page stays pending, so nothing below can pass by waiting for the page to
+ * settle.
+ */
+describe('Settings maintenance — the probe recovery control survives a running probe (bead xg9gp)', () => {
+  const runningProbe = {
+    ...idleProbe, in_progress: true, total: 100, current: 37, status: 'running',
+    current_stream: 'Example HD', success_count: 30, failed_count: 5, skipped_count: 2, percentage: 37,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(api.getSettings).mockReturnValue(pending());
+    vi.mocked(api.getStreams).mockReturnValue(pending());
+    vi.mocked(api.getM3UAccounts).mockReturnValue(pending());
+    vi.mocked(api.getProbeHistory).mockReturnValue(pending());
+    vi.mocked(api.getProbeProgress).mockResolvedValue(runningProbe);
+  });
+
+  afterEach(() => {
+    vi.mocked(api.getProbeProgress).mockResolvedValue(idleProbe);
+  });
+
+  it('keeps Reset Stuck Probe rendered, enabled and rail-linked while the probe reports in_progress', async () => {
+    const { container } = renderPage('maintenance');
+
+    // The banner is up: the page believes a probe is running. This is the
+    // exact state an operator following the section's own copy is in.
+    await waitFor(() => {
+      expect(screen.getByText(/Probing streams\.\.\. 37\/100/)).toBeInTheDocument();
+    });
+
+    // Reachable three ways, because a control you cannot get to is not a
+    // recovery path: rendered, enabled, and addressable from the rail.
+    const reset = screen.getByRole('button', { name: /Reset Stuck Probe/ });
+    expect(reset).toBeEnabled();
+    expect(container.querySelector('#settings-maintenance-section-reset-probe-state')).toBeInTheDocument();
+    const nav = await screen.findByRole('navigation', { name: 'On this page' });
+    expect(within(nav).getByRole('button', { name: 'Reset Probe State' })).toBeInTheDocument();
+
+    // Its neighbour is the ordinary control, and it IS suspended during a
+    // probe — with the reason attached to the control rather than left to
+    // inference, which is what makes hiding unnecessary.
+    const clear = screen.getByRole('button', { name: /Clear All Probe Stats/ });
+    expect(clear).toBeDisabled();
+    expect(clear).toHaveAccessibleDescription(/probe is running/i);
+  });
+
+  it('leaves both controls enabled once no probe is running', async () => {
+    vi.mocked(api.getProbeProgress).mockResolvedValue(idleProbe);
+
+    renderPage('maintenance');
+
+    const clear = await screen.findByRole('button', { name: /Clear All Probe Stats/ });
+    await waitFor(() => expect(clear).toBeEnabled());
+    expect(screen.getByRole('button', { name: /Reset Stuck Probe/ })).toBeEnabled();
+    expect(screen.queryByText(/probe is running/i)).not.toBeInTheDocument();
   });
 });

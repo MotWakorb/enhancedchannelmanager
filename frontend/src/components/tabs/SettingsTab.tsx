@@ -5083,50 +5083,78 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       )}
 
-      {/* Reset Stuck Probe Section - only show when NOT actively probing */}
-      {!probingAll && (
-        <div className="settings-section">
-          <div className="settings-section-header">
-            <span className="material-icons">restart_alt</span>
-            <h3>Reset Probe State</h3>
-          </div>
-          <p className="form-hint" style={{ marginBottom: '1rem' }}>
-            If a probe appears stuck or was interrupted (e.g., browser closed during probe),
-            use this button to clear the probe state and allow starting a new probe.
+      {/* Reset Probe State — rendered UNCONDITIONALLY, and that is the whole
+          point (bead enhancedchannelmanager-xg9gp).
+
+          It used to be `{!probingAll && …}`, which closed a loop: "Reset Stuck
+          Probe" calls `force_reset_probe_state()`, the only thing that clears
+          `StreamProber._probing_in_progress`; that flag is what the
+          probe-progress poll reports as `in_progress`; and that is what drives
+          `probingAll`. So a probe that wedged reported itself as running
+          forever and the one control that clears the flag was never rendered —
+          the section was hidden by exactly the condition its own copy says it
+          recovers from. The banner's Cancel is not a way out either:
+          `cancel_probe()` only sets `_probe_cancelled` for the probe loop to
+          observe, and a wedged loop never observes it.
+
+          So the recovery control stays ENABLED during a probe and the ordinary
+          one is disabled with the reason on screen. Reset takes no
+          confirmation: on a healthy probe its effect is the same stop that the
+          Cancel button one card above already performs unconfirmed, it
+          destroys no data (results already written stay written, and the run
+          can be started again), and a recovery control that argues with the
+          operator is worst exactly when they need it. */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">restart_alt</span>
+          <h3>Reset Probe State</h3>
+        </div>
+        <p className="form-hint" style={{ marginBottom: '1rem' }}>
+          If a probe appears stuck or was interrupted (e.g., browser closed during probe),
+          use this button to clear the probe state and allow starting a new probe.
+        </p>
+        {probingAll && (
+          <p className="form-hint" id="probe-running-reason" style={{ marginBottom: '1rem' }}>
+            A probe is running. &quot;Reset Stuck Probe&quot; stays available because a stuck
+            probe still reports itself as running — if this probe is healthy, resetting it
+            stops the run, the same as Cancel above. &quot;Clear All Probe Stats&quot; is
+            unavailable until the probe finishes.
           </p>
-          <div className="settings-group">
-            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleResetProbeState}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-              >
-                <span className="material-icons">refresh</span>
-                Reset Stuck Probe
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleClearAllProbeStats}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem'
-                }}
-                title="Delete all probe statistics from the database"
-              >
-                <span className="material-icons">delete_sweep</span>
-                Clear All Probe Stats
-              </button>
-            </div>
+        )}
+        <div className="settings-group">
+          <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '0.75rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleResetProbeState}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <span className="material-icons">refresh</span>
+              Reset Stuck Probe
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleClearAllProbeStats}
+              disabled={probingAll}
+              aria-describedby={probingAll ? 'probe-running-reason' : undefined}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+              title="Delete all probe statistics from the database"
+            >
+              <span className="material-icons">delete_sweep</span>
+              Clear All Probe Stats
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
       {/* Probe History Section */}
       {probeHistory.length > 0 && (

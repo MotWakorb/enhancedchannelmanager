@@ -1,10 +1,26 @@
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import './StickySectionNav.css';
 
 type SectionItem = { id: string; label: string };
 
 const slug = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const preferredScrollBehavior = (): ScrollBehavior => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+const requestedSection = () => new URLSearchParams(window.location.hash.split('?')[1] || '').get('section');
+
+/**
+ * Drops the `?section=` the URL is carrying, keeping the route it names.
+ *
+ * `ecm:route-replaced` is what tells `useHashRoute` this hash change was ours
+ * and not a navigation — same contract as `activate()`. The history STATE is
+ * preserved rather than nulled, because `useHashRoute` keeps its route index
+ * there and nothing here is a navigation.
+ */
+function dropSectionFromHash() {
+  const base = window.location.hash.split('?')[0];
+  if (base === window.location.hash) return;
+  window.history.replaceState(window.history.state, '', base);
+  window.dispatchEvent(new CustomEvent('ecm:route-replaced', { detail: { hash: window.location.hash } }));
+}
 
 /**
  * Scrolls `target` into view within `container` and nothing else.
@@ -44,6 +60,14 @@ export function StickySectionNav({
 }) {
   const [items, setItems] = useState<SectionItem[]>([]);
   const [activeId, setActiveId] = useState('');
+  /** The `?section=` that named nothing on this page, once one has. */
+  const [unresolvedSection, setUnresolvedSection] = useState('');
+  /**
+   * The `?section=` this mount has already acted on — the latch that makes the
+   * deep link ONE SHOT PER NAVIGATION (bead enhancedchannelmanager-ue130).
+   * A ref, not state: it must survive every re-render without causing one.
+   */
+  const honouredSection = useRef<string | null>(null);
 
   const discover = useCallback(() => {
     const container = containerRef.current;
@@ -81,14 +105,48 @@ export function StickySectionNav({
       const element = document.getElementById(id);
       if (element) observer.observe(element);
     });
-    const requested = new URLSearchParams(window.location.hash.split('?')[1] || '').get('section');
-    if (requested && items.some((item) => item.id === requested)) {
-      setActiveId(requested);
-      requestAnimationFrame(() => {
-        const target = document.getElementById(requested);
-        const container = containerRef.current;
-        if (target && container) scrollWithinContainer(container, target, preferredScrollBehavior());
-      });
+    // ONE SHOT PER NAVIGATION, not a standing order.
+    //
+    // `discover()` returns a FRESH array on every DOM mutation in the
+    // container, so `items` changes identity for the life of the page and this
+    // effect re-runs with it. Without the latch the `?section=` sitting in the
+    // URL is re-read and re-scrolled every time — measured on Settings →
+    // Maintenance, a reader who had clicked a rail entry and scrolled back to
+    // the top was thrown 2812px down when a backend-scheduled probe started,
+    // and again when it ended, minutes after opening the page. 22fef24d
+    // removed one CAUSE of a late `items` change; this removes the mechanism
+    // (bead enhancedchannelmanager-ue130).
+    //
+    // The latch is keyed on the requested VALUE, so a URL naming a DIFFERENT
+    // section still navigates — latching per mount would have traded the stray
+    // scroll for a broken link. `activate()` marks its own target honoured for
+    // the same reason: a click has already scrolled there.
+    //
+    // It is armed whether or not the target resolved. A section that is not
+    // here now is exactly the one whose later arrival yanks the reader, and
+    // every StickySectionNav consumer renders its sections from first paint
+    // (22fef24d, 4af8f487) — so "not found now" means absent by design, not
+    // still loading.
+    const requested = requestedSection();
+    if (requested && honouredSection.current !== requested) {
+      honouredSection.current = requested;
+      if (items.some((item) => item.id === requested)) {
+        setUnresolvedSection('');
+        setActiveId(requested);
+        requestAnimationFrame(() => {
+          const target = document.getElementById(requested);
+          const container = containerRef.current;
+          if (target && container) scrollWithinContainer(container, target, preferredScrollBehavior());
+        });
+      } else {
+        // Failing silently left the reader at the top of the page with
+        // `aria-current` on some unrelated section and no sign the link had
+        // named anything. Say so, and stop the URL claiming a section this
+        // page does not have — otherwise a reload revives the dead target and
+        // the address bar propagates it to the next person.
+        setUnresolvedSection(requested);
+        dropSectionFromHash();
+      }
     }
     return () => observer.disconnect();
   }, [containerRef, items]);
@@ -132,9 +190,19 @@ export function StickySectionNav({
     };
   }, [containerRef, items.length]);
 
+  // Below two sections there is nothing to navigate — including, deliberately,
+  // no place to put the notice below. A one-section page cannot be deep-linked
+  // wrongly in a way worth reporting: the reader is already looking at the only
+  // section there is. The stale `?section=` is still dropped by the effect.
   if (items.length < 2) return null;
   const activate = (id: string) => {
     setActiveId(id);
+    // A click IS a navigation, and it has done its own scrolling — record it so
+    // the next `items` change does not repeat it (bead ue130). It also settles
+    // the "that link named nothing" notice: the reader has now chosen a
+    // section, so the failed one no longer needs answering.
+    honouredSection.current = id;
+    setUnresolvedSection('');
     const base = window.location.hash.split('?')[0];
     window.history.replaceState(null, '', `${base}?section=${encodeURIComponent(id)}`);
     window.dispatchEvent(new CustomEvent('ecm:route-replaced', { detail: { hash: window.location.hash } }));
@@ -155,5 +223,12 @@ export function StickySectionNav({
         onClick={() => activate(item.id)}
       >{item.label}</button>)}
     </div>
+    {/* Always rendered, empty until there is something to say: a live region
+        has to be in the DOM before its text changes for the change to be
+        announced. `:empty` hides it, so an empty region costs no layout — not
+        even the flex gap (bead enhancedchannelmanager-ue130). */}
+    <p className="sticky-section-nav-notice" role="status">
+      {unresolvedSection ? 'That link named a section that is not on this page.' : ''}
+    </p>
   </nav>;
 }

@@ -36,6 +36,33 @@
 .sticky-section-nav button { min-height: 36px; white-space: nowrap; border: 0; border-radius: var(--radius-md); padding: .4rem .65rem; background: transparent; color: var(--text-secondary); font-size: var(--type-body-size); cursor: pointer; }
 .sticky-section-nav button[aria-current="location"] { background: var(--accent-10); color: var(--accent-secondary); }
 .sticky-section-nav button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+/* Wrap ONLY while there is a notice. `flex-wrap: wrap` on the bar
+   unconditionally would break the button scroller onto a second line the
+   moment its buttons exceed the bar's width — nine of them do on Stats — since
+   a wrapping line breaks at the items' base sizes instead of shrinking them.
+   Gated on `:has()` the horizontal bar is bit-for-bit its old self whenever
+   the notice is empty, which is ~always. Same `:has(… :empty)` idiom as
+   PageHeader.css § meta row. */
+.sticky-section-nav:has(> .sticky-section-nav-notice:not(:empty)) { flex-wrap: wrap; }
+/* "That link named a section that is not on this page." — the answer to a
+   `?section=` that resolved to nothing, which used to park the reader at the
+   top with no explanation at all (bead enhancedchannelmanager-ue130).
+   `flex-basis: 100%` puts it on its own line in the horizontal bar; in the
+   rail the column already gives it one. The meta role, because it is
+   supporting detail beside the list rather than running text, and
+   `--text-secondary` rather than `--text-muted` — the nav's own buttons are
+   already that colour on this background, so it is contrast the AA guard has
+   measured. `:empty` collapses the region completely, including the flex gap,
+   for the ~always case where there is nothing to report. */
+.sticky-section-nav-notice {
+  flex: 0 0 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+}
+.sticky-section-nav-notice:empty { display: none; }
 .sticky-section-target { scroll-margin-top: 76px; }
 @media (max-width: 850px) { .sticky-section-nav { align-items: flex-start; flex-direction: column; } .sticky-section-nav > div { width: 100%; } }
 
