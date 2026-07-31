@@ -299,9 +299,16 @@ class TestJellyfinTestConnectionSsrfMitigation:
     async def test_rejects_loopback_smoke(self, async_client):
         """Loopback denylist smoke (bd-fbc50) — full coverage is on the
         shared ``_sanitize_base_url`` helper in the Emby suite; this just
-        confirms the Jellyfin path is wired through the same guard."""
+        confirms the Jellyfin path is wired through the same guard.
+
+        Pinned to ``public_only`` since GH #754 / bead ``0yh70``: loopback is
+        now the wizard-toggled band, permitted under the ``lan_friendly``
+        default (ADR-012 D4), so the denial only exists in this mode.
+        """
+        from security.ssrf import SSRFMode
         jellyfin_constructor = AsyncMock()
-        with patch("routers.settings.JellyfinClient", side_effect=jellyfin_constructor):
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             patch("routers.settings.JellyfinClient", side_effect=jellyfin_constructor):
             response = await async_client.post(
                 "/api/settings/jellyfin/test-connection",
                 json={"base_url": "http://[::1]:8096", "api_key": "k"},

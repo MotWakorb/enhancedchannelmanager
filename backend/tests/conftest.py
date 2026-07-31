@@ -31,6 +31,32 @@ import export_models  # noqa: F401 — registers export tables with SQLAlchemy B
 assert models and export_models
 
 
+def patch_ssrf_dns(*ips: str):
+    """Pin the SSRF chokepoint's resolver so host policy tests are deterministic.
+
+    ``security.ssrf`` resolves a hostname once and rejects the whole URL if ANY
+    returned record is denied (threat model §9.4 item 3). Whether ``localhost``
+    resolves dual-stack therefore decides the outcome — and that depends on the
+    runner's ``/etc/hosts``: a ``network_mode: host`` box answers ``127.0.0.1``
+    only, while Docker's generated hosts file answers ``::1`` THEN
+    ``127.0.0.1``. GH #754 was only reproducible on the latter, so tests that
+    care about host policy pin the record set explicitly instead of inheriting
+    whatever the runner happens to be.
+
+    Args:
+        *ips: the records the resolver should return, in order.
+    """
+    import ipaddress
+    from unittest.mock import patch
+
+    from security import ssrf
+
+    return patch.object(
+        ssrf, "_resolve",
+        lambda host, port: [ipaddress.ip_address(i) for i in ips],
+    )
+
+
 def closing_create_task_mock() -> MagicMock:
     """Return a MagicMock drop-in for ``asyncio.create_task`` that does not leak.
 

@@ -106,8 +106,9 @@ ALWAYS_ON_DENIED = [
     # multicast 224.0.0.0/4
     "http://224.0.0.1/",
     "http://239.255.255.250/",
-    # IPv6 loopback ::1
-    "http://[::1]/",
+    # NOTE: IPv6 loopback ``::1`` is NOT here — it is the v6 equivalent of
+    # ``127.0.0.0/8`` and follows the wizard toggle (GH #754 / bead 0yh70).
+    # See TestWizardToggledBand.test_ipv6_loopback_follows_the_wizard_toggle.
     # IPv6 ULA fc00::/7
     "http://[fc00::1]/",
     "http://[fd12:3456:789a::1]/",
@@ -142,6 +143,38 @@ class TestAlwaysOnDenylist:
         with _patch_dns("::ffff:169.254.169.254"):
             with pytest.raises(SSRFError):
                 validate_outbound_url("http://evil.example.com/", SSRFMode.LAN_FRIENDLY)
+
+    @pytest.mark.parametrize("url", [
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://169.254.169.254/",
+        "http://169.254.1.1/",
+        "http://[::ffff:169.254.169.254]/",
+        "http://[fe80::1]/",
+    ])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_link_local_denied_in_both_modes_deliberately(self, url, mode):
+        """Link-local (incl. IMDS) stays denied in BOTH modes — GH #754 / ``0yh70``.
+
+        Decided deliberately rather than inherited from the loopback rule it
+        used to share a rejection message with:
+
+        1. **Asymmetric cost.** Loopback has a proven legitimate ECM use (a
+           Dispatcharr sharing the container's network namespace — the GH #754
+           report). Link-local has none: ``169.254.0.0/16`` is DHCP-failure
+           autoconfiguration plus cloud IMDS. Nobody deliberately runs
+           Dispatcharr/Plex/Emby/Jellyfin on a link-local address.
+        2. **Highest-value target in the set.** ``169.254.169.254`` serves
+           IAM/instance credentials to any unauthenticated GET from the
+           instance, and ECM's pollers re-GET a stored base URL every few
+           seconds with the stored key — the exact SSRF-to-credential-
+           exfiltration chain ``kgz3k`` SEC-1/2 closed.
+        3. **Spec-conformant.** §9.4 items 2 and 7: the wizard can move only
+           the RFC1918/loopback band and "can never touch the always-on
+           denylist". Addendum B row B6's named threat is precisely a settings
+           surface that re-enables ``169.254.169.254``.
+        """
+        with pytest.raises(SSRFError):
+            validate_outbound_url(url, mode)
 
     def test_no_settings_key_can_disable_denylist(self):
         # §9.4 item 2 / B6: the always-on denylist is unconditional in code.
@@ -195,11 +228,55 @@ class TestWizardToggledBand:
         with pytest.raises(SSRFError):
             validate_outbound_url("http://[::ffff:127.0.0.1]/", SSRFMode.PUBLIC_ONLY)
 
-    def test_ipv6_loopback_always_denied_even_lan_friendly(self):
-        # ::1 is in the ALWAYS-on denylist, NOT the toggled band — it stays
-        # denied even in LAN-friendly mode.
+    def test_ipv6_loopback_follows_the_wizard_toggle(self):
+        """``::1`` is the v6 equivalent of ``127.0.0.0/8`` — toggled, not always-on.
+
+        GH #754 / bead ``0yh70``. §9.4 item 2 is self-contradictory here: its
+        always-on bullet lists ``::1/128`` while its wizard-toggled bullet says
+        "``127.0.0.0/8`` and RFC1918 ... **+ IPv6 equivalents**". We resolve it
+        in favour of the toggled bullet for loopback ONLY, because:
+
+        * ``::1`` and ``127.0.0.1`` are the same trust domain (the ECM host's
+          own loopback interface), so denying one while allowing the other
+          blocks no attacker capability — they simply type ``127.0.0.1``.
+        * Docker's generated ``/etc/hosts`` maps ``localhost`` to BOTH ``::1``
+          and ``127.0.0.1``, and §9.4 item 3 rejects the whole request if ANY
+          record is denied. Keeping ``::1`` always-on therefore makes
+          ``http://localhost:<port>`` unusable in LAN-friendly mode for every
+          Docker deployment that is not ``network_mode: host`` — the reported
+          GH #754 failure.
+
+        IPv6 ULA ``fc00::/7`` deliberately stays ALWAYS-on denied: it addresses
+        a *different* host on the network, not this one (see ALWAYS_ON_DENIED).
+        """
+        result = validate_outbound_url("http://[::1]/", SSRFMode.LAN_FRIENDLY)
+        assert result is not None
         with pytest.raises(SSRFError):
-            validate_outbound_url("http://[::1]/", SSRFMode.LAN_FRIENDLY)
+            validate_outbound_url("http://[::1]/", SSRFMode.PUBLIC_ONLY)
+
+    def test_dual_stack_localhost_follows_the_toggle(self):
+        """``localhost`` in a container resolves dual-stack — GH #754 fixture.
+
+        The record order is copied verbatim from a real container run
+        (``docker run --rm python:3.12-slim python -c
+        "import socket; socket.getaddrinfo('localhost', 9191, ...)"``), which
+        returns ``::1`` FIRST and then ``127.0.0.1``. §9.4 item 3 rejects the
+        whole request if any record is denied, so this is the case that a
+        v4-only reproduction on a ``network_mode: host`` box silently misses.
+        """
+        with _patch_dns("::1", "127.0.0.1"):
+            result = validate_outbound_url("http://localhost:9191", SSRFMode.LAN_FRIENDLY)
+        assert result is not None
+
+        with _patch_dns("::1", "127.0.0.1"):
+            with pytest.raises(SSRFError):
+                validate_outbound_url("http://localhost:9191", SSRFMode.PUBLIC_ONLY)
+
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_ipv6_ula_stays_always_denied(self, mode):
+        """The loopback carve-out does NOT extend to ULA (a different host)."""
+        with pytest.raises(SSRFError):
+            validate_outbound_url("http://[fd12:3456:789a::1]/", mode)
 
     def test_public_address_allowed_in_both_modes(self):
         for mode in (SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY):
