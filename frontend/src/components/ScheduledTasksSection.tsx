@@ -8,6 +8,7 @@ import { TaskEditorModal } from './TaskEditorModal';
 import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { TaskStatusPill } from './TaskStatusPill';
 import { getTaskPillState } from '../utils/taskPillState';
+import { sectionIdForTask } from '../utils/taskSectionId';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
 import './ScheduledTasksSection.css';
@@ -89,9 +90,16 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
     // data-settings-section opts this card into the Settings section rail
     // without inheriting `.settings-section` styling; the label is explicit
     // because the card's title is a styled div rather than a heading.
+    //
+    // data-section-id PINS the anchor to `task_id` rather than letting
+    // StickySectionNav slug it from the label, which a rename can rewrite
+    // (bead de6u1). `discover()` reads `data-section-id` first and
+    // unconditionally; only the plain `id` attribute path discards a
+    // `settings-`-prefixed value. See utils/taskSectionId.ts for the scheme.
     <div
       data-testid={`task-card-${task.task_id}`}
       data-settings-section=""
+      data-section-id={sectionIdForTask(task.task_id)}
       data-section-label={task.task_name}
       style={{
       backgroundColor: 'var(--bg-secondary)',
@@ -650,6 +658,20 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
     }
   };
 
+  // NO PLACEHOLDER SECTIONS HERE, deliberately — this page is the one member
+  // of the section-rail load-window class (22fef24d / 4af8f487) that must not
+  // pre-render a rail. Those pages have a compile-time set of sections, so a
+  // placeholder carries the real label and the real id. Here every entry is
+  // the data: its count is unknown, its ids are unknowable, and a task card is
+  // ~180px, so placeholder geometry would land a deep-linked reader roughly a
+  // page-and-a-half away from the card they asked for. A rail with invented
+  // entries could not resolve a shared link during the load window either — it
+  // would not fix the thing it exists to fix.
+  //
+  // So the rail is absent until the count is known, and then appears complete
+  // in the same commit as the content it indexes (`tasks` feeds both), which
+  // is what keeps it from growing under the reader. Guarded in
+  // ScheduledTasksSection.sectionRail.test.tsx. Bead de6u1.
   if (loading) {
     return (
       <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
