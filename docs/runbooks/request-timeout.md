@@ -107,6 +107,71 @@ Action:
 - File a bead if a new endpoint is blocking the loop (should use
   `run_cpu_bound`).
 
+### Symptom: `WARNING: Exceeded concurrency limit.` in the logs, only when running behind a reverse proxy
+
+**Meaning**: a burst of requests exceeded `ECM_LIMIT_CONCURRENCY` (default
+100) in a single instant. Uvicorn refuses everything past the limit with a
+503 and logs one `Exceeded concurrency limit.` warning per refused request.
+This is uvicorn's own log line, not something ECM formats — grep for it
+literally.
+
+```bash
+docker logs ecm-ecm-1 2>&1 | grep "Exceeded concurrency limit"
+```
+
+If this shows up correlated with a UI action that failed, looked stuck, or
+only partly applied, read the rest of this section before touching
+`ECM_LIMIT_CONCURRENCY` — the fix is usually not the limit.
+
+**Why this reproduces behind a proxy and may not reproduce in direct
+testing.** It is not that the proxy or HTTP/2 is broken, and switching to
+HTTP/2 is not a fix you're missing — it's the opposite. What changes is how
+tightly the burst gets spread out before it reaches ECM:
+
+- A browser talking **HTTP/1.1 directly to ECM** caps itself at roughly 6
+  connections per origin. A burst of requests queues client-side and
+  trickles in a few at a time, so it rarely reaches the concurrency limit
+  even when the burst is large — the browser is doing throttling ECM never
+  has to do.
+- A reverse proxy speaking **HTTP/2** to the browser (nginx, Caddy, Traefik,
+  or similar) multiplexes many logical requests over a single TCP
+  connection, with no per-origin connection cap. The same burst arrives at
+  ECM all at once, uncapped.
+
+Running ECM behind an HTTP/2 proxy is a normal, supported deployment — the
+point is only that it changes the concurrency profile ECM sees, so a
+proxied deployment can hit `ECM_LIMIT_CONCURRENCY` at a burst size a direct
+deployment would never reach, because nothing upstream is spreading the
+burst out anymore.
+
+This is exactly what happened in [GitHub #755](https://github.com/MotWakorb/enhancedchannelmanager/issues/755)
+(bead `enhancedchannelmanager-hns2y`, fixed in build 0006 — see
+`CHANGELOG.md`): copying a Channel Pipeline rule fanned out into one
+`PUT /rules/{id}` per rule. On a reproduction instance driven through a
+reverse proxy, that put 124 requests in flight in 28ms — 115 came back 503
+with a matching `Exceeded concurrency limit` warning each. The identical
+action driven directly over HTTP/1.1 succeeded end to end (all 123 requests
+OK) — same code, same browser, same instance; only the connection
+multiplexing differed. Raising the limit would only have moved the failure
+to the next operator with a larger rule set, which is why the real fix
+collapsed the fan-out to 1–2 bulk requests instead (see the CHANGELOG entry
+for the fix).
+
+Action, in order:
+- **Check whether the burst is proportional to something in your data** (rule
+  count, channel count, stream count). If a UI action's request count scales
+  with your library size instead of staying constant, that is very likely a
+  client issuing one request per item instead of using a bulk endpoint —
+  file a bead with the endpoint pattern and the item count; it's an ECM bug
+  to fix, not a limit to tune around.
+- **If the burst is a genuine one-time spike** (a large manual import, a
+  bulk operation with no bulk endpoint yet), raise `ECM_LIMIT_CONCURRENCY`
+  (see Configuration above) to accommodate it.
+- **Do not "fix" this by removing HTTP/2 or the proxy.** That only
+  reintroduces the browser's incidental 6-connection throttle as a
+  workaround; it does not address the request count, and a large enough
+  burst still exceeds the limit even over HTTP/1.1.
+
 ### Symptom: `/api/dummy-epg/xmltv` returns 504 every time
 
 **Meaning**: XMLTV generation for a large catalog legitimately exceeds 30s.
