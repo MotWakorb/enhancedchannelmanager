@@ -9,6 +9,7 @@ import type {
   UpdateRuleData,
   BulkUpdateRulesPatch,
   BulkUpdateRulesResponse,
+  ReorderRulesResponse,
   AnalyzeRuleBodyRequest,
   RuleAnalyzerResponse,
   RulesListResponse,
@@ -95,6 +96,23 @@ export async function deleteChannelPipelineRule(id: number): Promise<void> {
 export async function toggleChannelPipelineRule(id: number): Promise<ChannelPipelineRule> {
   return fetchJson<ChannelPipelineRule>(`${API_BASE}/channel-pipeline/rules/${id}/toggle`, {
     method: 'POST',
+  });
+}
+
+/**
+ * Reorder rules in one write. `orderedIds` is the complete new order; the
+ * server assigns each listed rule a priority equal to its index.
+ *
+ * GH #755: this replaced a per-rule `PUT` fan-out. Reordering on an instance
+ * with more rules than uvicorn's `--limit-concurrency` (`backend/entrypoint.sh`,
+ * `ECM_LIMIT_CONCURRENCY`, default 100) burst past the limit and most of the
+ * writes came back 503. Keep this a single request — the amplification scaled
+ * with rule count, so raising the limit only moves the failure point.
+ */
+export async function reorderChannelPipelineRules(orderedIds: number[]): Promise<ReorderRulesResponse> {
+  return fetchJson<ReorderRulesResponse>(`${API_BASE}/channel-pipeline/rules/reorder`, {
+    method: 'POST',
+    body: JSON.stringify(orderedIds),
   });
 }
 

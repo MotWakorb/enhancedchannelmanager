@@ -1662,6 +1662,63 @@ describe('ChannelPipelineTab', () => {
     });
   });
 
+  /**
+   * GH #755 — on an instance with more rules than uvicorn's
+   * `--limit-concurrency` (`backend/entrypoint.sh`, default 100), copying a
+   * rule fired one `PUT /rules/{id}` per rule at once. Most came back 503, the
+   * operator got an error toast, and the copy stayed pinned to the bottom of
+   * the list until the page was reloaded.
+   *
+   * The 120-rule fixture is part of the guard: below the limit the burst never
+   * failed, so a small fixture cannot reproduce the reported failure.
+   */
+  describe('GH #755 rule copy at scale', () => {
+    const RULE_COUNT = 120;
+
+    const ruleNamesInOrder = () =>
+      screen.getAllByTestId('rule-row').map(row => row.querySelector('.rule-name')?.textContent);
+
+    it('shows the copy directly after the original without a page reload', async () => {
+      const user = userEvent.setup();
+      const perRuleWrites: string[] = [];
+      server.events.on('request:start', ({ request }) => {
+        const path = new URL(request.url).pathname;
+        if (request.method === 'PUT' && /\/channel-pipeline\/rules\/\d+$/.test(path)) {
+          perRuleWrites.push(path);
+        }
+      });
+
+      for (let i = 0; i < RULE_COUNT; i++) {
+        mockDataStore.channelPipelineRules.push(
+          createMockChannelPipelineRule({ name: `Bulk Rule ${String(i).padStart(3, '0')}`, priority: i })
+        );
+      }
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Bulk Rule 000')).toBeInTheDocument();
+      });
+
+      const originalRow = screen.getAllByTestId('rule-row')[1];
+      await user.click(within(originalRow).getByRole('button', { name: /duplicate/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Bulk Rule 001 \(Copy\)/)).toBeInTheDocument();
+      });
+
+      // The list itself must be right — not just after a refresh.
+      const names = ruleNamesInOrder();
+      expect(names[names.indexOf('Bulk Rule 001') + 1]).toBe('Bulk Rule 001 (Copy)');
+      expect(names[names.length - 1]).not.toBe('Bulk Rule 001 (Copy)');
+
+      // ...and it must not have taken a write per rule to get there.
+      expect(perRuleWrites).toHaveLength(0);
+
+      server.events.removeAllListeners('request:start');
+    });
+  });
+
   describe('keyboard navigation', () => {
     it('supports keyboard navigation in rules list', async () => {
       mockDataStore.channelPipelineRules.push(

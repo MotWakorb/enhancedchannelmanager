@@ -349,6 +349,12 @@ export interface BulkUpdateRulesResponse {
   updated_count: number;
 }
 
+/** Response from POST /channel-pipeline/rules/reorder */
+export interface ReorderRulesResponse {
+  status: string;
+  rule_ids: number[];
+}
+
 // =============================================================================
 // Rule analyzer (bd-0gntx / bd-m1s38.2)
 // =============================================================================
