@@ -1,20 +1,20 @@
 # Frontend Lint Policy
 
-> This document is **authoritative for ESLint policy** — the
+> This document is **authoritative for ESLint policy**: the
 > `--max-warnings 0` floor, per-rule fix patterns, and CI behavior. The
 > general `docs/style_guide.md` summarises the policy and the inline-disable
 > rationale rule, then defers here for the recurring-pattern catalog. If
 > the two disagree, this document wins; please file a PR against the style
 > guide so they are reconciled.
 
-**Policy:** `npm run lint` must exit clean — zero errors, zero warnings
+**Policy:** `npm run lint` must exit clean: zero errors, zero warnings
 (`--max-warnings 0`). Enforced in CI via `.github/workflows/test.yml` on every
 push and pull request.
 
 ## Why `--max-warnings 0`
 
 Warnings have a half-life measured in months. Once the count is non-zero, it
-trends up — reviewers stop reading the list because it's too long, and real
+trends up. Reviewers stop reading the list because it's too long, and real
 signals drown in noise. The only way to keep ESLint useful is to treat every
 warning as a failure. If a rule is truly noisy, turn the rule off at the
 config level rather than accumulating warnings against it.
@@ -37,7 +37,7 @@ of the lint being broken by a stale `ajv` override.
    // eslint-disable-next-line <rule-name> -- <one-line reason specific to this site>
    ```
 
-   The reason must be specific — "intentional" is not a reason. Good:
+   The reason must be specific: "intentional" is not a reason. Good:
 
    ```ts
    // eslint-disable-next-line react-hooks/exhaustive-deps -- polling lifecycle is owned by `probingAll`; parent callback identity doesn't need to restart polling
@@ -60,17 +60,17 @@ of the lint being broken by a stale `ajv` override.
 
 ## Common Patterns and Their Fixes
 
-### `react-hooks/refs` — "Cannot access ref value during render"
+### `react-hooks/refs`: "Cannot access ref value during render"
 
 Reading `ref.current` during render is unsafe because refs aren't tracked by
-React's reactivity system — the UI won't update when the ref changes.
+React's reactivity system. The UI won't update when the ref changes.
 
 - **Fix:** Switch to `useState` when the value drives rendering.
 - **Exception:** DOM-measurement patterns (useLayoutEffect measures → writes
-  ref → forceUpdate) — this is a known-idiomatic pattern for aligning with
+  ref → forceUpdate) are a known-idiomatic pattern for aligning with
   browser layout. Disable at the specific read site with a reason.
 
-### `react-hooks/set-state-in-effect` — "Avoid calling setState() directly within an effect"
+### `react-hooks/set-state-in-effect`: "Avoid calling setState() directly within an effect"
 
 - **Prefer:** Derive state from props with update-during-render guards:
 
@@ -89,13 +89,13 @@ React's reactivity system — the UI won't update when the ref changes.
 - **For data fetching on mount:** The classic `useEffect(() => { void
   loadX(); }, [loadX])` pattern transitively sets state, so the rule will
   flag it. In most cases `setState` fires in a `.then()` callback (async),
-  not the effect body — disable the rule at that site with the reason
+  not the effect body. Disable the rule at that site with the reason
   `async setState (inside .then), not synchronous`.
 
-### `react-hooks/exhaustive-deps` — missing/unnecessary dep
+### `react-hooks/exhaustive-deps`: missing/unnecessary dep
 
 - Add the missing dep. If adding it would cause a render loop, the callback
-  probably shouldn't be in the effect — restructure.
+  probably shouldn't be in the effect. Restructure instead.
 - If the missing value is a stable reference (useCallback/useMemo or a state
   setter), adding it is cheap.
 - Context values returned from `useContext(...)` should themselves be
@@ -114,10 +114,10 @@ comment. Consider a file-level ignore if this becomes common.
 
 Compiler-inferred deps didn't match the manual `useCallback` deps. Typically
 caused by optional-chain property deps (`displayInfo?.externalUrl`). Fix by
-using the whole object (`displayInfo`) — the compiler re-memoizes correctly.
+using the whole object (`displayInfo`). The compiler re-memoizes correctly.
 
 ## CI Behavior
 
 `.github/workflows/test.yml` runs `npm run lint` as a blocking step on every
-push and every pull request. There is no "informational" mode — a new
+push and every pull request. There is no "informational" mode: a new
 warning fails the build, same as a new test failure.

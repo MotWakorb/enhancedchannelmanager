@@ -1,7 +1,5 @@
 # Troubleshoot a Restore
 
-> **Audience:** Operator who ran a restore and got unexpected results, or who needs to diagnose why a restore failed.
->
 > **Status:** Shipped in v0.18.0.
 
 ---
@@ -33,11 +31,11 @@
 
 **Symptom:** After entering a passphrase for an encrypted backup, the restore is refused with this message.
 
-**Cause:** Either the passphrase is wrong, or the encrypted artifact is corrupted. ECM returns the same message for both cases — this is intentional (no oracle).
+**Cause:** Either the passphrase is wrong, or the encrypted artifact is corrupted. ECM returns the same message for both cases. This is intentional (no oracle).
 
 **Fix:**
 1. Double-check the passphrase. Passphrases are case-sensitive.
-2. If you are confident the passphrase is correct, the artifact may be corrupted — verify the `.sha256` sidecar if available.
+2. If you are confident the passphrase is correct, the artifact may be corrupted. Verify the `.sha256` sidecar if available.
 3. If the passphrase is lost: there is no recovery path. The encrypted artifact is permanently unrecoverable. Restore from an unencrypted backup, or from a different encrypted backup for which you have the passphrase.
 
 ---
@@ -63,19 +61,19 @@ Common pre-flight failures:
 
 **Symptom:** The restore reported success, but channel numbers are wrong, channels are missing, or streams are not playing.
 
-**Check 1 — Stream matching tiers.** The restore-complete report shows how many streams were matched at each tier (exact URL, exact name+provider, exact normalized name, fuzzy name). A large number of Tier-4 fuzzy matches or misses means ECM had trouble re-attaching streams from the archive to the streams on this Dispatcharr instance. This happens most often when the M3U provider's stream URLs have changed significantly, or when restoring onto an instance with different M3U accounts.
+**Check 1: Stream matching tiers.** The restore-complete report shows how many streams were matched at each tier (exact URL, exact name+provider, exact normalized name, fuzzy name). A large number of Tier-4 fuzzy matches or misses means ECM had trouble re-attaching streams from the archive to the streams on this Dispatcharr instance. This happens most often when the M3U provider's stream URLs have changed significantly, or when restoring onto an instance with different M3U accounts.
 
-**Fix for stream misses:** Check that the M3U accounts on the destination instance are configured and active. Run an M3U refresh to make sure all streams are present. Then re-attempt the restore — the stream matcher will have more candidates to match against.
+**Fix for stream misses:** Check that the M3U accounts on the destination instance are configured and active. Run an M3U refresh to make sure all streams are present. Then re-attempt the restore. The stream matcher will have more candidates to match against.
 
-**Check 2 — Did the M3U accounts restore first?** If you ran a partial restore that included channels but excluded M3U accounts, channels cannot be attached to their providers. Restore M3U accounts first, then restore channels.
+**Check 2: Did the M3U accounts restore first?** If you ran a partial restore that included channels but excluded M3U accounts, channels cannot be attached to their providers. Restore M3U accounts first, then restore channels.
 
-**Check 3 — Channel number conflicts.** The restore reports a `CONFLICT` (failed with reason) for a channel when the channel has no channel number and an existing channel with the same name and no number is already present. This is ambiguous — ECM cannot determine if they are the same channel or two different ones. The second channel is not created. Assign explicit channel numbers on the source before re-taking the backup to avoid this.
+**Check 3: Channel number conflicts.** The restore reports a `CONFLICT` (failed with reason) for a channel when the channel has no channel number and an existing channel with the same name and no number is already present. This is ambiguous. ECM cannot determine if they are the same channel or two different ones. The second channel is not created. Assign explicit channel numbers on the source before re-taking the backup to avoid this.
 
 ---
 
-## The restore failed part-way — "restore failed, state rolled back"
+## The restore failed part-way: "restore failed, state rolled back"
 
-**Symptom:** The restore-complete screen shows "restore failed — state rolled back."
+**Symptom:** The restore-complete screen shows "restore failed, state rolled back."
 
 **What happened:** A failure occurred mid-restore (a Dispatcharr API error, a timeout, or a validation error). ECM ran a compensating rollback: every entity created during this restore run was deleted in reverse order. The instance is back to its pre-restore state.
 
@@ -87,13 +85,13 @@ After resolving the underlying cause, re-run the restore from scratch.
 
 ---
 
-## The restore failed — "rollback incomplete"
+## The restore failed: "rollback incomplete"
 
-**Symptom:** The restore-complete screen shows "restore failed — rollback incomplete."
+**Symptom:** The restore-complete screen shows "restore failed, rollback incomplete."
 
 **What happened:** A failure occurred mid-restore AND the compensating rollback could not delete one or more entities (the delete returned an error that was not 404). The instance is in a partially modified state. The report lists the entity IDs and types that could not be rolled back.
 
-**This is the worst outcome. Take it seriously.** The instance state is indeterminate — some entities from the backup are present, others are not. Do not attempt another restore until you have cleaned up the residue.
+**This is the worst outcome. Take it seriously.** The instance state is indeterminate. Some entities from the backup are present, others are not. Do not attempt another restore until you have cleaned up the residue.
 
 **Fix:**
 1. Read the report. Note every entity type and destination ID listed as residue.
@@ -106,11 +104,11 @@ If you are on a fresh install and the instance has no channels you care about, a
 
 ---
 
-## Logo misses — red banner after restore
+## Logo misses: red banner after restore
 
 **Symptom:** After a successful restore, a red banner shows "N logos could not be matched."
 
-**What happened:** One or more logo files in the archive did not match any existing logo on the destination. The channels exist and work — only the logos are affected.
+**What happened:** One or more logo files in the archive did not match any existing logo on the destination. The channels exist and work. Only the logos are affected.
 
 **Fix:** Re-upload the missing logos manually in the Dispatcharr UI, or re-run an EPG logo match if your EPG sources carry logo URLs.
 
@@ -124,7 +122,7 @@ ECM logs all restore activity at the `[DBAS-RESTORE]` log prefix. For detailed d
 docker logs ecm-ecm-1 2>&1 | grep "\[DBAS"
 ```
 
-The logs contain entity types, IDs, and outcome codes — never credentials or passphrase values.
+The logs contain entity types, IDs, and outcome codes, but never credentials or passphrase values.
 
 The restore ledger is stored at `/config/dbas/restore_ledger_<id>.json` while a restore is in progress, and deleted on clean success. If a ledger file remains after a failed restore, it records the exact entities that were created and (if rollback was incomplete) which ones remain.
 
@@ -132,6 +130,6 @@ The restore ledger is stored at `/config/dbas/restore_ledger_<id>.json` while a 
 
 ## Still stuck?
 
-- [Backup & Restore overview](backup-overview.md) — to understand the artifact format and what each category contains.
-- [`docs/security/threat_model_dbas_import.md`](../../security/threat_model_dbas_import.md) — the security analysis of the restore pipeline.
-- [Disaster Recovery runbook](../../runbooks/disaster-recovery-restore.md) — for structured incident response.
+- [Backup & Restore overview](backup-overview.md): to understand the artifact format and what each category contains.
+- [`docs/security/threat_model_dbas_import.md`](../../security/threat_model_dbas_import.md): the security analysis of the restore pipeline.
+- [Disaster Recovery runbook](../../runbooks/disaster-recovery-restore.md): for structured incident response.

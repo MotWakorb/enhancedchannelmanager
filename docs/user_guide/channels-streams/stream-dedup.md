@@ -1,7 +1,5 @@
 # Stream Deduplication
 
-> **Audience:** Operator managing a channel lineup. You have streams arriving from M3U sources and want to prevent or resolve duplicate channels.
->
 > **Feature version:** v0.17.1 (ADR-008)
 
 ## What the dedup feature does
@@ -28,7 +26,7 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 
 1. Select a stream in the Streams pane.
 2. Drag it onto a channel group header or an existing channel row.
-3. If ECM finds a candidate channel — a channel whose name is at or above the configured dedup threshold — the **StreamDedupModal** appears.
+3. If ECM finds a candidate channel (a channel whose name is at or above the configured dedup threshold), the **StreamDedupModal** appears.
 
 ### Create in… menu (create channel in a chosen group)
 
@@ -45,11 +43,11 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 The modal presents:
 
 - The incoming **stream name**.
-- The **candidate channel** — the best matching existing channel — with its name and confidence score.
+- The **candidate channel** (the best matching existing channel), with its name and confidence score.
 - Two primary actions:
-  - **Merge into existing channel** — routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
-  - **Create new channel** — bypasses the dedup check and creates a new channel as usual.
-- A dismiss (close) action — leaves the stream unassigned and closes the modal.
+  - **Merge into existing channel**: routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
+  - **Create new channel**: bypasses the dedup check and creates a new channel as usual.
+- A dismiss (close) action: leaves the stream unassigned and closes the modal.
 
 ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%). If no candidate meets the threshold, the dedup check is silent and a new channel is created as normal.
 
@@ -68,9 +66,9 @@ Each pending merge row records:
 - The confidence score at the time of queuing.
 - The trigger context (`m3u_refresh`).
 
-The same `(stream_name, candidate_channel)` pair can only appear once in the pending queue — repeat M3U refreshes of the same stream against the same candidate produce one row, not duplicates.
+The same `(stream_name, candidate_channel)` pair can only appear once in the pending queue. Repeat M3U refreshes of the same stream against the same candidate produce one row, not duplicates.
 
-After the bulk M3U refresh completes, ECM shows a toast notification indicating how many pending merges were queued (e.g., "Auto-Creation: 0 created, 3 pending merges queued"). You can suppress this toast in Settings if you prefer to check the page on your own schedule — see [Settings](#settings-stream-deduplication).
+After the bulk M3U refresh completes, ECM shows a toast notification indicating how many pending merges were queued (e.g., "Auto-Creation: 0 created, 3 pending merges queued"). You can suppress this toast in Settings if you prefer to check the page on your own schedule. See [Settings](#settings-stream-deduplication).
 
 ### Navigating to the Pending Merges page
 

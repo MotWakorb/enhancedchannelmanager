@@ -1,7 +1,5 @@
 # Restore a Backup
 
-> **Audience:** Operator who needs to restore a Backup & Restore artifact — either after a data loss event, or after migrating to a new install.
->
 > **Status:** Shipped in v0.18.0.
 
 ---
@@ -18,7 +16,7 @@
 
 ## The restore flow
 
-### Step 1 — Upload the artifact
+### Step 1: Upload the artifact
 
 1. Go to **Settings → Backup & Restore**.
 2. Find the **Restore DBAS Backup** card.
@@ -30,14 +28,14 @@ ECM validates the artifact immediately on upload:
 
 - Checks for decompression-bomb characteristics (before decompressing anything).
 - Reads and validates `manifest.json`.
-- Checks `schema_version` — if the artifact was produced by a newer ECM build, the upload is refused with "Unsupported backup version."
+- Checks `schema_version`: if the artifact was produced by a newer ECM build, the upload is refused with "Unsupported backup version."
 - Verifies each archive member's SHA-256 against the manifest.
 
 If validation fails, ECM shows the error and makes no changes.
 
-### Step 2 — Run a dry-run preview (default)
+### Step 2: Run a dry-run preview (default)
 
-The restore modal runs a **dry-run by default** — it does not apply anything unless you explicitly confirm. After uploading:
+The restore modal runs a **dry-run by default**. It does not apply anything unless you explicitly confirm. After uploading:
 
 1. Click **Preview** (or the run button, which is in dry-run mode by default).
 2. ECM runs the full importer pipeline in read-only mode against the artifact.
@@ -46,7 +44,7 @@ The restore modal runs a **dry-run by default** — it does not apply anything u
 
 Review the report before applying. A large unexpected "would create" count on an existing instance is a signal to investigate before proceeding.
 
-### Step 3 — Apply
+### Step 3: Apply
 
 If the preview looks correct:
 
@@ -60,13 +58,13 @@ If the preview looks correct:
 
 The restore applies categories in a fixed order determined by their dependencies. You cannot change this order:
 
-1. **M3U accounts** — must exist before channels, since channels reference their provider.
-2. **EPG sources** — must exist before channels, since channels can reference EPG sources.
-3. **Channel groups, channel profiles, stream profiles** — must exist before channels, since channels reference them.
-4. **User agents, core settings** — applied alongside other config.
-5. **Users** — opt-in; see [User restore semantics](#user-restore-semantics).
-6. **Channels (with embedded streams)** — applied after all the entities they reference.
-7. **Logos** — applied last; references channels and URL mappings.
+1. **M3U accounts**: must exist before channels, since channels reference their provider.
+2. **EPG sources**: must exist before channels, since channels can reference EPG sources.
+3. **Channel groups, channel profiles, stream profiles**: must exist before channels, since channels reference them.
+4. **User agents, core settings**: applied alongside other config.
+5. **Users**: opt-in; see [User restore semantics](#user-restore-semantics).
+6. **Channels (with embedded streams)**: applied after all the entities they reference.
+7. **Logos**: applied last; references channels and URL mappings.
 
 This ordering is enforced by the restore orchestrator and cannot be reordered via the UI.
 
@@ -76,23 +74,23 @@ This ordering is enforced by the restore orchestrator and cannot be reordered vi
 
 When restoring channels, ECM must attach each channel's archived streams to streams that already exist on the destination Dispatcharr instance. The archive records which stream URLs were assigned to each channel, but stream IDs differ between instances. ECM uses a four-tier matching ladder to find the right stream on the destination:
 
-**Tier 1 — Exact URL match.** The archived stream URL matches a destination stream URL exactly (case-sensitive). This is the strongest signal: the same provider is serving the same endpoint. A Tier-1 match is never a false positive.
+**Tier 1: Exact URL match.** The archived stream URL matches a destination stream URL exactly (case-sensitive). This is the strongest signal: the same provider is serving the same endpoint. A Tier-1 match is never a false positive.
 
-**Tier 2 — Exact name + same provider.** Same display name (after normalization) and same M3U account on both instances. Covers the common case where a provider rotated its stream URLs (token refresh, CDN hostname change) but kept the channel lineup stable.
+**Tier 2: Exact name + same provider.** Same display name (after normalization) and same M3U account on both instances. Covers the common case where a provider rotated its stream URLs (token refresh, CDN hostname change) but kept the channel lineup stable.
 
-**Tier 3 — Exact normalized name (any provider).** Same normalized display name, regardless of which M3U account or provider the stream comes from. Useful when restoring onto an instance whose M3U account IDs differ from the source.
+**Tier 3: Exact normalized name (any provider).** Same normalized display name, regardless of which M3U account or provider the stream comes from. Useful when restoring onto an instance whose M3U account IDs differ from the source.
 
-**Tier 4 — Fuzzy name match.** A fuzzy normalized name comparison with a similarity floor (≥60%). Catches minor name drift: quality-tag reordering (`HD` vs `FHD`), punctuation differences, minor wording changes. Used as a last resort before declaring a miss.
+**Tier 4: Fuzzy name match.** A fuzzy normalized name comparison with a similarity floor (≥60%). Catches minor name drift: quality-tag reordering (`HD` vs `FHD`), punctuation differences, minor wording changes. Used as a last resort before declaring a miss.
 
 **If no tier matches (miss):** The stream is synthesized as a custom-stream entry so the channel is still created and visible. A WARN log entry is recorded and the restore-complete report includes an aggregate logo-miss count (for logos) and stream-miss details (for streams). Misses are a signal to check your M3U account configuration on the destination.
 
-When multiple destination streams match the same tier, the one with the lowest stream ID wins. This tie-break is deterministic — the same inputs always produce the same result.
+When multiple destination streams match the same tier, the one with the lowest stream ID wins. This tie-break is deterministic. The same inputs always produce the same result.
 
 ---
 
 ## User restore semantics
 
-Users are **opt-in** — they are not selected by default in the restore modal. This is intentional: restoring users onto a running instance can change login credentials and privilege flags for existing accounts.
+Users are **opt-in**. They are not selected by default in the restore modal. This is intentional: restoring users onto a running instance can change login credentials and privilege flags for existing accounts.
 
 When you opt in to restoring users:
 
@@ -108,15 +106,15 @@ If a restore fails mid-run (a network error, a Dispatcharr API error, or a valid
 
 1. Every entity that was created during the current restore run is tracked in a durable on-disk ledger (written to `/config/dbas/restore_ledger_<id>.json`).
 2. On failure, ECM issues delete requests for those entities in reverse creation order (logos first, then channels, then the groups and profiles they referenced, then M3U accounts and EPG sources). Reverse order ensures a parent entity is never deleted before the children that reference it are gone.
-3. A delete that returns 404 (already gone) is counted as success — the rollback is idempotent.
+3. A delete that returns 404 (already gone) is counted as success. The rollback is idempotent.
 
 The restore-complete screen reports one of three outcomes:
 
 | Outcome | What happened |
 |-|-|
 | **Success** | All selected categories applied cleanly. No failures, no rollback needed. |
-| **Restore failed — state rolled back** | One or more categories failed; the compensating rollback deleted all entities created in this run. The instance is back to its pre-restore state. |
-| **Restore failed — rollback incomplete** | A failure occurred AND the rollback could not delete one or more entities (a non-404 error on a delete). The instance is in a partially modified state. The report shows which entities remain and their IDs so you can clean them up manually. |
+| **Restore failed, state rolled back** | One or more categories failed; the compensating rollback deleted all entities created in this run. The instance is back to its pre-restore state. |
+| **Restore failed, rollback incomplete** | A failure occurred AND the rollback could not delete one or more entities (a non-404 error on a delete). The instance is in a partially modified state. The report shows which entities remain and their IDs so you can clean them up manually. |
 
 **If you see "rollback incomplete":** Check the Dispatcharr API is reachable and that your admin credentials are valid. Look at the entity IDs listed in the report and delete them manually via the Dispatcharr UI. Then re-attempt the restore from scratch.
 
@@ -130,7 +128,7 @@ If you want to restore a backup that is already stored locally (not re-uploading
 2. Find the backup file you want.
 3. Click **Restore this backup** (or use the `restore_dbas_backup_saved` MCP tool with the filename).
 
-This is the same restore flow as uploading — it runs through the same validation, dry-run, and apply pipeline. The saved file is not deleted by a restore.
+This is the same restore flow as uploading. It runs through the same validation, dry-run, and apply pipeline. The saved file is not deleted by a restore.
 
 ---
 
@@ -148,5 +146,5 @@ To resolve: re-upload the missing logos manually in **Settings → Channels**, o
 
 ## Next steps
 
-- [Troubleshoot a restore](troubleshoot-restore.md) — if the restore produced unexpected results.
-- [Migrate to a new install](migrate-to-a-new-install.md) — the full end-to-end migration walkthrough.
+- [Troubleshoot a restore](troubleshoot-restore.md): if the restore produced unexpected results.
+- [Migrate to a new install](migrate-to-a-new-install.md): the full end-to-end migration walkthrough.

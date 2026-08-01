@@ -1,13 +1,13 @@
 # Runbook: ECM Readiness Availability
 
-> **Stub** — scaffolded by bd-dl1bd alongside the SLOs. Will be reconciled
+> **Stub:** scaffolded by bd-dl1bd alongside the SLOs. Will be reconciled
 > with the runbook template produced by sibling bead bd-bwly4 when that
 > lands; if bwly4 merges first, re-flow this content into their template.
 
 **Alerts that route here:**
-- `ECMReadinessDown` (page) — `ecm_health_ready_ok == 0` sustained 2m+
-- `ECMReadinessFlapping` (ticket) — >4 transitions in 10m
-- `ECMReadiness30dBudgetBurn` (ticket) — 6h availability < 95%
+- `ECMReadinessDown` (page): `ecm_health_ready_ok == 0` sustained 2m+
+- `ECMReadinessFlapping` (ticket): >4 transitions in 10m
+- `ECMReadiness30dBudgetBurn` (ticket): 6h availability < 95%
 
 **SLO:** [SLO-1 Readiness Availability](../sre/slos.md#slo-1-readiness-availability)
 
@@ -21,7 +21,7 @@
 
 ## First 5 minutes
 
-1. **Confirm the alert.** Curl `/api/health/ready` directly — the JSON payload names the failing sub-check:
+1. **Confirm the alert.** Curl `/api/health/ready` directly. The JSON payload names the failing sub-check:
    ```bash
    curl -s http://<host>/api/health/ready | jq .
    ```
@@ -50,12 +50,12 @@
 ### `ffprobe` fails (or skipped)
 - Binary missing: `docker exec ecm-ecm-1 which ffprobe`.
 - Permissions: should be +x for the container user.
-- Note: `ffprobe` sub-check failure degrades features but is treated as OK for readiness if marked `skipped` — re-read the health.py logic if the status is ambiguous.
+- Note: `ffprobe` sub-check failure degrades features but is treated as OK for readiness if marked `skipped`. Re-read the health.py logic if the status is ambiguous.
 
 ## Mitigation
 
 - Database lock: identify the blocking query via logs (`grep trace_id` of the request that kicked it off), cancel if safe.
-- Dispatcharr: if Dispatcharr is down, there is no ECM-side mitigation — set user expectation, wait for upstream.
+- Dispatcharr: if Dispatcharr is down, there is no ECM-side mitigation. Set user expectation and wait for upstream.
 - Rollback: if a recent deploy caused the failure, `docker restart ecm-ecm-1` first; if still failing, revert to the previous image.
 
 ## Post-incident
@@ -66,5 +66,5 @@
 ## See also
 
 - [SLO document](../sre/slos.md)
-- [`backend/routers/health.py`](../../backend/routers/health.py) — readiness sub-check implementations
-- [`backend/observability.py`](../../backend/observability.py) — metric registration
+- [`backend/routers/health.py`](../../backend/routers/health.py): readiness sub-check implementations
+- [`backend/observability.py`](../../backend/observability.py): metric registration

@@ -14,11 +14,11 @@
 
 ## Observability
 
-The observability substrate lives in `backend/observability.py`. It is wired into the app by a single call from `main.py` — `install_observability()` — which installs both the JSON log formatter and the Prometheus metric registry. Every request flowing through FastAPI picks up a correlation id and contributes counter/histogram samples; the readiness probe publishes a gauge plus per-check histograms. The design philosophy is *substrate, not platform*: this code only produces signal — dashboards, SLOs, alertmanager, and Prometheus/Grafana deployment are separate concerns.
+The observability substrate lives in `backend/observability.py`. It is wired into the app by a single call from `main.py` (`install_observability()`), which installs both the JSON log formatter and the Prometheus metric registry. Every request flowing through FastAPI picks up a correlation id and contributes counter/histogram samples; the readiness probe publishes a gauge plus per-check histograms. The design philosophy is *substrate, not platform*: this code only produces signal. Dashboards, SLOs, alertmanager, and Prometheus/Grafana deployment are separate concerns.
 
 ### Structured logging
 
-Every log line is one JSON document on stdout with the fields `ts`, `level`, `logger`, `msg`, `trace_id`. The correlation middleware reads `X-Request-ID` from the inbound headers (truncated to 128 chars as a defensive cap) or generates a UUIDv4, stores it in a `contextvars.ContextVar`, and echoes it back as the `X-Request-ID` response header. Any log line emitted during the request carries that id automatically — no threading of arguments required.
+Every log line is one JSON document on stdout with the fields `ts`, `level`, `logger`, `msg`, `trace_id`. The correlation middleware reads `X-Request-ID` from the inbound headers (truncated to 128 chars as a defensive cap) or generates a UUIDv4, stores it in a `contextvars.ContextVar`, and echoes it back as the `X-Request-ID` response header. Any log line emitted during the request carries that id automatically. No threading of arguments is required.
 
 **Call style (unchanged):**
 ```python
@@ -41,13 +41,13 @@ try:
 finally:
     reset_context(token)
 ```
-The key/values attach to every log record emitted inside the `with`/`try` block. Keys that collide with built-in `LogRecord` attributes (`message`, `asctime`, etc.) are silently skipped — namespace your fields (`restore_id`, `sync_id`, `probe_stream_id`).
+The key/values attach to every log record emitted inside the `with`/`try` block. Keys that collide with built-in `LogRecord` attributes (`message`, `asctime`, etc.) are silently skipped. Namespace your fields (`restore_id`, `sync_id`, `probe_stream_id`).
 
 **Per-request access log:** one `ecm.access` INFO line fires after every request with `method`, `path`, `status`, `duration_ms`. Grep on `"logger":"ecm.access"` to audit traffic; filter on `trace_id` to trace a single request across modules.
 
 ### Metrics
 
-`/metrics` serves Prometheus text exposition. It is unauthenticated by design — Prometheus scrapers have no session context, and the endpoint exposes no user data. The deployment assumption is that the network surface (LAN, reverse proxy, tailnet) is trusted. If that assumption stops holding, the follow-up is an IP allowlist at the proxy (simplest, no code change) or a bearer-token scrape credential validated in the handler — both are future beads.
+`/metrics` serves Prometheus text exposition. It is unauthenticated by design. Prometheus scrapers have no session context, and the endpoint exposes no user data. The deployment assumption is that the network surface (LAN, reverse proxy, tailnet) is trusted. If that assumption stops holding, the follow-up is an IP allowlist at the proxy (simplest, no code change) or a bearer-token scrape credential validated in the handler. Both are future beads.
 
 **Minimum metric set (shipped in this substrate):**
 
@@ -55,13 +55,13 @@ The key/values attach to every log record emitted inside the `with`/`try` block.
 |-|-|-|-|
 | `ecm_http_requests_total` | Counter | method, path, status | RED rate + errors |
 | `ecm_http_request_duration_seconds` | Histogram | method, path | RED duration |
-| `ecm_health_ready_ok` | Gauge | — | 1/0 readiness verdict |
+| `ecm_health_ready_ok` | Gauge | None | 1/0 readiness verdict |
 | `ecm_health_ready_check_duration_seconds` | Histogram | check | Per sub-check latency |
 
-**Metric naming convention:** `ecm_<subsystem>_<name>_<unit>` — snake_case, unit suffix (`_seconds`, `_bytes`, `_total` for counters). The `ecm_` namespace is non-negotiable; it keeps ECM's series distinct when scraped into a shared Prometheus instance.
+**Metric naming convention:** `ecm_<subsystem>_<name>_<unit>`: snake_case, unit suffix (`_seconds`, `_bytes`, `_total` for counters). The `ecm_` namespace is non-negotiable; it keeps ECM's series distinct when scraped into a shared Prometheus instance.
 
 **Cardinality rules (enforced at metric-emit time, reviewed in PRs):**
-- Labels must have bounded cardinality. HTTP methods, status codes, route patterns, and a fixed vocabulary of check names are fine. User ids, channel ids, stream ids, UUIDs, raw URLs, and email addresses are not — they belong in traces or logs, never in metric labels.
+- Labels must have bounded cardinality. HTTP methods, status codes, route patterns, and a fixed vocabulary of check names are fine. User ids, channel ids, stream ids, UUIDs, raw URLs, and email addresses are not. They belong in traces or logs, never in metric labels.
 - For HTTP metrics we label by the matched FastAPI route pattern (`request.scope["route"].path`, e.g. `/api/channels/{channel_id}`), never the raw URL. The middleware does this automatically; custom middleware must follow suit.
 - Every new histogram gets buckets tuned to the signal: sub-millisecond floors for in-process calls, multi-second ceilings for network work. Default buckets rarely fit.
 
@@ -100,12 +100,12 @@ Metric emission is wrapped in try/except so a misbehaving collector can never fa
 
 ### SLOs and alert rules
 
-See [`docs/sre/slos.md`](./sre/slos.md) (bd-dl1bd) for the initial SLOs built on top of this substrate — readiness availability, HTTP p95 latency, HTTP 5xx error rate, and informational readiness sub-check latency. Corresponding Prometheus alert rules live in [`docs/sre/prometheus_rules.yaml`](./sre/prometheus_rules.yaml); runbooks referenced by each alert are under [`docs/runbooks/`](./runbooks/). Targets are intentionally conservative until 30+ days of production metrics exist — they will be recalibrated after that baseline, tracked as a follow-up bead.
+See [`docs/sre/slos.md`](./sre/slos.md) (bd-dl1bd) for the initial SLOs built on top of this substrate: readiness availability, HTTP p95 latency, HTTP 5xx error rate, and informational readiness sub-check latency. Corresponding Prometheus alert rules live in [`docs/sre/prometheus_rules.yaml`](./sre/prometheus_rules.yaml); runbooks referenced by each alert are under [`docs/runbooks/`](./runbooks/). Targets are intentionally conservative until 30+ days of production metrics exist. They will be recalibrated after that baseline, tracked as a follow-up bead.
 
 ### Out of scope for this substrate
 
 Explicit non-goals, handed off to future beads:
 
-- **Alertmanager / Prometheus / Grafana deployment** — this substrate only exposes the endpoint and ships rules-as-code (see SLO section above); no scrape target is deployed with ECM.
-- **Distributed tracing (OpenTelemetry / Jaeger / Tempo)** — the `trace_id` is a correlation id, not a W3C TraceContext id. A future bead will adopt OTel if and when we have a downstream tracer to emit to.
-- **Log aggregation (Loki / ELK)** — JSON on stdout is the substrate; a pipeline is its own bead.
+- **Alertmanager / Prometheus / Grafana deployment**: this substrate only exposes the endpoint and ships rules-as-code (see SLO section above); no scrape target is deployed with ECM.
+- **Distributed tracing (OpenTelemetry / Jaeger / Tempo)**: the `trace_id` is a correlation id, not a W3C TraceContext id. A future bead will adopt OTel if and when we have a downstream tracer to emit to.
+- **Log aggregation (Loki / ELK)**: JSON on stdout is the substrate; a pipeline is its own bead.

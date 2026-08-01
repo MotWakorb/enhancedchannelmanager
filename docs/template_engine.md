@@ -8,8 +8,9 @@ server-side XMLTV output are always byte-identical.
 
 > **Supported surface: Dummy EPG Profiles.** This engine backs the **Dummy EPG
 > Profiles** section of the EPG Manager page (the `dummy_epg_profiles` table and
-> the `/api/dummy-epg/*` endpoints) — the supported way to author dummy EPG in
-> ECM, and the one Event Sync integrates with. A second, older surface exists:
+> the `/api/dummy-epg/*` endpoints). This is the supported way to author dummy
+> EPG in ECM, and the one Event Sync integrates with. A second, older surface
+> exists:
 > Dispatcharr-native EPG sources of `source_type=dummy` (created via the legacy
 > "Dummy EPG Sources" section) also store the same fields in `custom_properties`.
 > That legacy path is **deprecated** (bead 09x38.4): its section only appears
@@ -21,9 +22,9 @@ server-side XMLTV output are always byte-identical.
 
 ### Placeholders
 
-- `{name}` — insert the value of the named regex group (or an empty string if
+- `{name}`: insert the value of the named regex group (or an empty string if
   it's absent).
-- `{name_normalize}` — legacy shortcut preserved from the pre-v0.14 engine:
+- `{name_normalize}` is a legacy shortcut preserved from the pre-v0.14 engine:
   lowercase the value and strip everything that isn't `a-z` or `0-9`.
 
 ### Pipes
@@ -45,7 +46,7 @@ Chain left-to-right with `|`; each pipe receives the previous pipe's output.
 > and the `lookup_tables` table) were removed in bead
 > `enhancedchannelmanager-70u0r.1`. `lookup` is now an ordinary unknown
 > transform. A grandfathered template still containing `{x|lookup:y}` renders
-> the raw template text — which is exactly what it already produced in
+> the raw template text. That is exactly what it already produced in
 > generated XMLTV before removal, because `generate_xmltv()` never passed a
 > lookups dict. See
 > [Lookup Tables retired](user_guide/epg/lookup-tables-retired.md).
@@ -70,8 +71,8 @@ which prevents catastrophic backtracking on untrusted input.
 Referencing an unknown transform raises `TemplateSyntaxError`. The
 higher-level `render_template()` wrapper in `dummy_epg_engine.py` catches this
 and falls back to the raw template text so a single profile typo can't tank
-an XMLTV refresh — the broken tokens become visible in the output, which is
-the intended signal to the user.
+an XMLTV refresh. The broken tokens become visible in the output instead,
+which is the intended signal to the user.
 
 ## Limits
 
@@ -131,8 +132,8 @@ final output exactly.
 ## Related files
 
 - `backend/template_engine.py`, `backend/tests/unit/test_template_engine.py`
-- `backend/dummy_epg_engine.py` — calls `render_template()` from the engine
-- `backend/routers/dummy_epg.py` — `/preview`, `/preview/batch`, `include_trace`
+- `backend/dummy_epg_engine.py`: calls `render_template()` from the engine
+- `backend/routers/dummy_epg.py`: `/preview`, `/preview/batch`, `include_trace`
 - `frontend/src/utils/templateEngine.ts`, `frontend/src/utils/templateEngine.test.ts`
-- `frontend/src/components/TemplateHelp.tsx` — in-app syntax reference
-- `frontend/src/components/DummyEPGSourceModal.tsx` — legacy source editor + preview UI
+- `frontend/src/components/TemplateHelp.tsx`: in-app syntax reference
+- `frontend/src/components/DummyEPGSourceModal.tsx`: legacy source editor + preview UI

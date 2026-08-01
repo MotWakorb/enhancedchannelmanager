@@ -1,15 +1,11 @@
 # Fuzzy Matching for Local / OTA Channels
 
-> **Audience:** Operator managing OTA or affiliate local channels where stream
-> names vary across providers (state-code prefixes, quality tags, run-together
-> market names) and exact-name matching misses them.
->
 > **Shipped:** v0.17.3-0006 (bead jnzst).
 
 ## What it is
 
 ECM's Channel Pipeline engine defaults to **exact normalized-name equality** when
-merging streams into existing channels. That default is intentional — it ended
+merging streams into existing channels. That default is intentional. It ended
 a 1,341-false-positive merge incident caused by over-broad word-prefix matching.
 
 Local and OTA streams are the one category where exact matching reliably fails.
@@ -52,12 +48,12 @@ the legacy fuzzy cascade:
 
 1. **Callsign hard-reject (M1).** If both the stream name and the channel name
    contain a parseable FCC callsign and they differ, the pair is rejected
-   unconditionally — no score, no merge. `WGBA` against `WBAY` is always
+   unconditionally: no score, no merge. `WGBA` against `WBAY` is always
    rejected here regardless of how similar the surrounding words look.
 
 2. **Callsign equality override.** If the callsigns on both sides match (or the
    `tvg_id` callsigns match), the score is set to 1.0 and the pair is admitted
-   immediately — no fuzzy scoring needed.
+   immediately: no fuzzy scoring needed.
 
 3. **LOCALS fuzzy scoring.** Names are cleaned (state-code and market prefixes
    stripped, superscripts converted, quality tags removed, `GREENBAY` split to
@@ -70,13 +66,13 @@ time.
 
 ## Setting up a fuzzy locals rule
 
-### Step 1 — identify your Local channel groups
+### Step 1: identify your Local channel groups
 
 Go to **Channel Groups** and note the ID(s) of the groups that hold your local
 channels (e.g., "Locals", "OTA"). You will need these group IDs for the
 `target_channel_in_group` allowlist.
 
-### Step 2 — preview before writing
+### Step 2: preview before writing
 
 Use the preview tool to see what would match at your intended threshold before
 saving any rule.
@@ -97,14 +93,14 @@ GET /api/channel-pipeline/fuzzy-preview
 The preview returns scored `(stream, channel)` pairs in descending score order.
 Review the `callsign_verdict` column:
 
-- `match` — both sides have a callsign and they agree. These are the
+- `match`: both sides have a callsign and they agree. These are the
   high-confidence matches.
-- `absent` — at least one side has no parseable callsign. Admitted by default
+- `absent`: at least one side has no parseable callsign. Admitted by default
   only when `allow_no_callsign` is set (see below).
 
 Inspect any surprising pairs in the results. The preview never writes anything.
 
-### Step 3 — build the rule action
+### Step 3: build the rule action
 
 Add a `merge_streams` action to your rule with these fields:
 
@@ -125,7 +121,7 @@ Add a `merge_streams` action to your rule with these fields:
   callsign-verified matches; lower values increase recall at the cost of
   precision.
 
-### Step 4 — run dry-run first
+### Step 4: run dry-run first
 
 Run the pipeline in dry-run mode before enabling the rule:
 
@@ -143,11 +139,11 @@ match_streams_to_channels(group_ids=[14, 22], min_score=0.75, apply=false)
 The dry-run shows which streams would be matched and at what score, without
 writing anything.
 
-### Step 5 — enable and monitor
+### Step 5: enable and monitor
 
 Enable the rule and watch the journal (`GET /api/journal` or the Journal page).
 Each scored-fuzzy merge writes a journal entry with the score, `callsign_verdict`,
-signal, and the callsigns that were parsed — so you can audit exactly why each
+signal, and the callsigns that were parsed. This lets you audit exactly why each
 merge fired.
 
 If a run produces unexpected matches, use
@@ -165,7 +161,7 @@ score ≥ 0.90. The 0.90 bar is higher than the normal `min_score` floor to
 partially compensate for the absence of the callsign correctness gate.
 
 The M1 hard-reject still fires if both sides have parseable but different
-callsigns — `allow_no_callsign` does not affect that case.
+callsigns. `allow_no_callsign` does not affect that case.
 
 ## Safety guarantees
 
@@ -199,15 +195,15 @@ Set `apply=true` to actually assign the best-scoring stream per channel. The
 is channels with zero streams only).
 
 Both tools call `GET /api/channel-pipeline/fuzzy-preview` under the hood and
-inherit M1/M2 admission from the shared policy — they cannot see or assign
+inherit M1/M2 admission from the shared policy. They cannot see or assign
 non-admissible pairs.
 
 ## Deep reference
 
 | Topic | Where |
 |-|-|
-| Scoring core internals | `backend/services/dedup_matcher.py` — `score_one`, `score_all`, `is_admissible`, `_normalize(mode=LOCALS)` |
-| Rule schema validation | `backend/channel_pipeline_schema.py` — `min_score` / `target_channel_in_group` constraints |
-| Preview endpoint | [`docs/api.md`](../../api.md) — `GET /api/channel-pipeline/fuzzy-preview` |
-| Scored-fuzzy rule path (dev reference) | [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md) — "Scored-fuzzy rule path" section |
-| Confidence floor (ADR-008 §D2) | `CONFIDENCE_FLOOR = 0.60` in `services.dedup_matcher` — same constant used by interactive stream dedup |
+| Scoring core internals | `backend/services/dedup_matcher.py`: `score_one`, `score_all`, `is_admissible`, `_normalize(mode=LOCALS)` |
+| Rule schema validation | `backend/channel_pipeline_schema.py`: `min_score` / `target_channel_in_group` constraints |
+| Preview endpoint | [`docs/api.md`](../../api.md): `GET /api/channel-pipeline/fuzzy-preview` |
+| Scored-fuzzy rule path (dev reference) | [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md): "Scored-fuzzy rule path" section |
+| Confidence floor (ADR-008 §D2) | `CONFIDENCE_FLOOR = 0.60` in `services.dedup_matcher`: same constant used by interactive stream dedup |

@@ -15,17 +15,17 @@ This project has comprehensive test coverage at three levels.
 
 > **Always run backend tests under the project venv**, not a bare system
 > `python3`: `.venv/bin/python -m pytest` (or the path-relative equivalent
-> from wherever you're running — the point is the interpreter, not the cwd).
+> from wherever you're running, since the point is the interpreter, not the cwd).
 > The project pins `cryptography` at 42+; a bare system `python3` commonly
 > resolves an older `cryptography` (e.g. 41.0.7) that is missing
 > `x509.Certificate.not_valid_before_utc` / `not_valid_after_utc` (added in
 > cryptography 42). That gap produces 7-9 confusing failures in
-> `backend/tests/unit/test_tls_storage.py` — assertion failures on subject/
+> `backend/tests/unit/test_tls_storage.py`: assertion failures on subject/
 > validity fields, not an obvious `AttributeError`, because the code under
 > test catches the exception broadly. Two engineers independently lost time
 > to this (bead `enhancedchannelmanager-vol5d`) before the affected tests
-> were given a version-gated skip that names the fix in its reason string —
-> if you see that skip fire, you're not on the venv interpreter.
+> were given a version-gated skip that names the fix in its reason string.
+> If you see that skip fire, you're not on the venv interpreter.
 
 Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 
@@ -74,24 +74,24 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 
 ## Backend Test Layers: `integration/` vs `routers/`
 
-These two directories are distinct testing layers — they are not duplicates of each other.
+These two directories are distinct testing layers. They are not duplicates of each other.
 
-### `backend/tests/integration/` — Shallow, mock-DB layer
+### `backend/tests/integration/`: Shallow, mock-DB layer
 
 Files named `test_api_<domain>.py` and other integration-scoped tests.
 
 - **Client**: `fastapi.testclient.TestClient` (synchronous)
 - **Database**: `MagicMock()` session injected via `patch("routers.<module>.get_session")`
-- **Depth**: Shallow — asserts API shapes, status codes, and routing without touching real SQL
+- **Depth**: Shallow, asserting API shapes, status codes, and routing without touching real SQL
 - **When to add tests here**: Verifying API contracts that can be fully expressed by mocking the DB query results; testing how the router reacts to DB-layer exceptions; lightweight smoke checks that don't require real ORM behaviour
 
-### `backend/tests/routers/` — Deep, real-DB layer
+### `backend/tests/routers/`: Deep, real-DB layer
 
 Files named `test_<domain>.py`.
 
 - **Client**: `httpx.AsyncClient` via the `async_client` fixture in `conftest.py` (async)
-- **Database**: Real in-memory SQLite (`StaticPool`) via the `test_session` fixture — full ORM round-trips
-- **Depth**: Deep — inserts real rows, exercises ORM queries, validates constraints and model
+- **Database**: Real in-memory SQLite (`StaticPool`) via the `test_session` fixture: full ORM round-trips
+- **Depth**: Deep, inserting real rows, exercising ORM queries, validating constraints and model
   relationships
 - **When to add tests here**: Verifying that endpoints interact correctly with actual database state;
   testing model constraints, ordering, pagination, and FK relationships; any scenario where a
@@ -103,7 +103,7 @@ Despite the directory names, the `integration/` layer is the **shallower, more-m
 
 ### Acceptable duplication
 
-A handful of trivially simple cases — `GET /some/endpoint → 404 Not Found` — are
+A handful of trivially simple cases (`GET /some/endpoint → 404 Not Found`) are
 intentionally present in both layers.  This is acceptable because each copy exercises
 different machinery (sync+mock-DB vs async+real-DB) and provides independent signal.
 Do not consolidate these just to reduce line count.
@@ -152,7 +152,7 @@ Located in `e2e/`, run with `npm run test:e2e` from root
 - `journal.spec.ts` - Journal/logging
 - `stats.spec.ts` - Statistics and analytics
 - `alert-methods.spec.ts` - Alert notification methods
-- `auto-creation.spec.ts` - Channel Pipeline (spec filename predates the Channel Pipeline rename; not renamed yet — enhancedchannelmanager-3udrl follow-up)
+- `auto-creation.spec.ts` - Channel Pipeline (spec filename predates the Channel Pipeline rename; not renamed yet, tracked as follow-up enhancedchannelmanager-3udrl)
 
 **Running E2E Tests:**
 ```bash
@@ -165,7 +165,7 @@ npm run test:e2e:report    # View test report
 
 ### Rendered-CSS regression guards
 
-Seven specs in `e2e/` are not feature tests — they are guards over *rendered*
+Seven specs in `e2e/` are not feature tests. They are guards over *rendered*
 CSS, the layer where the project has repeatedly regressed while every unit
 test stayed green. They exist because a computed style in a real browser is
 the only thing that can prove these claims; jsdom cannot, and neither can a
@@ -174,11 +174,11 @@ declaration-level audit.
 | Spec | What it pins | Proven red against |
 |-|-|-|
 | `sr-only-hidden.spec.ts` | `.sr-only` / `.visually-hidden` measure ≤1×1 and are not returned by `elementFromPoint`, **on a cold context with Channel Pipeline never visited** | `.sr-only` moved back into the ChannelPipelineTab chunk (bead `-zncyv`): Dashboard 1004×24, `position: static`, hit-testable |
-| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px — on ten routes × dark/light/high-contrast × 1600×1000, 1280×800 and 1280×720 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
-| `route-typography-scale.spec.ts` | every visible text node in a route content pane computes to a P1 size — {20, 15, 13, 11, 10} text, {18, 16, 14, 64} icon | a new 22px site on M3U Manager **and** an allowlisted site silently fixed without deleting its entry (reported as `STALE`) |
+| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px, all measured across ten routes × dark/light/high-contrast × 1600×1000, 1280×800 and 1280×720 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
+| `route-typography-scale.spec.ts` | every visible text node in a route content pane computes to a P1 size: {20, 15, 13, 11, 10} text, {18, 16, 14, 64} icon | a new 22px site on M3U Manager **and** an allowlisted site silently fixed without deleting its entry (reported as `STALE`) |
 | `cross-route-css-leak.spec.ts` | shared-class typography does not depend on route visit order | four historical instances: `.list-header`, `.status-label`, `.group-count`, `.action-btn .material-icons` |
-| `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA — 4.5:1 normal, 3:1 large and non-text glyphs — in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
-| `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds — it scrolls, Back stays pinned and opaque, the last destination stays reachable — at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
+| `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA (4.5:1 normal, 3:1 large and non-text glyphs) in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
+| `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds (it scrolls, Back stays pinned and opaque, the last destination stays reachable) at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
 | `control-typeface.spec.ts` | every visible `button`/`input`/`select`/`textarea` on ten routes renders in the SAME resolved face as its nearest text-bearing ancestor (arm 1), and at a size the application chose rather than the user-agent's own control default (arm 2) | arm 1 (bead `-6z299.9`): controls resolving to generic `sans-serif` while surrounding text resolved to `system-ui`, invisible to a `fontFamily` string comparison. Arm 2 (bead `-ul2tp`): 274 of 418 visible controls across the ten routes rendering at Chromium's 13.3333px UA default with arm 1 green throughout |
 
 `frozen-chrome.spec.ts` pins **1280×720 as well as 1280×800** because 1280×720
@@ -196,7 +196,7 @@ npm run test:css-guard:settings-nav       # needs a live ECM backend
 npm run test:css-guard:control-typeface   # needs a live ECM backend
 ```
 
-**CI status — read this before assuming coverage.**
+**CI status: read this before assuming coverage.**
 
 - `sr-only-hidden.spec.ts` **runs in CI**, as the `Screen-Reader-Only
   Rendering Guard` job in `.github/workflows/test.yml`. It uses
@@ -209,7 +209,7 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
 - `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
   `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
   `control-typeface.spec.ts` are **manual-only**.
-  This is not an oversight and not a "wire it up later" — all five walk every route, and
+  This is not an oversight and not a "wire it up later": all five walk every route, and
   Channel Manager's `.channels-pane` never mounts without an API (measured, on
   a backend-less preview build: `waitForSelector('.channels-pane')` times out
   at 60s). They need a live ECM container, which CI does not have; that is the
@@ -223,7 +223,7 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
 **These guards measure the build that is being SERVED, not your working tree.**
 The default base URL is the deployed container on `:6100`, so running them
 against a container that has not been redeployed since your edit reports the
-*old* build's CSS — and the type-scale guard will list the sites you just
+*old* build's CSS, and the type-scale guard will list the sites you just
 fixed as brand-new failures. Observed exactly that: nine sites fixed in the
 tree still showed as off-scale on `:6100` because the container predated the
 fix.
@@ -239,7 +239,7 @@ npm run test:css-guards
 
 **Or serve your own tree and skip the deploy entirely.** `vite preview`
 inherits `server.proxy` from `frontend/vite.config.ts`, so it *does* proxy
-`/api` — to `http://localhost:8000`. With a backend answering there, the whole
+`/api` to `http://localhost:8000`. With a backend answering there, the whole
 guard set runs against the working tree with nothing deployed:
 
 ```bash
@@ -250,12 +250,12 @@ E2E_BASE_URL=http://127.0.0.1:4173 npm run test:css-guards
 Measured on bead `-70u0r.4`: `sr-only-hidden`, `frozen-chrome`,
 `route-typography-scale`, `cross-route-css-leak` and `settings-nav-groups` all
 green this way, including `frozen-chrome`'s full ten-route walk with Channel
-Manager's `.channels-pane` mounting normally — so a backend-less preview is not
+Manager's `.channels-pane` mounting normally, so a backend-less preview is not
 the constraint the paragraph above assumed. `control-typeface` was verified the
 same way under bead `-ae3ms`, the pass that wired it into `test:css-guards`:
 all 21 tests across the full seven-spec aggregate passed against a `vite
 preview` tree with `/api` proxied to the live container. This corrects an earlier claim that preview "proxies
-nothing, so `/api` 502s" — that was true of a bare static server, not of
+nothing, so `/api` 502s". That was true of a bare static server, not of
 `vite preview`. Use it whenever you must measure rendered CSS *before*
 committing or deploying; it is the only way to run these guards against an
 uncommitted tree. The caveat that survives is the important one: **these
@@ -264,7 +264,7 @@ re-measuring the previous bundle.
 
 **Their allowlist cannot rot.** `route-typography-scale.spec.ts` carries an
 allowlist because eight of ten routes have off-scale sites today, and it is
-bidirectional on purpose — same discipline as TIER 2 of
+bidirectional on purpose, following the same discipline as TIER 2 of
 `frontend/src/cssAudits/sharedClassChunkLeak.audit.test.ts`. A **new**
 off-scale site fails; a **stale** entry (its site now renders on-scale) also
 fails, with "delete this entry"; an entry whose selector matches nothing fails
@@ -277,14 +277,14 @@ it are load-bearing rather than convenience:
 
 1. **One login per spec file.** `backend/auth/routes.py` rate-limits login at
    `5/minute`; these guards open many contexts and a login per context blows
-   that budget, surfacing as `Login failed: Too Many Requests` — a flake that
+   that budget, surfacing as `Login failed: Too Many Requests`, a flake that
    reads like a broken assertion.
 2. **Hash navigation, never `page.reload()`.** Every route tab is a lazy chunk
    whose stylesheet is appended to `<head>` on first visit and never removed.
    A reload discards all of them, resetting the exact state these guards
    observe and silently turning a real failure into a pass.
 3. **An explicit `waitFor` on the login gate.** `isVisible({ timeout })` is a
-   no-op in Playwright — the option is ignored — so a still-rendering login
+   no-op in Playwright (the option is ignored), so a still-rendering login
    form reads as "not a login page" and the run proceeds into a blank shell.
 
 ## 4. Modal harness (dev-only dialog measurement)
@@ -325,13 +325,13 @@ non-test `.tsx` under `src/` is scanned for `modal-container` / `ModalOverlay`
 / `role="dialog"` / `role="alertdialog"`, and
 `src/devHarness/harnessCoverage.test.ts` goes RED when a file matching those
 markers has no entry in `dialogCatalog.ts`. A dialog added later is therefore
-covered automatically, or it breaks the build — it cannot be silently missed.
+covered automatically, or it breaks the build. It cannot be silently missed.
 
 Adding a dialog to the harness:
 
 1. Add an entry to `src/devHarness/dialogCatalog.ts` (`status: 'stubbed'`, or
    `'gap'` with a reason if it genuinely cannot be force-rendered).
-2. Add a recipe to `src/devHarness/dialogRenderers.tsx` — `tsc --noEmit` fails
+2. Add a recipe to `src/devHarness/dialogRenderers.tsx`. `tsc --noEmit` fails
    until you do. Either render the component directly with stub props, or
    render its host and list the `open` clicks that bring the dialog up.
 3. Add stub responses to `src/devHarness/apiStub.ts` if it fetches on mount.
@@ -368,7 +368,7 @@ Frontend measurement: `cd frontend && npm run test:coverage`. 1118 tests across
 The ideal methodology (from bead `enhancedchannelmanager-nmlxi`) is to wait
 ~1 week after the CI test-gate landed (`enhancedchannelmanager-t8xw3`) so we
 can observe real per-PR coverage numbers rather than the full-suite snapshot.
-We didn't have that window — t8xw3 closed the day this bead landed. The PO
+We didn't have that window. t8xw3 closed the day this bead landed. The PO
 approved a single full-suite snapshot with a 2-point buffer as a pragmatic
 baseline. Expect slightly churny CI on PRs that touch low-coverage modules
 until the first re-ratchet.
@@ -381,14 +381,14 @@ until the first re-ratchet.
 - **Raise criterion**: if every PR merged in the review window held coverage
   comfortably (≥ threshold + 3 points) on every metric, raise that metric's
   threshold by **~5 points**. Never raise by more than 5 points in one
-  review — gives authors time to respond before the ratchet tightens further.
+  review. This gives authors time to respond before the ratchet tightens further.
 - **Lower prohibition**: thresholds are **one-way**. Lowering requires
   explicit PO approval and a one-line rationale in the commit message. Do
-  not lower "because my PR didn't quite make it" — add tests instead.
+  not lower "because my PR didn't quite make it". Add tests instead.
 - **Per-metric independence**: frontend has four metrics (lines, branches,
   functions, statements). They ratchet independently. A PR that lifts
-  function coverage to 20% should raise the function threshold to 15% —
-  it does not have to wait for statements to also move.
+  function coverage to 20% should raise the function threshold to 15%.
+  It does not have to wait for statements to also move.
 - **Scope creep guard**: this bead's predecessor (`t8xw3`) explicitly
   excludes retroactively force-testing low-coverage modules. The ratchet
   exists to prevent regression, not to force a coverage sprint.
@@ -396,7 +396,7 @@ until the first re-ratchet.
 ### Next-iteration upgrade: diff-coverage
 
 The bead scope flagged **diff-coverage** (coverage of CHANGED lines only)
-as a likely better gate for a 61K-line codebase — whole-codebase coverage
+as a likely better gate for a 61K-line codebase: whole-codebase coverage
 is noisy for small PRs. This is out of scope for the current ratchet bead
 and should be filed as a follow-up. Candidate tools:
 
@@ -436,7 +436,7 @@ Do **not** lower the threshold in the config.
 `ecm-ecm-1`, verify the container is actually running current `dev`
 HEAD.** This pattern (engineer files a "tests failing on dev" bead;
 investigation reveals tests pass locally and the container is stale)
-recurred enough times — beads `5dug8`, `0gcu9`, others — that it
+recurred enough times (beads `5dug8`, `0gcu9`, others) that it
 deserves its own check (bd-h0wfu).
 
 The container reports its source SHA in two places, populated from
@@ -458,7 +458,7 @@ git fetch origin dev
 git rev-parse origin/dev
 ```
 
-**If the SHAs match**, the container is current — investigate the test
+**If the SHAs match**, the container is current. Investigate the test
 failure as real. **If they don't match**, the container is stale; redeploy
 current dev HEAD before triaging:
 
@@ -475,14 +475,14 @@ docker cp dist/. ecm-ecm-1:/app/static/
 ```
 
 Re-run the failing tests. If they now pass, the bead was deploy drift,
-not a code defect — close it without filing a code bead. The
+not a code defect. Close it without filing a code bead. The
 container-first development workflow (per `CLAUDE.md`) means agents
 `docker cp` specific files when iterating, so the shared `ecm-ecm-1`
 container can lag origin/dev when nobody re-deploys after a merge to
 `dev`. The freshness check above is a one-line cure for the entire
 class of fake test-failure beads.
 
-The same SHA labels also drive container-drift dashboards in Grafana —
+The same SHA labels also drive container-drift dashboards in Grafana:
 `max by (git_sha) (ecm_app_info)` shows the running build identity, and
 an alert can fire when it diverges from the `origin/dev` SHA published by
 the build pipeline.
@@ -507,8 +507,8 @@ When endpoints move from `main.py` to `routers/<module>.py`, test mock patches m
 
 ## Flake Triage Policy
 
-Flaky tests — tests that pass and fail non-deterministically without code changes
-— are treated as **P1 bugs** (per the QA hard rules). The baseline established in
+Flaky tests are tests that pass and fail non-deterministically without code changes.
+They are treated as **P1 bugs** (per the QA hard rules). The baseline established in
 bead `enhancedchannelmanager-tp681` (2026-04-20): 3 consecutive BE + FE runs on
 `dev` tip produced zero true flakes.
 
@@ -522,18 +522,18 @@ identical re-runs without any code or data change. Common causes:
 - **Shared state**: module-level globals leaking between tests, DB rows not
   rolled back, singleton clients caching values.
 - **Environmental**: test expects a file, binary, or network endpoint that is
-  only sometimes present. These are **not true flakes** — they are environment
+  only sometimes present. These are **not true flakes**. They are environment
   drift and should be fixed by making the test defensive, not by re-running.
 
 If a test fails identically every run for the same reason, it is **deterministically
-broken** — repair the test or the code. Do not mark it `flaky`.
+broken**. Repair the test or the code. Do not mark it `flaky`.
 
 ### Re-run policy (CI & local)
 
 | Scenario | Allowed re-runs |
 |----------|-----------------|
 | PR check fails on one test, passes on re-run | Re-run **once** to confirm flake. If flaky, file a `flaky`-labelled bead before merge. |
-| PR check fails on same test twice in a row | Treat as deterministic break — do not merge. |
+| PR check fails on same test twice in a row | Treat as deterministic break. Do not merge. |
 | Local `pytest` / `vitest` reports intermittent failure | Re-run **up to twice**. If it recurs, open a bead rather than silently re-running. |
 
 **Never** use `pytest-rerunfailures`, `vitest --retry`, or equivalent as an
@@ -547,7 +547,7 @@ temporary mitigation while a bead is open.
 2. If the test blocks the suite, mark it with
    `@pytest.mark.skip(reason="flaky, see bead <id>")` or
    `test.fixme(...)` in vitest. Cite the bead ID in the reason string.
-3. Do **not** leave `@pytest.mark.xfail` on flaky tests — xfail masks real
+3. Do **not** leave `@pytest.mark.xfail` on flaky tests: xfail masks real
    regressions once the code is fixed.
 
 ### Quarterly flake sweep
@@ -568,7 +568,7 @@ engineer in its absence) runs the 3-run cadence from bead `tp681`:
 ### Flake baseline gate for PR reviews
 
 The reviewer SHOULD reject a PR when the CI failure signature includes a test
-in the **flagged-in-last-30-runs** list — those are known-flaky and the PR
+in the **flagged-in-last-30-runs** list. Those are known-flaky, and the PR
 needs a clean re-run (or an explicit note that the flake is unrelated to the
 change).
 
@@ -578,7 +578,7 @@ open / sync it walks the last 30 `Tests` workflow runs on the PR's base
 branch, parses the `junit-backend` and `junit-frontend` artifacts, and posts
 or updates a single PR comment listing every test that failed in at least
 one of those runs. The comment is identified by a hidden marker and updated
-in place — no comment-storm on rebased branches. The comment is
+in place, avoiding a comment-storm on rebased branches. The comment is
 informational only; it does not gate merge.
 
 Reviewer workflow:
@@ -612,17 +612,17 @@ Tracked in bead **enhancedchannelmanager-hhsz0** (`flaky` label, P1).
 **Not flakes, but deterministic environment drift (cleared in bead 0gcu9):**
 
 The original three BE tests covered by `enhancedchannelmanager-0gcu9` were:
-- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
-  — referenced a POST route that was removed from `routers/tasks.py`. **Test
+- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`:
+  referenced a POST route that was removed from `routers/tasks.py`. **Test
     deleted.**
-- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
-  — failed because the SPA fallback route `/{full_path:path}` registers only
+- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`:
+  failed because the SPA fallback route `/{full_path:path}` registers only
     when `backend/static/` exists (present in prod image, absent on CI). **Fixed
     by adding the SPA fallback path to `NON_API_ROUTES`.**
-- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
-  — the code under test promised an output-writability check its docstring
+- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`:
+  the code under test promised an output-writability check its docstring
     described. **Resolved by deleting `ffmpeg_builder/execution.py` and the
-    whole `test_ffmpeg_execution.py` file — the module was dead code (zero live
+    whole `test_ffmpeg_execution.py` file: the module was dead code (zero live
     callers; ECM builds ffmpeg command configs but never executes ffmpeg).**
 
 None of these tests need deselection any longer; the 3-run cadence command

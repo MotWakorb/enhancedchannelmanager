@@ -1,8 +1,8 @@
 # Enhanced Channel Manager
 
-**Enhanced Channel Manager (ECM)** is a companion tool for managing IPTV channels on top of Dispatcharr — building channel lineups, matching streams, linking EPG, running the Channel Pipeline, probing stream health, viewing stats, and backing everything up.
+**Enhanced Channel Manager (ECM)** is a companion tool for managing IPTV channels on top of Dispatcharr: building channel lineups, matching streams, linking EPG, running the Channel Pipeline, probing stream health, viewing stats, and backing everything up.
 
-This is the **user guide** — task-oriented documentation for people who *use* ECM. If you're setting ECM up for the first time, start with **[Getting Started](user_guide/getting-started/index.md)**.
+This is the **user guide**: task-oriented documentation for people who *use* ECM. If you're setting ECM up for the first time, start with **[Getting Started](user_guide/getting-started/index.md)**.
 
 ## Find your way around
 
@@ -48,5 +48,5 @@ This is the **user guide** — task-oriented documentation for people who *use* 
 !!! info "Contributing to these docs"
     This guide is community-maintained. To propose changes, open a pull request against
     the [`enhancedchannelmanager`](https://github.com/MotWakorb/enhancedchannelmanager)
-    repository — the pages here are built from the Markdown files under `docs/user_guide/`.
+    repository. The pages here are built from the Markdown files under `docs/user_guide/`.
     See `docs/user_guide/README.md` for the information architecture and authoring conventions.

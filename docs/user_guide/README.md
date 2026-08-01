@@ -1,4 +1,4 @@
-# User Guide — Contributing & Architecture
+# User Guide: Contributing & Architecture
 
 > Information architecture and authoring conventions for `docs/user_guide/`. Read this before adding a new article or restructuring a section.
 
@@ -14,16 +14,21 @@ Scaffolded in bd-f1wnt; first user-facing feature it unblocks is bd-gb5r5.3 (DBA
 
 ## Audience model
 
-We design the IA around two distinct user types. Every article should declare which audience it is for in its frontmatter / opening sentence.
+We design the IA around two distinct user types. The guide is **operator-first by default**. Most articles need no audience statement at all, because "operator" is the assumed reader unless the article says otherwise.
 
 | Audience | Who they are | What they need from docs |
 |-|-|-|
 | **Operator** | The person who installed ECM, manages the Dispatcharr connection, configures rules, runs backups, troubleshoots failures. Often the same person who runs Dispatcharr. Comfortable with Docker, log inspection, and YAML-ish config. | Setup, configuration, recovery, and "how does this feature work end-to-end" reference. Can handle terminology like *task engine*, *normalization policy*, *idempotent*. |
-| **End user** | The household member or downstream consumer watching the streams ECM produces. Rarely opens the ECM UI. Cares about "the channel I watch is gone" or "the EPG is wrong." | Almost nothing — but a small surface (e.g., the public stats page, if one is exposed) needs plain-language framing. Most end-user concerns are surfaced through the operator. |
+| **End user** | The household member or downstream consumer watching the streams ECM produces. Rarely opens the ECM UI. Cares about "the channel I watch is gone" or "the EPG is wrong." | Almost nothing, but a small surface (e.g., the public stats page, if one is exposed) needs plain-language framing. Most end-user concerns are surfaced through the operator. |
 
-Today the user guide is **operator-first**. End-user content is rare and clearly labelled when it appears. If you're not sure which audience an article serves, ask the Tech Writer in standup before drafting.
+An article only needs to say who it's for, in prose in the opening paragraph, when it departs from that default:
 
-## Boundaries — what belongs here vs. elsewhere
+- **Rare end-user content**: say so plainly; don't assume the reader knows this article breaks the operator-first pattern.
+- **A destination with an access requirement**: e.g., a Settings page that only renders for admins. State the requirement in a plain sentence ("Requires an admin account.") where the reader will see it before following steps they can't complete. This is a fact about the destination, not an audience-declaration ritual. Don't add a blockquote for it.
+
+Do not add a `> **Audience:**` blockquote to new articles. See [Per-destination tutorial template](#per-destination-tutorial-template) below. If you're not sure whether an article needs an audience or access sentence, ask the Tech Writer in standup before drafting.
+
+## Boundaries: what belongs here vs. elsewhere
 
 | If the content is… | It belongs in… |
 |-|-|
@@ -39,11 +44,11 @@ The rule of thumb: if the audience is "someone trying to **use** ECM to manage t
 ## Authoring conventions
 
 - **Task-oriented titles.** "Connect ECM to Dispatcharr" beats "Dispatcharr Connection Settings." Verb-first. The reader is trying to do something.
-- **Open with the audience and the outcome.** First sentence: who this article is for and what they will be able to do when they finish it.
-- **Use the in-UI label, exactly.** If the destination is **Channel Pipeline** in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug — the Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
+- **Open with the outcome.** First sentence: what the reader will be able to do when they finish the article. Audience is operator-by-default and normally goes unsaid. See [Audience model](#audience-model) for the two cases (non-default audience, access requirement) that do need a plain sentence.
+- **Use the in-UI label, exactly.** If the destination is **Channel Pipeline** in the navigation, write *Channel Pipeline*, not *auto-creation* or *Auto-Create*. Terminology drift between docs and UI is a usability bug. The Tech Writer and UX Designer own consistency jointly. The DBAS feature is labelled **Backup & Restore** in the UI, per UX grooming, and should be called Backup & Restore in user-facing docs (the acronym DBAS only appears in dev docs and the threat model).
 - **Cross-link, don't duplicate.** If the developer reference for a feature already exists (e.g., `docs/normalization.md#developer-reference`, `docs/template_engine.md`), link to it from a "Going deeper" section rather than copying material.
 - **Screenshots live in `docs/images/user_guide/<section>/`.** See [Screenshot conventions](#screenshot-conventions) below for the full spec (viewport, theme, filenames, placement).
-- **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step — see `docs/_shared/engineering-discipline.md` style "Verification of Completion."
+- **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step. See `docs/_shared/engineering-discipline.md` style "Verification of Completion."
 - **Stub before article.** Every section in this scaffold ships as a stub (purpose, audience, placeholder TOC). The actual articles are filed as separate beads and written in their own PRs. This keeps user-facing content reviewable in small chunks and lets each article be evaluated by both UX (for the user model) and Tech Writer (for clarity).
 
 ## Per-destination tutorial template
@@ -54,24 +59,22 @@ It distills the pattern already in production in
 [`backup-restore/index.md`](backup-restore/index.md) (the "Start here"
 task-router) and [`integrations/index.md`](integrations/index.md) /
 [`integrations/emby.md`](integrations/emby.md) (goal-first setup steps with
-an explicit end state) — read those two before writing a new destination tutorial.
+an explicit end state). Read those two before writing a new destination tutorial.
 
 ```markdown
 # <Destination Name>
 
-> **Audience:** <one sentence — who reads this and what they walk away able to do>
-
-<Destination Name> is for <2 sentences max — what this page is for, no more>.
+<Destination Name> is for <2 sentences max: what this page is for, no more>. <If the destination has an access requirement, e.g. admin-only, say so here in one plain sentence; otherwise, omit.>
 
 ## Common tasks
 
-### <Operator's goal, phrased as an action — "Merge two duplicate channels", not "Merge Duplicates feature">
+### <Operator's goal, phrased as an action: "Merge two duplicate channels", not "Merge Duplicates feature">
 
 1. <Step>
 2. <Step>
 3. <Step>
 
-**Result:** <what the operator sees when it worked — the verifiable end state>
+**Result:** <what the operator sees when it worked: the verifiable end state>
 
 ### <Next goal>
 
@@ -82,16 +85,15 @@ an explicit end state) — read those two before writing a new destination tutor
 
 ## Going deeper
 
-- [<link text>](<relative path>) — <why an operator would follow this>
+- [<link text>](<relative path>): <why an operator would follow this>
 ```
 
 Notes on filling in the skeleton:
 
-- **Title** — the exact in-UI destination label (see [Authoring conventions](#authoring-conventions) — "Use the in-UI label, exactly").
-- **Audience blockquote** — one sentence, same voice as `backup-restore/index.md`'s `> **Audience:**` line. Don't restate the destination name; say who the reader is and what they need.
-- **"What this page is for"** — two sentences maximum, no more. This is orientation, not documentation — the `## Common tasks` walkthroughs carry the actual content.
-- **`## Common tasks`** — one `###` subsection per goal. Head each subsection with the goal phrased as the operator's action ("Find and merge duplicate channels"), never as a UI-element name ("The Find Duplicates Button"). Steps are numbered. Every walkthrough ends with a **Result:** line — this is the "Show the result" rule made literal and mandatory for tutorial articles specifically (existing non-tutorial articles, like the DBAS reference pages, apply "Show the result" more loosely).
-- **`## Going deeper`** — cross-links only, per "Cross-link, don't duplicate." Link to the developer reference, the API doc section, or a sibling article — never re-explain what's already written elsewhere.
+- **Title**: the exact in-UI destination label (see [Authoring conventions](#authoring-conventions): "Use the in-UI label, exactly").
+- **"What this page is for"**: two sentences maximum, no more. This is orientation, not documentation. The `## Common tasks` walkthroughs carry the actual content. No audience blockquote. The guide is operator-first by default (see [Audience model](#audience-model)). Only add a plain sentence here if the destination has an access requirement (e.g., admin-only) or serves the rare non-operator audience.
+- **`## Common tasks`**: one `###` subsection per goal. Head each subsection with the goal phrased as the operator's action ("Find and merge duplicate channels"), never as a UI-element name ("The Find Duplicates Button"). Steps are numbered. Every walkthrough ends with a **Result:** line. This is the "Show the result" rule made literal and mandatory for tutorial articles specifically (existing non-tutorial articles, like the DBAS reference pages, apply "Show the result" more loosely).
+- **`## Going deeper`**: cross-links only, per "Cross-link, don't duplicate." Link to the developer reference, the API doc section, or a sibling article, but never re-explain what's already written elsewhere.
 
 ## Screenshot conventions
 
@@ -106,7 +108,7 @@ formalizes the pattern already used by
 - **Viewport: 1280×720.** The same fixed size Playwright's visual-regression
   suite already pins for deterministic screenshots
   (`e2e/visual-regression.spec.ts`). Don't capture at your browser's ambient
-  window size — resize to 1280×720 first.
+  window size. Resize to 1280×720 first.
 - **Theme: dark.** ECM's default theme. Capture in dark unless the article is
   specifically documenting the light/dark toggle itself.
 - **Filenames: numbered kebab-case, `<n>-<short-name>.png`.** The number
@@ -117,7 +119,7 @@ formalizes the pattern already used by
   user-guide section, matching the section's directory name under
   `docs/user_guide/`.
 - **Placement: inline, immediately after the step it illustrates.** Never a
-  screenshot dump at the end of the article — a screenshot belongs directly
+  screenshot dump at the end of the article. A screenshot belongs directly
   under the numbered step (or `###` goal) it shows the result of, the same
   way `docs/event_sync.md` interleaves its `images/event_sync/*.png`
   references between steps.
@@ -130,10 +132,10 @@ formalizes the pattern already used by
 
 Capture screenshots with Playwright against the dev container
 (`ecm-ecm-1`), using representative seeded data (real-shaped channel
-groups, streams, and rules — not an empty instance) so the screenshot
+groups, streams, and rules, not an empty instance) so the screenshot
 shows what an operator's screen actually looks like. Capture during the
 same writing pass as the tutorial bead that needs the image, not as a
-separate follow-up pass — an article and its screenshots ship in the same
+separate follow-up pass. An article and its screenshots ship in the same
 PR.
 
 ## Information architecture
@@ -146,48 +148,47 @@ docs/user_guide/
 ├── index.md                      ← landing page + nav for users
 ├── getting-started/              ← first-run, install, Dispatcharr connect
 ├── channels-streams/             ← day-to-day channel & stream management
+├── m3u-manager/                  ← add/refresh/configure provider playlists
+├── m3u-changes/                  ← read-only log of provider playlist changes
 ├── channel-pipeline/             ← rule authoring, conditions/actions, bulk ops
 ├── normalization/                ← naming patterns, apply-to-channels flow
 ├── epg/                          ← EPG sources, dummy EPG templates
+├── guide/                        ← the TV-guide-style programming grid
+├── logo-manager/                 ← channel artwork library
 ├── notifications/                ← SMTP/Discord/Telegram scheduled-task alerts
 ├── stats/                        ← Stats page (Stats v2, v0.17.0)
+├── journal/                      ← forensic record of channel/EPG/M3U changes
 ├── integrations/                 ← Emby/Plex/Jellyfin + MCP connection reference
 ├── backup-restore/               ← Backup & Restore (bd-0i2vt epic)
+├── settings/                     ← Settings drill-in navigation, six groups
 └── troubleshooting/              ← common issues, log inspection, support
 ```
 
-This tree reflects the actual current filesystem under `docs/user_guide/` —
-every directory listed above exists and has its own `index.md` (section
+This tree reflects the actual current filesystem under `docs/user_guide/`.
+Every directory listed above exists and has its own `index.md` (section
 landing); each accumulates per-article files as downstream beads ship.
 
 ### Planned sections (bd-gsnw0)
 
-The `gsnw0` per-destination tutorial epic scopes six additional tutorials that
-have not been scaffolded yet — no directory exists for them today. Listed
-here rather than in the tree above so the tree stays an accurate map of what
-currently exists on disk. Naming and status match `index.md`'s
-["By workspace destination"](index.md#by-workspace-destination) table:
+The `gsnw0` per-destination tutorial epic scoped six additional tutorials.
+All six have since shipped: `m3u-manager/`, `m3u-changes/`, `guide/`,
+`logo-manager/`, `journal/`, and `settings/` all now exist in the tree above,
+so there is nothing left to list here. Naming matches `index.md`'s ["By
+workspace destination"](index.md#by-workspace-destination) table.
 
-- `m3u-manager/` — M3U Manager tutorials — **Planned**
-- `guide/` — Guide tutorials — **Planned**
-- `logo-manager/` — Logo Manager tutorials — **Planned**
-- `m3u-changes/` — M3U Changes tutorials — **Planned**
-- `journal/` — Journal tutorials — **Planned**
-- `settings/` — Settings tutorials — **Planned**
-
-Once a bead scaffolds one of these, move it from this list into the tree
-above.
+The next bead that scopes a section not yet scaffolded should list it here,
+then move it into the tree above once its directory lands on disk.
 
 ### Why this order
 
-1. **Getting started** — nobody can do anything else until ECM can talk to Dispatcharr.
-2. **Channels & streams** — the core entity model. Everything else mutates these.
-3. **Channel Pipeline** — the first power feature an operator graduates into.
-4. **Normalization** — typically discovered when the Channel Pipeline produces names you don't like.
-5. **EPG** — needed once channels exist, but not blocking initial setup.
-6. **Stats** — observability of what ECM is doing. Useful but not on the critical path.
-7. **Backup & Restore** — disaster recovery. Critical, but read once and rarely.
-8. **Troubleshooting** — referenced from every other section when things go wrong.
+1. **Getting started**: nobody can do anything else until ECM can talk to Dispatcharr.
+2. **Channels & streams**: the core entity model. Everything else mutates these.
+3. **Channel Pipeline**: the first power feature an operator graduates into.
+4. **Normalization**: typically discovered when the Channel Pipeline produces names you don't like.
+5. **EPG**: needed once channels exist, but not blocking initial setup.
+6. **Stats**: observability of what ECM is doing. Useful but not on the critical path.
+7. **Backup & Restore**: disaster recovery. Critical, but read once and rarely.
+8. **Troubleshooting**: referenced from every other section when things go wrong.
 
 ## Adding a new article
 
@@ -196,7 +197,7 @@ above.
 3. Update that section's `index.md` to link the new article and place it in the appropriate sub-section of the section TOC.
 4. If the article introduces a new screenshot, save it under `docs/images/user_guide/<section>/` and reference with a relative path.
 5. Open a PR. Request review from both the Tech Writer (clarity, structure, terminology consistency) and the UX Designer (does the article match the user's mental model and the in-UI labels?).
-6. Update `docs/user_guide/index.md` only if your article changes the section landing — individual article links live in section indexes, not the top-level index.
+6. Update `docs/user_guide/index.md` only if your article changes the section landing: individual article links live in section indexes, not the top-level index.
 
 ## Cross-references
 
@@ -207,7 +208,7 @@ Existing docs that complement (and are linked from) the user guide:
 | getting-started | `README.md` (project root), `docs/architecture.md` (system overview, optional reading) |
 | channels-streams | `docs/api.md` (when an operator wants the API behind a UI action) |
 | channel-pipeline | `docs/api.md` (Channel Pipeline router), eventual `analyze-rules` skill output |
-| normalization | `docs/normalization.md` (the existing dual-audience guide — user guide section is a thinner, task-first wrapper that defers to the deep reference) |
+| normalization | `docs/normalization.md` (the existing dual-audience guide; user guide section is a thinner, task-first wrapper that defers to the deep reference) |
 | epg | `docs/template_engine.md` (dummy EPG template syntax) |
 | stats | `docs/sre/slos.md` (operators curious about the SLO framing of what they see) |
 | backup-restore | `docs/security/threat_model_dbas_import.md` (operators evaluating restore safety; deliberately surfaced because import is a high-impact operation) |

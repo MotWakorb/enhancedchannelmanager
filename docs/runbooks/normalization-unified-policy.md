@@ -9,14 +9,14 @@ engine's Test Rules preview path and its Channel Pipeline execution path
 share a single `NormalizationPolicy`. Both paths apply identical Unicode
 preprocessing to every input:
 
-1. **NFC canonicalization** — NFD-decomposed input (e.g. `e` + `U+0301`)
-   collapses to pre-composed form (`U+00E9`). NFC, not NFKC — ligatures,
+1. **NFC canonicalization**: NFD-decomposed input (e.g. `e` + `U+0301`)
+   collapses to pre-composed form (`U+00E9`). NFC, not NFKC: ligatures,
    fullwidth digits, and Roman-numeral compatibility forms are preserved.
-2. **Narrow Cf-code-point stripping** — `U+200B` ZWSP, `U+200C` ZWNJ,
+2. **Narrow Cf-code-point stripping**: `U+200B` ZWSP, `U+200C` ZWNJ,
    `U+200D` ZWJ, and `U+FEFF` BOM are removed. RTL/LTR bidi marks
    (`U+200F`, `U+202E`) are **preserved** so channel names that use them
    intentionally are not mangled.
-3. **Full superscript conversion** — both letter-superscripts
+3. **Full superscript conversion**: both letter-superscripts
    (`ᴴᴰ` → `HD`, `ᴿᴬᵂ` → `RAW`) and numeric-superscripts
    (`ESPN²` → `ESPN2`, `⁶⁰fps` → `60fps`) convert on every code path.
    The prior `preserve_superscripts=True` carve-out was dropped in
@@ -47,7 +47,7 @@ you hit one of the following:
   from what operators expect *because* of the new preprocessing (e.g. a
   downstream system that indexed `ESPN²` as the primary key).
 - A Unicode edge case you did not anticipate (the engineer's best
-  guess would be a homoglyph locale we do not test — track with a new
+  guess would be a homoglyph locale we do not test, track with a new
   bead, then flip the flag while that bead is worked).
 
 Do **not** flip the flag to dodge a related failure elsewhere. If a
@@ -100,13 +100,13 @@ was started before the flag was set. Restart the container.
 ### Symptom: Channel names now strip characters that users expected to keep
 
 If the "characters" are superscripts, BOM/ZWSP/ZWNJ/ZWJ, or NFD-form
-accents, this is the intended behavior — the fix corrected a
+accents, this is the intended behavior. The fix corrected a
 long-running divergence. Explain to the user that Test Rules now
 matches what the Channel Pipeline produces, and their stored names will
 converge on the canonical form as channels are recreated.
 
 If the characters are **bidi marks** (U+200F, U+202E), **ligatures**
-(`ﬁ`), or **fullwidth digits** (`１`), that's a bug — open a bead
+(`ﬁ`), or **fullwidth digits** (`１`), that's a bug: open a bead
 with the reproducer. The policy uses NFC (not NFKC) and a narrow Cf
 whitelist specifically to preserve these.
 
@@ -115,7 +115,7 @@ whitelist specifically to preserve these.
 Expected if CI runs against the disabled flag. The parity suite
 (`backend/tests/unit/test_normalization_parity.py`) has a
 `TestLegacyPolicyFallback` class that exercises the disabled path
-directly via `NormalizationPolicy(unified_enabled=False)` — those
+directly via `NormalizationPolicy(unified_enabled=False)`: those
 remain green. The `TestPinnedRegressions::test_nfd_cafe_normalizes_to_nfc`
 test will fail under the rollback, because the rollback explicitly does
 not canonicalize NFD. Treat the NFC-specific failures as expected while
@@ -135,8 +135,8 @@ File a follow-up bead under bd-eio04 to:
 
 ## Related material
 
-- `backend/normalization_engine.py` — `NormalizationPolicy` definition.
-- `backend/tests/unit/test_normalization_parity.py` — parity sweep.
-- `backend/tests/fixtures/unicode_fixtures.py` — shared fixture bank (bd-eio04.3).
-- GH #104 — the issue this flag backs out.
-- bd-eio04.1 / bd-eio04.4 — the beads that landed the unified policy.
+- `backend/normalization_engine.py`: `NormalizationPolicy` definition.
+- `backend/tests/unit/test_normalization_parity.py`: parity sweep.
+- `backend/tests/fixtures/unicode_fixtures.py`: shared fixture bank (bd-eio04.3).
+- GH #104: the issue this flag backs out.
+- bd-eio04.1 / bd-eio04.4: the beads that landed the unified policy.

@@ -1,7 +1,5 @@
 # Migrate to a New Install
 
-> **Audience:** Operator who wants to move their ECM + Dispatcharr configuration from one host to another — for example, moving to new hardware, migrating to a different container runtime, or rebuilding after a host failure.
->
 > **Status:** Shipped in v0.18.0.
 
 ---
@@ -17,7 +15,7 @@ This walkthrough assumes:
 
 ---
 
-## Step 1 — Take a backup on the old install
+## Step 1: Take a backup on the old install
 
 Take a **manual encrypted backup** so credentials travel with the artifact. If you are OK re-entering credentials on the new install, a standard (unencrypted) backup is sufficient.
 
@@ -38,23 +36,23 @@ Wait for the backup to complete (a notification appears). Then go to **Settings 
 
 ---
 
-## Step 2 — Install ECM and Dispatcharr on the new host
+## Step 2: Install ECM and Dispatcharr on the new host
 
-Follow your normal installation procedure. At first run, ECM will show a setup wizard. You can skip the manual configuration steps — the backup will replace them.
+Follow your normal installation procedure. At first run, ECM will show a setup wizard. You can skip the manual configuration steps. The backup will replace them.
 
 Make sure the new Dispatcharr instance is:
 - Running and reachable from ECM.
-- Not yet configured (a clean install). If it already has some configuration, the restore will merge — existing entities with the same names will be updated, not duplicated.
+- Not yet configured (a clean install). If it already has some configuration, the restore will merge: existing entities with the same names will be updated, not duplicated.
 
 ---
 
-## Step 3 — Connect ECM to the new Dispatcharr instance
+## Step 3: Connect ECM to the new Dispatcharr instance
 
 Complete the initial setup in ECM to point it at the new Dispatcharr API. The restore needs a working Dispatcharr connection to apply channel and stream configuration.
 
 ---
 
-## Step 4 — Run a dry-run preview
+## Step 4: Run a dry-run preview
 
 Before applying the restore, run a preview to confirm the backup artifact is valid and the expected counts look right.
 
@@ -69,7 +67,7 @@ If the counts look wrong (too few channels, unexpected skip count), do not apply
 
 ---
 
-## Step 5 — Apply the restore
+## Step 5: Apply the restore
 
 If the preview looks correct:
 
@@ -83,12 +81,12 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
 ### What to watch for
 
 - **Users** are not restored by default. If you want to restore user accounts, explicitly enable the users category in the restore modal before applying.
-- **The current admin account is always preserved** — the account you used to log in to the new ECM cannot be overwritten by the restore.
-- **Logo misses** appear as a red banner if any logos could not be matched. This is a warning, not a failure — channels work, logos may be absent.
+- **The current admin account is always preserved**. The account you used to log in to the new ECM cannot be overwritten by the restore.
+- **Logo misses** appear as a red banner if any logos could not be matched. This is a warning, not a failure. Channels still work, though logos may be absent.
 
 ---
 
-## Step 6 — Re-enter credentials (standard backup only)
+## Step 6: Re-enter credentials (standard backup only)
 
 If you used a standard (unencrypted) backup, M3U account passwords, EPG passwords, and similar credentials were redacted. On the new install:
 
@@ -98,11 +96,11 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
 4. Edit each EPG source and re-enter the password (if applicable).
 5. Run an M3U refresh and an EPG refresh to populate the new Dispatcharr with streams and guide data.
 
-If you used an encrypted backup with **Include credentials**, this step is not needed — credentials travel with the artifact and are restored automatically.
+If you used an encrypted backup with **Include credentials**, this step is not needed. Credentials travel with the artifact and are restored automatically.
 
 ---
 
-## Step 7 — Verify the new install
+## Step 7: Verify the new install
 
 After the restore:
 
@@ -134,7 +132,7 @@ For a hard failure on a fresh install (rollback incomplete, instance in a bad st
 
 ## Alternative: Cross-instance sync for ongoing DR
 
-If your goal is ongoing DR (keeping a standby always in sync with your primary), consider [Cross-Instance Sync](cross-instance-sync.md) (v0.18.1) instead of — or in addition to — manual migration. Sync is not a backup and does not produce a restorable archive, but it keeps a second Dispatcharr instance continuously tracking the primary's configuration.
+If your goal is ongoing DR (keeping a standby always in sync with your primary), consider [Cross-Instance Sync](cross-instance-sync.md) (v0.18.1) instead of, or in addition to, manual migration. Sync is not a backup and does not produce a restorable archive, but it keeps a second Dispatcharr instance continuously tracking the primary's configuration.
 
 The recommended pattern for a DR setup:
 1. Migrate the initial configuration to the standby via an encrypted backup restore (this article).
