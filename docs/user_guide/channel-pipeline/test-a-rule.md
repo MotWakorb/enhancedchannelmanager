@@ -37,7 +37,7 @@ changed. A dry run only ever reads streams and evaluates conditions.
   would use for its real result.
 - **Read "created" as "would create," not "created."** A dry run performs
   zero writes. This is enforced the same way for both the per-rule Test
-  button and the pipeline-wide Dry Run in the **⋮** menu. The counts in a
+  button and the pipeline-wide **Dry Run** toolbar button. The counts in a
   dry-run result describe what a live Run would do if you ran it right now
   with the same data, not something that already happened. If you want to
   double-check, look the target group up in Channel Manager. A dry run
@@ -65,10 +65,11 @@ condition before enabling it.
 | **Catches** | "This rule doesn't match the streams I expected" | "This rule can never work, regardless of streams" | N/A: this is the live run |
 | **When to use it** | After the analyzer is clean, to confirm the rule matches what you expect | First: cheap, catches structural bugs before you touch real data | Once Test confirms the expected matches |
 
-The Channel Pipeline page's **⋮** menu also has a whole-pipeline **Dry
-Run**, which previews every enabled rule together in one pass. This is
-useful when rule order and interaction matter, not just one rule in
-isolation.
+The Channel Pipeline page's toolbar also has a whole-pipeline **Dry Run**
+button (there is no menu to open it from; it sits alongside Run, Import,
+Export, and Pipeline Debug Bundle, always visible), which previews every
+enabled rule together in one pass. This is useful when rule order and
+interaction matter, not just one rule in isolation.
 
 ## Going deeper
 

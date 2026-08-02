@@ -24,8 +24,10 @@ if the Settings section list looks unfamiliar.
 1. Enter the **Dispatcharr URL**: the full base URL Dispatcharr is
    reachable at, e.g. `http://localhost:9191` or `http://dispatcharr.local:9191`.
 2. Choose an **Authentication Method**:
-   - **API Key**: recommended for Dispatcharr 0.23.0+. Generate one in
-     Dispatcharr under **Account → API Keys**, then paste it in.
+   - **API Key**: recommended for Dispatcharr 0.23.0+. In Dispatcharr, click
+     your username at the bottom of the sidebar to open the **User** dialog,
+     select the **API & XC** tab, and click **Generate API Key**. Paste the
+     resulting key in here.
    - **Username & Password**: the legacy method. Dispatcharr 0.23.0+ rate-limits
      logins to 3/minute per IP, which API key auth is not subject to.
 3. Click **Test Connection**. The button reports **Connected** or **Failed**

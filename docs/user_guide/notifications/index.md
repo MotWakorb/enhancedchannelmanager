@@ -108,6 +108,24 @@ Paste the token into **Bot Token** and the chat ID into **Chat ID**, then save.
 
 **Verifying it works:** click **Send Test Message**. A successful test posts a test message to the chat and surfaces a success toast. The most common failure is *"chat not found"* (bot is not in the group, or chat ID is wrong) or *"unauthorized"* (token is wrong).
 
+## Settings → Notification Settings → Alert Methods
+
+Below the SMTP, Discord Webhook, and Telegram Bot sections, the **Alert
+Methods** list shows every alert method those settings have created, one row
+per method: its name, its type badge (**Email (SMTP)**, **Discord**,
+**Telegram**), an **Enabled/Disabled** badge, a send icon (sends a test
+message to that method) and a delete icon. When no alert methods exist yet,
+it reads *"No alert methods configured yet. Configure SMTP, Discord, or
+Telegram above to create one."*
+
+> **This list does not live-update.** Saving SMTP settings or Email Alert
+> Recipients, the Discord Webhook, or the Telegram Bot creates or updates the
+> underlying alert method immediately on the backend, but the Alert Methods
+> list on the same page keeps showing its previous state, including "No
+> alert methods configured yet," until you reload the page. Reload after
+> saving a channel for the first time to see its row (and the send/delete
+> icons) appear.
+
 ## How scheduled tasks dispatch external alerts
 
 Each scheduled task has its own copy of the four notify-on-* gates and the three per-channel toggles. They live on the task, not on the alert method.

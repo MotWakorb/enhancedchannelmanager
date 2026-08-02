@@ -44,6 +44,12 @@ e.g. **Lineups (4/4)** once you're at the cap) and limits how many lineup
 *changes* you can make per day. The panel shows **N changes left today**
 once that count is known, so plan additions carefully near the cap.
 
+If the panel already opens at the cap (for example **Lineups (4/4)**), the
+**Add** step above cannot succeed until you free a slot: click **Remove** on
+a lineup you no longer need, then Add the new one. Removals count against
+the same daily change quota as additions, so a remove-then-add swap uses two
+of your changes for the day, not one.
+
 ## Refresh and match
 
 Schedules Direct enforces stricter rate limits than a plain XMLTV feed: the

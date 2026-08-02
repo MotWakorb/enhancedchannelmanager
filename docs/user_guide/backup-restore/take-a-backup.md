@@ -14,19 +14,25 @@ Read [Backup & Restore overview](backup-overview.md) to understand what a backup
 
 Use this when you want a backup right now: before a major change, before a restore, or before migrating to a new install.
 
-1. Go to **Settings → Backup & Restore**.
-2. Find the **Backup** card.
-3. Click **Back Up Now**.
+The Backup & Restore page does not have a "Backup" card or a "Back Up Now" button. The working on-demand path today is running the `dbas_backup` task directly from Scheduled Tasks:
 
-ECM builds the artifact in the background via the `dbas_backup` task. A notification appears when the backup completes. The artifact is saved to `/config/backups/` on the ECM host.
+1. Go to **Settings → Scheduled Tasks**.
+2. Find the **DBAS Backup** task card.
+3. Click **Run Now**.
+
+ECM builds the artifact in the background via the `dbas_backup` task. A notification appears when the backup completes. The artifact and a `.sha256` sidecar are saved to `/config/backups/` on the ECM host.
+
+> A single-click "Back Up Now" control on the Backup & Restore page itself does not exist yet; it is tracked separately (bead `enhancedchannelmanager-pui76`) and may be added in a future release. Until then, Scheduled Tasks → DBAS Backup → Run Now is the supported on-demand path.
+
+If you need credentials to travel with the artifact instead, use the Encrypted Backup card described below. That card **does** live on the Backup & Restore page.
 
 ### Taking an encrypted backup
 
 If you need credentials (M3U passwords, EPG passwords, SMTP config) to travel with the artifact:
 
 1. Go to **Settings → Backup & Restore**.
-2. Find the **Encrypted Backup** card.
-3. Check the acknowledgement: *"I understand a lost passphrase makes this artifact permanently unrecoverable."*
+2. Find the **Encrypted Backup (Migration)** card.
+3. Check the acknowledgement: *"I understand that a lost passphrase means this backup cannot be recovered."*
 4. Enter a passphrase of at least 12 characters. Write it down somewhere safe before proceeding. ECM never stores the passphrase.
 5. Enable **Include credentials** if you want M3U/EPG passwords included in the encrypted artifact.
 6. Click **Create encrypted backup**.
@@ -41,13 +47,13 @@ Encrypted backups are always manual. A passphrase cannot be persisted in the tas
 
 Use this for routine protection. A scheduled backup runs automatically and applies the retention policy after each successful run.
 
-1. Go to **Settings → Task Schedules**.
-2. Find the `dbas_backup` task, or create a new schedule for it.
+1. Go to **Settings → Scheduled Tasks**.
+2. Find the **DBAS Backup** task, or create a new schedule for it.
 3. Set the interval (daily is recommended for most operators).
 4. Optionally configure a cloud destination to receive the artifact off-host (see [Configure cloud destinations](configure-cloud-destinations.md)).
 5. Save the schedule.
 
-To verify the schedule is running, check **Settings → Task History** after the first scheduled fire, or look for the notification the task produces on completion.
+To verify the schedule is running, expand **History** on the DBAS Backup task card after the first scheduled fire, or look for the notification the task produces on completion. There is no separate "Task History" destination in Settings; run history lives per-task, behind each card's own History expander.
 
 ---
 
@@ -65,7 +71,9 @@ A `.sha256` sidecar file is written alongside each `.zip`, containing the artifa
 
 ### Listing saved backups
 
-In **Settings → Backup & Restore**, the **Saved Backups** section lists all local backups with their creation time and size. You can download or delete individual backups from this list.
+The **Saved Backups** card on **Settings → Backup & Restore** is scoped to YAML exports only: its own caption reads "YAML backups saved on the server by the scheduled backup task." It does not list, download, or delete DBAS `.zip` artifacts, which are what Option A and Option B above produce. Take a DBAS backup and open Saved Backups right after, and it will still read "No saved backups" even though the artifact exists on disk.
+
+There is currently no UI listing for DBAS artifacts. To confirm one exists, use the completion notification, the History expander on the DBAS Backup task card, or check `/config/backups/` on the host filesystem directly.
 
 ---
 
@@ -87,8 +95,8 @@ When a backup runs, ECM:
 ## Checking backup status
 
 - **Notifications panel**: a success or failure notification is emitted after each backup run.
-- **Settings → Task History**: shows the last run time, duration, and outcome of each task.
-- **Settings → Backup & Restore → Saved Backups**: shows the local artifact list.
+- **Scheduled Tasks → DBAS Backup → History**: shows the last run time, duration, and outcome for the task. There is no separate "Task History" destination in Settings.
+- **Settings → Backup & Restore → Saved Backups**: lists YAML exports only. It does not list DBAS `.zip` artifacts; see [Listing saved backups](#listing-saved-backups) above.
 
 ---
 
