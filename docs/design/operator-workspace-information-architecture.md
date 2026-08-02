@@ -54,30 +54,30 @@ An authenticated non-admin operator sees all non-administration destinations. Ad
 Every primary destination appears exactly once:
 
 1. **Overview**
-   - Dashboard — `dashboard`
+   - Dashboard: `dashboard`
 2. **Operations**
-   - M3U Manager — `m3u-manager`
-   - EPG Manager — `epg-manager`
-   - Logo Manager — `logo-manager`
-   - Channel Manager — `channel-manager`
+   - M3U Manager: `m3u-manager`
+   - EPG Manager: `epg-manager`
+   - Logo Manager: `logo-manager`
+   - Channel Manager: `channel-manager`
 3. **Automation**
-   - Channel Pipeline — `channel-pipeline`
+   - Channel Pipeline: `channel-pipeline`
 4. **Insights**
-   - Guide — `guide`
-   - Stats — `stats`
-   - M3U Changes — `m3u-changes`
-   - Journal — `journal`
+   - Guide: `guide`
+   - Stats: `stats`
+   - M3U Changes: `m3u-changes`
+   - Journal: `journal`
 5. **System**
-   - Settings — `settings`
+   - Settings: `settings`
 
-Operations is ordered along the operator's setup path — sources, then programme
+Operations is ordered along the operator's setup path: sources, then programme
 data, then artwork, then the Channel Manager that consumes all three. Insights
 collects the read-mostly surfaces: Guide and M3U Changes sit here rather than in
 Operations/Automation because neither changes configuration.
 
 The product name/logo precedes the groups; account/notification controls remain available without displacing primary destinations. Group labels describe operator intent and are not links.
 
-The logo **is** the collapse control — a `<button>` wrapping the mark, first in the sidebar's focus order, with no separate Collapse button at the foot of the sidebar. Exactly one control may carry the `Collapse navigation`/`Expand navigation` accessible name: Playwright's `getByRole` name option matches substrings, so a second control sharing that phrase makes every query for the toggle ambiguous.
+The logo **is** the collapse control: a `<button>` wrapping the mark, first in the sidebar's focus order, with no separate Collapse button at the foot of the sidebar. Exactly one control may carry the `Collapse navigation`/`Expand navigation` accessible name: Playwright's `getByRole` name option matches substrings, so a second control sharing that phrase makes every query for the toggle ambiguous.
 
 ### Application header
 
@@ -148,10 +148,10 @@ The destinations are grouped, in this order:
 
 | # | Group | Destinations | Why these belong together |
 |---|---|---|---|
-| 1 | **Connections** | General, Integrations | Both answer *"what other systems does ECM talk to?"* — the Dispatcharr connection ECM is a client of, and the Emby/Plex/Jellyfin servers it reads back from. |
+| 1 | **Connections** | General, Integrations | Both answer *"what other systems does ECM talk to?"*: the Dispatcharr connection ECM is a client of, and the Emby/Plex/Jellyfin servers it reads back from. |
 | 2 | **Channel Processing** | Channel Defaults, Channel Normalization, Tags, Channel Pipeline | The path a stream takes to become a channel: defaults for creation, rules for cleaning the name, the vocabularies those rules match against, and the automation that runs it. |
 | 3 | **Notifications & Reports** | Notification Settings, M3U Digest | Notification Settings is delivery *transport* (SMTP, Discord, Telegram, Alert Methods); M3U Digest is a *report* that rides it. Adjacent, not merged. |
-| 4 | **Upkeep** | Scheduled Tasks, Maintenance, Backup & Restore | *"How do I keep this instance healthy?"* — the recurring work, the diagnostic and cleanup tools, and the recovery path. |
+| 4 | **Upkeep** | Scheduled Tasks, Maintenance, Backup & Restore | *"How do I keep this instance healthy?"*: the recurring work, the diagnostic and cleanup tools, and the recovery path. |
 | 5 | **Workspace** | Appearance, Linked Accounts | The operator-facing surface rather than instance behaviour: how ECM presents itself, and which identities sign in to it. |
 | 6 | **Administration** | Authentication, User Management, TLS Certificates, MCP Integration | Administrators only. |
 
@@ -159,30 +159,30 @@ Group order follows the operator's path, mirroring the rationale this document a
 
 - Grouping is a property of the data, not of the sidebar component: `group` on each entry of [`settingsSections.ts`](../../frontend/src/components/settingsSections.ts), rendered through the same `<section class="navigation-group"><h2>` markup the primary nav uses. Moving a destination between groups is a data change.
 - **`Upkeep`, not `System` or `Maintenance`.** The primary nav already uses `System` for the group that *contains* Settings, so reusing it would make one word denote two levels of the same tree; `Maintenance` is the name of a destination *inside* this group. Both alternatives collide.
-- **Administration is derived from `adminOnly`, not from the group label.** All four of its destinations carry `adminOnly`, so for a non-admin the group is left empty and dropped wholesale by the empty-group filter — a non-admin never sees an Administration heading over an empty list. `routeHierarchy.test.ts` asserts the group and the flag agree.
-- **Channel Processing is four destinations, not five.** Lookup Tables briefly sat here provisionally: it served the dummy EPG template engine rather than channel processing and had no coherent home in this grouping — which was the finding, not a gap. Bead `enhancedchannelmanager-70u0r.1` retired the whole feature (PO decision D2), so the group is four. `#settings/lookup-tables` survives as a compatibility alias only.
-- A **Back** control heads the drill-in. Its accessible name is `Back to main navigation`, which contains the visible `Back` label so WCAG 2.5.3 holds while the collapsed rail hides the label entirely. It is **pinned** (`position: sticky`, opaque) — see the measured cost below.
+- **Administration is derived from `adminOnly`, not from the group label.** All four of its destinations carry `adminOnly`, so for a non-admin the group is left empty and dropped wholesale by the empty-group filter. A non-admin never sees an Administration heading over an empty list. `routeHierarchy.test.ts` asserts the group and the flag agree.
+- **Channel Processing is four destinations, not five.** Lookup Tables briefly sat here provisionally: it served the dummy EPG template engine rather than channel processing and had no coherent home in this grouping, which was the finding, not a gap. Bead `enhancedchannelmanager-70u0r.1` retired the whole feature (PO decision D2), so the group is four. `#settings/lookup-tables` survives as a compatibility alias only.
+- A **Back** control heads the drill-in. Its accessible name is `Back to main navigation`, which contains the visible `Back` label so WCAG 2.5.3 holds while the collapsed rail hides the label entirely. It is **pinned** (`position: sticky`, opaque); see the measured cost below.
 - Back restores the groups without changing the route: the operator stays on the Settings page they were reading. Reaching another destination therefore takes Back first, which is the accepted cost of the drill-in.
-- Entering Settings by any means — sidebar, contextual link, or deep link — opens the drill-in. Re-selecting Settings while already there reopens it after a Back.
+- Entering Settings by any means (sidebar, contextual link, or deep link) opens the drill-in. Re-selecting Settings while already there reopens it after a Back.
 - Section links are real `#settings/<page>` anchors carrying `aria-current="page"`, and honour the same guarded-navigation disable contract as primary destinations.
 
-#### Measured vertical cost — the rail scrolls, and Back is pinned
+#### Measured vertical cost: the rail scrolls, and Back is pinned
 
 Measured by bead `enhancedchannelmanager-70u0r.4` against a build of the source,
-in all three themes (identical in each — no theme changes the rail's height):
+in all three themes (identical in each; no theme changes the rail's height):
 
 | State | Viewport | Rail content | Rail budget | Overflow |
 |---|---|---:|---:|---:|
 | Expanded | 1280×720 | 1099px | 675px | 424px |
 | Expanded | 1920×1080 | 1099px | 1035px | 64px |
 | Collapsed | 1280×720 | 896px | 675px | 221px |
-| Collapsed | 1920×1080 | 1035px | 1035px | — |
+| Collapsed | 1920×1080 | 1035px | 1035px | 0px |
 
 Each group costs 38.7px (a 30.7px heading plus 8px of separation), so going from
 two groups to six added ~155px. Three things follow, and the middle one is the
 reason Back is pinned:
 
-- **The expanded rail already overflowed at 1280×720 before grouping** — 18
+- **The expanded rail already overflowed at 1280×720 before grouping**: 18
   destinations at 45px each do not fit 675px whatever the headings do. Grouping
   made an existing overflow worse; it did not create it. The collapsed rail
   overflows at 1280×720 for the same reason, and grouping contributes *nothing*
@@ -195,8 +195,8 @@ reason Back is pinned:
   to Administration took the only exit from Settings off screen with them. Back
   is therefore `position: sticky` with an opaque background, pinned flush to the
   top of the scroll box: destinations scroll *behind* it. This is the treatment
-  the Settings IA proposal nominated in advance for exactly this outcome —
-  sidebar-internal scrolling with the Back control kept in view — chosen over
+  the Settings IA proposal nominated in advance for exactly this outcome
+  (sidebar-internal scrolling with the Back control kept in view), chosen over
   reducing the group count, which would contradict the approved assignment.
 
 `e2e/settings-nav-groups.spec.ts` asserts the overflow *contract* rather than
@@ -207,7 +207,7 @@ changing what has to hold.
 
 ### Settings page heading
 
-Settings sections do not render their own heading block. The route header carries a third crumb — `SYSTEM / SETTINGS / <SECTION>` — with the section's descriptive line beneath it, returning that vertical space to the content pane.
+Settings sections do not render their own heading block. The route header carries a third crumb (`SYSTEM / SETTINGS / <SECTION>`) with the section's descriptive line beneath it, returning that vertical space to the content pane.
 
 - Crumb text and description come from [`settingsSections.ts`](../../frontend/src/components/settingsSections.ts), carried verbatim from the `.settings-page-header` blocks they replaced. A section's crumb may therefore differ from its shorter sidebar label (`General` → `GENERAL SETTINGS`, `TLS Certificates` → `TLS/SSL CERTIFICATE MANAGEMENT`).
 - Sections that never had their own description (`scheduled-tasks`, `backup-restore`) fall back to the Settings route purpose so the header keeps a constant height across sections.
@@ -219,7 +219,7 @@ Settings sections do not render their own heading block. The route header carrie
 
 `StickySectionNav` takes a `placement` prop. Settings passes `rail`; Stats keeps the default `top` bar.
 
-Settings passes the selector `.settings-section` for every page rather than an allow-list of audited-long pages. As a rail the nav costs no vertical space, so the only reason to withhold it is having too little to navigate, and the component already renders nothing below two sections. `auditedLongSettingsPages` still exists and still gates `supportsPageSave` — that is a separate contract and must not be conflated with section navigation.
+Settings passes the selector `.settings-section` for every page rather than an allow-list of audited-long pages. As a rail the nav costs no vertical space, so the only reason to withhold it is having too little to navigate, and the component already renders nothing below two sections. `auditedLongSettingsPages` still exists and still gates `supportsPageSave`: that is a separate contract and must not be conflated with section navigation.
 
 - `rail` renders a sticky right-hand column inside the `.settings-content` scroll container, so the section list consumes no vertical space in the content pane.
 - Below 1100px the rail returns to the stacked bar above the content, because the column would otherwise crowd the settings themselves.
@@ -231,7 +231,7 @@ Each Settings route appears once inside Settings. The global sidebar does not ex
 
 Listed in navigation order. The `SettingsPage` union, the router's set of accepted
 sub-page ids, and this inventory are all derived from the one declaration in
-[`settingsSections.ts`](../../frontend/src/components/settingsSections.ts) —
+[`settingsSections.ts`](../../frontend/src/components/settingsSections.ts):
 adding or retiring a destination is a single entry, not three parallel lists.
 
 | Canonical URL | Group | Settings label | Visibility |
@@ -259,7 +259,7 @@ Compatibility aliases:
 - `#settings/general` canonicalizes to `#settings`.
 - `#settings/auto-creation` resolves to `#settings/channel-pipeline`.
 - `#settings/security` resolves to `#settings/backup-restore`.
-- `#settings/lookup-tables` resolves to `#settings` (General) — the Lookup Tables feature was
+- `#settings/lookup-tables` resolves to `#settings` (General): the Lookup Tables feature was
   removed outright by bead `enhancedchannelmanager-70u0r.1`, so it has no successor page. The
   alias exists so a bookmarked URL resolves explicitly rather than via the unknown-page
   fallback.

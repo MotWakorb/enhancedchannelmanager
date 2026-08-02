@@ -5,17 +5,17 @@
 - **Severity**: P2 page (`ECMTaskSchedulerNextRunNull`), P3 warning (per-task staleness alerts)
 - **Owner**: SRE
 - **Last reviewed**: 2026-05-15
-- **Related beads**: `enhancedchannelmanager-qxi02` (this runbook + metrics + alerts), `enhancedchannelmanager-p5b8i` (SRE spike that surfaced the silent-stall gap), `enhancedchannelmanager-ifmr5` (Bundle H — existing-operator schedule heal)
+- **Related beads**: `enhancedchannelmanager-qxi02` (this runbook + metrics + alerts), `enhancedchannelmanager-p5b8i` (SRE spike that surfaced the silent-stall gap), `enhancedchannelmanager-ifmr5` (Bundle H, existing-operator schedule heal)
 
 **Alerts that route here:**
 
-- `ECMTaskSchedulerNextRunNull` (**page**) — one or more enabled non-MANUAL `task_schedules` rows has `next_run_at = NULL`. Scheduler loop will never pick them up. This is the bd-p5b8i disease vector.
-- `ECMTaskScheduleStaleStatsRollup` (warning) — `stats_v2_rollup` last success > 25h ago.
-- `ECMTaskScheduleStaleCleanup` (warning) — `cleanup` last success > 8d ago.
-- `ECMTaskScheduleStaleM3UMonitor` (warning) — `m3u_change_monitor` last success > 30m ago (5-min cadence, 30-min staleness budget = 6 missed runs).
-- `ECMTaskScheduleStaleStreamProbe` (warning) — `stream_probe` last success > 48h ago.
+- `ECMTaskSchedulerNextRunNull` (**page**): one or more enabled non-MANUAL `task_schedules` rows has `next_run_at = NULL`. Scheduler loop will never pick them up. This is the bd-p5b8i disease vector.
+- `ECMTaskScheduleStaleStatsRollup` (warning): `stats_v2_rollup` last success > 25h ago.
+- `ECMTaskScheduleStaleCleanup` (warning): `cleanup` last success > 8d ago.
+- `ECMTaskScheduleStaleM3UMonitor` (warning): `m3u_change_monitor` last success > 30m ago (5-min cadence, 30-min staleness budget = 6 missed runs).
+- `ECMTaskScheduleStaleStreamProbe` (warning): `stream_probe` last success > 48h ago.
 
-**SLO:** Not tied to a numbered SLO. Capacity-planning / operational-health class — task cadence is operator-configurable, so ECM cannot make a portable commitment about it. See `docs/sre/slos.md` → "Capacity planning: Task scheduler health (bd-qxi02)".
+**SLO:** Not tied to a numbered SLO. Capacity-planning / operational-health class: task cadence is operator-configurable, so ECM cannot make a portable commitment about it. See `docs/sre/slos.md` → "Capacity planning: Task scheduler health (bd-qxi02)".
 
 ---
 
@@ -34,7 +34,7 @@ The original bd-p5b8i disease silently disabled every scheduled task on every op
 - Journal entries and task-execution history were growing unbounded → `cleanup` not running.
 - Channel Pipeline rules weren't picking up new M3U streams → `m3u_change_monitor` not running.
 
-No alert fired. No journal entry surfaced the disease. The signal was "absence of expected work" — historically the hardest class of failure to detect.
+No alert fired. No journal entry surfaced the disease. The signal was "absence of expected work," historically the hardest class of failure to detect.
 
 ---
 
@@ -109,9 +109,9 @@ No alert fired. No journal entry surfaced the disease. The signal was "absence o
        print(r)
    "
    ```
-   - **No rows recently:** the task is not being scheduled. Cross-check `task_schedules` for that `task_id` — is `enabled=1`? Is `next_run_at` set? If it's NULL, see the `ECMTaskSchedulerNextRunNull` section above.
+   - **No rows recently:** the task is not being scheduled. Cross-check `task_schedules` for that `task_id`: is `enabled=1`? Is `next_run_at` set? If it's NULL, see the `ECMTaskSchedulerNextRunNull` section above.
    - **Rows recently but `status='failed'`:** the task is running but failing. Read the `error` column for the last few rows; that's your root cause.
-   - **Rows recently with `status='completed'` but old:** schedule cadence is too sparse for the budget. Either the operator changed the schedule or the budget is too tight for this install — adjust per Settings → Tasks or tune the alert.
+   - **Rows recently with `status='completed'` but old:** schedule cadence is too sparse for the budget. Either the operator changed the schedule or the budget is too tight for this install: adjust per Settings → Tasks or tune the alert.
 
 2. **Cross-reference the container log:**
    ```bash
@@ -123,7 +123,7 @@ No alert fired. No journal entry surfaced the disease. The signal was "absence o
    ```bash
    docker exec ecm-ecm-1 curl -s localhost:8000/metrics | grep ecm_task_schedule
    ```
-   The gauge values in `/metrics` should reflect the latest scrape. If `ecm_task_schedule_last_success_timestamp` is missing for a `task_id` you expect to see, the task has never completed successfully since the metric was added — that's a different signal from "completed long ago."
+   The gauge values in `/metrics` should reflect the latest scrape. If `ecm_task_schedule_last_success_timestamp` is missing for a `task_id` you expect to see, the task has never completed successfully since the metric was added: that's a different signal from "completed long ago."
 
 ---
 
@@ -142,7 +142,7 @@ bd-qxi02 closes the detection gap with `ecm_task_schedule_next_run_null_count` +
 ## Recovery
 
 - **Automatic on container restart**, once a build containing both Bundle H (the heal) and bd-qxi02 (the detection) is deployed. The heal runs at startup; the `next_run_at` count drops to 0 within one scrape interval after startup.
-- **Manual recovery** is the SQL block in the "First 10 minutes" section above for the `ECMTaskSchedulerNextRunNull` path. For per-task staleness alerts, manual recovery depends on the underlying error — fix the cause, then either wait for the next scheduled run or trigger a manual run via Settings → Tasks → \[task name\] → Run Now.
+- **Manual recovery** is the SQL block in the "First 10 minutes" section above for the `ECMTaskSchedulerNextRunNull` path. For per-task staleness alerts, manual recovery depends on the underlying error: fix the cause, then either wait for the next scheduled run or trigger a manual run via Settings → Tasks → \[task name\] → Run Now.
 
 ---
 

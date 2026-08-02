@@ -3,14 +3,14 @@
 **Status:** Reference baseline. Frozen until 6rrl5 epic closes.
 **Owner:** SRE / Project Engineer (rotating with whoever lands a 6rrl5 child).
 **Bead:** [enhancedchannelmanager-6rrl5.3](https://github.com/MotWakorb/enhancedchannelmanager) (P1, gating).
-**Captured from SHA:** `3d97433a847fa335d80ddde37a69303b14935d27` (dev tip — `Merge pull request #148 from MotWakorb/chore/v0.16.0-0056`).
+**Captured from SHA:** `3d97433a847fa335d80ddde37a69303b14935d27` (dev tip: `Merge pull request #148 from MotWakorb/chore/v0.16.0-0056`).
 **App version:** `0.16.0-0056` (matches `frontend/package.json` and `backend/main.py`).
 **Captured:** 2026-04-23 (UTC 2026-04-24T02:58:49Z).
 **Capture host:** Ubuntu 24.04 LTS, x86_64, 16 vCPU, 60 GiB RAM (worktree dev box).
 
 ## Why this exists
 
-The 6rrl5 epic bumps every major frontend dep at once (TS 5→6, Vite 7→8, React 18→19, plugin-react 5→6, ESLint 9→10, jsdom 24→29, @dnd-kit 6→10) plus follow-on backend bumps (starlette 1.0, fastapi 0.137+, uvicorn). Each child PR needs an objective answer to *"did this bump regress build size, runtime, or test speed?"* — not a vibe check.
+The 6rrl5 epic bumps every major frontend dep at once (TS 5→6, Vite 7→8, React 18→19, plugin-react 5→6, ESLint 9→10, jsdom 24→29, @dnd-kit 6→10) plus follow-on backend bumps (starlette 1.0, fastapi 0.137+, uvicorn). Each child PR needs an objective answer to *"did this bump regress build size, runtime, or test speed?"* This is not a vibe check.
 
 This document captures the reference values **before any bump lands** and defines the regression-check procedure each child PR runs against this baseline. Without it, every "looks fine to me" review of a 6rrl5 child is a guess.
 
@@ -38,7 +38,7 @@ These are the versions every metric below was measured against. When a 6rrl5 chi
 
 ---
 
-## Metric 1 — Frontend bundle size
+## Metric 1: Frontend bundle size
 
 **Why this matters:** Vite/React/plugin-react bumps are the most likely to silently bloat the JS bundle. Larger bundles = slower first paint on the LAN/customer side.
 
@@ -93,7 +93,7 @@ Sizes are read from Vite's own `transforming` output. Gzipped totals computed wi
 | `dist/assets/StatsTab-BBEmCzS6.js` | 431.65 KB | 123.06 KB |
 | `dist/assets/index-CErS0nCi.js` | 910.07 KB | 238.38 KB |
 
-**Pre-existing warning at baseline:** Vite emits a `(!) Some chunks are larger than 500 kB after minification` warning for `index-CErS0nCi.js` (910 KB raw / 238 KB gzip) and `StatsTab-BBEmCzS6.js` (431 KB raw / 123 KB gzip). This is **not** a 6rrl5 regression — it pre-dates this epic. A bump only regresses when the warning gains a new chunk or the existing chunks grow past their thresholds below.
+**Pre-existing warning at baseline:** Vite emits a `(!) Some chunks are larger than 500 kB after minification` warning for `index-CErS0nCi.js` (910 KB raw / 238 KB gzip) and `StatsTab-BBEmCzS6.js` (431 KB raw / 123 KB gzip). This is **not** a 6rrl5 regression. It pre-dates this epic. A bump only regresses when the warning gains a new chunk or the existing chunks grow past their thresholds below.
 
 **Regression thresholds (per-bump):**
 
@@ -107,7 +107,7 @@ Sizes are read from Vite's own `transforming` output. Gzipped totals computed wi
 
 ---
 
-## Metric 2 — Docker image size
+## Metric 2: Docker image size
 
 **Why this matters:** Backend dep bumps (uvicorn, starlette, fastapi) and Python base image changes can quietly add hundreds of MB to the deploy image, slowing every CI build, push, and pull. The frontend `dist/` ships *inside* this image too, so frontend bumps are also captured here.
 
@@ -116,7 +116,7 @@ Sizes are read from Vite's own `transforming` output. Gzipped totals computed wi
 docker build -f Dockerfile -t ecm-baseline:6rrl5 .
 docker images ecm-baseline:6rrl5 --format '{{.Size}}'
 ```
-Built fresh from the captured SHA on the worktree host (no shared `ecm-ecm-1` container touched — image tag is `ecm-baseline:6rrl5` to keep isolation).
+Built fresh from the captured SHA on the worktree host (no shared `ecm-ecm-1` container touched; image tag is `ecm-baseline:6rrl5` to keep isolation).
 
 **Result:**
 
@@ -135,11 +135,11 @@ Built fresh from the captured SHA on the worktree host (no shared `ecm-ecm-1` co
 
 ---
 
-## Metric 3 — Backend cold-start time
+## Metric 3: Backend cold-start time
 
 **Why this matters:** Uvicorn / Starlette / FastAPI bumps directly affect ASGI startup. Cold-start is what the Dockerfile `HEALTHCHECK` waits on after `docker restart ecm-ecm-1` and what determines deploy-window length.
 
-**Capture method:** Loop 5 cold runs of the freshly-built image, timing from `docker run` invocation (process start) to first 200 from `GET /api/health`. Container internally listens on port 6100 (per `Dockerfile EXPOSE 6100 6143`) — host mapped to 6109 to avoid clobbering any local ECM container. Probe script: `/tmp/cold_start_probe.sh` (see below for inline copy).
+**Capture method:** Loop 5 cold runs of the freshly-built image, timing from `docker run` invocation (process start) to first 200 from `GET /api/health`. Container internally listens on port 6100 (per `Dockerfile EXPOSE 6100 6143`). Host mapped to 6109 to avoid clobbering any local ECM container. Probe script: `/tmp/cold_start_probe.sh` (see below for inline copy).
 
 ```bash
 docker rm -f ecm-baseline-coldstart || true
@@ -167,7 +167,7 @@ docker run -d --name ecm-baseline-coldstart \
 | **max** | **5152** |
 | **median** | **5103** (~5.1s) |
 
-**Note on isolation:** The container's `/api/health` is the cheap liveness probe (does NOT depend on Dispatcharr). The richer `/api/health/ready` is intentionally NOT used for cold-start measurement here because it would couple the metric to the Dispatcharr stub's reachability — which makes the number a network test, not a startup test. See `backend/routers/health.py:196` for the contract.
+**Note on isolation:** The container's `/api/health` is the cheap liveness probe (does NOT depend on Dispatcharr). The richer `/api/health/ready` is intentionally NOT used for cold-start measurement here because it would couple the metric to the Dispatcharr stub's reachability, which would make the number a network test, not a startup test. See `backend/routers/health.py:196` for the contract.
 
 **Regression thresholds (per-bump):**
 
@@ -179,7 +179,7 @@ docker run -d --name ecm-baseline-coldstart \
 
 ---
 
-## Metric 4 — Backend test-suite runtime
+## Metric 4: Backend test-suite runtime
 
 **Why this matters:** Pytest runtime tracks both raw test count growth and per-test slowdown from dep bumps (starlette TestClient changes, httpx response shape changes, pydantic validation cost).
 
@@ -225,7 +225,7 @@ ECM_CI_DB_PATH=/tmp/ecm-baseline-test.db \
 | `tests/integration/test_event_loop_responsiveness.py::TestHealthRespondsDuringCpuBoundWork::test_health_fast_during_xmltv_generate` | 0.81s |
 | `tests/integration/test_event_loop_responsiveness.py::TestHealthRespondsDuringCpuBoundWork::test_health_under_500ms_while_normalize_batch_runs` | 0.80s |
 
-**Note:** All slowest tests cluster around 1.0s, suggesting they hit deliberate `asyncio.sleep`/timeout boundaries — that's a fixed cost, not load-dependent. A 6rrl5 bump that pushes one of these significantly past 1.0s without an explicit sleep change is suspicious.
+**Note:** All slowest tests cluster around 1.0s, suggesting they hit deliberate `asyncio.sleep`/timeout boundaries. That is a fixed cost, not load-dependent. A 6rrl5 bump that pushes one of these significantly past 1.0s without an explicit sleep change is suspicious.
 
 **Regression thresholds (per-bump):**
 
@@ -233,12 +233,12 @@ ECM_CI_DB_PATH=/tmp/ecm-baseline-test.db \
 |---|---|---|
 | Total pytest runtime | > +30% (i.e. > 90s reported, > 95s wall) | Investigate; backend dep bumps especially |
 | Any single test moves into top-10 with > 2.0s | New entry over 2s | Investigate |
-| Test count drops below 3035 | Any drop without explanation in PR | Block — silent skips are P1 |
+| Test count drops below 3035 | Any drop without explanation in PR | Block: silent skips are P1 |
 | Test count grows but runtime grows >2× new-test count × 1s | Investigate | Bump may be slowing existing tests |
 
 ---
 
-## Metric 5 — Frontend test-suite runtime
+## Metric 5: Frontend test-suite runtime
 
 **Why this matters:** Vitest/jsdom bumps directly affect this. React 19 may also change render timing in tests.
 
@@ -262,7 +262,7 @@ cd frontend && /usr/bin/time -v npm test
 
 **Note:** Vitest's per-phase breakdown sums to far more than wall-clock because phases run in parallel across worker threads. The actionable numbers are **wall-clock** (6.05s) and **`Duration`** (5.77s).
 
-**Pre-existing warning at baseline:** A `BulkRuleSettingsModal` test emits a React `act(...)` warning (not a failure). This is **not** a 6rrl5 regression — it pre-dates this epic. A bump that causes new `act` warnings in other suites IS a regression signal worth investigating.
+**Pre-existing warning at baseline:** A `BulkRuleSettingsModal` test emits a React `act(...)` warning (not a failure). This is **not** a 6rrl5 regression. It pre-dates this epic. A bump that causes new `act` warnings in other suites IS a regression signal worth investigating.
 
 **Regression thresholds (per-bump):**
 
@@ -270,12 +270,12 @@ cd frontend && /usr/bin/time -v npm test
 |---|---|---|
 | Total wall-clock | > +30% (i.e. > 7.9s) | Investigate |
 | Total wall-clock | > +100% (i.e. > 12s) | Block bump |
-| Test count drops below 1142 | Any drop without explanation in PR | Block — silent skips are P1 |
+| Test count drops below 1142 | Any drop without explanation in PR | Block: silent skips are P1 |
 | New `act(...)` warnings in unrelated suites | Any | Investigate React 19 / testing-library compat |
 
 ---
 
-## Metric 6 — CI pipeline end-to-end duration
+## Metric 6: CI pipeline end-to-end duration
 
 **Why this matters:** CI runtime is the per-PR feedback loop. A 30% bump-induced slowdown across every PR is a real productivity tax.
 
@@ -340,7 +340,7 @@ Every 6rrl5 child PR (e.g. enhancedchannelmanager-6rrl5.1 fastapi 0.137+, enhanc
 
 1. Check out the PR branch (which has the bump applied).
 2. Re-run all six metric captures **on the same worktree host** as this baseline (Ubuntu 24.04, 16 vCPU). Different hardware invalidates the comparison.
-3. Use a fresh, unique image tag — never `ecm-ecm-1`, never `ecm-baseline:6rrl5` (that's the reference). Suggested: `ecm-bump-<bead-id>:test`.
+3. Use a fresh, unique image tag: never `ecm-ecm-1`, never `ecm-baseline:6rrl5` (that's the reference). Suggested: `ecm-bump-<bead-id>:test`.
 4. For Metric 6 (CI pipelines), wait until the PR has produced at least 3 green runs of `build.yml` and `test.yml`. Take the median of those, not a single run.
 5. Fill in the comparison table below in the PR body.
 6. If any threshold is breached, the PR is blocked unless the PO signs off with documented justification (e.g., security-mandated bump that has no smaller version available).

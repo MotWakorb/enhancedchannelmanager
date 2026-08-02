@@ -215,15 +215,15 @@ Startup → TaskEngine (checks every 60s, max 3 concurrent)
 
 `ChannelPipelineEngine` orchestrates a per-stream pipeline. For each stream in scope it builds a `StreamContext`, evaluates it against a rule via `ConditionEvaluator`, and on match hands the matched actions to `ActionExecutor`.
 
-### Trigger model — event-driven, decoupled from M3U refresh (ADR-011)
+### Trigger model: event-driven, decoupled from M3U refresh (ADR-011)
 
 The Channel Pipeline has **two** entry points, with distinct gating:
 
-- **Manual "Run Now"** — `POST /api/channel-pipeline/run` (and `/rules/{id}/run`;
-  the deprecated `/api/auto-creation/...` alias still works — see `docs/api.md`)
+- **Manual "Run Now"**: `POST /api/channel-pipeline/run` (and `/rules/{id}/run`;
+  the deprecated `/api/auto-creation/...` alias still works, see `docs/api.md`)
   go straight to `engine.run_pipeline`. **Never gated** by the run-on-refresh
   circuit breaker or the refresh watermark.
-- **Unattended auto-fire** — `ChannelPipelineTask` (`tasks/channel_pipeline.py`) runs
+- **Unattended auto-fire**: `ChannelPipelineTask` (`tasks/channel_pipeline.py`) runs
   on an **INTERVAL schedule (~60s)** and decides for itself whether to run. It
   is the single auto-fire path (one breaker gate, one created-channel cap path,
   one notification style).
@@ -270,7 +270,7 @@ ChannelPipelineEngine.run_pipeline() / run_rule()
 
 | DTO | Source | Role |
 |-|-|-|
-| `StreamContext` | `channel_pipeline_evaluator.py` | Stream + existing data + stats — input to evaluation |
+| `StreamContext` | `channel_pipeline_evaluator.py` | Stream + existing data + stats: input to evaluation |
 | `Action` / `ActionType` | `channel_pipeline_schema.py` | The verb + its parameters |
 | `ExecutionContext` | `channel_pipeline_executor.py` | Per-run rollback tracker |
 | `ActionResult` | `channel_pipeline_executor.py` | Outcome reported back up the chain |
@@ -284,23 +284,23 @@ A run finalizes to exactly one terminal `ChannelPipelineExecution.status`:
 | Status | Meaning |
 |-|-|
 | `completed` | Every executed action succeeded (green). |
-| `completed_with_errors` | ≥1 executed action/phase FAILED, but the run was not wholly aborted — some channels/actions may have succeeded. Distinct from a blanket `failed`. The top-level `run_pipeline` result reports `success=False` and `failed_action_count`. |
+| `completed_with_errors` | ≥1 executed action/phase FAILED, but the run was not wholly aborted. Some channels/actions may have succeeded. Distinct from a blanket `failed`. The top-level `run_pipeline` result reports `success=False` and `failed_action_count`. |
 | `capped` | The created-channel cap was hit. Takes precedence over `completed_with_errors`, but a compound capped+failed run persists BOTH the cap info AND the failed-action summary in `error_message`, and the result still reports `success=False`. |
 | `failed` | The run was wholly aborted by an unrecoverable error. |
 | `rolled_back` | A completed run was later reverted via rollback/undo. |
-| `abandoned` | The run was left at `running` by a hard restart/OOM kill and crash-reconciled to `abandoned` on next boot by `task_engine._abandon_orphaned_auto_creation_executions` (GH #473 / bd-exo4j). Carries an "Abandoned: run was interrupted…" `error_message` and trips the run-on-refresh circuit breaker until an operator clears it. This transition lives in `task_engine`, NOT the engine's finalization branch, so it is easy to miss when enumerating the terminal set — it is nonetheless a genuinely persisted terminal status. |
+| `abandoned` | The run was left at `running` by a hard restart/OOM kill and crash-reconciled to `abandoned` on next boot by `task_engine._abandon_orphaned_auto_creation_executions` (GH #473 / bd-exo4j). Carries an "Abandoned: run was interrupted…" `error_message` and trips the run-on-refresh circuit breaker until an operator clears it. This transition lives in `task_engine`, NOT the engine's finalization branch, so it is easy to miss when enumerating the terminal set. It is nonetheless a genuinely persisted terminal status. |
 
 The full persisted terminal set is therefore: `completed`, `completed_with_errors`, `capped`, `failed`, `rolled_back`, `abandoned` (transient: `pending`, `running`). Any poller/consumer must treat ALL six as terminal.
 
-**One aggregation chokepoint.** Every executed-action/phase failure is recorded into `results["failed_actions"]` — the ONE list finalization keys on. Per-stream Pass 2 action failures funnel through `_record_failed_action`; the non-Pass-2 phases (Event Sync attach, Event Sync dummy-EPG, Pass 5 deferred-EPG retry, default-profile assignment) funnel through `_record_failed_phase`. Default-profile assignment is best-effort for the channel CREATE (a failed profile PATCH never aborts it) but its failure now escalates into aggregation, so such a run is not green.
+**One aggregation chokepoint.** Every executed-action/phase failure is recorded into `results["failed_actions"]`, the ONE list finalization keys on. Per-stream Pass 2 action failures funnel through `_record_failed_action`; the non-Pass-2 phases (Event Sync attach, Event Sync dummy-EPG, Pass 5 deferred-EPG retry, default-profile assignment) funnel through `_record_failed_phase`. Default-profile assignment is best-effort for the channel CREATE (a failed profile PATCH never aborts it) but its failure now escalates into aggregation, so such a run is not green.
 
 **Direct-run vs task success semantics.** The engine's `run_pipeline` result is the honest record: `success = not failed_actions`, and `execution.status` persists `completed_with_errors`. The *task envelope* is intentionally softer (PO decision): the unattended `ChannelPipelineTask` returns `TaskResult(success=True, failed_count=N)` on a failed-action run, so the task engine emits ONE "Completed with Warnings" (with external alerts) rather than a hard "failed". Task History renders `failed_count>0` as an amber warning, never solid green.
 
-**Non-rollbackable profile recovery.** `assign_channel_profile` mutates channel-profile membership, which has no reversible previous-state — so it is never recorded as a rollback/snapshot entity. A run that mutated membership persists a `non_reversible_profile_changes` warning; `to_dict` exposes `has_non_reversible_profile_changes`, and the executions UI's Rollback/Undo affordances disclose that membership will NOT be restored. Recovery is manual: re-run the rule (all profile-write paths are idempotent) or fix membership by hand.
+**Non-rollbackable profile recovery.** `assign_channel_profile` mutates channel-profile membership, which has no reversible previous-state. It is therefore never recorded as a rollback/snapshot entity. A run that mutated membership persists a `non_reversible_profile_changes` warning; `to_dict` exposes `has_non_reversible_profile_changes`, and the executions UI's Rollback/Undo affordances disclose that membership will NOT be restored. Recovery is manual: re-run the rule (all profile-write paths are idempotent) or fix membership by hand.
 
 ## Stream Deduplication Pipeline (v0.17.1)
 
-The interactive stream-to-channel deduplication feature (ADR-008) intercepts three trigger paths — drag-drop, "Add Stream" button, and bulk M3U refresh — and offers the operator a choice to **merge into an existing channel** rather than creating a duplicate.
+The interactive stream-to-channel deduplication feature (ADR-008) intercepts three trigger paths: drag-drop, "Add Stream" button, and bulk M3U refresh. It offers the operator a choice to **merge into an existing channel** rather than creating a duplicate.
 
 ### Database tables (migration 0014)
 
@@ -315,7 +315,7 @@ The `pending_merges` table uses a partial unique index on `(stream_name, candida
 
 ### Matcher service
 
-`backend/services/dedup_matcher.py` implements `find_candidate(stream_name, candidates, threshold) -> MatchResult | None` using RapidFuzz `token_set_ratio`. A hard `CONFIDENCE_FLOOR = 0.60` is enforced in the matcher regardless of the operator-configured threshold — the matcher will never emit a candidate below 60% confidence (ADR-008 §D2). The Pydantic validator for `dedup_threshold` in `backend/config.py` imports this constant so the two layers stay locked to the same floor value.
+`backend/services/dedup_matcher.py` implements `find_candidate(stream_name, candidates, threshold) -> MatchResult | None` using RapidFuzz `token_set_ratio`. A hard `CONFIDENCE_FLOOR = 0.60` is enforced in the matcher regardless of the operator-configured threshold. The matcher will never emit a candidate below 60% confidence (ADR-008 §D2). The Pydantic validator for `dedup_threshold` in `backend/config.py` imports this constant so the two layers stay locked to the same floor value.
 
 ### API surface (`backend/routers/channel_merges.py`)
 
@@ -336,7 +336,7 @@ Response envelopes follow the ECM flat-outcome pattern (no top-level `data` wrap
 
 1. Calls `dedup_matcher.find_candidate()` with the operator-configured `dedup_threshold`.
 2. On a match above the threshold: INSERTs a `pending_merges` row with `trigger_context='m3u_refresh'` and signals the executor to SKIP the new-channel creation.
-3. On a collision with an existing pending row (§D5 partial unique index): logs at INFO and returns "skip creation" — the existing row stays authoritative.
+3. On a collision with an existing pending row (§D5 partial unique index): logs at INFO and returns "skip creation". The existing row stays authoritative.
 4. Increments the `ecm_pending_merges_queue_depth_added_total` counter (BD-M locked metric contract).
 
 The hook fires only on the M3U-refresh path. Scheduled / manual Channel Pipeline runs are not affected.
@@ -344,7 +344,7 @@ The hook fires only on the M3U-refresh path. Scheduled / manual Channel Pipeline
 ### Interactive trigger flow
 
 For drag-drop and Create-in-group triggers (the latter via the Streams pane
-selection strip's "Create in…" menu since build 0161 — previously a
+selection strip's "Create in…" menu since build 0161; previously a
 right-click context menu):
 
 ```
@@ -418,11 +418,11 @@ User interaction
 
 Why: the channel list spans 27k+ streams. Per-change network calls would be unusably slow and would prevent the preview-and-commit UX entirely. Staging enables undo/redo, preview diffs, pre-commit validation, and rollback on bulk failure.
 
-**Lazy per-group stream loading** is a related optimization — the 27k streams are never loaded at once. Streams are fetched on demand per channel group as the user navigates.
+**Lazy per-group stream loading** is a related optimization: the 27k streams are never loaded at once. Streams are fetched on demand per channel group as the user navigates.
 
 ## MCP Server
 
-A separate container (`mcp-server/`, default port 6101) exposes ECM operations to AI agents via the Model Context Protocol. Runs as a Starlette app with the Streamable HTTP transport — a single `/mcp` endpoint; Claude Desktop (via the `mcp-remote` bridge) and Claude Code connect over HTTP.
+A separate container (`mcp-server/`, default port 6101) exposes ECM operations to AI agents via the Model Context Protocol. Runs as a Starlette app with the Streamable HTTP transport: a single `/mcp` endpoint. Claude Desktop (via the `mcp-remote` bridge) and Claude Code connect over HTTP.
 
 ```mermaid
 graph LR
@@ -455,9 +455,9 @@ graph LR
 
 **Resources (read-only):** `ecm://stats/overview`, `ecm://channels/summary`, `ecm://tasks/status`.
 
-**Auth model — two separate keys:**
+**Auth model (two separate keys):**
 
-- **Inbound (MCP client → MCP server):** API key from `settings.json:mcp_api_key`. Accepts `?api_key=` query param or `Authorization: Bearer`. Re-read on every request (no restart for rotation). The Streamable HTTP transport uses a single `/mcp` endpoint — both the client→server POST and the server→client event-stream GET hit `/mcp`, with the session carried via the `Mcp-Session-Id` header — so the API key is checked on every `/mcp` request. `/health` is public. (DNS-rebinding/Host-header protection in the SDK transport is disabled so the sidecar is reachable from any host by IP or hostname; the static API key is the access control.)
+- **Inbound (MCP client → MCP server):** API key from `settings.json:mcp_api_key`. Accepts `?api_key=` query param or `Authorization: Bearer`. Re-read on every request (no restart for rotation). The Streamable HTTP transport uses a single `/mcp` endpoint. Both the client→server POST and the server→client event-stream GET hit `/mcp`, with the session carried via the `Mcp-Session-Id` header, so the API key is checked on every `/mcp` request. `/health` is public. (DNS-rebinding/Host-header protection in the SDK transport is disabled so the sidecar is reachable from any host by IP or hostname; the static API key is the access control.)
 - **Outbound (MCP server → ECM backend):** the same key is sent as `Authorization: Bearer` to ECM. `ECMClient` recreates the httpx client on key change.
 
 **`settings.json` credential schema (bd-jmi1c, GH #273).** Three distinct credentials live in `/config/settings.json`; the lexical similarity of two of the field names was the root cause of GH #273 (operators copying the MCP key into the Dispatcharr token slot):
@@ -468,12 +468,12 @@ graph LR
 | `api_key` (deprecated alias) | Same Dispatcharr REST API token, mirrored from `dispatcharr_api_key` on save for one release of back-compat | External scripts that read `settings.json` directly. **Removed in v0.19.0 per `enhancedchannelmanager-ewm4h`** |
 | `mcp_api_key` | MCP server API key | MCP container (inbound auth) + MCP→ECM backend calls |
 
-The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Both `mcp_api_key` and the Dispatcharr key are credential-class — every export path (`routers/backup.py` ZIP export, `routers/channel_pipeline.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
+The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Both `mcp_api_key` and the Dispatcharr key are credential-class. Every export path (`routers/backup.py` ZIP export, `routers/channel_pipeline.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
 
 **Compound tools:** most tools wrap a single ECM endpoint, but some orchestrate multiple calls. Examples:
 
-- `set_logo_from_epg(channel_ids)` — per channel: read channel → read EPG entry → create-or-find logo → PATCH channel.
-- `build_channel_lineup(channels, group_id, provider_id, market)` — bulk-create channels via `/bulk-commit`, fetch the created channels, fuzzy-match streams per channel using shared `_score_match` / `_generate_variants` helpers from `tools/streams.py`, then assign matched streams.
+- `set_logo_from_epg(channel_ids)` (per channel): read channel → read EPG entry → create-or-find logo → PATCH channel.
+- `build_channel_lineup(channels, group_id, provider_id, market)`: bulk-create channels via `/bulk-commit`, fetch the created channels, fuzzy-match streams per channel using shared `_score_match` / `_generate_variants` helpers from `tools/streams.py`, then assign matched streams.
 
 **Deployment:** `ECM_URL=http://ecm:6100` (internal Docker network); shares the `/config/` volume with the ECM backend for the API key file. The key is generated in ECM's UI under *Settings → MCP Integration*.
 
@@ -483,7 +483,7 @@ On each bandwidth poll (~5s cadence), the `BandwidthTracker` (persisted
 path) and the on-demand `/api/stats/channels` enrichment (live path)
 cross-reference active stream sessions against the live-sessions API of
 each configured media server (Emby, Plex, Jellyfin). Attribution is
-**networking-agnostic** — it works whether ECM observes a connection's
+**networking-agnostic**: it works whether ECM observes a connection's
 source as the configured server IP, the host IP, a Docker bridge gateway
 (`172.18.0.1`), a NAT'd address, or a container IP. This was redesigned in
 bd-mlcla; the brittle source-IP gate it replaced is described under
@@ -496,22 +496,22 @@ pair. For each channel:
 
 1. **Resolvers return the matched-user SET for any IP** (no gate). Each
    per-source resolver runs a tiered match against its cached session
-   list — Tier 1 channel-name → Tier 2 channel-number → Tier 3 fuzzy
-   stream-name — and returns every matched session, sorted most-recent
+   list (Tier 1 channel-name → Tier 2 channel-number → Tier 3 fuzzy
+   stream-name) and returns every matched session, sorted most-recent
    first. The IP is no longer a reject condition; it is demoted to a
    ranking hint (see step 3). **Tier 3 fuzzy stays server-IP-gated**
-   internally to avoid VOD/library false positives — fuzzy matching is
+   internally to avoid VOD/library false positives. Fuzzy matching is
    only trusted for connections that egress through the server IP.
 2. **Eligible connections** = the channel's Dispatcharr `/proxy/ts/status`
    connections that do **not** carry a per-client identity. A connection is
-   excluded — kept out of media-server reconciliation and attributed via the
-   bd-gy5nd provider/hostname path instead — when it has a **Dispatcharr
+   excluded (kept out of media-server reconciliation and attributed via the
+   bd-gy5nd provider/hostname path instead) when it has a **Dispatcharr
    ACCOUNT identity**: a positive `user_id` (and resolved `username`) on the
    client dict, meaning the viewer authenticated to Dispatcharr with a real
-   sub-account (e.g. `kmfelmer`, `user_id=3`). Anonymous connections —
+   sub-account (e.g. `kmfelmer`, `user_id=3`). Anonymous connections are
    Dispatcharr `user_id` `"0"` / `0` / `None`, which is how Dispatcharr
    serves EVERY media-server pull (the transcoding proxy AND NAT'd
-   browser-direct playback) — carry no account identity and **are** eligible.
+   browser-direct playback); they carry no account identity and **are** eligible.
    This per-connection account-identity test is the discriminator: it
    replaces both the old per-IP gate and the (incorrect, bd-4w9w6)
    channel-upstream-URL discriminator. The channel's **upstream provider
@@ -519,7 +519,7 @@ pair. For each channel:
    the operator's PROVIDER ACCOUNT, shared by every viewer of the channel; it
    feeds the bd-gy5nd provider/hostname label but is **not** a per-client
    identity and does **not** exclude any connection from reconciliation. The
-   provider label and the media-server user are independent surfaces — a
+   provider label and the media-server user are independent surfaces. A
    viewer can watch an XC-sourced channel through Emby/Plex/Jellyfin and
    carries both.
 
@@ -533,9 +533,9 @@ pair. For each channel:
    >
    > **bd-rools correction (re-fix for the bd-cat70 direct-client
    > cross-attribution):** bd-4w9w6 first set `has_url_identity=False`
-   > unconditionally, which fixed User #0 but — because the resolver is no
+   > unconditionally, which fixed User #0 but (because the resolver is no
    > longer IP-gated and returns the channel's full matched-user set for ANY
-   > source IP — re-exposed the bd-cat70 cross-attribution: a genuine direct
+   > source IP) re-exposed the bd-cat70 cross-attribution: a genuine direct
    > XC subscriber sharing a channel with a media-server viewer would, via the
    > B1 direct-first ordering, ABSORB that media-server user (`kmfelmer`'s row
    > showing `MotWakorb`; the real viewer dropped to User #0). The real
@@ -552,13 +552,13 @@ pair. For each channel:
    media-server IP(s), the operator-configured `trusted_media_networks`
    setting (CIDRs or bare IPs), and auto-detected local Docker bridge
    gateways. Getting the ranking wrong can only change tie-break order,
-   never which users attribute — an unknown IP is ranked lower, not
+   never which users attribute: an unknown IP is ranked lower, not
    rejected.
 4. **Set reconciliation** assigns users to connections with three
    structural guarantees: each candidate user is consumed **at most once**
-   (anti-collapse — one user can never land on two connections, the
-   bd-ost8o regression); assignment is **per-connection** (anti-broadcast
-   — never stamp one user onto every connection, the bd-cat70 *fan-out*
+   (anti-collapse: one user can never land on two connections, the
+   bd-ost8o regression); assignment is **per-connection** (anti-broadcast:
+   never stamp one user onto every connection, the bd-cat70 *fan-out*
    form); and surplus users (`users > connections`) surface only in the
    channel-level viewer list, never as a synthesized phantom connection.
 
@@ -567,8 +567,8 @@ pair. For each channel:
    > per-connection at-most-once assignment. The **direct-client
    > cross-attribution** form (a genuine direct XC subscriber absorbing a
    > media-server viewer it shares a channel with) is NOT prevented by the
-   > assignment model — a non-IP-gated resolver would happily offer the
-   > subscriber the media-server users and B1 direct-first ordering would
+   > assignment model. A non-IP-gated resolver would happily offer the
+   > subscriber the media-server users, and B1 direct-first ordering would
    > pair them. That form is prevented one step earlier, by the
    > **account-identity discriminator** in step 2: the subscriber carries a
    > Dispatcharr account identity and is excluded from
@@ -581,12 +581,12 @@ pair. For each channel:
    server-proxy connection then carries the **remaining (unconsumed)**
    users as its rollup. This guarantees a browser-direct viewer sharing a
    channel with a proxy pull always gets its own distinct name whenever an
-   unconsumed matching user exists — the proxy never suppresses it to
+   unconsumed matching user exists. The proxy never suppresses it to
    "User #0". A proxy serving N app-viewers with no direct connection still
    carries the full set unchanged. (The `is_server_proxy` flag is exact
    source-IP-equality with no corroborating signal, so a browser-direct
-   connection whose observed IP happens to equal the server IP — e.g. a
-   browser run on the media-server host — is mis-flagged as the proxy;
+   connection whose observed IP happens to equal the server IP (e.g. a
+   browser run on the media-server host) is mis-flagged as the proxy;
    the direct-first ordering bounds the blast radius to that one
    connection's display label, never another viewer's attribution.)
 6. **Option-B rollup for unresolvable ties.** When a group of 2+ direct
@@ -618,7 +618,7 @@ The **live** path (`/api/stats/channels`) keys connections by Dispatcharr's
 stable per-connection `client_id`, so it distinguishes two browser-direct
 viewers even behind the same NAT IP. The **persisted** path
 (`session_telemetry`) keys rows by `(channel, ip)`, so two browser-direct
-viewers behind the **same NAT IP** collapse to **one telemetry row** — the
+viewers behind the **same NAT IP** collapse to **one telemetry row**. The
 persisted path attributes that row to the single top-ranked matched user
 (the second viewer is not persisted on this path; it still surfaces on the
 live Stats page and in the channel-level viewer list). This is a known
@@ -631,7 +631,7 @@ so it cannot silently drift.
 
 Each source has a 5-second TTL cache of upstream sessions with
 thundering-herd lock + stale-fallback on upstream failure. The resolver
-never raises — upstream failures degrade the row's attribution to NULL
+never raises. Upstream failures degrade the row's attribution to NULL
 without affecting the telemetry write. The three resolvers run via
 `asyncio.gather` with per-source 2s timeouts: a slow Plex does not stall
 Emby or Jellyfin attribution.
@@ -646,7 +646,7 @@ playback NAT'd through a bridge gateway (`172.18.0.1`) was rejected as
 "User #0" (bd-mlcla / bd-podx3), and channel-name-only matching with no
 per-connection identity collapsed every viewer onto one user (bd-ost8o) or
 broadcast one user to all (bd-cat70 fan-out). The set-reconciliation model
-above replaces both — IP is a ranking hint, identity comes from
+above replaces both: IP is a ranking hint, identity comes from
 per-connection set assignment. The separate bd-cat70 direct-client
 cross-attribution form (a genuine direct subscriber absorbing a media-server
 viewer) is held off by the account-identity discriminator in step 2, not by
@@ -684,7 +684,7 @@ API field reference: see [Enhanced Stats § Per-channel attribution fields](api.
 
 ---
 
-## External API Contract — Dispatcharr
+## External API Contract: Dispatcharr
 
 `backend/dispatcharr_client.py` makes **73 named calls** into Dispatcharr's HTTP API, covering **4 of Dispatcharr's 13 Django apps**. The table below maps each ECM domain to the Dispatcharr app that serves it.
 
@@ -700,6 +700,6 @@ All 73 calls funnel through `DispatcharrClient._request()`, which handles the JW
 
 **Contract symmetry check (cross-repo graph):** 47 of 73 ECM client methods have direct camelCase counterparts in Dispatcharr's own frontend (`frontend/src/api.js`). The remaining 26 are mostly CRUD operations on DRF `ModelViewSet`s (Django REST Framework auto-generates list/retrieve/create/update/destroy endpoints without explicit function definitions, so there's nothing for a graph to match against) plus a handful of specialized M3U refresh and EPG import triggers. The two clients being parallel is strong evidence that the API contract is stable.
 
-**Drift candidates (watch these for breakage in Dispatcharr releases):** `get_all_m3u_group_settings`, `update_m3u_group_settings`, `get_epg_grid`, `trigger_epg_import`, `refresh_m3u_vod`, `find_logo_by_url`, `bulk_update_profile_channels`. These don't have direct frontend equivalents in Dispatcharr, so they may be ECM-specific uses of backend endpoints the UI doesn't exercise — more likely to break silently.
+**Drift candidates (watch these for breakage in Dispatcharr releases):** `get_all_m3u_group_settings`, `update_m3u_group_settings`, `get_epg_grid`, `trigger_epg_import`, `refresh_m3u_vod`, `find_logo_by_url`, `bulk_update_profile_channels`. These don't have direct frontend equivalents in Dispatcharr, so they may be ECM-specific uses of backend endpoints the UI doesn't exercise. They are more likely to break silently.
 
 **Upstream schema source:** `http://<dispatcharr-host>:9191/swagger.json` (YAML format despite the name). See `docs/dispatcharr_api.md` for the fetch pattern and known endpoint conventions.

@@ -1,6 +1,6 @@
 # Project Architecture
 
-Enhanced Channel Manager (ECM) — a web app for managing IPTV channels via Dispatcharr.
+Enhanced Channel Manager (ECM): a web app for managing IPTV channels via Dispatcharr.
 
 ## Stack
 
@@ -33,7 +33,7 @@ Ports: `6100` (HTTP), `6143` (HTTPS when TLS enabled)
 
 ## Backend (`backend/`)
 
-**Modular router architecture** (v0.13.0 refactor) — `main.py` handles app lifecycle, middleware, and WebSocket; domain endpoints live in `routers/` modules.
+**Modular router architecture** (v0.13.0 refactor): `main.py` handles app lifecycle, middleware, and WebSocket; domain endpoints live in `routers/` modules.
 
 ### Router Modules (`backend/routers/`)
 
@@ -124,7 +124,7 @@ All routers are registered via `routers/__init__.py` → `all_routers` list, inc
 | File | Purpose |
 |---|---|
 | `main.tsx` | React mount point |
-| `App.tsx` | Root component — state management, tab routing, data loading |
+| `App.tsx` | Root component: state management, tab routing, data loading |
 | `App.css` | Global styles, `.tab-loading`, `.main` layout |
 | `index.css` | Design tokens (CSS variables for theme, spacing, typography) |
 | `TabNavigation.tsx` | Tab bar component |
@@ -135,17 +135,17 @@ ChannelManagerTab loads eagerly; all others are lazy-loaded via `React.lazy()`:
 
 | Tab | File | Sub-panels |
 |---|---|---|
-| Channels | `ChannelManagerTab.tsx` | — |
-| M3U Manager | `M3UManagerTab.tsx` | — |
-| EPG Manager | `EPGManagerTab.tsx` | — |
-| Guide | `GuideTab.tsx` | — |
-| Logo Manager | `LogoManagerTab.tsx` | — |
-| M3U Changes | `M3UChangesTab.tsx` | — |
-| Journal | `JournalTab.tsx` | — |
+| Channels | `ChannelManagerTab.tsx` | None |
+| M3U Manager | `M3UManagerTab.tsx` | None |
+| EPG Manager | `EPGManagerTab.tsx` | None |
+| Guide | `GuideTab.tsx` | None |
+| Logo Manager | `LogoManagerTab.tsx` | None |
+| M3U Changes | `M3UChangesTab.tsx` | None |
+| Journal | `JournalTab.tsx` | None |
 | Stats | `StatsTab.tsx` | BandwidthPanel, EnhancedStatsPanel, PopularityPanel, WatchHistoryPanel |
 | Settings | `SettingsTab.tsx` | AuthSettingsSection, LinkedAccountsSection, TagEngineSection, NormalizationEngineSection, TLSSettingsSection, UserManagementSection |
 | Channel Pipeline | `ChannelPipelineTab.tsx` | RuleBuilder, ConditionEditor, ActionEditor |
-| Status | `StatusTab.tsx` | — |
+| Status | `StatusTab.tsx` | None |
 
 ### Shared Code
 
@@ -212,6 +212,6 @@ dependent frontend is no longer live.
 ## Config & Data
 
 All persistent data lives in the `/config` Docker volume:
-- `settings.json` — App configuration (Dispatcharr URL, credentials, preferences)
-- `journal.db` — SQLite database (journal entries, task history, notifications, etc.)
-- `tls/` — TLS certificates and keys
+- `settings.json`: App configuration (Dispatcharr URL, credentials, preferences)
+- `journal.db`: SQLite database (journal entries, task history, notifications, etc.)
+- `tls/`: TLS certificates and keys

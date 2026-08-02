@@ -13,13 +13,13 @@ guide assignment; it does not rename, renumber, or replace the channel.
 2. Choose the XMLTV or Gracenote source that should become the target.
 3. Select **Preview migration**. ECM reads the current assignments and shows
    one status for every channel:
-   - **Ready** — exactly one target row has the same station identifier.
-   - **Already on target** — no change is needed.
-   - **No guide assigned** — there is no current assignment to translate.
-   - **LCN not found** — the current XMLTV channel has no usable station ID.
-   - **No target match** — the target contains no matching station ID.
-   - **Ambiguous target** — more than one target row uses that station ID.
-   - **Unsupported source type** — the current assignment belongs to a dummy
+   - **Ready**: exactly one target row has the same station identifier.
+   - **Already on target**: no change is needed.
+   - **No guide assigned**: there is no current assignment to translate.
+   - **LCN not found**: the current XMLTV channel has no usable station ID.
+   - **No target match**: the target contains no matching station ID.
+   - **Ambiguous target**: more than one target row uses that station ID.
+   - **Unsupported source type**: the current assignment belongs to a dummy
      or unknown source. Only XMLTV and Schedules Direct origins are eligible.
 
 **Result:** You can inspect the exact ready count and every unresolved channel

@@ -1,11 +1,11 @@
 # Runbook: ECM HTTP Error Rate
 
-> **Stub** — scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
+> **Stub**: scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
 > when that lands.
 
 **Alerts that route here:**
-- `ECMHTTPError5xxElevated` (ticket) — 5xx rate > 1% for 10m
-- `ECMHTTPError5xxCritical` (page) — 5xx rate > 10% for 3m
+- `ECMHTTPError5xxElevated` (ticket): 5xx rate > 1% for 10m
+- `ECMHTTPError5xxCritical` (page): 5xx rate > 10% for 3m
 
 **SLO:** [SLO-3 HTTP Error Rate](../sre/slos.md#slo-3-http-error-rate)
 
@@ -37,7 +37,7 @@
      | jq 'select(.path == "/api/<offending-path>")' \
      | head -20
    ```
-   Extract one `trace_id` and grep for it across all logs — full request story, ordered.
+   Extract one `trace_id` and grep for it across all logs: full request story, ordered.
 
 3. **Check readiness.** If readiness is failing, fix that first; 5xxs often downstream of it.
 
@@ -55,14 +55,14 @@
 - Signals: Errors on proxying endpoints (streams, EPG sync, channel groups); Dispatcharr-side logs confirm upstream failure.
 - Mitigation: no ECM-side fix; upstream recovery. Consider circuit-breaking if sustained.
 
-### Rate-limited (should be 429, not 5xx — investigate if 5xx)
+### Rate-limited (should be 429, not 5xx; investigate if 5xx)
 - slowapi limiter on `/api/auth/login`. If 5xx correlates with auth endpoints during a brute-force attempt, investigate whether the limiter is misconfigured to 5xx instead of 429.
 
 ## Mitigation
 
 - Rollback is the fastest remedy for recent-deploy-caused 5xx.
 - For infra issues (database/disk/network), mitigate the infra before the app.
-- Capture a log snapshot (`docker logs ecm-ecm-1 --since 1h > /tmp/incident.log`) **before** restarting — container restart loses in-memory state useful for postmortem.
+- Capture a log snapshot (`docker logs ecm-ecm-1 --since 1h > /tmp/incident.log`) **before** restarting. Container restart loses in-memory state useful for postmortem.
 
 ## See also
 

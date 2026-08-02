@@ -1,6 +1,6 @@
 # Runbook: ECM Dedup Candidate-Lookup Latency High
 
-> **STUB — section headers + metric names present, real triage and resolution procedures pending.** This runbook ships at v0.17.1 alongside the SLO-10 alert rules (bd-ft3hk / BD-M) so the alert has a runbook_url to resolve. The procedures fill in as the team accumulates incident experience after BD-D/E/F deploy the metric emitters. If you are the first responder to this alert, the structure below is your skeleton — capture what you do in real time and feed it back into this file via a follow-up bead.
+> **STUB: section headers + metric names present, real triage and resolution procedures pending.** This runbook ships at v0.17.1 alongside the SLO-10 alert rules (bd-ft3hk / BD-M) so the alert has a runbook_url to resolve. The procedures fill in as the team accumulates incident experience after BD-D/E/F deploy the metric emitters. If you are the first responder to this alert, the structure below is your skeleton. Capture what you do in real time and feed it back into this file via a follow-up bead.
 
 - **Severity**: P3 warning
 - **Owner**: SRE
@@ -9,7 +9,7 @@
 
 **Alerts that route here:**
 
-- `ECMDedupCandidateLookupLatencyHigh` (warning) — `histogram_quantile(0.99, ecm_dedup_candidate_lookup_duration_seconds_bucket) > 500ms` sustained 10m
+- `ECMDedupCandidateLookupLatencyHigh` (warning): `histogram_quantile(0.99, ecm_dedup_candidate_lookup_duration_seconds_bucket) > 500ms` sustained 10m
 
 **SLO:** [SLO-10a Candidate Lookup Latency](../sre/slos.md#slo-10-channel-deduplication-v0171-dedup-epic-bd-1v4ht-bd-ft3hk)
 
@@ -23,7 +23,7 @@ The histogram metric `ecm_dedup_candidate_lookup_duration_seconds` is emitted by
 
 ## Why this matters
 
-The merge modal is interactive UI — operators drag, drop, and expect a candidate list within "instant" human perception (~250ms is the upper bound for "feels instant"). The 500ms SLO threshold leaves 2× headroom, so a sustained breach means the matcher has stopped serving the interaction smoothly. Operators perceive stalls as bugs, not slow queries, and the dedup epic loses operator trust quickly.
+The merge modal is interactive UI: operators drag, drop, and expect a candidate list within "instant" human perception (~250ms is the upper bound for "feels instant"). The 500ms SLO threshold leaves 2× headroom, so a sustained breach means the matcher has stopped serving the interaction smoothly. Operators perceive stalls as bugs, not slow queries, and the dedup epic loses operator trust quickly.
 
 ## Symptoms
 
@@ -37,18 +37,18 @@ The merge modal is interactive UI — operators drag, drop, and expect a candida
    ```promql
    histogram_quantile(0.99, sum by (le) (rate(ecm_dedup_candidate_lookup_duration_seconds_bucket[5m])))
    ```
-   If `NaN`, the matcher is not being called (no current activity) — the alert should not have fired; treat as a false positive and capture for tuning.
+   If `NaN`, the matcher is not being called (no current activity). The alert should not have fired; treat as a false positive and capture for tuning.
 
 2. **TODO: pull recent request logs.** Once BD-D logs the matcher invocation with timing, the grep pattern goes here. Expected format something like:
    ```bash
    docker logs ecm-ecm-1 --since 15m | grep '\[DEDUP\] candidate_lookup'
    ```
 
-3. **Check broader backend latency.** If `ECMHTTPLatencyHighP95` is also firing, this is not dedup-specific — go to [http_latency.md](./http_latency.md) first. Otherwise the matcher is the regression.
+3. **Check broader backend latency.** If `ECMHTTPLatencyHighP95` is also firing, this is not dedup-specific. Go to [http_latency.md](./http_latency.md) first. Otherwise the matcher is the regression.
 
 ## Diagnosis
 
-TODO — fill in as the team accumulates incident experience. Initial branches to investigate:
+TODO: fill in as the team accumulates incident experience. Initial branches to investigate:
 
 ### Branch A: The dedup index regressed
 
@@ -72,7 +72,7 @@ The matcher shares the database with the Channel Pipeline, bulk-merge, and M3U i
 
 ## Resolution
 
-TODO — fill in once the team has resolved at least one real incident. Likely categories:
+TODO: fill in once the team has resolved at least one real incident. Likely categories:
 
 1. **Index regression**: re-create the dedup index, re-run query plan check.
 2. **Per-channel loop**: revert the offending caller change, add a regression test.
@@ -83,7 +83,7 @@ TODO — fill in once the team has resolved at least one real incident. Likely c
 If the alert persists more than 1 hour after triage:
 
 - Page on-call SRE with: current p99, log snippets from `[DEDUP]` lines, output of the query-plan check.
-- Cross-reference `ECMDedupMergeApiErrorRateHigh` — if both are firing, treat as a dedup-subsystem incident, not isolated latency.
+- Cross-reference `ECMDedupMergeApiErrorRateHigh`: if both are firing, treat as a dedup-subsystem incident, not isolated latency.
 
 ## Post-incident
 

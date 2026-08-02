@@ -43,7 +43,7 @@ The file is stored and served by Dispatcharr. The `url` field is a relative path
 
 Dispatcharr models all EPG sources with a single `EPGSource` resource keyed by a
 `source_type` enum: `xmltv`, `schedules_direct`, or `dummy`. Schedules Direct is
-**not** a separate mechanism — just a `source_type` value with credential fields
+**not** a separate mechanism. It is just a `source_type` value with credential fields
 and SD-specific account endpoints.
 
 ### EPG source CRUD
@@ -59,8 +59,8 @@ and SD-specific account endpoints.
 
 - `source_type`: `"schedules_direct"`
 - `username`: SD account username
-- `password`: SD account password — **write-only** (Dispatcharr never returns it
-  and SHA1-hashes it at fetch time). ECM uses preserve-on-omit: omit `password`
+- `password`: SD account password. It is **write-only**: Dispatcharr never returns it
+  and SHA1-hashes it at fetch time. ECM uses preserve-on-omit: omit `password`
   on PATCH to keep the stored one.
 - `custom_properties` (JSON bag): `logo_style` (`dark`/`white`/`gray`/`light`),
   `poster_style`, `auto_apply_epg_logos`, `fetch_posters`. The SD lineups GET also

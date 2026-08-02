@@ -18,7 +18,7 @@ curl -o ~/.claude/commands/analyze-rules.md \
   https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/docs/commands/analyze-rules.md
 ```
 
-The command is available immediately — no restart needed.
+The command is available immediately, no restart needed.
 
 ## Usage
 

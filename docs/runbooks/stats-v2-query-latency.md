@@ -2,15 +2,15 @@
 
 > Stats v2 query latency has breached the SLO-9 target. The `/api/stats/*` endpoints are responding slowly, causing visible stalls on the Stats page.
 
-- **Severity**: Warning (non-paging; SLO-9 is warn-only — stats panels are admin tooling, not a user-facing outage)
+- **Severity**: Warning (non-paging; SLO-9 is warn-only, stats panels are admin tooling, not a user-facing outage)
 - **Owner**: SRE
 - **Last reviewed**: 2026-05-25
 - **Related beads**: `enhancedchannelmanager-skqln.11`, `enhancedchannelmanager-zppgx`
 
 **Alerts that route here:**
 
-- `ECMStatsQueryLatencyHigh` (warning) — p95 > 800ms sustained 15m
-- `ECMStatsQueryLatencyP99High` (warning) — p99 > 2s sustained 15m
+- `ECMStatsQueryLatencyHigh` (warning): p95 > 800ms sustained 15m
+- `ECMStatsQueryLatencyP99High` (warning): p99 > 2s sustained 15m
 
 **SLO:** [SLO-9 Stats v2 Query Latency](../sre/slos.md#slo-9-stats-v2-query-latency)
 
@@ -70,7 +70,7 @@ docker exec ecm-ecm-1 sqlite3 /config/journal.db \
 Look for `SCAN` (no index) vs `SEARCH` (index used). A `SCAN` on a large table is the problem.
 
 **Recovery:**
-1. The structural fix is `bd-7i2vv` (rollup tables + retention policy) — if not yet shipped, open a priority bump bead.
+1. The structural fix is `bd-7i2vv` (rollup tables + retention policy): if not yet shipped, open a priority bump bead.
 2. Interim: run the nightly rollup task manually to prune old raw rows (if rollup task exists):
    ```bash
    docker exec ecm-ecm-1 curl -s -X POST http://localhost:<port>/api/tasks/stats_v2_rollup/run
@@ -90,7 +90,7 @@ docker logs ecm-ecm-1 --since 30m \
 A WAL file growing large (`ecm_database_wal_size_bytes` > 200 MB per the database-size alert) means `wal_autocheckpoint` is not firing fast enough.
 
 **Recovery:**
-1. Force a manual checkpoint (takes an exclusive lock briefly — do during low-traffic window):
+1. Force a manual checkpoint (takes an exclusive lock briefly, do during low-traffic window):
    ```bash
    docker exec ecm-ecm-1 sqlite3 /config/journal.db "PRAGMA wal_checkpoint(TRUNCATE);"
    ```
@@ -98,13 +98,13 @@ A WAL file growing large (`ecm_database_wal_size_bytes` > 200 MB per the databas
    ```bash
    docker exec ecm-ecm-1 ls -lh /config/journal.db-wal
    ```
-3. If the WAL re-grows immediately, a long-running reader is preventing checkpointing — see [database-size-warn runbook](./database-size-warn.md) for the WAL-vs-body triage table.
+3. If the WAL re-grows immediately, a long-running reader is preventing checkpointing. See [database-size-warn runbook](./database-size-warn.md) for the WAL-vs-body triage table.
 
 ### Branch C: Missing or unused index on a specific endpoint
 
 **When:** Only one endpoint is slow (e.g., `/api/stats/watch-time/{user_id}` but not `/api/stats/channel-bandwidth`).
 
-**Verify — identify the query:**
+**Verify: identify the query:**
 ```bash
 docker logs ecm-ecm-1 --since 30m \
   | grep '\[STATS\]' \
@@ -118,9 +118,9 @@ Then run the relevant query with `EXPLAIN QUERY PLAN` in sqlite3 to confirm whet
    ```bash
    docker exec ecm-ecm-1 sqlite3 /config/journal.db "ANALYZE;"
    ```
-   Then re-run `EXPLAIN QUERY PLAN` — ANALYZE refreshes the statistics that guide the planner.
-2. If the index is genuinely missing: file a bead against the missing index. Do not add ad-hoc indexes to production — changes go through Alembic migrations. Document the missing index as a backlog candidate.
-3. Cross-reference: the in-CI benchmark gate (`skqln.10`) is supposed to catch missing-index regressions before they reach production. If the gate didn't catch it, the bench fixture may not cover the affected table state — note this in the bead.
+   Then re-run `EXPLAIN QUERY PLAN`: ANALYZE refreshes the statistics that guide the planner.
+2. If the index is genuinely missing: file a bead against the missing index. Do not add ad-hoc indexes to production. Changes go through Alembic migrations. Document the missing index as a backlog candidate.
+3. Cross-reference: the in-CI benchmark gate (`skqln.10`) is supposed to catch missing-index regressions before they reach production. If the gate didn't catch it, the bench fixture may not cover the affected table state: note this in the bead.
 
 ### Branch D: N+1 query pattern from a frontend Stats panel
 
@@ -145,7 +145,7 @@ If the same endpoint appears dozens of times in a short window: a frontend compo
 - **All endpoints slow, sustained**: Branch A (table size) → prune or rollup; or Branch B (WAL stall) → checkpoint.
 - **One endpoint slow**: Branch C (index miss) → ANALYZE + file bead for structural fix.
 - **Episodic, correlates with user actions**: Branch D (N+1) → frontend bead.
-- **Write failures co-firing**: start with [stats-v2-write-failures.md](./stats-v2-write-failures.md) — query slowness is likely downstream of the write-side root cause.
+- **Write failures co-firing**: start with [stats-v2-write-failures.md](./stats-v2-write-failures.md): query slowness is likely downstream of the write-side root cause.
 - **Never skip the rollup task as a "fix"**: if `bd-7i2vv` retention is not yet shipped, manual pruning is a stopgap, not a solution. File the priority bump and track it.
 
 ## Escalation
@@ -165,8 +165,8 @@ SLO-9 is warn-only. This alert does not require 3 AM paging. Triage during busin
 ## See also
 
 - [SLO-9: Stats v2 Query Latency](../sre/slos.md#slo-9-stats-v2-query-latency)
-- [`backend/routers/stats.py`](../../backend/routers/stats.py) — Stats endpoint implementations
-- [`backend/observability.py`](../../backend/observability.py) — `ecm_stats_query_duration_seconds` histogram registration
-- [stats-v2-write-failures.md](./stats-v2-write-failures.md) — write-side context (Branch B overlap)
-- [database-size-warn.md](./database-size-warn.md) — WAL checkpoint triage (Branch B)
-- [stats-v2-row-growth.md](./stats-v2-row-growth.md) — storage growth context (Branch A)
+- [`backend/routers/stats.py`](../../backend/routers/stats.py): Stats endpoint implementations
+- [`backend/observability.py`](../../backend/observability.py): `ecm_stats_query_duration_seconds` histogram registration
+- [stats-v2-write-failures.md](./stats-v2-write-failures.md): write-side context (Branch B overlap)
+- [database-size-warn.md](./database-size-warn.md): WAL checkpoint triage (Branch B)
+- [stats-v2-row-growth.md](./stats-v2-row-growth.md): storage growth context (Branch A)

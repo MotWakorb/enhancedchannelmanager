@@ -1,8 +1,5 @@
 # ECM Retained Task Reference
 
-> **Audience:** Operators who need detailed task instructions while the
-> destination-specific `gsnw0` tutorials are still being completed.
-
 This maintained reference preserves the actionable material from ECM's former
 single-file guide. Navigation has been updated for the grouped sidebar and
 current page names. For the workspace mental model, exact keyboard behavior,
@@ -454,7 +451,7 @@ For channels without upstream guide data, use **Dummy EPG Profiles** at the
 bottom of **EPG Manager**. Create a profile, configure its templates, and use
 **Add to Dispatcharr** or copy its XMLTV URL. The older workflow that created
 a dummy source directly is deprecated; existing legacy sources remain
-editable. See [EPG — Dummy EPG: profiles, not legacy
+editable. See [Dummy EPG profiles, not legacy
 sources](epg/index.md#dummy-epg).
 
 ### Bulk EPG Assignment
@@ -617,25 +614,25 @@ Between each condition is a clickable **AND/OR toggle**. Click it to switch betw
 
 **AND** means "also require this." All conditions connected by AND must be true together for a match.
 
-**OR** means "or alternatively match this." OR creates a separate group of conditions — if *any* OR-group fully matches, the stream matches the rule.
+**OR** means "or alternatively match this." OR creates a separate group of conditions: if *any* OR-group fully matches, the stream matches the rule.
 
 **Order of operations:** AND binds tighter than OR, just like multiplication before addition in math. Conditions connected by AND are grouped together first, then OR separates those groups.
 
-**Example 1 — Simple AND (all must match):**
+**Example 1: Simple AND (all must match):**
 
 ```
 Stream Name contains "ESPN"  AND  Stream Group contains "US"
 ```
 Matches only streams with "ESPN" in the name that are also in a "US" group. Both must be true.
 
-**Example 2 — Simple OR (either can match):**
+**Example 2: Simple OR (either can match):**
 
 ```
 Stream Name contains "ESPN"  OR  Stream Name contains "Fox Sports"
 ```
 Matches streams with either "ESPN" or "Fox Sports" in the name.
 
-**Example 3 — Mixed AND/OR (order of operations):**
+**Example 3: Mixed AND/OR (order of operations):**
 
 ```
 Stream Name contains "ESPN"  AND  Quality at least 1080p  OR  Stream Name contains "Fox Sports"  AND  Quality at least 720p
@@ -646,7 +643,7 @@ This is evaluated as two groups:
 
 A stream matches if *either* group fully matches. So "ESPN HD 1080p" matches via Group 1, and "Fox Sports 720p" matches via Group 2, but "ESPN 480p" does not match (fails Group 1's quality requirement, and doesn't match Group 2 at all).
 
-**Example 4 — Common pattern for multi-provider merging:**
+**Example 4: Common pattern for multi-provider merging:**
 
 ```
 Normalized Match in Group = "Documentaries"  AND  Stream Group matches "^US"
@@ -659,13 +656,13 @@ Matches any stream from a US group whose normalized name matches a channel in yo
 
 This condition type is particularly useful for merging streams into existing channels. It normalizes both the stream name (stripping country prefixes like "US:") and channel names (stripping number prefixes like "106 |") using the normalization engine, then checks if the normalized stream name matches any channel in the selected group. The group selector only shows channel groups that actually contain channels.
 
-The **Global** variant checks against all channel groups at once, while the **Not In** variant inverts the match — useful for finding streams that don't yet have a corresponding channel.
+The **Global** variant checks against all channel groups at once, while the **Not In** variant inverts the match, useful for finding streams that don't yet have a corresponding channel.
 
 #### Date Expansion in Regex
 
 Regex conditions support date patterns that automatically expand to match current dates. For example, a pattern like `{date:YYYY-MM-DD}` in a regex condition will expand to match today's date. This is useful for matching streams that include dates in their names (e.g., PPV events). Date expansion supports patterns up to 90 days out to prevent regex overload. Contributed by @lpukatch.
 
-Saving a rule validates the *expanded* pattern, so a date token like `{date+3d}` saves without a regex-validation error — the same expansion the pipeline applies when the rule actually runs.
+Saving a rule validates the *expanded* pattern, so a date token like `{date+3d}` saves without a regex-validation error. This is the same expansion the pipeline applies when the rule actually runs.
 
 ### Actions
 
@@ -1033,7 +1030,7 @@ Each method supports:
 ### Settings Navigation
 
 Open **System** → **Settings**. The sidebar swaps its groups for the
-**Settings sections** list — grouped as **Connections**, **Channel
+**Settings sections** list, grouped as **Connections**, **Channel
 Processing**, **Notifications & Reports**, **Upkeep**, **Workspace**, and (for
 administrators) **Administration**. Select **Back** to restore the main
 groups. Contextual links elsewhere in ECM can open the correct section
@@ -1108,7 +1105,7 @@ If any M3U account has multiple profiles, a **Profile Distribution Strategy** dr
 | **Round Robin** | Rotates across profiles one at a time so each gets an equal share of probe connections. Good for spreading usage evenly. |
 | **Least Loaded** | Picks the profile with the most remaining headroom (highest ratio of free connections). Best for maximizing throughput when profiles have different connection limits. |
 
-This setting only affects probing — it does not change how Dispatcharr routes viewer traffic.
+This setting only affects probing. It does not change how Dispatcharr routes viewer traffic.
 
 ### Black Screen Detection
 
@@ -1119,8 +1116,8 @@ streams. Detailed black-screen state belongs to an assigned stream row. The
 unassigned **Streams** inventory intentionally shows neither probe health nor
 strike details.
 
-- **Enable/Disable** — Checkbox in the Stream Probing section
-- **Sample Duration** — How long to sample each stream (3-30 seconds, default 5). Longer samples are more accurate but slower.
+- **Enable/Disable**: Checkbox in the Stream Probing section
+- **Sample Duration**: How long to sample each stream (3-30 seconds, default 5). Longer samples are more accurate but slower.
 
 ### Low FPS Detection
 
@@ -1128,8 +1125,8 @@ ECM flags assigned streams whose framerate falls below the configured
 threshold. Channel rows summarize that state; the assigned stream row carries
 the probe detail. The **Streams** inventory does not show a low-FPS badge.
 
-- **Threshold** — Configurable in Settings → Maintenance via a dropdown (5, 10, 15, or 20 FPS, default 20)
-- **Always On** — No enable/disable toggle since it has zero overhead
+- **Threshold**: Configurable in Settings → Maintenance via a dropdown (5, 10, 15, or 20 FPS, default 20)
+- **Always On**: No enable/disable toggle since it has zero overhead
 
 Both black screen and low FPS counts appear in probe progress notifications, probe history, and the notification center.
 
@@ -1138,7 +1135,7 @@ Both black screen and low FPS counts appear in probe progress notifications, pro
 The strikeout system helps you identify and clean up streams that consistently fail probe checks.
 
 **How It Works:**
-1. Each stream tracks its **consecutive probe failures** — the counter resets when a probe succeeds
+1. Each stream tracks its **consecutive probe failures**: the counter resets when a probe succeeds
 2. When a stream exceeds the configurable **strike threshold** (set in Settings → Maintenance), it is flagged as "struck out"
 3. **Strike badges** appear on assigned stream rows in Channel Manager,
    showing the failure count. They never appear in the **Streams** inventory.
@@ -1485,7 +1482,7 @@ The **subsystem tag** (e.g., `[AUTO-CREATE-ENGINE]`) tells you exactly which par
 | Prefix | Description |
 |-|-|
 | `[AUTO-CREATE]` | Auto-creation rule management (CRUD via API) |
-| `[AUTO-CREATE-ENGINE]` | Core pipeline — stream fetching, rule matching, sorting, execution |
+| `[AUTO-CREATE-ENGINE]` | Core pipeline: stream fetching, rule matching, sorting, execution |
 | `[AUTO-CREATE-EVAL]` | Per-condition evaluation (which streams match which rules) |
 | `[AUTO-CREATE-EXEC]` | Action execution (channel creation, merging, priority changes) |
 | `[AUTO-CREATE-SCHEMA]` | Rule schema validation (conditions and actions) |

@@ -238,8 +238,8 @@ E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shel
 
 All five runs passed, totaling 40/40 checks. This establishes the causal class:
 the assertions lacked a deterministic completed-layout boundary. The historical
-failure artifacts do not identify which individual subcondition—async task
-content, font readiness, or an active CSS/focus/theme transition—was decisive
+failure artifacts do not identify which individual subcondition (async task
+content, font readiness, or an active CSS/focus/theme transition) was decisive
 in each occurrence, so no narrower subcondition claim is made. The
 machine-readable run record is
 [`evidence/a0ekz-layout-settling-runs.json`](evidence/a0ekz-layout-settling-runs.json).

@@ -1,4 +1,4 @@
-# Runbook: Disaster Recovery — ECM Configuration Restore
+# Runbook: Disaster Recovery (ECM Configuration Restore)
 
 > Restore ECM + Dispatcharr configuration from a DBAS backup artifact after host failure, data loss, or a corrupt Dispatcharr instance.
 
@@ -29,7 +29,7 @@
 
 ## Diagnosis
 
-### Step 1 — Confirm you have a usable backup
+### Step 1: Confirm you have a usable backup
 
 ```bash
 ls -lh /config/backups/ecm-backup-*.zip
@@ -39,7 +39,7 @@ Expected: one or more `.zip` files sorted by timestamp. The most recent is the b
 
 If no local backup exists, check your configured cloud destinations (S3 bucket, WebDAV server, GDrive folder) for the most recent artifact.
 
-### Step 2 — Verify the artifact integrity
+### Step 2: Verify the artifact integrity
 
 ```bash
 sha256sum -c /config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
@@ -49,15 +49,15 @@ Expected output: `ecm-backup-YYYY-MM-DD_HHMMSS.zip: OK`
 
 If the sidecar is absent or the hash does not match, the artifact is corrupted. Use an earlier backup.
 
-### Step 3 — Check ECM is running and can reach Dispatcharr
+### Step 3: Check ECM is running and can reach Dispatcharr
 
 ```bash
 docker exec ecm-ecm-1 curl -s http://localhost:8080/api/health/ready | python3 -m json.tool
 ```
 
-Expected: `"dispatcharr": "ok"` (or equivalent healthy state). If Dispatcharr is unreachable, resolve that first — the restore pipeline writes directly to the Dispatcharr API.
+Expected: `"dispatcharr": "ok"` (or equivalent healthy state). If Dispatcharr is unreachable, resolve that first. The restore pipeline writes directly to the Dispatcharr API.
 
-### Step 4 — Determine if the artifact is encrypted
+### Step 4: Determine if the artifact is encrypted
 
 ```bash
 python3 -c "
@@ -67,13 +67,13 @@ with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
 "
 ```
 
-If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact — go to an older unencrypted backup.
+If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact. Go to an older unencrypted backup.
 
 ---
 
 ## Resolution
 
-### Phase 1 — Pre-restore (5 minutes)
+### Phase 1: Pre-restore (5 minutes)
 
 **1.1 Take a fresh backup of current state (if any state exists).**
 
@@ -91,12 +91,12 @@ Or use the UI: **Settings → Backup & Restore → Back Up Now**.
 
 Go to **Settings → Backup & Restore → Restore DBAS Backup** in the ECM UI.
 
-### Phase 2 — Upload and validate (2 minutes)
+### Phase 2: Upload and validate (2 minutes)
 
 **2.1** Upload the backup `.zip` artifact. If it is encrypted, enter the passphrase when prompted.
 
 ECM validates:
-- Decompression-bomb check (header scan only — nothing decompressed).
+- Decompression-bomb check (header scan only, nothing decompressed).
 - `manifest.json` presence and integrity.
 - `schema_version` compatibility (artifact must not be newer than this ECM build).
 - Per-member SHA-256 verification.
@@ -105,9 +105,9 @@ If validation fails, stop and use an older backup.
 
 **2.2** Note the reported `schema_version` and `app_version` from the manifest display.
 
-### Phase 3 — Dry-run preview (3 minutes)
+### Phase 3: Dry-run preview (3 minutes)
 
-**3.1** Click **Preview** (default mode — no changes are written).
+**3.1** Click **Preview** (default mode, no changes are written).
 
 **3.2** Review the per-category counts:
 
@@ -122,10 +122,10 @@ If validation fails, stop and use an older backup.
 **3.3** If counts look wrong: verify you uploaded the correct artifact. Do not apply if the category counts are significantly lower than expected.
 
 **3.4** Check for pre-flight problems in the report notes. Common ones:
-- `unresolved_fk_reference` — the backup's channels reference groups/profiles not in the archive. Ensure channel groups are in the restore selection.
-- `duplicate_unique_name` — duplicate names in one category. Contact support — this should not occur in an ECM-produced artifact.
+- `unresolved_fk_reference`: the backup's channels reference groups/profiles not in the archive. Ensure channel groups are in the restore selection.
+- `duplicate_unique_name`: duplicate names in one category. Contact support. This should not occur in an ECM-produced artifact.
 
-### Phase 4 — Apply (15–30 minutes depending on logo count)
+### Phase 4: Apply (15–30 minutes depending on logo count)
 
 **4.1** Click **Apply these changes**.
 
@@ -146,15 +146,15 @@ If validation fails, stop and use an older backup.
 
 **4.4** Wait for the restore-complete report.
 
-### Phase 5 — Interpret the result
+### Phase 5: Interpret the result
 
 | Outcome | Action |
 |-|-|
-| **Success** | Go to Phase 6 — verification. |
-| **Restore failed — state rolled back** | The rollback ran cleanly. Instance is at pre-restore state. Diagnose the failure reason in the report notes and retry. See Phase 5a. |
-| **Restore failed — rollback incomplete** | **Critical — stop.** See Phase 5b. |
+| **Success** | Go to Phase 6: verification. |
+| **Restore failed: state rolled back** | The rollback ran cleanly. Instance is at pre-restore state. Diagnose the failure reason in the report notes and retry. See Phase 5a. |
+| **Restore failed: rollback incomplete** | **Critical: stop.** See Phase 5b. |
 
-**Phase 5a — Rolled-back failure:**
+**Phase 5a: Rolled-back failure:**
 
 Read the notes section. Common causes:
 - Dispatcharr returned an API error for a specific entity. Check Dispatcharr logs: `docker logs dispatcharr 2>&1 | tail -100`.
@@ -163,7 +163,7 @@ Read the notes section. Common causes:
 
 After resolving the cause, re-attempt from Phase 3.
 
-**Phase 5b — Rollback incomplete (instance in partial state):**
+**Phase 5b: Rollback incomplete (instance in partial state):**
 
 The restore created some entities and could not roll them back. The report lists the entity IDs.
 
@@ -177,7 +177,7 @@ curl -s -X DELETE http://dispatcharr:8080/api/channel-groups/ID \
 
 Repeat for each listed entity type and ID. Once all residue is deleted, take a fresh local backup and retry the restore from Phase 3.
 
-### Phase 6 — Verification (5 minutes)
+### Phase 6: Verification (5 minutes)
 
 **6.1** Navigate to **Channels** in ECM and confirm the channel count matches the backup.
 
@@ -193,7 +193,7 @@ curl -s -X POST http://localhost:8080/api/tasks/m3u_refresh/run \
 
 **6.5** Test playback on one channel per M3U provider to confirm stream assignment worked.
 
-**6.6** If logos are missing (red banner on restore-complete), this is a warning — channels work. Re-upload logos manually or re-run an EPG logo match.
+**6.6** If logos are missing (red banner on restore-complete), this is a warning: channels work. Re-upload logos manually or re-run an EPG logo match.
 
 ---
 
@@ -221,7 +221,7 @@ If the restore repeatedly fails or if the rollback-incomplete state cannot be re
 ## References
 
 - [Backup & Restore overview](../user_guide/backup-restore/backup-overview.md)
-- [Restore a backup — user guide](../user_guide/backup-restore/restore-a-backup.md)
+- [Restore a backup: user guide](../user_guide/backup-restore/restore-a-backup.md)
 - [Troubleshoot a restore](../user_guide/backup-restore/troubleshoot-restore.md)
-- ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`) — the restore pipeline design
-- Threat model (`docs/security/threat_model_dbas_import.md`) — restore security controls
+- ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`): the restore pipeline design
+- Threat model (`docs/security/threat_model_dbas_import.md`): restore security controls

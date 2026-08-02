@@ -1,12 +1,12 @@
 # Runbook: ECM Readiness Sub-check Latency
 
-> **Stub** — scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
+> **Stub**: scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
 > when that lands.
 
-**Alerts that route here (warning severity — informational only):**
-- `ECMReadinessDatabaseCheckSlow` — database sub-check p95 > 50ms for 10m
-- `ECMReadinessDispatcharrCheckSlow` — dispatcharr sub-check p95 > 500ms for 10m
-- `ECMReadinessFfprobeCheckSlow` — ffprobe sub-check p95 > 100ms for 10m
+**Alerts that route here (warning severity, informational only):**
+- `ECMReadinessDatabaseCheckSlow`: database sub-check p95 > 50ms for 10m
+- `ECMReadinessDispatcharrCheckSlow`: dispatcharr sub-check p95 > 500ms for 10m
+- `ECMReadinessFfprobeCheckSlow`: ffprobe sub-check p95 > 100ms for 10m
 
 **SLO:** [SLO-4 Readiness Sub-check Latency](../sre/slos.md#slo-4-readiness-sub-check-latency-informational)
 
@@ -16,7 +16,7 @@
 
 Readiness sub-check latency is a **leading indicator**, not a user-impacting failure. A slow sub-check is a heads-up that one of the production SLOs (latency or availability) is about to breach. Treat these alerts as "look at this now while you still have time" rather than "wake up at 3am."
 
-If the related production SLO alert (`ECMReadinessDown`, `ECMHTTPLatencyHighP95`) also fires, escalate to that runbook — the warning here was the early signal for that real incident.
+If the related production SLO alert (`ECMReadinessDown`, `ECMHTTPLatencyHighP95`) also fires, escalate to that runbook: the warning here was the early signal for that real incident.
 
 ## Diagnosis
 
@@ -46,5 +46,5 @@ For a warning-only alert, mitigation is typically "open an investigative ticket,
 ## See also
 
 - [SLO document](../sre/slos.md)
-- [`backend/routers/health.py`](../../backend/routers/health.py) — sub-check implementations with `_timed` wrapper
+- [`backend/routers/health.py`](../../backend/routers/health.py): sub-check implementations with `_timed` wrapper
 - Production SLO runbooks: [readiness](./readiness_availability.md), [latency](./http_latency.md), [error rate](./http_error_rate.md)

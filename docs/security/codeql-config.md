@@ -1,4 +1,4 @@
-# CodeQL Configuration — Single Source of Truth
+# CodeQL Configuration: Single Source of Truth
 
 > Operational reference for the CodeQL static analysis pipeline.
 > Use this to add/remove rules, audit current configuration, or verify there
@@ -6,7 +6,7 @@
 
 - **Owner**: Security Engineer (rule decisions) + Project Engineer (workflow plumbing)
 - **Scope**: First-party Python and TypeScript code in this repo
-- **Authoritative ADR**: [`docs/adr/ADR-005-code-security-gating-strategy.md`](../adr/ADR-005-code-security-gating-strategy.md) — gating policy and dismissal categories
+- **Authoritative ADR**: [`docs/adr/ADR-005-code-security-gating-strategy.md`](../adr/ADR-005-code-security-gating-strategy.md): gating policy and dismissal categories
 - **Last reviewed**: 2026-05-25 (bd-aqu3f path-scoping investigation)
 
 ## Single Source of Truth
@@ -16,7 +16,7 @@ There is **exactly one** CodeQL scan configured for this repository:
 | Layer | Location | Owns |
 |-|-|-|
 | **Workflow** | [`.github/workflows/build.yml`](../../.github/workflows/build.yml), job `codeql-analysis` | When CodeQL runs, language matrix, action version, delta-zero gate |
-| **Rule config** | [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) | Query suite, query exclusions (repo-wide only — see §Path-scoping limitation) |
+| **Rule config** | [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) | Query suite, query exclusions (repo-wide only; see §Path-scoping limitation) |
 
 GitHub-managed **Default Setup is `not-configured`** for this repository (verified
 2026-04-23, see "Verifying no Default-Setup drift" below). All historical
@@ -42,15 +42,15 @@ Default Setup cannot satisfy:
    runtime sanitizer in `backend/log_utils.py` makes the static-analysis flow
    model wrong for our code), `py/unused-global-variable` repository-wide
    (Alembic introspection pattern + global one-shot latch pattern in config.py
-   and bandwidth_tracker.py — both produce pervasive false positives; see PR #110,
+   and bandwidth_tracker.py: both produce pervasive false positives; see PR #110,
    alerts 1466-1469, and bd-mqtrq), and `py/weak-sensitive-data-hashing`
    repository-wide (`_settings_hash()` in dispatcharr_client.py derives a
    process-local HMAC-SHA-256 cache key, not a stored password; see bd-jmi1c
-   P2-3). All three exclusions are repo-wide — see §Path-scoping limitation
+   P2-3). All three exclusions are repo-wide; see §Path-scoping limitation
    below for why path-scoped exclusions are not available. Default Setup does not
    support `query-filters` at all.
-3. **Language matrix control.** We pin to `['javascript-typescript', 'python']`
-   — Default Setup's auto-language detection currently expands to five
+3. **Language matrix control.** We pin to `['javascript-typescript', 'python']`:
+   Default Setup's auto-language detection currently expands to five
    languages including `actions`, `javascript`, and `typescript` (see API
    output in the verification command below), most of which would either
    double-scan or scan irrelevant content.
@@ -64,7 +64,7 @@ Default Setup cannot satisfy:
 ## How to add or remove a query rule
 
 All rule changes go through `.github/codeql/codeql-config.yml`. Do not edit
-the workflow for rule selection — only for trigger conditions, language
+the workflow for rule selection: only for trigger conditions, language
 matrix, or action versions.
 
 ### Adding a new query exclusion (false positive that recurs)
@@ -73,7 +73,7 @@ matrix, or action versions.
    sanitizer is the justification, identify the test that proves the
    sanitizer fires for the relevant input class (ADR-005 Phase 1 dismissal
    policy item 2, sub-case "sanitized upstream").
-2. **Note: all config-level exclusions are repo-wide** — see §Path-scoping
+2. **Note: all config-level exclusions are repo-wide**: see §Path-scoping
    limitation below. Per-file suppression is not available at the config level;
    if you need to suppress only in a specific file, the only current option is
    per-alert API dismissal (ADR-005 category (b)).
@@ -89,7 +89,7 @@ matrix, or action versions.
 5. **Open a PR.** Per ADR-005 Phase 1 policy item 4, config-level exclusions
    require Security Engineer review (architectural exclusion is stricter
    than per-alert dismissal). Reference the original alerts and the dismissal
-   record — see the existing exclusion comments in the config file as the
+   record; see the existing exclusion comments in the config file as the
    model.
 
 ### Removing an exclusion
@@ -123,7 +123,7 @@ protection updates.
 The official GitHub docs for customizing advanced setup CodeQL
 ([customizing-your-advanced-setup-for-code-scanning](https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning))
 document `id` and `tags` as the only valid properties under `query-filters.exclude`.
-The `paths:` sub-key has no effect — it is silently ignored by the action.
+The `paths:` sub-key has no effect: it is silently ignored by the action.
 
 **Evidence from bd-jmi1c / bd-aqu3f:** A `paths:`-scoped exclusion was added for
 `py/weak-sensitive-data-hashing` targeting `backend/dispatcharr_client.py`. The
@@ -136,11 +136,11 @@ repo-wide. The `paths:` sub-keys have been removed to reflect actual behavior.
 
 **Workarounds for path-limited suppression (when needed):**
 
-1. **Per-alert API dismissal** (ADR-005 category (b)) — dismiss the specific alert
+1. **Per-alert API dismissal** (ADR-005 category (b)): dismiss the specific alert
    via the GitHub Code Scanning API with a documented rationale. This is the only
    mechanism that currently works for file-scoped suppression. See bd-jmi1c for
    the dismissal pattern.
-2. **Custom QL pack with per-file path filters** — possible via a `.ql` pack that
+2. **Custom QL pack with per-file path filters**: possible via a `.ql` pack that
    wraps the standard query with a path predicate, but requires QL authoring
    expertise and maintenance overhead. Not recommended unless multiple path-scoped
    suppressions of the same rule are needed regularly.
@@ -173,11 +173,11 @@ The `state` field has three values to recognize:
 
 | State | Meaning | Action |
 |-|-|-|
-| `not-configured` | Default Setup never enabled, or explicitly disabled | OK — no drift |
-| `configured` | Default Setup is enabled in parallel with the custom workflow | **Drift — disable it** (Settings → Code security → Code scanning → Default setup → Disable) |
+| `not-configured` | Default Setup never enabled, or explicitly disabled | OK: no drift |
+| `configured` | Default Setup is enabled in parallel with the custom workflow | **Drift: disable it** (Settings → Code security → Code scanning → Default setup → Disable) |
 | `errored` | Default Setup attempted to configure and failed | Investigate; usually safe but log it |
 
-**Cross-check via analyses endpoint** — every analysis on the repo should
+**Cross-check via analyses endpoint**: every analysis on the repo should
 have `analysis_key = ".github/workflows/build.yml:codeql-analysis"`. If any
 analysis surfaces with a different `analysis_key` (e.g. `dynamic/github/codeql/...`
 indicating Default Setup), that's drift:
@@ -199,13 +199,13 @@ A second entry in the array is drift.
 
 ## Related references
 
-- [ADR-005: Code Security Gating Strategy](../adr/ADR-005-code-security-gating-strategy.md) — gating policy, dismissal categories, sequencing. Open Question 4 is the canonical decision to keep custom over Default Setup
-- [`.github/workflows/build.yml`](../../.github/workflows/build.yml) — workflow (job `codeql-analysis`)
-- [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) — query exclusions
-- [`backend/log_utils.py`](../../backend/log_utils.py) — runtime sanitizer justifying the `py/log-injection` exclusion
-- PR #108 — workflow-level delta-zero enforcement (substitute for UI merge protection rules)
-- PR #110 — Alembic `py/unused-global-variable` exclusion (bd-877dw)
-- Bead `enhancedchannelmanager-bsbr3` — investigation that produced this document
-- Bead `enhancedchannelmanager-jmi1c` — Dispatcharr `py/weak-sensitive-data-hashing` exclusion (P2-3 fix-forward)
-- Bead `enhancedchannelmanager-aqu3f` — path-scoping limitation investigation (2026-05-25)
-- Bead `enhancedchannelmanager-mqtrq` — `py/unused-global-variable` on global latch pattern (config.py)
+- [ADR-005: Code Security Gating Strategy](../adr/ADR-005-code-security-gating-strategy.md): gating policy, dismissal categories, sequencing. Open Question 4 is the canonical decision to keep custom over Default Setup
+- [`.github/workflows/build.yml`](../../.github/workflows/build.yml): workflow (job `codeql-analysis`)
+- [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml): query exclusions
+- [`backend/log_utils.py`](../../backend/log_utils.py): runtime sanitizer justifying the `py/log-injection` exclusion
+- PR #108: workflow-level delta-zero enforcement (substitute for UI merge protection rules)
+- PR #110: Alembic `py/unused-global-variable` exclusion (bd-877dw)
+- Bead `enhancedchannelmanager-bsbr3`: investigation that produced this document
+- Bead `enhancedchannelmanager-jmi1c`: Dispatcharr `py/weak-sensitive-data-hashing` exclusion (P2-3 fix-forward)
+- Bead `enhancedchannelmanager-aqu3f`: path-scoping limitation investigation (2026-05-25)
+- Bead `enhancedchannelmanager-mqtrq`: `py/unused-global-variable` on global latch pattern (config.py)

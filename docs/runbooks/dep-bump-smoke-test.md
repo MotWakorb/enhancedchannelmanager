@@ -7,14 +7,14 @@
 > dry-run gate in
 > [Dep-Bump Backend ASGI Regression](./dep-bump-backend-asgi-regression.md#pre-merge-dry-run-gate-pr-170-and-any-future-asgi-triplet-bump),
 > which exercises the rollback path before merge and verifies all four
-> `ecm_*` SLI families emit under synthetic traffic — the silent-SLI-
+> `ecm_*` SLI families emit under synthetic traffic: the silent-SLI-
 > degradation class of regression the smoke matrix does not cover.
 
-- **Severity**: Pre-merge gate (no paging) — workflow tool, not an incident runbook
+- **Severity**: Pre-merge gate (no paging), workflow tool, not an incident runbook
 - **Owner**: Project Engineer (run during dep-bump work); SRE (owns the underlying contract via ADR-001)
 - **Last reviewed**: 2026-04-23
 - **Related beads**: `enhancedchannelmanager-6rrl5.5` (this script), `enhancedchannelmanager-6rrl5` (epic), `enhancedchannelmanager-xnqgo` (ADR-001)
-- **Related ADR**: [ADR-001 — Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md)
+- **Related ADR**: [ADR-001: Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md)
 
 ## Alert / Trigger
 
@@ -71,7 +71,7 @@ docker rm -f <container-name>   # When you're done
 
 ## Resolution
 
-The script doesn't restore service — it gates a PR. If the smoke fails:
+The script doesn't restore service: it gates a PR. If the smoke fails:
 
 1. **Identify the broken contract** from the FAIL line.
 2. **Fix locally** (edit code, adjust requirements pin, update migration).
@@ -82,22 +82,22 @@ The script doesn't restore service — it gates a PR. If the smoke fails:
    `--no-build` reuses the existing `ecm-smoke:<sha>` image. If you changed `requirements.txt` or `package.json`, drop `--no-build` so a fresh image is built.
 4. **Repeat until green**, then open the PR. The CI gate will re-run the same checks against the GHCR-built image.
 
-If the smoke shows real fresh-image-only breakage (passes locally with `docker exec uv pip install` but fails fresh), that is exactly the silent-skew case ADR-001 is designed to catch — fix it before merging, do not work around it.
+If the smoke shows real fresh-image-only breakage (passes locally with `docker exec uv pip install` but fails fresh), that is exactly the silent-skew case ADR-001 is designed to catch. Fix it before merging; do not work around it.
 
 ## Escalation
 
 This is a developer workflow check, not a paging condition. Escalation paths:
 
 - **Script itself broken** (false positives, won't run on the host): file a bead and ping the SRE/Project Engineer who owns it. The script lives at `scripts/smoke_test_dev_container.sh`.
-- **CI gate disagrees with local result** (script passes locally, CI fails on the same SHA, or vice versa): that's a real ADR-001 finding — capture both logs, file a bead with the divergence, and post in the dep-bump epic (`bd-6rrl5`).
+- **CI gate disagrees with local result** (script passes locally, CI fails on the same SHA, or vice versa): that's a real ADR-001 finding. Capture both logs, file a bead with the divergence, and post in the dep-bump epic (`bd-6rrl5`).
 - **Script reports systemic regression across multiple dep bumps**: hold the affected dep PRs, open a bead under the epic, and propose either a code fix or a targeted update to the smoke matrix.
 
 ## Post-incident
 
-Not applicable — this is a pre-merge gate, not an incident response. After every dep-bump merge:
+Not applicable: this is a pre-merge gate, not an incident response. After every dep-bump merge:
 
 - [ ] Confirm the corresponding CI `build-amd64` / `dast-scan` / `trivy-scan` jobs were green on the PR (ADR-001 acceptance criterion 2).
-- [ ] If the local script passed but CI failed: file a bead under `bd-6rrl5` capturing the divergence — that's an ADR-001 gap to close.
+- [ ] If the local script passed but CI failed: file a bead under `bd-6rrl5` capturing the divergence. That's an ADR-001 gap to close.
 - [ ] If you discovered a check that should be in the matrix but isn't, edit `scripts/smoke_test_dev_container.sh`, add a row to the matrix above, and update this runbook in the same PR.
 
 ## Reference
@@ -126,12 +126,12 @@ Not applicable — this is a pre-merge gate, not an incident response. After eve
 
 ### Isolation guarantees
 
-- The script never touches the running `ecm-ecm-1` container or its image — it tags its image as `ecm-smoke:<short-sha>` and names the container `ecm-smoke-<short-sha>-<pid>`.
-- The smoke container binds to `127.0.0.1:<random-ephemeral-port>` only — never reachable from the network, never collides with the developer's running ECM port.
+- The script never touches the running `ecm-ecm-1` container or its image: it tags its image as `ecm-smoke:<short-sha>` and names the container `ecm-smoke-<short-sha>-<pid>`.
+- The smoke container binds to `127.0.0.1:<random-ephemeral-port>` only: never reachable from the network, never collides with the developer's running ECM port.
 - The smoke container uses `docker run --rm` and a cleanup trap so it tears itself down on success, failure, Ctrl-C, or terminal hangup (unless `--keep-container` is set).
 
 ### Related
 
-- [ADR-001 — Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md) — the contract this script implements
-- `.github/workflows/build.yml` — the CI counterpart (`build-amd64`, `dast-scan`, `trivy-scan` jobs)
-- Epic: `enhancedchannelmanager-6rrl5` — dep-bump children that consume this script
+- [ADR-001: Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md): the contract this script implements
+- `.github/workflows/build.yml`: the CI counterpart (`build-amd64`, `dast-scan`, `trivy-scan` jobs)
+- Epic: `enhancedchannelmanager-6rrl5`, dep-bump children that consume this script

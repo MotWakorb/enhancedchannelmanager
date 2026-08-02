@@ -2,7 +2,7 @@
 
 The rule analyzer surfaces structural and regex-style configuration
 bugs in Channel Pipeline rules **without running them**. Findings are
-advisory — they are warnings or info, never errors, and saves are
+advisory: they are warnings or info, never errors, and saves are
 never blocked. The analyzer is a support tool, not a gate.
 
 Bead: `enhancedchannelmanager-0gntx` (Phase 1).
@@ -16,7 +16,7 @@ POST /api/channel-pipeline/rules/analyze
 POST /api/channel-pipeline/rules/analyze/from-bundle   (multipart, file=<tar.gz>)
 ```
 
-(The deprecated `/api/auto-creation/...` alias still works — see `docs/api.md`.)
+(The deprecated `/api/auto-creation/...` alias still works. See `docs/api.md`.)
 
 The first analyzes the rules currently in the DB. The second analyzes
 `rules.yaml` (and, if present, `channel_groups_diagnostic.json`)
@@ -71,7 +71,7 @@ so the whole pattern matches every input at position 0.
 **Real-world example.** A user typed their M3U group prefix `UK|`
 into the "Matches (Regex)" field expecting a literal pipe, but the
 "Matches" operator interprets the value as regex and `UK|` reads as
-"UK or empty string" — every group matches.
+"UK or empty string". Every group matches.
 
 **Remediation.**
 - Switch the operator from "Matches (Regex)" to **Begins With** or
@@ -81,13 +81,13 @@ into the "Matches (Regex)" field expecting a literal pipe, but the
 
 ### `REGEX_REDUNDANT_ESCAPE_CARET`
 
-**Trigger.** Pattern starts with `^\^` — anchor immediately followed
+**Trigger.** Pattern starts with `^\^`: anchor immediately followed
 by an escaped (literal) caret.
 
 **Real-world example.** A user typed `^4K` into "Matches (Regex)",
 then the UI's escape pass added a backslash, producing `^\^4k`.
 Almost always a typo; the user meant either `^4K` (anchored) or
-`\^4K` (literal caret) — not both.
+`\^4K` (literal caret), not both.
 
 **Remediation.** Drop one of the carets. If you want "starts with
 4K", use `^4K`. If you want a literal caret somewhere, drop the `^`
@@ -98,13 +98,13 @@ anchor at position 0.
 **Trigger.** A `*_contains` operator's value contains substrings
 that suggest the user meant regex syntax: leading `^`, trailing `$`,
 `.*`, `.+`, or any of `\b`, `\B`, `\d`, `\D`, `\w`, `\W`, `\s`,
-`\S`. **Bare `|` is not flagged** — M3U groups commonly contain a
+`\S`. **Bare `|` is not flagged**: M3U groups commonly contain a
 literal pipe (`UK| MOVIES`), and substring search for `UK|` is a
 legitimate use of the Contains operator.
 
 **Real-world example.** A user typed `^4K` into "Stream Group
 Contains" thinking the `^` would anchor. Contains is substring
-match, so the search is for the literal characters `^4K` — which no
+match, so the search is for the literal characters `^4K`, which no
 group name contains, so the rule matches nothing.
 
 **Remediation.** Switch the operator to **Begins With** (and drop
@@ -168,14 +168,14 @@ endpoint does not currently fetch channel-group counts.
 
 **Trigger.** A rule with a `create_channel` action whose `if_exists`
 is `merge` or `merge_only`, on a rule whose `match_scope_target_group`
-is **off** (falsy). (`if_exists` is a flat key on the action JSON —
+is **off** (falsy). (`if_exists` is a flat key on the action JSON.
 `Action.to_dict()` spreads the action's params onto the top level.)
 
 **Why it matters.** With `match_scope_target_group` off, the
 existing-channel name lookup for `create_channel` searches **every**
 channel group, not just the rule's target group. If a channel with
 the same normalized name already exists in *any* other group, the
-stream merges into that channel — `channels_updated` increments and
+stream merges into that channel. `channels_updated` increments, and
 **no channel is created in this rule's target group** (the rule's
 "created" count stays 0). With the flag on, the lookup is restricted
 to the rule's target group, so the rule creates a new channel there
@@ -204,7 +204,7 @@ condition. The rule provably matches no stream.
 Phase 2 candidates, not in this build:
 
 - **Live regex match counts.** "This regex would match all 1,472
-  groups" — strong signal that the analyzer can't produce without a
+  groups" is a strong signal that the analyzer can't produce without a
   group corpus.
 - **Per-rule dry-run replay** over a bundle's `channels.csv` to count
   match/skip outcomes.
@@ -238,7 +238,7 @@ change with it.
 ## Group protection: stream-side fire gate vs merge-target filter
 
 Two distinct mechanisms protect specific channel groups from unwanted
-merges. They are NOT interchangeable — each applies at a different
+merges. They are NOT interchangeable. Each applies at a different
 point in the pipeline.
 
 | Mechanism | Kind | When it applies | What it checks | Primary use case |
@@ -253,15 +253,15 @@ the evaluator reaches one of these, it checks whether a channel
 whose normalized name matches the triggering stream's normalized
 name already exists inside group N:
 
-- `normalized_name_in_group` — fires the rule only when such a
+- `normalized_name_in_group`: fires the rule only when such a
   channel **exists** in group N.
-- `normalized_name_not_in_group` — fires the rule only when no
+- `normalized_name_not_in_group`: fires the rule only when no
   such channel exists in group N.
 
 **Critical limitation.** These conditions gate whether the rule
 fires at all. Once the rule fires, they have no further effect.
 They do NOT constrain which existing channel a `merge_streams`
-action eventually targets — the merge resolution runs independently
+action eventually targets. The merge resolution runs independently
 and may land the stream in any group.
 
 ### Merge-target filter (`target_channel_[not_]in_group`)
@@ -272,9 +272,9 @@ channel (via `target=auto`, `name_exact`, `name_regex`, or
 `tvg_id`), it checks the resolved channel's `channel_group_id`
 against the filter list:
 
-- `target_channel_not_in_group` — **skip** the merge if the
+- `target_channel_not_in_group`: **skip** the merge if the
   resolved channel's group is in this list.
-- `target_channel_in_group` — **skip** the merge if the resolved
+- `target_channel_in_group`: **skip** the merge if the resolved
   channel's group is NOT in this list.
 
 Both default to absent (no filter), preserving existing behavior for
@@ -302,7 +302,7 @@ action has `target_channel_not_in_group=[5]` (skip any merge that
 would land in group 5).
 
 1. Stream "Sky Sport 1" arrives. Its normalized name "sky sport 1"
-   is NOT in group 5 — the **stream-side gate passes**, so the rule
+   is NOT in group 5: the **stream-side gate passes**, so the rule
    fires.
 2. The executor resolves the auto merge target and finds an existing
    channel named "Sky Sport 1" in group 5.
@@ -311,7 +311,7 @@ would land in group 5).
    `skipped=True`; the stream is left unattached.
 
 Without `target_channel_not_in_group`, step 3 would have merged the
-stream into the group-5 channel — the stream-side condition alone
+stream into the group-5 channel. The stream-side condition alone
 could not prevent it, because it only checked whether the name
 existed, not whether the merge itself would land there.
 
@@ -324,7 +324,7 @@ existed, not whether the merge itself would land there.
 
 ## Scored-fuzzy rule path (`loose_name_match` + `min_score`)
 
-Shipped in v0.17.3-0006 (bead jnzst). This path adds a callsign-aware, confidence-scored stream→channel matching mode on top of the existing `loose_name_match` boolean. It is opt-in — a `loose_name_match` rule without `min_score` keeps running the legacy fuzzy cascade exactly as before.
+Shipped in v0.17.3-0006 (bead jnzst). This path adds a callsign-aware, confidence-scored stream→channel matching mode on top of the existing `loose_name_match` boolean. It is opt-in: a `loose_name_match` rule without `min_score` keeps running the legacy fuzzy cascade exactly as before.
 
 ### How to activate it
 
@@ -349,20 +349,20 @@ When `min_score` is present, the executor delegates to the unified scoring core 
 |-|-|-|-|
 | `loose_name_match` | boolean | Yes (`true`) | Must be `true`; `min_score` has no meaning on the exact path. |
 | `min_score` | float [0.0–1.0] | Yes (to activate scored path) | Floored at `CONFIDENCE_FLOOR` (0.60). A value below the floor is rejected at write time with a `400`. |
-| `target_channel_in_group` | list of integer group IDs | **Yes — non-empty** | A scored-fuzzy rule with no `target_channel_in_group` allowlist is rejected by the schema validator (`400`). This is an intentional safety constraint: an unscoped fuzzy rule was the root cause of a 1,341-false-positive merge incident. |
+| `target_channel_in_group` | list of integer group IDs | **Yes (non-empty)** | A scored-fuzzy rule with no `target_channel_in_group` allowlist is rejected by the schema validator (`400`). This is an intentional safety constraint: an unscoped fuzzy rule was the root cause of a 1,341-false-positive merge incident. |
 | `allow_no_callsign` | boolean | No (default `false`) | Opt-in to matching pairs where at least one side has no parseable callsign. When `true`, such pairs are admitted only at score ≥ 0.90. |
 
 ### Scoring precedence (shared core)
 
-The scoring core applies a hard precedence ladder — the same ladder the `fuzzy-preview` endpoint uses:
+The scoring core applies a hard precedence ladder, the same ladder the `fuzzy-preview` endpoint uses:
 
-1. **M1 callsign hard-reject.** If both the stream name and the channel name parse a callsign (e.g. `WBAY`/`WGBA`) and they differ, the pair is rejected unconditionally — score 0.0, verdict `"conflict"`. This fires before any threshold and cannot be overridden.
+1. **M1 callsign hard-reject.** If both the stream name and the channel name parse a callsign (e.g. `WBAY`/`WGBA`) and they differ, the pair is rejected unconditionally: score 0.0, verdict `"conflict"`. This fires before any threshold and cannot be overridden.
 2. **tvg_id callsign override.** If the stream's `tvg_id` (or its name) and the channel's `tvg_id` (or its name) parse the same callsign, the score is set to 1.0 (`tvg_id-override`). Only reached when M1 did not fire.
 3. **LOCALS-cleaned fuzzy.** RapidFuzz `token_set_ratio` on names cleaned with the LOCALS cleaner (strips `US |` / state-code / `CITY:` / `DIREC TV` prefixes, dotted sub-channel numbers, superscripts, quality tags like `RAW`/`HD`, and run-together market tokens like `GREENBAY → GREEN BAY`).
 
 ### No-callsign opt-in (`allow_no_callsign`)
 
-The default policy requires a parseable FCC callsign on both sides of a match. This is the safe default — without a callsign cross-check, `WGBA 2 (NBC)` scored 0.889 against `WBAY` in the spike that motivated the callsign gate.
+The default policy requires a parseable FCC callsign on both sides of a match. This is the safe default: without a callsign cross-check, `WGBA 2 (NBC)` scored 0.889 against `WBAY` in the spike that motivated the callsign gate.
 
 Set `allow_no_callsign: true` to admit pairs where at least one side lacks a parseable callsign, subject to the 0.90 floor (`NO_CALLSIGN_FLOOR`). Even with the opt-in, an M1 conflict (different callsigns on both sides) is still never admitted.
 
@@ -372,10 +372,10 @@ For each stream matched via the scored-fuzzy path, the executor writes a journal
 
 - The match `score` (float)
 - `callsign_verdict` (`"match"` or `"absent"`)
-- `signal` — which scoring rung fired (`"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, `"fuzzy-no-callsign-floor"`)
+- `signal`: which scoring rung fired (`"callsign-exact"`, `"tvg_id-override"`, `"fuzzy-with-callsign"`, `"fuzzy-no-callsign-floor"`)
 - The stream and channel callsigns (when parsed)
 
-This lets you audit exactly why a merge fired — accessible in the ECM Journal page or via `GET /api/journal`.
+This lets you audit exactly why a merge fired, accessible in the ECM Journal page or via `GET /api/journal`.
 
 ### Rollback
 
@@ -401,13 +401,13 @@ Use the `GET /api/channel-pipeline/fuzzy-preview` endpoint (or the `preview_fuzz
 action** (default `false`). It controls whether `target=auto`
 matching uses strict or fuzzy resolution:
 
-- `false` (default) — merge into an existing channel only on
+- `false` (default): merge into an existing channel only on
   **exact normalized-name equality** (case-insensitive). The stream's
   normalized name must equal the channel's normalized name character
   for character.
-- `true` — restore the **legacy fuzzy cascade**: core-name
+- `true`: restores the **legacy fuzzy cascade** (core-name
   match → deparenthesize → word-prefix containment → call-sign
-  lookup. Use when you explicitly want the older broad-matching
+  lookup). Use when you explicitly want the older broad-matching
   behavior.
 
 The strict default (`false`) was introduced to fix production
@@ -425,9 +425,9 @@ Action dict example:
 }
 ```
 
-### `match_by` (validated, runtime no-op — back-compat only)
+### `match_by` (validated, runtime no-op, back-compat only)
 
-There is **no `exact_match` or `match_strict` parameter** — a common
+There is **no `exact_match` or `match_strict` parameter**. This is a common
 misconception. `match_by` accepts `"tvg_id"`, `"normalized_name"`,
 or `"stream_group"` and is validated by the schema, but **it is
 never consumed by the executor at runtime**. It is retained solely

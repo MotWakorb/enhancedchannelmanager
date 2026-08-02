@@ -61,8 +61,22 @@ mcp-server/junit.xml
 backend/.benchmarks/
 backend/tests/performance/.benchmarks/
 
-# User guide screenshots (may contain PII)
-docs/images/
+# Screenshots of a live instance (may contain PII). The default is to ignore
+# everything under docs/images/ — captures taken against a real instance can
+# render Xtream stream URLs (provider password is in the path), provider
+# hostnames, private/public IPs, real email addresses, and account usernames.
+# This repository is public, so an accidental `git add` is unrecoverable.
+#
+# Exception (bd-2mluw): docs/images/user_guide/ is tracked. Those screenshots
+# are captured against the sanitized documentation environment — placeholder
+# hosts (dispatcharr.example.local), the `e2e_test` operator, pseudonymized
+# provider names, empty credential fields, and provider-identifying strings
+# blurred at capture time. Every file under it was individually PII-audited
+# before being committed. Anything added there later must clear the same bar.
+# `docs/images/*` (not `docs/images/`) is required: git will not descend into
+# an excluded directory, so a negation under it can never re-include anything.
+docs/images/*
+!docs/images/user_guide/
 
 # Playwright run-time artifacts (bd-lln2x). The visual-regression
 # baseline PNGs under e2e/visual/__screenshots__/ ARE checked in (they

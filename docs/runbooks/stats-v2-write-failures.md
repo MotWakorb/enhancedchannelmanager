@@ -1,6 +1,6 @@
 # Runbook: Stats v2 Telemetry Write Failures
 
-> `session_telemetry` writes are failing at a rate that breaches SLO-7. The poll loop survives — failures are wrapped — but the data layer is degrading.
+> `session_telemetry` writes are failing at a rate that breaches SLO-7. The poll loop survives, failures are wrapped, but the data layer is degrading.
 
 - **Severity**: P2 ticket → P1 page if sustained 30m+
 - **Owner**: SRE
@@ -9,9 +9,9 @@
 
 **Alerts that route here:**
 
-- `ECMStatsTelemetryWriteFailing` (page) — failure ratio > 5% sustained 30m
-- `ECMStatsTelemetryWriteFailingWarn` (ticket) — failure ratio > 5% over 5m
-- `ECMStatsQueryLatencyHigh` / `ECMStatsQueryLatencyP99High` (warning) — when the failure root cause is a stalled writer or migration mismatch that also slows queries, this runbook applies
+- `ECMStatsTelemetryWriteFailing` (page): failure ratio > 5% sustained 30m
+- `ECMStatsTelemetryWriteFailingWarn` (ticket): failure ratio > 5% over 5m
+- `ECMStatsQueryLatencyHigh` / `ECMStatsQueryLatencyP99High` (warning): when the failure root cause is a stalled writer or migration mismatch that also slows queries, this runbook applies
 
 **SLO:** [SLO-7 Stats v2 Telemetry Write Success Rate](../sre/slos.md#slo-7-stats-v2-telemetry-write-success-rate)
 
@@ -21,7 +21,7 @@
 
 - `ecm_session_telemetry_writes_total{result="failure"}` rate climbs and exceeds 5% of total writes.
 - New `session_telemetry` rows stop appearing or appear intermittently; Stats v2 panels go stale.
-- Frontend Stats page still renders, but data is hours behind real time — the user-visible signal is "the chart hasn't updated since X."
+- Frontend Stats page still renders, but data is hours behind real time: the user-visible signal is "the chart hasn't updated since X."
 - Logs contain `[STATS_V2]` ERROR or WARNING lines (the helper logs the swallowed exception before incrementing the failure counter).
 
 ## First 5 minutes
@@ -31,7 +31,7 @@
    sum(rate(ecm_session_telemetry_writes_total{result="failure"}[5m]))
    / sum(rate(ecm_session_telemetry_writes_total[5m]))
    ```
-   Expected if real: > 0.05. Expected if div-by-zero (idle): NaN — alert shouldn't have fired (the rule guards `> 0.001`).
+   Expected if real: > 0.05. Expected if div-by-zero (idle): NaN. Alert shouldn't have fired (the rule guards `> 0.001`).
 
 2. **Pull the error lines.** Failures log before they increment the counter:
    ```bash
@@ -42,7 +42,7 @@
    ```
    The first error line usually tells you which branch of the diagnosis tree below applies. Capture a `trace_id` from one entry if present and grep across all logs.
 
-3. **Check readiness.** If `ecm_health_ready_ok == 0` and the database sub-check is failing, the write failures are downstream of a broader DB outage — go to [readiness runbook](./readiness_availability.md) first.
+3. **Check readiness.** If `ecm_health_ready_ok == 0` and the database sub-check is failing, the write failures are downstream of a broader DB outage. Go to [readiness runbook](./readiness_availability.md) first.
 
 ## Diagnosis tree
 
@@ -76,7 +76,7 @@ If present: SQLite WAL contention. Most common cause is a concurrent bulk operat
      | grep -iE '\[(AUTO-CREATE|M3U|CHANNELS)\]' \
      | tail -50
    ```
-2. If a long-running task is mid-flight, let it finish — interrupting it makes things worse. The session_telemetry writer self-heals once the lock clears.
+2. If a long-running task is mid-flight, let it finish: interrupting it makes things worse. The session_telemetry writer self-heals once the lock clears.
 3. If the lock has persisted > 10m, a transaction has leaked. Last-resort: `docker restart ecm-ecm-1`. **Capture log snapshot first**:
    ```bash
    docker logs ecm-ecm-1 --since 1h > /tmp/incident-stats-v2-write.log
@@ -93,7 +93,7 @@ docker exec ecm-ecm-1 df -h /config
 If `/config` is > 95% full or shows ENOSPC errors in logs (`grep -i 'no space\|ENOSPC' /tmp/incident*.log`): disk pressure is the root cause.
 
 **Recovery:**
-1. **Stop the bleeding first** — prune old `session_telemetry` rows per ADR-007 retention policy (typically 30d raw + indefinite rollups; if rollup tables from bd-7i2vv haven't shipped, only raw rows exist):
+1. **Stop the bleeding first**: prune old `session_telemetry` rows per ADR-007 retention policy (typically 30d raw + indefinite rollups; if rollup tables from bd-7i2vv haven't shipped, only raw rows exist):
    ```bash
    # Inspect retention policy first — do NOT run blind. The retention
    # script / endpoint is the project-defined mechanism; coordinate with
@@ -101,7 +101,7 @@ If `/config` is > 95% full or shows ENOSPC errors in logs (`grep -i 'no space\|E
    # the canonical session_telemetry retention command.
    ```
 2. If no automated retention exists yet (likely true pre-bd-7i2vv), open a ticket against bd-7i2vv as a priority bump and engage the project engineer for a manual prune procedure.
-3. Investigate the growth — go to [stats-v2-row-growth runbook](./stats-v2-row-growth.md) for the storage-growth angle.
+3. Investigate the growth. Go to [stats-v2-row-growth runbook](./stats-v2-row-growth.md) for the storage-growth angle.
 
 ### Branch D: Migration mismatch
 
@@ -125,20 +125,20 @@ If columns are missing relative to the current code's expectations: Alembic migr
    ```bash
    docker exec ecm-ecm-1 alembic upgrade head
    ```
-2. If `current` > `heads`: a newer schema is running against older code (uncommon — usually the result of a manual `alembic upgrade` followed by a code rollback). Either re-deploy the matching code, or `alembic downgrade <prior-rev>` and restart.
-3. Reference: [`docs/database_migrations.md`](../database_migrations.md). Migration ordering matters — see also [stats-v2-deployment-safety runbook](./stats-v2-deployment-safety.md).
+2. If `current` > `heads`: a newer schema is running against older code (uncommon, usually the result of a manual `alembic upgrade` followed by a code rollback). Either re-deploy the matching code, or `alembic downgrade <prior-rev>` and restart.
+3. Reference: [`docs/database_migrations.md`](../database_migrations.md). Migration ordering matters. See also [stats-v2-deployment-safety runbook](./stats-v2-deployment-safety.md).
 
 ## Mitigation summary
 
-- **Rollback is rarely the right tool here** — the writer's try/except means rolling back the *code* won't help if the root cause is infrastructure (disk, lock, migration). Diagnose first.
+- **Rollback is rarely the right tool here**: the writer's try/except means rolling back the *code* won't help if the root cause is infrastructure (disk, lock, migration). Diagnose first.
 - **Container restart** clears in-memory lock state but loses logs useful for postmortem. Always capture `docker logs --since 1h` to a file before restarting.
-- **Do not** disable the writer by toggling `ECM_SESSION_TELEMETRY_WRITE_ENABLED` — that env var is **retired** as of skqln.3 step (d) and has no effect.
+- **Do not** disable the writer by toggling `ECM_SESSION_TELEMETRY_WRITE_ENABLED`: that env var is **retired** as of skqln.3 step (d) and has no effect.
 
 ## Escalation
 
 If failure ratio remains > 5% after running the matching diagnosis branch:
 
-- Page the SRE persona via the operator's chosen channel (no rotation defined yet — pages route to `curt@lecaptain.org` until on-call exists).
+- Page the SRE persona via the operator's chosen channel (no rotation defined yet, pages route to `curt@lecaptain.org` until on-call exists).
 - Provide: alert start time, branch from diagnosis tree that matched, recovery steps attempted, current `ecm_session_telemetry_writes_total{result="failure"}` 5m rate.
 
 ## Post-incident
@@ -151,7 +151,7 @@ If failure ratio remains > 5% after running the matching diagnosis branch:
 ## See also
 
 - [SLO-7: Stats v2 Telemetry Write Success Rate](../sre/slos.md#slo-7-stats-v2-telemetry-write-success-rate)
-- [`backend/bandwidth_tracker.py`](../../backend/bandwidth_tracker.py) — `_write_session_telemetry` helper and try/except wrapper
-- [`backend/observability.py`](../../backend/observability.py) — `ecm_session_telemetry_writes_total` counter registration
-- [stats-v2-deployment-safety runbook](./stats-v2-deployment-safety.md) — migration order and post-deploy verification
-- [stats-v2-row-growth runbook](./stats-v2-row-growth.md) — storage-side context if Branch C applies
+- [`backend/bandwidth_tracker.py`](../../backend/bandwidth_tracker.py): `_write_session_telemetry` helper and try/except wrapper
+- [`backend/observability.py`](../../backend/observability.py): `ecm_session_telemetry_writes_total` counter registration
+- [stats-v2-deployment-safety runbook](./stats-v2-deployment-safety.md): migration order and post-deploy verification
+- [stats-v2-row-growth runbook](./stats-v2-row-growth.md): storage-side context if Branch C applies

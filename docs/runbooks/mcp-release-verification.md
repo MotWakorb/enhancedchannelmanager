@@ -3,7 +3,7 @@
 > Per-release manual verification that the MCP static-key connection works
 > end-to-end. Walk this before tagging any release that includes MCP changes.
 
-- **Severity**: Release gate (blocking — do not tag until all steps pass)
+- **Severity**: Release gate (blocking: do not tag until all steps pass)
 - **Owner**: Releaser (Project Engineer, with PO authorization to cut)
 - **Last reviewed**: 2026-05-21
 - **Related beads**: `enhancedchannelmanager-9axgc` (retired the MCP OAuth offering)
@@ -44,14 +44,14 @@ curl -s http://YOUR_ECM_HOST:6101/health | python3 -m json.tool
 # Expected: {"status": "ok", "api_key_configured": true, ...}
 ```
 
-No HTTPS reverse proxy is required — the static `?api_key=` path runs over plain
+No HTTPS reverse proxy is required. The static `?api_key=` path runs over plain
 HTTP on your private network.
 
 ---
 
 ## Step 1: Static API Key Path
 
-**What this verifies**: the supported `?api_key=` connection works end-to-end —
+**What this verifies**: the supported `?api_key=` connection works end-to-end:
 the MCP Resource Server accepts the static key and dispatches a tool listing.
 
 **Requires**: `mcp_api_key` configured in ECM Settings → MCP Integration.
@@ -122,9 +122,9 @@ When all steps pass, record sign-off in the release PR description:
 
 ```
 ### MCP Release Verification (docs/runbooks/mcp-release-verification.md)
-- [x] Step 1: Static API key path — ?api_key= returns 200 with tools list
-- [x] Step 2: Tool call via Claude — list_channel_groups returned data
-- [x] Step 3: Settings panel smoke check — status, key, instructions correct
+- [x] Step 1 (Static API key path): ?api_key= returns 200 with tools list
+- [x] Step 2 (Tool call via Claude): list_channel_groups returned data
+- [x] Step 3 (Settings panel smoke check): status, key, instructions correct
 Verified by: [your name], [date], on ECM vX.Y.Z-NNNN against [environment description]
 ```
 
@@ -132,6 +132,6 @@ Verified by: [your name], [date], on ECM vX.Y.Z-NNNN against [environment descri
 
 ## References
 
-- `docs/user_guide/integrations/mcp.md` — operator connection reference (mcp-remote + Claude Code)
-- `docs/adr/ADR-009-mcp-oauth-authorization-server-split.md` (Superseded) — history of the retired OAuth offering
-- `docs/shipping.md` — full release cut procedure (this checklist is linked from there)
+- `docs/user_guide/integrations/mcp.md`: operator connection reference (mcp-remote + Claude Code)
+- `docs/adr/ADR-009-mcp-oauth-authorization-server-split.md` (Superseded): history of the retired OAuth offering
+- `docs/shipping.md`: full release cut procedure (this checklist is linked from there)

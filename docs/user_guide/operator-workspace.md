@@ -1,7 +1,5 @@
 # Find Your Way Around the Operator Workspace
 
-> **Audience:** ECM operators moving from the former top-row navigation or learning the current workspace for the first time.
-
 ECM uses a grouped sidebar so related pages stay together while the main work
 area keeps as much width as possible. This page explains where things moved,
 how deep links behave, and how to use the workspace with a keyboard. It is an
@@ -57,9 +55,10 @@ The pill also shows the running ECM version, for example **● Online · v0.18.1
 The coloured dot repeats what the words already say, so the status is readable
 without relying on colour.
 
-When a newer ECM release is available, an **Update available** link appears
-beside the pill and opens the release notes. ECM has no bottom status bar; the
-header carries all of it.
+When a newer ECM release is available, the notice arrives as an entry in the
+notification centre (the bell icon further along the header), not as a pill
+or link next to the status pill. ECM has no bottom status bar; the header
+carries all of it.
 
 ### Keyboard-only navigation
 
@@ -70,7 +69,7 @@ header carries all of it.
    above.
 3. Press `Enter` on a destination link.
 4. Press `Enter` or `Space` on **Collapse navigation** or **Expand
-   navigation** — the logo control at the top of the sidebar, which is reached
+   navigation**. This is the logo control at the top of the sidebar, reached
    before the destination links. Focus stays on the control.
 5. Use `Shift+Tab` to move backward. A visible outline identifies the focused
    control in either sidebar mode.
@@ -114,7 +113,7 @@ the settings content. The sections are grouped, in this order:
 first five groups and no empty Administration heading.
 
 Select **Back** at the top of the sidebar to restore the main navigation
-groups. Back only changes what the sidebar shows — you stay on the Settings
+groups. Back only changes what the sidebar shows. You stay on the Settings
 page you were reading. Because the sidebar holds the Settings sections while
 you are in Settings, reach another destination by selecting **Back** first.
 
@@ -130,16 +129,16 @@ pane starts at the first setting.
 
 Any Settings page with more than one section shows an **On this page**
 navigation region in a column on the right of the page, which stays in place as
-the settings scroll. Pages with a single section, or none, do not show it —
+the settings scroll. Pages with a single section, or none, do not show it:
 there would be nothing to move between. Its buttons move within the current
 page and update the `?section=` portion of the hash. They do not leave
 Settings. On narrower windows the region moves back above the settings content.
 
 ### Save and cancellation protection
 
-On the Settings pages that save as a page—**General**, **Channel Defaults**,
+On the Settings pages that save as a page (**General**, **Channel Defaults**,
 **Appearance**, **Notification Settings**, **Integrations**, **Channel
-Pipeline**, and **Maintenance**—changing a field produces the sticky
+Pipeline**, and **Maintenance**), changing a field produces the sticky
 **Unsaved settings** action region:
 
 - **Save changes** writes the page's pending values.
@@ -196,7 +195,7 @@ The accessible names follow the same pattern, such as **0 streams; no streams
 assigned**, **1 stream; failed probe**, or **1 stream; healthy**. The icon and
 text alternative carry the meaning; color alone does not. Probe details,
 resolution badges, timeouts, and strike information belong with a channel's
-assigned streams—not in the Streams inventory.
+assigned streams, not in the Streams inventory.
 
 ## Edit Mode and staged changes
 
