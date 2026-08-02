@@ -74,12 +74,13 @@ re-reading the whole dialog each time.
 
 ## Beyond the rule dialog
 
-The **⋮** (more actions) menu next to **Run** on the Channel Pipeline page
-has four more operations that act on the whole rule set rather than one
-rule: **Dry Run** (preview every enabled rule against live streams, nothing
-written), **Import**, **Export**, and **Pipeline Debug Bundle** (a support
-bundle you can hand to someone helping you, or run through the rule
-analyzer; see [Debugging rules](debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode)).
+The Channel Pipeline page's toolbar has four more always-visible buttons
+alongside **Run** (there is no hidden or overflow menu) that act on the
+whole rule set rather than one rule: **Dry Run** (preview every enabled rule
+against live streams, nothing written), **Import**, **Export**, and
+**Pipeline Debug Bundle** (a support bundle you can hand to someone helping
+you, or run through the rule analyzer; see [Debugging
+rules](debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode)).
 
 ## Going deeper
 

@@ -31,6 +31,22 @@ found). If there are channels needing review, you're prompted to **Review
 Changes** (pick per channel) or **Accept Best Guesses** (use the top
 candidate for every conflict) before you can finish.
 
+### Make the match show up in Guide
+
+Matching a channel to an EPG entry links the two records, but it does not by
+itself pull that entry's programme listings into the [Guide](../guide/index.md)
+grid. This is expected behavior, not a bug: Guide displays whatever
+programme data ECM already has cached, and a channel-to-EPG match takes
+effect there only after the EPG data itself is refreshed again. Guide's own
+**Refresh** button reloads the grid from that cache; it does not re-fetch
+EPG data, so clicking it repeatedly after a match will not make programming
+appear.
+
+To get real programming showing for newly-matched channels, run the **EPG
+Refresh** task: **Settings → Scheduled Tasks → EPG Refresh → Run Now** (or
+wait for its next scheduled run). Once that completes, Guide's Refresh
+button will show the new programme data.
+
 ## Why review matters: read the confidence score
 
 Do not treat every suggested match as correct. A low score means the
@@ -132,11 +148,14 @@ non-regional networks) is unaffected.
   it above the plain `AMC` entry because West↔Pacific agree. `AMC West` now
   links to `AMC (Pacific)`.
 
-**Checking your fleet.** Run the [duplicate-EPG-link
-audit](finding-mislinked-channels.md) (`audit_epg_duplicates` MCP tool /
-`GET /api/epg/audit-duplicates`) to find channels still mis-linked: either
-left over from before this fix, or a region combination the matcher doesn't
-have enough signal to disambiguate automatically.
+**Checking your fleet.** There is currently no UI surface for this audit; a
+UI path is tracked separately (bead `enhancedchannelmanager-0r0w7`). Today
+the only way to run the [duplicate-EPG-link
+audit](finding-mislinked-channels.md) is the `audit_epg_duplicates` MCP tool
+or `GET /api/epg/audit-duplicates` directly, both of which require API or
+MCP access rather than just the ECM web UI. It finds channels still
+mis-linked: either left over from before this fix, or a region combination
+the matcher doesn't have enough signal to disambiguate automatically.
 
 > **Dev note:** this logic lives in `backend/epg_matching.py`:
 > `detect_region()`, the region-collapse step in `epg_match_key()`, and the

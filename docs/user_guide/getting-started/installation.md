@@ -4,38 +4,53 @@ ECM ships as a Docker image and is installed with Docker Compose. This article
 covers the compose file, the one setting that determines whether your data
 survives a container rebuild, and how to confirm the container is up.
 
+## Before you start
+
+- **Docker and Docker Compose** installed on the host that will run ECM.
+- **A running Dispatcharr instance** ECM can reach over the network.
+  Dispatcharr is a separate application; ECM is a management layer in front
+  of it and has nothing to manage until it can connect to one. See
+  [Connect ECM to Dispatcharr](connect-dispatcharr.md) for the connection
+  step itself, once ECM is up.
+- **Network reachability** between the two: whatever host and port ECM runs
+  on must be able to reach Dispatcharr's URL (for example
+  `http://dispatcharr.local:9191`), whether that's localhost, a Docker
+  network, or a LAN address.
+
 ## Common tasks
 
 ### Install ECM with Docker Compose
 
 1. Create a directory for ECM (for example `~/ecm/`) and, inside it, a
-   `docker-compose.yml` file with the following:
+    `docker-compose.yml` file with the following:
 
-   ```yaml
-   services:
-     ecm:
-       image: ghcr.io/motwakorb/enhancedchannelmanager:latest
-       ports:
-         - "6100:6100"   # HTTP (configurable via ECM_PORT)
-         - "6143:6143"   # HTTPS (configurable via ECM_HTTPS_PORT)
-       volumes:
-         - ./config:/config
-       environment:
-         - PUID=1000
-         - PGID=1000
-         - ECM_PORT=6100
-         - ECM_HTTPS_PORT=6143
-   ```
+    ```yaml
+    services:
+      ecm:
+        image: ghcr.io/motwakorb/enhancedchannelmanager:latest
+        ports:
+          - "6100:6100"   # HTTP (configurable via ECM_PORT)
+          - "6143:6143"   # HTTPS (configurable via ECM_HTTPS_PORT)
+        volumes:
+          - ./config:/config
+        environment:
+          - PUID=1000
+          - PGID=1000
+          - ECM_PORT=6100
+          - ECM_HTTPS_PORT=6143
+    ```
 
-   Set `PUID`/`PGID` to match the user who should own the files under
-   `./config` on the host. Run `id your_user` to find them.
+    Set `PUID`/`PGID` to match the user who should own the files under
+    `./config` on the host. Run `id your_user` to find them.
+
 2. From that directory, start the container:
 
-   ```bash
-   docker compose up -d
-   ```
+    ```bash
+    docker compose up -d
+    ```
+
 3. Open `http://<host>:6100` in a browser once the container reports healthy
-   (see [Confirm the container is up](#confirm-the-container-is-up) below).
+    (see [Confirm the container is up](#confirm-the-container-is-up) below).
 
 **Result:** ECM's setup wizard loads in the browser. See [First run](first-run.md)
 for what happens next.
@@ -69,16 +84,17 @@ instead.
 ### Confirm the container is up
 
 1. Check the container's logs for the preflight banner and the "All
-   preflight checks passed!" line:
+    preflight checks passed!" line:
 
-   ```bash
-   docker compose logs -f ecm
-   ```
+    ```bash
+    docker compose logs -f ecm
+    ```
+
 2. Once it's running, hit the health endpoint from the host:
 
-   ```bash
-   curl http://localhost:6100/api/health
-   ```
+    ```bash
+    curl http://localhost:6100/api/health
+    ```
 
 **Result:** a healthy container returns something like:
 
