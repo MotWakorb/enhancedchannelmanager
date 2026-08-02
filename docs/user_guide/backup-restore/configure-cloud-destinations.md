@@ -164,7 +164,7 @@ Retention is applied independently per cloud destination. A failed upload to one
 ## Testing and troubleshooting
 
 - **Test connection button**: use this before saving a new destination. It confirms ECM can reach the endpoint and authenticate.
-- **Task history**: after a backup run, check **Settings → Task History** for per-destination upload results.
+- **Task history**: after a backup run, check the DBAS Backup task card's own **History** expander under **Settings → Scheduled Tasks** for per-destination upload results. There is no separate "Task History" destination in Settings; run history lives per-task.
 - **Notifications**: a failure notification is emitted when an upload fails. The notification includes the destination name (never the URL or credentials).
 
 See [Troubleshoot a restore](troubleshoot-restore.md) for further diagnostic patterns.
