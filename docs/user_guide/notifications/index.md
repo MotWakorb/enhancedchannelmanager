@@ -63,7 +63,7 @@ This is where you tell ECM **who receives** scheduled-task email alerts. It is s
 **Validation behavior:**
 
 - Each address is validated against **RFC 5322** at save time. The first invalid address produces an inline error like *"`bad@@example` is not a valid email address. Use a comma-separated list."* Fix it and re-save.
-- **Duplicates are removed** automatically. If two addresses normalize to the same value, only one is kept and a toast reports *"Removed N duplicate recipients."*
+- **Duplicates are removed** automatically. If two addresses normalize to the same value, only one is kept and a toast reports how many were removed, singular- or plural-aware: *"Removed 1 duplicate recipient"* for exactly one, *"Removed N duplicate recipients"* for more than one.
 - **Pasted lists** with semicolons (`;`), newlines (`\n`), or carriage returns (`\r`) are normalized to commas at paste time. You can paste from a spreadsheet or another mail client without manual cleanup.
 - Whitespace around addresses is trimmed.
 

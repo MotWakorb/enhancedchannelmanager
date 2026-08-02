@@ -10,13 +10,13 @@ inside the container to go looking for.
 
 ```bash
 # The last 200 lines
-docker logs --tail 200 ecm-ecm-1
+docker logs --tail 200 <container>
 
 # Everything since a point in time
-docker logs --since 30m ecm-ecm-1
+docker logs --since 30m <container>
 
 # Follow live
-docker logs -f ecm-ecm-1
+docker logs -f <container>
 ```
 
 Two of these matter more than the rest in practice. `--since` is what you want
@@ -27,7 +27,7 @@ on a long-running container will return more than you can read.
 Log output goes to stderr as well as stdout, so redirect both when you pipe:
 
 ```bash
-docker logs --since 1h ecm-ecm-1 2>&1 | grep ERROR
+docker logs --since 1h <container> 2>&1 | grep ERROR
 ```
 
 ## The line format
@@ -80,7 +80,7 @@ where ECM narrates itself; `ERROR` is where it admits something did not work.
 When triaging an unfamiliar failure, filter to `ERROR` first:
 
 ```bash
-docker logs --since 1h ecm-ecm-1 2>&1 | grep '"level":"ERROR"'
+docker logs --since 1h <container> 2>&1 | grep '"level":"ERROR"'
 ```
 
 ## Changing the log level
@@ -112,7 +112,7 @@ subsystem. Grepping for a tag is the fastest way to narrow a large log to one
 concern:
 
 ```bash
-docker logs --since 6h ecm-ecm-1 2>&1 | grep '\[AUTO-CREATE-ENGINE\]'
+docker logs --since 6h <container> 2>&1 | grep '\[AUTO-CREATE-ENGINE\]'
 ```
 
 The tags you are most likely to need:
@@ -192,7 +192,7 @@ that request carries it. That makes a failing request tractable even in a busy
 log: find any one line from it, then filter on its id.
 
 ```bash
-docker logs --since 15m ecm-ecm-1 2>&1 | grep '3152e6b5-6e18-4cef-88a3-20d771fe0082'
+docker logs --since 15m <container> 2>&1 | grep '3152e6b5-6e18-4cef-88a3-20d771fe0082'
 ```
 
 The same value is returned to the browser in the `X-Request-ID` response header,
