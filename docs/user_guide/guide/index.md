@@ -52,12 +52,17 @@ is missing is a different problem, covered in
    channel-metadata editor Channel Manager uses. Editing here just saves a
    trip.
 3. Select **Save Changes**.
-4. Select **Refresh** at the top of Guide to reload the grid. If the new
-   match is correct, the channel's row now shows real programme titles
-   instead of a placeholder.
+4. Select **Refresh** at the top of Guide to reload the grid.
 
-**Result:** the channel is re-linked to the right EPG entry, and the next
-grid refresh proves it by showing real programming.
+**Result:** the channel is re-linked to the right EPG entry. Guide's
+**Refresh** button reloads the grid from ECM's existing programme cache; it
+does not re-fetch EPG data by itself, so the grid will not show real
+programming yet. Run the **EPG Refresh** task (**Settings → Scheduled Tasks
+→ EPG Refresh → Run Now**, or wait for its next scheduled run) to pull the
+new match's programme listings in, then use Guide's Refresh button to load
+them into the grid. See [Matching channels to EPG
+data](../epg/channel-to-epg-matching.md#make-the-match-show-up-in-guide) for
+the same step in the bulk-matching flow.
 
 ![Edit Channel dialog opened from the Guide grid, showing Channel #, Channel Name, TVG-ID with Get from EPG, Gracenote Station ID, EPG Data source search, and Stream Profile](../../images/user_guide/guide/3-edit-channel-modal.png)
 
