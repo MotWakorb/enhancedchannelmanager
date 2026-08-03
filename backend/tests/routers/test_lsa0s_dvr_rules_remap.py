@@ -14,6 +14,13 @@ including the SPA catch-all — using the recorded fixture
 ``tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json`` as the source
 of truth for what each path answers. That is the only layer at which a wrong
 PATH is provable; a mocked client would happily return rows for any path at all.
+
+KNOWN FIXTURE GAP (PR #768 review, Warn 2): the recorded instance had no
+recurring rules, so no populated rule row was captured and ``_LIVE_RULE`` below
+is built from the recorded OpenAPI schema's field set. One field's wire shape —
+``days_of_week`` as a JSON array of ints 0-6 — is asserted from Dispatcharr's
+serializer rather than captured; see the fixture's
+``capture.known_gap_no_populated_rule`` for the basis and the re-record trigger.
 """
 import json
 from pathlib import Path

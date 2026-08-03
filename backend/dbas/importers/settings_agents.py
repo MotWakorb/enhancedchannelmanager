@@ -445,13 +445,20 @@ async def import_user_agents(
 # remapped before the rule is sent upstream.
 _DVR_FK_FIELDS = (("channel", EntityType.CHANNEL),)
 
-# The fields that make an UNNAMED DVR rule what it is. Dispatcharr's
+# The date/time fields that make an UNNAMED DVR rule what it is. Dispatcharr's
 # RecurringRecordingRule leaves ``name`` blank-able (lsa0s recorded fixture:
 # ``name`` is not in the schema's ``required`` set), so a name-only identity
 # would re-create every unnamed rule on every restore of the same artifact. Two
 # rules on the same destination channel, for the same weekdays, over the same
-# clock window and the same date range record exactly the same thing — treating
-# them as the same rule is what keeps a repeated restore idempotent.
+# clock window and the same date range, in the same ``enabled`` state, produce
+# the same recordings — treating those as the same rule is what keeps a repeated
+# restore idempotent.
+#
+# ``enabled`` is part of the key but not of this tuple: it needs its own
+# normalization (see :func:`_norm_enabled`) rather than the stringify below, and
+# it is NOT cosmetic — it decides whether the rule records at all, so an archived
+# ENABLED rule must never be satisfied by a disabled one already sitting in the
+# same slot on the destination (PR #768 review, Warn 1).
 _DVR_SCHEDULE_FIELDS = ("start_time", "end_time", "start_date", "end_date")
 
 
@@ -467,6 +474,19 @@ def _as_int(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _norm_enabled(value) -> bool:
+    """Normalize a DVR rule's ``enabled`` flag for the identity key.
+
+    An ABSENT flag normalizes to ``True``: that is the upstream model default, so
+    it is also what a create built from such a record would end up with — the key
+    therefore compares the state the rule would actually have, not the state the
+    archive happened to serialize.
+    """
+    if value is None:
+        return True
+    return bool(value)
 
 
 def _norm_days_of_week(value) -> tuple:
@@ -494,6 +514,10 @@ def _dvr_schedule_key(record: dict, channel_id) -> tuple | None:
     passes its remapped id, the existing-destination side passes the id the
     destination already reports. Without a channel there is nothing to be
     identical to, so the caller falls back to creating the rule.
+
+    The key spans the destination channel, the weekdays, the ``enabled`` state
+    and the date/time fields in :data:`_DVR_SCHEDULE_FIELDS` — everything that
+    decides WHETHER and WHEN the rule records.
     """
     if channel_id is None:
         return None
@@ -505,7 +529,11 @@ def _dvr_schedule_key(record: dict, channel_id) -> tuple | None:
         str(record.get(field)) if record.get(field) is not None else None
         for field in _DVR_SCHEDULE_FIELDS
     )
-    return (channel_key, _norm_days_of_week(record.get("days_of_week"))) + schedule
+    return (
+        channel_key,
+        _norm_days_of_week(record.get("days_of_week")),
+        _norm_enabled(record.get("enabled")),
+    ) + schedule
 
 
 def _index_existing_dvr_by_schedule(records: list[dict]) -> dict[tuple, dict]:
@@ -596,6 +624,13 @@ async def import_dvr_rules(
     except Exception as exc:
         logger.warning("[DBAS-SETTINGS] Could not list existing DVR rules: %s", exc)
         existing = []
+    # Both indexes are a SNAPSHOT of the destination taken once, before the loop,
+    # and are never updated as this run creates rows — the same pre-existing
+    # limitation ``import_user_agents`` has. Two consequences, neither new here
+    # (PR #768 review nits 3/4): two identical rules within ONE archive are both
+    # created, and a rule RENAMED on the destination is not matched by name (the
+    # schedule fallback only runs for archive rules that have no name of their
+    # own). Both duplicate rather than clobber, which is the safe direction.
     existing_by_name = _index_existing_by_name(existing)
     existing_by_schedule = _index_existing_dvr_by_schedule(existing)
 
