@@ -1,0 +1,399 @@
+{
+  "capture": {
+    "source": "Live reads against Dispatcharr 0.28.2 (doc-test instance) through ECM's own DispatcharrClient: GET /api/schema/?format=json, GET /api/channels/recurring-rules/, GET /api/channels/dvr/comskip-config/, GET /api/dvr/rules/ (bead enhancedchannelmanager-lsa0s)",
+    "fixture_kind": "literal slice of real responses",
+    "literal_raw_capture": true,
+    "captured_at": "2026-08-03",
+    "dispatcharr_version": "0.28.2",
+    "redaction": "Nothing was edited. The doc-test instance has zero recurring rules and no custom comskip.ini, so both live bodies are operator-data-free by construction ([] and {\"path\": \"\", \"exists\": false}). The dead /api/dvr/rules/ capture keeps only the status line, content-type and the SPA <title> marker -- the rest of that body is the Dispatcharr SPA shell with build-hashed asset names, which carries no contract meaning.",
+    "why": "Pins three contract facts behind the dvr_rules remap: (1) ECM's former _DVR_RULES_PATH '/api/dvr/rules/' has NO route on 0.28.2 -- it falls through to the SPA catch-all and returns 200 text/html, which is why get_dvr_rules() raised a JSONDecodeError and the backup exporter emitted a _warning stub for the category on every run; (2) the real DVR-rule resource is /api/channels/recurring-rules/ (RecurringRecordingRule: name identity + a single 'channel' FK + full list/create/delete CRUD), which is exactly the shape the settings_agents DVR importer already assumes; (3) /api/channels/dvr/comskip-config/ DOES exist (contradicting the old comment in routers/backup.py) but its GET returns only {path, exists} -- never the comskip.ini CONTENT -- and its POST takes a multipart .ini upload, so it is not a usable backup source."
+  },
+  "dead_dvr_rules_path": {
+    "path": "/api/dvr/rules/",
+    "status_code": 200,
+    "content_type": "text/html; charset=utf-8",
+    "body_marker": "<title>Dispatcharr</title>",
+    "present_in_openapi_paths": false
+  },
+  "recurring_rules_list_response": {
+    "path": "/api/channels/recurring-rules/",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body": [],
+    "body_shape": "bare JSON array (NOT a DRF paginated envelope)"
+  },
+  "comskip_config_response": {
+    "path": "/api/channels/dvr/comskip-config/",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body": {
+      "path": "",
+      "exists": false
+    }
+  },
+  "openapi_slice": {
+    "paths": {
+      "/api/channels/recurring-rules/": {
+        "get": {
+          "operationId": "api_channels_recurring_rules_list",
+          "tags": [
+            "api"
+          ],
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/RecurringRecordingRule"
+                    }
+                  }
+                }
+              },
+              "description": ""
+            }
+          }
+        },
+        "post": {
+          "operationId": "api_channels_recurring_rules_create",
+          "tags": [
+            "api"
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              },
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              },
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              }
+            },
+            "required": true
+          },
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "201": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RecurringRecordingRule"
+                  }
+                }
+              },
+              "description": ""
+            }
+          }
+        }
+      },
+      "/api/channels/recurring-rules/{id}/": {
+        "get": {
+          "operationId": "api_channels_recurring_rules_retrieve",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "schema": {
+                "type": "integer"
+              },
+              "description": "A unique integer value identifying this recurring recording rule.",
+              "required": true
+            }
+          ],
+          "tags": [
+            "api"
+          ],
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RecurringRecordingRule"
+                  }
+                }
+              },
+              "description": ""
+            }
+          }
+        },
+        "put": {
+          "operationId": "api_channels_recurring_rules_update",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "schema": {
+                "type": "integer"
+              },
+              "description": "A unique integer value identifying this recurring recording rule.",
+              "required": true
+            }
+          ],
+          "tags": [
+            "api"
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              },
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              },
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringRecordingRule"
+                }
+              }
+            },
+            "required": true
+          },
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RecurringRecordingRule"
+                  }
+                }
+              },
+              "description": ""
+            }
+          }
+        },
+        "patch": {
+          "operationId": "api_channels_recurring_rules_partial_update",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "schema": {
+                "type": "integer"
+              },
+              "description": "A unique integer value identifying this recurring recording rule.",
+              "required": true
+            }
+          ],
+          "tags": [
+            "api"
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchedRecurringRecordingRule"
+                }
+              },
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchedRecurringRecordingRule"
+                }
+              },
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatchedRecurringRecordingRule"
+                }
+              }
+            }
+          },
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RecurringRecordingRule"
+                  }
+                }
+              },
+              "description": ""
+            }
+          }
+        },
+        "delete": {
+          "operationId": "api_channels_recurring_rules_destroy",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "id",
+              "schema": {
+                "type": "integer"
+              },
+              "description": "A unique integer value identifying this recurring recording rule.",
+              "required": true
+            }
+          ],
+          "tags": [
+            "api"
+          ],
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "204": {
+              "description": "No response body"
+            }
+          }
+        }
+      },
+      "/api/channels/dvr/comskip-config/": {
+        "get": {
+          "operationId": "api_channels_dvr_comskip_config_retrieve",
+          "description": "Upload or inspect the custom comskip.ini used by DVR processing.",
+          "tags": [
+            "api"
+          ],
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "No response body"
+            }
+          }
+        },
+        "post": {
+          "operationId": "api_channels_dvr_comskip_config_create",
+          "description": "Upload or inspect the custom comskip.ini used by DVR processing.",
+          "tags": [
+            "api"
+          ],
+          "security": [
+            {
+              "jwtAuth": []
+            },
+            {
+              "ApiKeyAuth": []
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "No response body"
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "RecurringRecordingRule": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "readOnly": true
+            },
+            "days_of_week": {},
+            "start_time": {
+              "type": "string",
+              "format": "time"
+            },
+            "end_time": {
+              "type": "string",
+              "format": "time"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "start_date": {
+              "type": "string",
+              "format": "date",
+              "nullable": true
+            },
+            "end_date": {
+              "type": "string",
+              "format": "date",
+              "nullable": true
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "readOnly": true
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "readOnly": true
+            },
+            "channel": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "channel",
+            "created_at",
+            "end_time",
+            "id",
+            "start_time",
+            "updated_at"
+          ]
+        }
+      }
+    }
+  }
+}

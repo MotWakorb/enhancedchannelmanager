@@ -19,11 +19,18 @@ ENTITY categories — create rows, remappable, ledger-tracked (mirror
   ``ALREADY_EXISTS_IDENTICAL`` and remapped to the existing destination id so a
   DVR rule (or channel) that references it still resolves.
 
-* **dvr_rules** (:func:`import_dvr_rules`) -> ``EntityType.DVR_RULE`` (a.k.a.
-  recording / series rules). Identity by name/title. Its ``channel`` FK is
-  remapped through the IdRemapTable; an unresolvable FK is failed
-  ``DEPENDENCY_UNRESOLVED`` (or skipped ``DEPENDENCY_UNRESOLVED`` on dry-run) and
-  never sent upstream with a dangling source id.
+* **dvr_rules** (:func:`import_dvr_rules`) -> ``EntityType.DVR_RULE``. The
+  upstream resource is Dispatcharr's RECURRING RECORDING RULE
+  (``/api/channels/recurring-rules/`` — channel + weekly schedule); the category
+  was retargeted there by ``…-lsa0s`` after its original ``/api/dvr/rules/``
+  guess turned out to have no route at all. Identity is by name/title with a
+  SCHEDULE fallback for unnamed rules (``name`` is optional upstream). Its
+  ``channel`` FK is remapped through the IdRemapTable; an unresolvable FK is
+  failed ``DEPENDENCY_UNRESOLVED`` — identically on apply and on dry-run, per the
+  y6zg6 preview-parity rule — and never sent upstream with a dangling source id.
+  Dispatcharr's other two DVR surfaces are deliberately out of this category:
+  SERIES rules live inside the ``dvr_settings`` core-setting the ``core_settings``
+  category already carries, and RECORDINGS are per-instance state, not rules.
 
 SETTINGS categories — APPLY key/value config; NOT entity-create, NOT
 id-remapped, NOT ledgered as creates:
@@ -427,11 +434,95 @@ async def import_user_agents(
 
 # ===========================================================================
 # DVR RULES (entity, FK remap)
+#
+# Upstream resource: Dispatcharr's recurring-recording-rules ViewSet
+# (``dispatcharr_client._DVR_RECURRING_RULES_PATH``). A rule is a channel + a
+# weekly schedule; ``name`` is OPTIONAL upstream, which is why identity below is
+# name-first with a schedule fallback (enhancedchannelmanager-lsa0s).
 # ===========================================================================
 
 # FK fields on a DVR rule that point at another restored entity and must be
 # remapped before the rule is sent upstream.
 _DVR_FK_FIELDS = (("channel", EntityType.CHANNEL),)
+
+# The fields that make an UNNAMED DVR rule what it is. Dispatcharr's
+# RecurringRecordingRule leaves ``name`` blank-able (lsa0s recorded fixture:
+# ``name`` is not in the schema's ``required`` set), so a name-only identity
+# would re-create every unnamed rule on every restore of the same artifact. Two
+# rules on the same destination channel, for the same weekdays, over the same
+# clock window and the same date range record exactly the same thing — treating
+# them as the same rule is what keeps a repeated restore idempotent.
+_DVR_SCHEDULE_FIELDS = ("start_time", "end_time", "start_date", "end_date")
+
+
+def _as_int(value) -> int | None:
+    """Coerce an archive/upstream id to ``int``, or ``None`` when it is not one.
+
+    Mirrors the tolerance of :func:`_remap_dvr_fks` (which accepts a stringified
+    id) so the identity lookup and the FK rewrite agree on what a usable id is.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _norm_days_of_week(value) -> tuple:
+    """Order-insensitive, duplicate-free weekday key; ``()`` when unusable.
+
+    Dispatcharr's serializer stores ``sorted(set(...))`` of ints, but an archive
+    row is whatever the source instance serialized at capture time, so the key
+    normalizes rather than trusting the order.
+    """
+    if not isinstance(value, list):
+        return ()
+    days = set()
+    for entry in value:
+        try:
+            days.add(int(entry))
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(days))
+
+
+def _dvr_schedule_key(record: dict, channel_id) -> tuple | None:
+    """Identity key for an unnamed DVR rule, or None when it cannot be formed.
+
+    ``channel_id`` must ALWAYS be a DESTINATION channel id — the archive side
+    passes its remapped id, the existing-destination side passes the id the
+    destination already reports. Without a channel there is nothing to be
+    identical to, so the caller falls back to creating the rule.
+    """
+    if channel_id is None:
+        return None
+    try:
+        channel_key = int(channel_id)
+    except (TypeError, ValueError):
+        return None
+    schedule = tuple(
+        str(record.get(field)) if record.get(field) is not None else None
+        for field in _DVR_SCHEDULE_FIELDS
+    )
+    return (channel_key, _norm_days_of_week(record.get("days_of_week"))) + schedule
+
+
+def _index_existing_dvr_by_schedule(records: list[dict]) -> dict[tuple, dict]:
+    """Index destination DVR rules by their schedule key (see above).
+
+    NAMED destination rules are indexed too: a name is a label, not a behaviour,
+    so an unnamed archive rule that matches a named destination rule's schedule
+    is still the same recording and must not be duplicated.
+    """
+    index: dict[tuple, dict] = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        key = _dvr_schedule_key(rec, rec.get("channel"))
+        if key is not None and key not in index:
+            index[key] = rec
+    return index
 
 
 def _remap_dvr_fks(
@@ -470,10 +561,22 @@ async def import_dvr_rules(
 ) -> None:
     """Restore the DVR_RULE category: remap FKs, create, remap + ledger.
 
-    Identity is by name/title. An unresolvable FK (e.g. ``channel``) fails the
-    rule ``DEPENDENCY_UNRESOLVED`` (skip ``DEPENDENCY_UNRESOLVED`` on dry-run) and
-    never sends a dangling source id upstream. A name collision is skipped
-    ``ALREADY_EXISTS_IDENTICAL`` and remapped. Opt-in via ``selected``.
+    Identity is by name/title, falling back to the rule's SCHEDULE
+    (:func:`_dvr_schedule_key`) when the archived rule has no name — Dispatcharr
+    leaves ``name`` optional on a recurring recording rule, and a name-only
+    identity would duplicate every unnamed rule each time the same artifact is
+    restored (enhancedchannelmanager-lsa0s). A collision is skipped
+    ``ALREADY_EXISTS_IDENTICAL`` and remapped to the existing destination id.
+
+    An unresolvable FK (e.g. ``channel``) fails the rule
+    ``DEPENDENCY_UNRESOLVED`` and never sends a dangling source id upstream. That
+    outcome is reported IDENTICALLY on dry-run and on apply — same reason, same
+    message — because whether the FK resolves is a fact about the run's remap
+    state, not about the mode: the channels importer registers a provisional
+    remap for every would-create channel, so a dry-run resolves exactly what the
+    apply would. (Previously the dry-run reported a would_skip while the apply
+    reported a failure, which is the preview-lies defect y6zg6 closed for the
+    settings category.) Opt-in via ``selected``.
     """
     cat = report.category(EntityType.DVR_RULE)
 
@@ -494,13 +597,30 @@ async def import_dvr_rules(
         logger.warning("[DBAS-SETTINGS] Could not list existing DVR rules: %s", exc)
         existing = []
     existing_by_name = _index_existing_by_name(existing)
+    existing_by_schedule = _index_existing_dvr_by_schedule(existing)
 
     for rec in archive_dvr_rules:
         label = _label(rec, "name", "title")
         source_id = rec.get("id")
         name_key = _norm_name(rec.get("name")) or _norm_name(rec.get("title"))
 
-        existing_rec = existing_by_name.get(name_key) if name_key else None
+        if name_key:
+            existing_rec = existing_by_name.get(name_key)
+        else:
+            # Unnamed: match on the schedule, keyed by the DESTINATION channel
+            # the rule would be created against. An unresolvable channel yields
+            # no key, so the rule falls through to the FK check below and is
+            # reported DEPENDENCY_UNRESOLVED rather than guessed at.
+            source_channel = _as_int(rec.get("channel"))
+            dest_channel = (
+                remap.resolve(EntityType.CHANNEL, source_channel)
+                if source_channel is not None
+                else None
+            )
+            schedule_key = _dvr_schedule_key(rec, dest_channel)
+            existing_rec = (
+                existing_by_schedule.get(schedule_key) if schedule_key else None
+            )
         if existing_rec is not None:
             _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
             existing_id = existing_rec.get("id")
@@ -512,20 +632,22 @@ async def import_dvr_rules(
         payload = _build_create_payload(rec)
         unresolved_fk = _remap_dvr_fks(payload, remap)
         if unresolved_fk is not None:
-            if is_dry_run:
-                _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
-            else:
-                cat.failed += 1
-                cat.failure_details.append(
-                    FailureDetail(
-                        reason=FailureReason.DEPENDENCY_UNRESOLVED,
-                        label=label,
-                        message=f"DVR rule references an unresolved {unresolved_fk}; not restored.",
-                        source_export_id=source_id,
-                    )
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                    label=label,
+                    message=(
+                        f"DVR rule references a '{unresolved_fk}' that is not "
+                        "present on the destination Dispatcharr; nothing was "
+                        "created for it."
+                    ),
+                    source_export_id=source_id,
                 )
+            )
             logger.warning(
-                "[DBAS-SETTINGS] DVR rule '%s' has unresolved FK '%s'; skipped.", label, unresolved_fk
+                "[DBAS-SETTINGS] DVR rule '%s' has unresolved FK '%s'; not created.",
+                label, unresolved_fk
             )
             continue
 
