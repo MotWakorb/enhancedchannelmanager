@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -326,6 +326,68 @@ async def test_clean_gather_is_unaffected_by_degraded_wiring(
     assert result.failed_count == 0
     assert result.success_count == 1
     assert "degraded_categories" not in result.details
+
+
+@pytest.mark.asyncio
+async def test_total_client_unavailability_reaches_warning_level_end_to_end(
+    _wire_db, _reset_metrics, tmp_path
+):
+    """PR #770 review BLOCK, reviewer's exact repro: get_client() returning
+    None (total Dispatcharr unavailability, BEFORE any per-category fetch)
+    must not silently produce a clean success. Runs the REAL
+    build_backup_artifact (not a fake artifact, unlike every other test in
+    this file) so the detection bug in _gather_redacted_categories is
+    exercised for real end to end, then the REAL artifact flows through the
+    REAL DbasBackupTask.execute()."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+    from routers import backup as backup_mod
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    journal = config_dir / "journal.db"
+    journal.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+    settings_file = config_dir / "settings.json"
+    settings_file.write_text("{}")
+
+    mock_settings = MagicMock()
+    mock_settings.model_dump.return_value = {"url": "http://test:9191"}
+
+    mock_engine = MagicMock()
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = (0, 0, 0)
+    mock_engine.connect.return_value.__enter__ = MagicMock(return_value=conn)
+    mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
+
+    session = MagicMock()
+    session.query.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
+    session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
+
+    backups_dir = tmp_path / "backups"
+
+    with patch.object(backup_mod, "CONFIG_DIR", config_dir), \
+         patch.object(backup_mod, "CONFIG_FILE", settings_file), \
+         patch.object(backup_mod, "JOURNAL_DB_FILE", journal), \
+         patch.object(backup_mod, "get_engine", return_value=mock_engine), \
+         patch.object(backup_mod, "get_settings", return_value=mock_settings), \
+         patch.object(backup_mod, "get_session", return_value=session), \
+         patch.object(backup_mod, "get_client", return_value=None), \
+         patch.object(dbas_backup, "BACKUPS_DIR", backups_dir):
+        task = DbasBackupTask()
+        result = await task.execute()
+
+    all_dispatcharr_keys = sorted(
+        k for k, v in backup_mod.RESTORABLE_SECTIONS.items() if v.get("dispatcharr")
+    )
+    # Every requested Dispatcharr category is degraded, NOT a silent
+    # empty list — this is the reviewer's "worst possible input" scenario.
+    assert result.details["degraded_categories"] == all_dispatcharr_keys
+    # WARNING-level, never a clean silent success.
+    assert result.success is True
+    assert result.failed_count == 1
+    assert result.success_count == 0
 
 
 @pytest.mark.asyncio

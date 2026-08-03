@@ -102,7 +102,10 @@ def _seed_journal_db(path):
         conn.close()
 
 
-def _patched_build(tmp_path, *, with_logos=False, dest_dir=None, client_overrides=None):
+def _patched_build(
+    tmp_path, *, with_logos=False, dest_dir=None, client_overrides=None,
+    get_client_override=None,
+):
     """Run build_backup_artifact with CONFIG_DIR/JOURNAL_DB_FILE pointed at
     tmp_path, settings carrying secrets, and Dispatcharr returning M3U accounts
     that embed an M3U password sentinel.
@@ -111,6 +114,14 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None, client_override
     instance to raise instead of returning the default fixture data (zt3kf —
     used to prove degraded-category isolation: a failing category must not
     blast-radius the rest of the gather).
+
+    ``get_client_override`` — a dict of kwargs (``return_value`` or
+    ``side_effect``) for patching ``get_client`` ITSELF, instead of returning
+    the default fully-mocked client. Used to reproduce total client
+    unavailability (PR #770 review) — ``get_client()`` returning falsy or
+    raising BEFORE any per-key fetch is attempted — which is a DIFFERENT
+    failure shape than a single method on an otherwise-working client
+    raising (``client_overrides`` above).
     """
     config_dir = tmp_path
     journal = config_dir / "journal.db"
@@ -181,13 +192,15 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None, client_override
     session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
     session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
+    get_client_kwargs = get_client_override or {"return_value": mock_client}
+
     with patch.object(backup_mod, "CONFIG_DIR", config_dir), \
          patch.object(backup_mod, "CONFIG_FILE", settings_file), \
          patch.object(backup_mod, "JOURNAL_DB_FILE", journal), \
          patch.object(backup_mod, "get_engine", return_value=_mock_engine()), \
          patch.object(backup_mod, "get_settings", return_value=_mock_settings_with_secrets()), \
          patch.object(backup_mod, "get_session", return_value=session), \
-         patch.object(backup_mod, "get_client", return_value=mock_client):
+         patch.object(backup_mod, "get_client", **get_client_kwargs):
         import asyncio
         return asyncio.get_event_loop().run_until_complete(
             build_backup_artifact(dest_dir=dest_dir)
@@ -424,6 +437,31 @@ class TestDegradedCategoryReporting:
             },
         )
         assert sorted(art.degraded_categories) == ["dvr_rules", "user_agents"]
+
+    # -----------------------------------------------------------------
+    # PR #770 review BLOCK: total client unavailability (get_client()
+    # falsy/raising BEFORE any per-key fetch) produces the UN-NESTED
+    # {"_warning": ...} shape rather than the per-key nested shape above.
+    # The reviewer's repro: patch get_client to raise/return None, run the
+    # real build_backup_artifact -> degraded_categories must list EVERY
+    # requested dispatcharr category, not stay empty.
+    # -----------------------------------------------------------------
+
+    def _all_dispatcharr_keys(self):
+        return sorted(
+            k for k, v in backup_mod.RESTORABLE_SECTIONS.items() if v.get("dispatcharr")
+        )
+
+    def test_client_returns_none_degrades_every_dispatcharr_category(self, tmp_path):
+        art = _patched_build(tmp_path, get_client_override={"return_value": None})
+        assert sorted(art.degraded_categories) == self._all_dispatcharr_keys()
+
+    def test_client_raises_degrades_every_dispatcharr_category(self, tmp_path):
+        art = _patched_build(
+            tmp_path,
+            get_client_override={"side_effect": Exception("Dispatcharr unreachable")},
+        )
+        assert sorted(art.degraded_categories) == self._all_dispatcharr_keys()
 
 
 class TestFreeDiskGuard:

@@ -598,6 +598,23 @@ async def _gather_redacted_categories(
       :func:`_gather_dispatcharr_sections` is what makes that true for the
       MULTI-section ``/export?sections=...`` caller too, not just this
       one-key-per-call pattern.
+
+      Detection has to recognize BOTH stub shapes
+      :func:`_gather_dispatcharr_sections` can return for a requested
+      dispatcharr-backed key: the per-fetch stub nested under the key itself
+      (``{key: {"_warning": ...}}``, one failing endpoint) AND the
+      total-client-unavailability stub, which is the WHOLE blob
+      (``{"_warning": ...}``, no per-key nesting at all — there was no
+      per-key attempt to isolate because the client itself was unusable
+      before any fetch). PR #770 review: the first cut here only checked the
+      nested shape, so ``get_client()`` returning falsy or raising —
+      degrading EVERY requested dispatcharr category at once — silently
+      produced an EMPTY ``degraded`` list and a clean-success TaskResult on
+      the worst possible input. The un-nested shape is intentionally
+      preserved on the wire (it is the long-standing artifact/export shape
+      the restore-side decoder already tolerates —
+      ``tests/dbas/test_restore_artifact_decode.py`` — so this is a
+      DETECTION-side fix, not a producer-side format change).
     """
     # include_credentials (D12) preserves the approved migration-cred allowlist
     # (== _REDACT_KEYS; password_hash is never in that set and so is never
@@ -623,6 +640,20 @@ async def _gather_redacted_categories(
         if isinstance(dispatcharr_blob, dict):
             section_value = dispatcharr_blob.get(key)
             if isinstance(section_value, dict) and "_warning" in section_value:
+                # Per-fetch stub: THIS key's own upstream call failed while
+                # nested under its own key (isolation contract intact).
+                degraded.append(key)
+            elif (
+                key not in dispatcharr_blob
+                and "_warning" in dispatcharr_blob
+                and RESTORABLE_SECTIONS[key].get("dispatcharr")
+            ):
+                # Total-client-unavailability stub (PR #770 review): the
+                # WHOLE blob is a single un-nested {"_warning": ...} — there
+                # was no per-key fetch attempt at all, so THIS
+                # dispatcharr-backed key never got real data either. Since
+                # this function always requests exactly ONE key per call,
+                # this shape unambiguously means "key" is degraded.
                 degraded.append(key)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
