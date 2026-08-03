@@ -159,11 +159,16 @@ class CoreSettingIdResolver:
         if self._id_map is None and not self._fetch_failed:
             try:
                 self._id_map = await self._client.get_core_setting_id_map()
-            except Exception:
+            except Exception as exc:
                 self._fetch_failed = True
+                # Exception TYPE name only -- never the exception's message text
+                # (no-key-names/no-URLs hygiene: the message could echo a
+                # request URL or upstream body). The type alone is enough for an
+                # operator to distinguish timeout vs 5xx vs unreachable at 3 AM.
                 logger.warning(
                     "[DBAS-SETTINGS] Could not read the destination core-settings "
-                    "list; no setting can be resolved this run."
+                    "list (%s); no setting can be resolved this run.",
+                    type(exc).__name__,
                 )
         if self._fetch_failed:
             # Payload-free and unchained: an upstream error's text can echo the
@@ -682,7 +687,7 @@ async def _apply_settings_blob(
                     label=f"{source_label}:{setting_name}",
                     message=(
                         "Could not read the destination Dispatcharr settings list, "
-                        f"so setting '{setting_name}' could not be applied."
+                        f"so setting '{setting_name}' could not be resolved/applied."
                     ),
                     source_export_id=None,
                 )

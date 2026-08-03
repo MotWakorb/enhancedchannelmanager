@@ -77,6 +77,23 @@ class _AutoIdMap(dict):
             self[key] = self._next_id
         return self[key]
 
+    def __eq__(self, other):
+        """Delegate to dict CONTENTS only -- ``_next_id`` is autovivification
+        bookkeeping, not identity. CodeQL flags a class that adds mutable state
+        (``_next_id``) without an explicit ``__eq__``: two instances with the
+        same entries but different mint-counters must still compare equal, and
+        this makes that contract explicit rather than relying on dict's
+        inherited (content-only) equality by accident.
+        """
+        if not isinstance(other, dict):
+            return NotImplemented
+        return dict(self) == dict(other)
+
+    # Defining __eq__ makes a class unhashable by default in Python 3 (this is
+    # already true here since dict itself is unhashable) -- spelled out
+    # explicitly so the mutable-equality contract above is fully documented.
+    __hash__ = None
+
 
 def _applied_setting_ids(client):
     """The destination row ids the importer PATCHed."""
@@ -163,6 +180,29 @@ def _remap(**kwargs):
 
 def _cat(report, entity_type):
     return report.category(entity_type)
+
+
+def test_auto_id_map_eq_delegates_to_dict_contents():
+    """``_AutoIdMap.__eq__`` compares CONTENTS only -- two instances with the
+    same entries but different ``_next_id`` mint-counters are still equal, and
+    an instance is equal to a plain dict with the same entries. Content that
+    differs (including a differing minted id) makes them unequal."""
+    a = _AutoIdMap({"ui_theme": 1000})
+    b = _AutoIdMap({"ui_theme": 1000})
+    a.get("default_user_agent")  # advances a's _next_id past b's
+    assert a._next_id != b._next_id
+    assert a != b  # the mint advanced a's contents (new key), not just its counter
+
+    c = _AutoIdMap({"ui_theme": 1000})
+    # A second, freshly-constructed instance with the SAME contents as `a`
+    # (including the minted key) is equal to it -- proves equality is a
+    # property of contents, not object identity (no self-comparison, which
+    # trips CodeQL's py/comparison-of-identical-expressions).
+    a_same_contents = _AutoIdMap({"ui_theme": 1000, "default_user_agent": a["default_user_agent"]})
+    assert a == a_same_contents
+    assert b == c  # same contents, same untouched counters
+    assert b == {"ui_theme": 1000}  # equal to a plain dict with the same entries
+    assert b != {"ui_theme": 1000, "other": 2}
 
 
 # ===========================================================================
@@ -644,6 +684,33 @@ async def test_core_settings_dry_run_resolver_fetch_failure_reports_would_fail()
 
 
 @pytest.mark.asyncio
+async def test_core_settings_resolver_fetch_failure_message_accurate_for_dry_run():
+    """The per-key failure message for a resolver-fetch failure must be
+    accurate on a DRY RUN -- nothing was ever attempted to be APPLIED at that
+    point, only RESOLVED (PR #766 review nit: the prior wording said "...could
+    not be applied" unconditionally, which overclaims an apply attempt that
+    never happens in the dry-run branch). The apply branch hits this exact same
+    code path (message parity -- one source string for both modes), so the
+    wording must be accurate for both."""
+    client = _client(setting_id_map_side_effect=RuntimeError("boom"))
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    detail = cat.failure_details[0]
+    assert "could not be applied" not in detail.message.lower()
+    assert "resolved" in detail.message.lower()
+
+
+@pytest.mark.asyncio
 async def test_core_settings_dry_run_denylisted_key_never_resolved():
     """A denylisted key keeps its existing dry-run treatment: it is would-skip
     by NAME and is NEVER passed to the resolver — resolving it would cost an
@@ -898,6 +965,84 @@ async def test_settings_id_map_fetch_failure_fails_keys_without_refetching():
     assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
     client.update_core_setting.assert_not_called()
     assert client.get_core_setting_id_map.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetch_failure_logs_exception_type(caplog):
+    """The resolver's fetch-failure warning names the EXCEPTION TYPE (so an
+    operator can distinguish timeout vs 5xx vs unreachable at 3 AM) WITHOUT
+    echoing the exception's message text -- the message could carry a request
+    URL or an upstream response fragment (no-key-names/no-URLs hygiene)."""
+
+    class _SimulatedTimeout(RuntimeError):
+        pass
+
+    client = _client(
+        setting_id_map_side_effect=_SimulatedTimeout(
+            "connect to 10.0.0.5:9191 timed out"
+        )
+    )
+    report = _report()
+
+    with caplog.at_level(logging.WARNING):
+        await import_core_settings(
+            archive_core_settings={"ui_theme": "dark"},
+            client=client,
+            selected=True,
+            report=report,
+            ledger=_ledger(),
+        )
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("_SimulatedTimeout" in m for m in messages)
+    assert not any("10.0.0.5" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_core_settings_patch_failure_after_resolution_fails_that_key():
+    """A key that RESOLVES to a destination row id but whose PATCH itself then
+    fails (upstream 500, network blip, ...) fails ONLY that key
+    UPSTREAM_API_ERROR — successful id resolution is not a guarantee the apply
+    succeeds. Other keys in the same blob still apply; one bad PATCH does not
+    poison the whole run. The failing key is deliberately FIRST in the archive
+    (not last) so an early-return regression -- one that stops processing the
+    blob after the first failure instead of continuing to later keys -- cannot
+    escape this test. This is the original enhancedchannelmanager-q6xjl failure
+    text ("Upstream rejected applying setting ...") with no dedicated pin
+    before this test.
+    """
+    id_map = {"default_user_agent": 6, "ui_theme": 21}
+
+    def _patch_side_effect(setting_id, value):
+        if setting_id == id_map["default_user_agent"]:
+            raise RuntimeError("upstream 500")
+        return {"id": setting_id, "value": value}
+
+    client = _client(
+        setting_id_map=id_map, settings_patch_side_effect=_patch_side_effect
+    )
+    report = _report()
+
+    await import_core_settings(
+        archive_core_settings={"default_user_agent": "VLC", "ui_theme": "dark"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    cat = _settings_category(report)
+    # The good key still applied — one bad PATCH does not poison the blob.
+    assert cat.updated == 1
+    assert cat.failed == 1
+    # Both keys resolved and both PATCHes were attempted (id 6's raised).
+    assert _applied_setting_ids(client) == {21, 6}
+
+    detail = next(
+        d for d in cat.failure_details if d.label.endswith(":default_user_agent")
+    )
+    assert detail.reason == FailureReason.UPSTREAM_API_ERROR
+    assert "default_user_agent" in detail.message
 
 
 # ===========================================================================

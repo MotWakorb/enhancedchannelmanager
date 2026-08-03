@@ -237,6 +237,75 @@ async def test_get_core_setting_id_map_handles_paginated_envelope():
 
 
 @pytest.mark.asyncio
+async def test_get_core_setting_id_map_follows_next_across_multiple_pages():
+    """A DRF-paginated envelope with a non-null ``next`` is followed to
+    completion — the docstring has long claimed paginated-envelope support, but
+    only page 1 was ever actually read. A future/larger settings list must not
+    silently lose every key past page 1 (which would fail those keys
+    DEPENDENCY_UNRESOLVED even though the destination genuinely has them)."""
+    client = _make_client()
+    try:
+        page1 = _response(
+            200,
+            {
+                "count": 2,
+                "next": "http://dispatcharr:8000/api/core/settings/?page=2",
+                "results": [{"id": 1, "key": "network_access", "value": "x"}],
+            },
+        )
+        page2 = _response(
+            200,
+            {
+                "count": 2,
+                "next": None,
+                "results": [{"id": 2, "key": "ui_theme", "value": "dark"}],
+            },
+        )
+        rm = AsyncMock(side_effect=[page1, page2])
+        with patch.object(client, "_request", rm):
+            id_map = await client.get_core_setting_id_map()
+
+        assert id_map == {"network_access": 1, "ui_theme": 2}
+        assert rm.await_count == 2
+        # Second request advances the page param — never re-requests page 1.
+        second_call_kwargs = rm.await_args_list[1].kwargs
+        assert second_call_kwargs.get("params") == {"page": 2}
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_core_setting_id_map_page_cap_exceeded_fails_loudly():
+    """A ``next`` chain that never terminates is bounded, not followed forever.
+
+    Exceeding the defensive page cap raises loudly (the resolver's broad
+    ``except Exception`` then fails every key UPSTREAM_API_ERROR) rather than
+    hanging the restore run or silently returning a partial map.
+    """
+    client = _make_client()
+    try:
+        def _endless_page(*args, **kwargs):
+            return _response(
+                200,
+                {
+                    "count": 9999,
+                    "next": "http://dispatcharr:8000/api/core/settings/?page=999",
+                    "results": [{"id": 1, "key": "k", "value": "v"}],
+                },
+            )
+
+        rm = AsyncMock(side_effect=_endless_page)
+        with patch.object(client, "_request", rm):
+            with pytest.raises(RuntimeError):
+                await client.get_core_setting_id_map()
+
+        # Bounded: it gave up at the cap, it did not loop forever.
+        assert rm.await_count <= 21
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_get_core_setting_id_map_drops_unusable_rows():
     """Rows without a usable string key or an integer id are dropped, not guessed.
 
