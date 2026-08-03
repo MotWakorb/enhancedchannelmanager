@@ -1,0 +1,20 @@
+{
+ "capture": {
+  "source": "Live GET /api/core/settings/ from Dispatcharr 0.28.2 (doc-test instance, bead enhancedchannelmanager-q6xjl)",
+  "fixture_kind": "literal shape capture with VALUES replaced",
+  "literal_raw_capture": false,
+  "captured_at": "2026-08-03",
+  "dispatcharr_version": "0.28.2",
+  "redaction": "The id/key/name of every row is the literal captured value. Every 'value' payload was replaced with a neutral placeholder -- the live values carry instance network CIDRs, proxy config and DVR paths, and nothing in ECM's key->id resolution reads them.",
+  "why": "Pins the response SHAPE the key->id resolver must handle: a BARE JSON list (not a paginated envelope) of {id, key, name, value} rows, with NON-CONTIGUOUS ids that do not correlate with list position. The 7 keys are exactly the 7 that failed with PATCH 404 in the q6xjl doc-test run."
+ },
+ "core_settings_list": [
+  {"id": 6, "key": "network_access", "name": "Network Access", "value": "<redacted>"},
+  {"id": 18, "key": "dvr_settings", "name": "DVR Settings", "value": "<redacted>"},
+  {"id": 19, "key": "backup_settings", "name": "Backup Settings", "value": "<redacted>"},
+  {"id": 21, "key": "user_limit_settings", "name": "User Limit Settings", "value": "<redacted>"},
+  {"id": 17, "key": "stream_settings", "name": "Stream Settings", "value": "<redacted>"},
+  {"id": 20, "key": "system_settings", "name": "System Settings", "value": "<redacted>"},
+  {"id": 7, "key": "proxy_settings", "name": "Proxy Settings", "value": "<redacted>"}
+ ]
+}

@@ -339,6 +339,17 @@ def _apply_client():
     client.create_user_agent = AsyncMock(return_value={"id": 771})
     client.get_dvr_rules = AsyncMock(return_value=[])
     client.create_dvr_rule = AsyncMock(return_value={"id": 781})
+    # Destination core-settings rows the key->id resolver maps the archive keys
+    # onto (q6xjl): the detail route is keyed by integer pk, so the importer
+    # resolves ids from the destination before PATCHing. ``provider_api_key`` is
+    # deliberately present here — proving it is denylisted, not merely absent.
+    client.get_core_setting_id_map = AsyncMock(
+        return_value={
+            "default_user_agent": 6,
+            "comskip_ini": 17,
+            "provider_api_key": 21,
+        }
+    )
     client.update_core_setting = AsyncMock(return_value={})
     client.create_user = AsyncMock(return_value={"id": 791})
     client.create_channel = AsyncMock(return_value={"id": 505})
@@ -432,9 +443,12 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     client.update_channel.assert_awaited_once_with(505, {"streams": [990]})
 
     # The denylisted settings key was skipped by NAME and its value never sent.
-    sent_keys = [c.args[0] for c in client.update_core_setting.await_args_list]
-    assert "provider_api_key" not in sent_keys
-    assert set(sent_keys) == {"default_user_agent", "comskip_ini"}
+    # Settings are PATCHed at the DESTINATION row id resolved for each key.
+    sent_ids = [c.args[0] for c in client.update_core_setting.await_args_list]
+    assert 21 not in sent_ids  # provider_api_key's row — never touched
+    assert set(sent_ids) == {6, 17}  # default_user_agent, comskip_ini
+    # core_settings + comskip share one namespace: ONE list fetch for the run.
+    assert client.get_core_setting_id_map.await_count == 1
 
     # --- 5. EPG-download wait ran for the CREATED source, before channels. ----
     client.refresh_epg_source.assert_awaited_once_with(751)

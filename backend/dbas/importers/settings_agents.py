@@ -29,9 +29,14 @@ SETTINGS categories — APPLY key/value config; NOT entity-create, NOT
 id-remapped, NOT ledgered as creates:
 
 * **core_settings** (:func:`import_core_settings`) — apply the archived core/
-  global settings to the destination via PER-KEY PATCH
-  (``client.update_core_setting``). Reported as ``updated`` / ``skipped`` on the
-  ``EntityType.SETTINGS`` report category — never ``created``, never ledgered.
+  global settings to the destination one row at a time
+  (``client.update_core_setting``). The archive carries key->value only, and
+  Dispatcharr's detail route is keyed by an integer pk, so each key is first
+  resolved to the DESTINATION's row id by the run-scoped
+  :class:`CoreSettingIdResolver` — one ``GET /api/core/settings/`` per apply run
+  (bead ``…-q6xjl``; the previous key-string URL 404'd on every key). Reported as
+  ``updated`` / ``skipped`` / ``failed`` on the ``EntityType.SETTINGS`` report
+  category — never ``created``, never ledgered.
 * **comskip** (:func:`import_comskip`) — same shape; a comskip config blob applied
   conservatively.
 
@@ -96,6 +101,77 @@ logger = logging.getLogger(__name__)
 # applied (updated/skipped), never created and never ledgered — this is a
 # report-only key, not a remap/ledger namespace.
 SETTINGS_CATEGORY_TYPE = EntityType.SETTINGS
+
+
+class CoreSettingNotFoundError(LookupError):
+    """A settings key in the archive has no row on the DESTINATION instance.
+
+    Carries NO payload deliberately: the only caller
+    (:func:`_apply_settings_blob`) already holds the key name and builds the
+    operator-facing message from its own variable, so the key name can never
+    reach a logging sink via this exception's text.
+    """
+
+
+class CoreSettingsUnavailableError(RuntimeError):
+    """The destination's core-settings list could not be read at all.
+
+    Distinct from :class:`CoreSettingNotFoundError`: nothing about the archive is
+    wrong, the destination just did not answer. Every key in the run fails
+    ``UPSTREAM_API_ERROR``. Payload-free for the same reason.
+    """
+
+
+class CoreSettingIdResolver:
+    """Resolve a core-setting KEY to the destination's row id, fetching ONCE.
+
+    Dispatcharr's core-settings detail route is ``/api/core/settings/{id}/`` with
+    an integer pk — a key-string URL matches no route and 404s
+    (enhancedchannelmanager-q6xjl: 7/7 settings failed exactly this way on a
+    same-instance round-trip). Row ids are per-instance and are NOT carried in a
+    backup artifact (the producer flattens core settings to key->value), so they
+    must be resolved against the destination at apply time.
+
+    One instance is shared for the whole apply run — core_settings and comskip
+    live in the SAME Dispatcharr settings namespace, so both blobs resolve
+    against a single ``GET /api/core/settings/``. The fetch is LAZY (a dry-run or
+    an opted-out category costs no request) and its outcome is memoized including
+    the failure case, so a dead destination cannot turn into a per-key fetch
+    storm.
+    """
+
+    def __init__(self, client: DispatcharrClient):
+        self._client = client
+        self._id_map: dict | None = None
+        self._fetch_failed = False
+
+    async def resolve(self, setting_name: str) -> int:
+        """Return the destination row id for ``setting_name``.
+
+        Raises:
+            CoreSettingsUnavailableError: the settings list could not be read.
+            CoreSettingNotFoundError: the destination has no row for this key.
+        """
+        if self._id_map is None and not self._fetch_failed:
+            try:
+                self._id_map = await self._client.get_core_setting_id_map()
+            except Exception:
+                self._fetch_failed = True
+                logger.warning(
+                    "[DBAS-SETTINGS] Could not read the destination core-settings "
+                    "list; no setting can be resolved this run."
+                )
+        if self._fetch_failed:
+            # Payload-free and unchained: an upstream error's text can echo the
+            # request URL or a response body carrying setting VALUES.
+            raise CoreSettingsUnavailableError(
+                "Destination core-settings list unavailable"
+            ) from None
+
+        setting_id = self._id_map.get(setting_name)
+        if not isinstance(setting_id, int):
+            raise CoreSettingNotFoundError from None
+        return setting_id
 
 # Archive-source identifiers the destination assigns itself, never forwarded.
 _SOURCE_ID_KEYS = frozenset({"id", "pk"})
@@ -487,15 +563,17 @@ async def _apply_settings_blob(
     report: RestoreReport,
     is_dry_run: bool,
     source_label: str,
+    id_resolver: CoreSettingIdResolver,
 ) -> None:
     """Apply a key/value settings blob conservatively (core_settings / comskip).
 
-    Safe keys (:func:`is_safe_setting_key`) are PATCHed per-key. Dangerous keys
-    are skipped (reported by NAME only — never their value). Results land on the
-    ``EntityType.SETTINGS`` report category as ``updated`` / ``skipped`` (or
-    ``would_update`` / ``would_skip`` on dry-run). NEVER ledgered (settings are
-    config, not created entities — rollback of settings is out of scope). NEVER
-    logs/echoes a setting VALUE.
+    Safe keys (:func:`is_safe_setting_key`) are PATCHed one row at a time, at the
+    destination row id ``id_resolver`` resolves for that key. Dangerous keys are
+    skipped (reported by NAME only — never their value). Results land on the
+    ``EntityType.SETTINGS`` report category as ``updated`` / ``skipped`` /
+    ``failed`` (or ``would_update`` / ``would_skip`` on dry-run). NEVER ledgered
+    (settings are config, not created entities — rollback of settings is out of
+    scope). NEVER logs/echoes a setting VALUE.
     """
     cat = report.category(SETTINGS_CATEGORY_TYPE)
 
@@ -553,9 +631,55 @@ async def _apply_settings_blob(
             cat.would_update += 1
             continue
 
+        # Resolve the DESTINATION row id for this key before PATCHing — the
+        # detail route is keyed by integer pk, and an archive carries no ids
+        # (enhancedchannelmanager-q6xjl). The resolver fetches the list once per
+        # apply run and serves every later lookup from memory.
         try:
-            await client.update_core_setting(setting_name, setting_value)
-        except Exception as exc:
+            setting_id = await id_resolver.resolve(setting_name)
+        except CoreSettingNotFoundError:
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                    label=f"{source_label}:{setting_name}",
+                    message=(
+                        f"Setting key '{setting_name}' is not present on the "
+                        "destination Dispatcharr; nothing was applied for it."
+                    ),
+                    source_export_id=None,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] %s setting %s has no row on the destination; "
+                "not applied.",
+                source_label,
+                _safe_key_label(setting_index, setting_name),
+            )
+            continue
+        except Exception:
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.UPSTREAM_API_ERROR,
+                    label=f"{source_label}:{setting_name}",
+                    message=(
+                        "Could not read the destination Dispatcharr settings list, "
+                        f"so setting '{setting_name}' could not be applied."
+                    ),
+                    source_export_id=None,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Could not resolve %s setting %s.",
+                source_label,
+                _safe_key_label(setting_index, setting_name),
+            )
+            continue
+
+        try:
+            await client.update_core_setting(setting_id, setting_value)
+        except Exception:
             cat.failed += 1
             cat.failure_details.append(
                 FailureDetail(
@@ -590,12 +714,19 @@ async def import_core_settings(
     report: RestoreReport,
     ledger: RollbackLedger,  # accepted for entry-point symmetry; settings NEVER ledger
     is_dry_run: bool = False,
+    id_resolver: CoreSettingIdResolver | None = None,
 ) -> None:
-    """Apply archived core/global settings conservatively (denylist; per-key PATCH).
+    """Apply archived core/global settings conservatively (denylist; per-row PATCH).
 
     See module docstring: dangerous keys are skipped (by name), safe keys applied,
     reported updated/skipped on ``EntityType.SETTINGS``, NEVER created, NEVER
     ledgered (settings rollback is out of scope). NEVER logs a setting value.
+
+    Args:
+        id_resolver: The run-scoped key->row-id resolver. Pass the SAME instance
+            used for :func:`import_comskip` so one apply run costs one
+            ``GET /api/core/settings/``; omitted, a private one is created (still
+            one GET, just not shared).
     """
     await _apply_settings_blob(
         archive_settings=archive_core_settings,
@@ -604,6 +735,7 @@ async def import_core_settings(
         report=report,
         is_dry_run=is_dry_run,
         source_label="core_settings",
+        id_resolver=id_resolver or CoreSettingIdResolver(client),
     )
 
 
@@ -615,11 +747,16 @@ async def import_comskip(
     report: RestoreReport,
     ledger: RollbackLedger,  # accepted for symmetry; comskip settings NEVER ledger
     is_dry_run: bool = False,
+    id_resolver: CoreSettingIdResolver | None = None,
 ) -> None:
     """Apply archived comskip config conservatively — same shape as core settings.
 
     Dangerous keys skipped (by name), safe keys applied; reported updated/skipped;
     never created, never ledgered. NEVER logs a setting value.
+
+    Comskip config lives in the SAME Dispatcharr core-settings namespace (there is
+    no comskip endpoint), so ``id_resolver`` is the same run-scoped resolver the
+    core_settings blob uses — see :func:`import_core_settings`.
     """
     await _apply_settings_blob(
         archive_settings=archive_comskip,
@@ -628,6 +765,7 @@ async def import_comskip(
         report=report,
         is_dry_run=is_dry_run,
         source_label="comskip",
+        id_resolver=id_resolver or CoreSettingIdResolver(client),
     )
 
 
@@ -687,6 +825,9 @@ async def import_settings_agents(
         remap=remap,
         is_dry_run=is_dry_run,
     )
+    # ONE resolver for both settings blobs — they share Dispatcharr's single
+    # core-settings namespace, so the run costs one GET (q6xjl).
+    id_resolver = CoreSettingIdResolver(client)
     await import_core_settings(
         archive_core_settings=archive.get("core_settings") or {},
         client=client,
@@ -694,6 +835,7 @@ async def import_settings_agents(
         report=report,
         ledger=ledger,
         is_dry_run=is_dry_run,
+        id_resolver=id_resolver,
     )
     await import_comskip(
         archive_comskip=archive.get("comskip") or {},
@@ -702,4 +844,5 @@ async def import_settings_agents(
         report=report,
         ledger=ledger,
         is_dry_run=is_dry_run,
+        id_resolver=id_resolver,
     )

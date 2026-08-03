@@ -260,8 +260,8 @@ def test_settings_hash_changes_when_any_field_changes():
 # ---------------------------------------------------------------------------
 # Clear-text-logging hygiene for the shared ``_request`` (bead 0i2vt.13).
 # CodeQL py/clear-text-logging-sensitive-data flagged 5 sinks in ``_request``
-# because a credential-named value can flow into ``path`` (e.g.
-# ``update_core_setting`` builds it from a settings key) and an httpx exception
+# because a credential-named value can flow into ``path`` (callers interpolate
+# caller-supplied identifiers into it) and an httpx exception
 # can embed the full request URL with a token. The error path must log only the
 # HTTP method, status code, and exception TYPE -- never the path, the full
 # exception object, or ``str(e)``.
