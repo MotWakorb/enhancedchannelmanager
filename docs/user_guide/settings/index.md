@@ -89,21 +89,21 @@ step. A bookmarked `#settings/lookup-tables` link resolves to General.
 
 ## Articles
 
-| Article | Group | Purpose | Status |
-|-|-|-|-|
-| [`general-settings.md`](general-settings.md) | Connections | Dispatcharr connection, stats polling, timezone, logging, debug bundle. | **Shipped** |
-| [`channel-defaults.md`](channel-defaults.md) | Channel Processing | Naming, timezone, channel profiles, EPG matching, dedup, Smart Sort. | **Shipped** |
-| [`channel-normalization.md`](channel-normalization.md) | Channel Processing | The two Settings-level normalization toggles; defers to `docs/normalization.md` for rule authoring. | **Shipped** |
-| [`tags.md`](tags.md) | Channel Processing | Managing the built-in tag vocabularies normalization rules match against. | **Shipped** |
-| [`m3u-digest.md`](m3u-digest.md) | Notifications & Reports | Turning on and scoping the M3U change digest email/Discord report. | **Shipped** |
-| [`scheduled-tasks.md`](scheduled-tasks.md) | Upkeep | Running, editing, and reading the history of any of ECM's 17 scheduled tasks. | **Shipped** |
-| [`maintenance.md`](maintenance.md) | Upkeep | Stream probing, probe history, orphaned groups, struck-out/stale streams, diagnostics. | **Shipped** |
-| [`appearance.md`](appearance.md) | Workspace | Theme, date format, display options, VLC/stream-preview behavior. | **Shipped** |
-| [`linked-accounts.md`](linked-accounts.md) | Workspace | Linking an external identity to your account. | **Shipped** |
-| [`authentication.md`](authentication.md) | Administration | Requiring login, local auth, Dispatcharr SSO. | **Shipped** |
-| [`user-management.md`](user-management.md) | Administration | Creating, editing, and deactivating user accounts. | **Shipped** |
-| [`tls-certificates.md`](tls-certificates.md) | Administration | Enabling HTTPS with Let's Encrypt (DNS-01) or a manual certificate. | **Shipped** |
-| [`mcp-integration.md`](mcp-integration.md) | Administration | Thin pointer to the full MCP connection reference. | **Shipped** |
+| Article | Group | Purpose |
+|-|-|-|
+| [General Settings](general-settings.md) | Connections | Dispatcharr connection, stats polling, timezone, logging, debug bundle. |
+| [Channel Defaults](channel-defaults.md) | Channel Processing | Naming, timezone, channel profiles, EPG matching, dedup, Smart Sort. |
+| [Channel Normalization](channel-normalization.md) | Channel Processing | The two Settings-level normalization toggles; defers to `docs/normalization.md` for rule authoring. |
+| [Tags](tags.md) | Channel Processing | Managing the built-in tag vocabularies normalization rules match against. |
+| [M3U Change Digest](m3u-digest.md) | Notifications & Reports | Turning on and scoping the M3U change digest email/Discord report. |
+| [Scheduled Tasks](scheduled-tasks.md) | Upkeep | Running, editing, and reading the history of any of ECM's 17 scheduled tasks. |
+| [Maintenance](maintenance.md) | Upkeep | Stream probing, probe history, orphaned groups, struck-out/stale streams, diagnostics. |
+| [Appearance](appearance.md) | Workspace | Theme, date format, display options, VLC/stream-preview behavior. |
+| [Linked Accounts](linked-accounts.md) | Workspace | Linking an external identity to your account. |
+| [Authentication](authentication.md) | Administration | Requiring login, local auth, Dispatcharr SSO. |
+| [User Management](user-management.md) | Administration | Creating, editing, and deactivating user accounts. |
+| [TLS Certificates](tls-certificates.md) | Administration | Enabling HTTPS with Let's Encrypt (DNS-01) or a manual certificate. |
+| [MCP Integration](mcp-integration.md) | Administration | Thin pointer to the full MCP connection reference. |
 
 Three destinations in the live navigation aren't covered by a new article
 here because they already have a home elsewhere in the user guide. See the
@@ -117,6 +117,6 @@ rather than duplicating it.
 
 ## Going deeper
 
-- [`docs/design/settings-information-architecture.md`](../../design/settings-information-architecture.md): the UX proposal and PO decisions (D1–D5) behind the current grouping. Preserved as historical analysis, not updated for shipped state.
-- [`docs/architecture.md`](../../architecture.md): system overview, for how Settings values flow into the rest of ECM.
-- [`docs/api.md`](../../api.md): HTTP API reference, if you want to read or write settings programmatically instead of through the UI.
+- [`docs/design/settings-information-architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/design/settings-information-architecture.md) (on the `dev` branch; not yet on `main`): the UX proposal and PO decisions (D1–D5) behind the current grouping. Preserved as historical analysis, not updated for shipped state.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): system overview, for how Settings values flow into the rest of ECM.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): HTTP API reference, if you want to read or write settings programmatically instead of through the UI.

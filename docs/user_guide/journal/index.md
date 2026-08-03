@@ -33,5 +33,5 @@ Journal is ECM's forensic record of every channel, EPG, M3U, watch, task, Channe
 ## Going deeper
 
 - [Channel Pipeline](../channel-pipeline/index.md): the biggest single source of Journal volume; rule runs, auto-creation, and rollback all write entries here.
-- [Event Sync](../../event_sync.md): Event Sync activity is journaled under its own category; the dev guide explains what triggers it.
-- [`docs/api.md#journal`](../../api.md#journal): the `/api/journal` endpoints behind this page, useful if you want to query the Journal programmatically instead of filtering in the UI.
+- [Event Sync](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md): Event Sync activity is journaled under its own category; the dev guide explains what triggers it.
+- [`docs/api.md#journal`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#journal): the API reference for the Journal, useful if you want to query it programmatically instead of filtering in the UI.

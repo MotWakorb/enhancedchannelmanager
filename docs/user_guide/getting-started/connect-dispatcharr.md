@@ -130,5 +130,5 @@ across the workspace. ECM has settings but nothing to manage.
 - [First run](first-run.md): what leads into this step, including the preflight config-persistence check.
 - [Set up your first channels](your-first-channels.md): once the connection is healthy, this is the end-to-end workflow: M3U account, EPG source, channels, groups, streams.
 - [Find your way around the operator workspace](../operator-workspace.md): the full sidebar and Settings-section map, if you want more than the one path used above.
-- [`docs/dispatcharr_api.md`](../../dispatcharr_api.md): what ECM expects from Dispatcharr's API surface, for a deeper dive on the integration contract.
-- [`docs/architecture.md`](../../architecture.md): system overview, including where the outbound-connection safety check (SSRF policy) fits.
+- [`docs/dispatcharr_api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/dispatcharr_api.md) (in the repository, not part of this published guide): what ECM expects from Dispatcharr's API surface, for a deeper dive on the integration contract.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md) (in the repository, not part of this published guide): system overview, including where the outbound-connection safety check (SSRF policy) fits.

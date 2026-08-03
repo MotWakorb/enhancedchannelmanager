@@ -291,88 +291,44 @@ effectively dead.
 ## How to run the analyzer
 
 There is **no UI surface for the analyzer today.** This is a known gap tracked
-separately. The three current ways to run it are:
+separately. Until a UI exists, running the analyzer requires API or MCP
+access, or working through an AI assistant. Two modes are available:
 
-### 1. Call the API directly (live mode)
+### Live mode
 
-```
-POST /api/channel-pipeline/rules/analyze
-```
+Run the analyzer against your currently saved rules. It is read-only: ECM
+reads every rule from the database and returns the analysis immediately,
+without changing anything. The result lists each rule, its findings (if any),
+and a summary count by severity. Rules with no findings are included with an
+empty findings list.
 
-(The deprecated `/api/auto-creation/...` alias still works; see `docs/api.md`.)
+### Bundle mode
 
-No request body needed. ECM reads all rules from the database and returns the
-analysis immediately.
+Run the analyzer against a previously generated debug bundle instead of your
+live database. **It never touches the database.** This is the safe way to get
+support help: because bundle mode does not read your live installation, you
+can hand a bundle to someone helping you (another operator, a support helper,
+an AI assistant) without exposing your live channel data. The helper runs the
+analysis on their end against the bundle you provided.
 
-This endpoint requires authentication. See [`docs/api.md`](../../api.md) for
-how to authenticate.
-
-Response shape:
-
-```json
-{
-  "rules": [
-    {
-      "rule_id": 2,
-      "rule_name": "Sports Networks - excl Fr and Es",
-      "findings": [
-        {
-          "code": "REGEX_TRIVIALLY_MATCHES_ALL",
-          "severity": "warning",
-          "field": "conditions[1].value",
-          "message": "...",
-          "suggestion": "...",
-          "detail": { "reason": "empty-alternation" }
-        }
-      ]
-    }
-  ],
-  "summary": { "error": 0, "warning": 6, "info": 0 }
-}
-```
-
-Rules with no findings appear in the list with an empty `findings` array. The
-`summary` counts findings by severity across all rules.
-
-### 2. Upload a debug bundle (from-bundle mode)
-
-```
-POST /api/channel-pipeline/rules/analyze/from-bundle
-```
-
-Upload a debug bundle (`tar.gz`) as a multipart file field named `file`. ECM
-reads `rules.yaml` from inside the bundle and runs the same analysis.
-**It never touches the database**.
-
-This is the safe way to get support help. Because the from-bundle endpoint does
-not read your live installation, you can hand a bundle to someone helping you
-(another operator, a support helper, an AI assistant) without exposing your
-live channel data. The helper runs the analysis on their end against the bundle
-you provided.
-
-To generate a debug bundle from your ECM installation:
-
-1. `POST /api/channel-pipeline/debug-bundle`: starts the bundle build and returns
-   a `job_id`.
-2. `GET /api/channel-pipeline/debug-bundle/{job_id}`: poll until `status` is no
-   longer `"running"`. When ready, the response is the `tar.gz` file itself
-   (download it).
-
-If the bundle includes `channel_groups_diagnostic.json` (all bundles generated
-by the current debug-bundle endpoint include this), the
+If the bundle includes `channel_groups_diagnostic.json` (included in every
+currently generated bundle), the
 [`MERGE_STREAMS_NO_TARGET_CHANNELS`](#merge_streams_no_target_channels) finding
 becomes available. Without it, that check is skipped. The analyzer never
 invents findings from data it does not have.
 
-### 3. Use the `/analyze-rules` agent command
+### Through an AI assistant
 
 If you are working with an AI assistant (Claude Code or the ECM MCP server),
 the `/analyze-rules` command runs the analyzer and formats the results as a
-readable report. See [`docs/commands/analyze-rules.md`](../../commands/analyze-rules.md)
-for how to invoke it and what arguments it accepts.
+readable report. See [`docs/commands/analyze-rules.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/commands/analyze-rules.md)
+for how to invoke it and what arguments it accepts. The command can run in
+live mode (against the current database) or bundle mode (pass a path to a
+debug bundle).
 
-The command can run in live mode (against the current database) or bundle mode
-(pass a path to a debug bundle `tar.gz`).
+For the underlying API reference (live mode, bundle mode, debug-bundle
+generation, authentication, and the exact response shape), see
+[`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md).
 
 ---
 
@@ -394,7 +350,7 @@ To diagnose this class of mismatch, use **Settings → Normalization → Test
 Rules**: paste the raw stream name and inspect the trace. The trace shows you
 exactly what the engine sees when evaluating conditions.
 
-See [`docs/normalization.md`](../../normalization.md) for the full normalization
+See [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md) for the full normalization
 reference and the parity contract.
 
 ---
@@ -416,13 +372,13 @@ For the per-rule dry-run, see test-a-rule.md (planned).
 
 ## Going deeper
 
-- [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md):
+- [`docs/channel_pipeline_rule_analyzer.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/channel_pipeline_rule_analyzer.md):
   the full technical reference: all finding codes with the exact trigger
   logic, the response JSON schema, implementation notes, and what Phase 2 will
   add.
-- [`docs/api.md`](../../api.md): the `/api/channel-pipeline/rules/analyze` and
-  `/api/channel-pipeline/rules/analyze/from-bundle` endpoints.
-- [`docs/commands/analyze-rules.md`](../../commands/analyze-rules.md): the
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the API reference for running the analyzer
+  programmatically, in both live and bundle mode.
+- [`docs/commands/analyze-rules.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/commands/analyze-rules.md): the
   `/analyze-rules` agent command.
-- [`docs/normalization.md`](../../normalization.md): normalization concepts,
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md): normalization concepts,
   the parity contract, and the Test Rules preview tool.

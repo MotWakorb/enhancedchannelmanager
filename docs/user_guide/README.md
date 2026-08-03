@@ -51,6 +51,16 @@ The rule of thumb: if the audience is "someone trying to **use** ECM to manage t
 - **Show the result.** Where a workflow has a verifiable end state (a new channel exists, a backup file appears, a setting takes effect), say what the user will see. "It works" is not a verification step. See `docs/_shared/engineering-discipline.md` style "Verification of Completion."
 - **Stub before article.** Every section in this scaffold ships as a stub (purpose, audience, placeholder TOC). The actual articles are filed as separate beads and written in their own PRs. This keeps user-facing content reviewable in small chunks and lets each article be evaluated by both UX (for the user model) and Tech Writer (for clarity).
 
+## What must never appear in published guide pages
+
+These are PO-ruled hard exclusions, not style preferences. If you're drafting or reviewing an article and one of these shows up, cut it before the PR opens.
+
+- **No internal tracking artifacts.** ADR numbers, bead ids, epic ids, and `Status:`/tracking banners never appear in published pages. Coverage tracking lives in this README — see [Planned-article backlog](#planned-article-backlog-moved-from-published-indexes) — not in the article itself.
+- **No source files or code symbols.** No `backend/…`/`frontend/…` paths, function/class names, or code constants. State the behavior, not where it lives in the codebase. Dev notes belong in the dev docs, not here.
+- **No raw API endpoints as workarounds.** If a capability has no UI, say so plainly ("there is currently no way to do this from the web UI") instead of citing the endpoint or an MCP tool as the escape hatch. The gap statement is intentional — it keeps missing UI visible as a product problem instead of quietly papering over it with a curl command.
+- **Explicit keep-exceptions (PO-ruled).** The exclusions above are not absolute. These stay: documented operator verification commands (the health-check curls); URLs operators paste as configuration (feeds, webhooks); log-line examples that show `/api/` paths as illustrative output; operator-invoked CLI scripts and runtime paths (`reset_password.py`, `/config/backups/`, `journal.db`); third-party APIs described for integration context (e.g. Emby's); the MCP integration articles and dedicated MCP tool-name sections that document that shipped feature; genuine automation alternatives where a fully functional UI already exists (error-telemetry's "Via the API"); and safety-critical migration/data-rescue commands that are the only documented procedure (lookup-tables-retired's export curls).
+- **Cross-references leave the guide as links to the public GitHub repo** (`blob/main` for files, `tree/main` for directories), never as relative links into excluded docs. Article tables in section indexes use nav titles, never filenames.
+
 ## Per-destination tutorial template
 
 Every ECM primary destination gets a "Common tasks" tutorial article that follows the
@@ -219,3 +229,68 @@ Existing docs that complement (and are linked from) the user guide:
 - Writing the actual articles. Each section ships as a stub. Articles are individual downstream beads.
 - Building a docs site / static-site generator. ECM docs are read from the repo today; if a docs site is ever introduced, the IA here is the authoritative source for nav structure.
 - Localising the docs. English-only for now; if i18n is added later, the file structure will accommodate it without restructuring the IA.
+
+## Planned-article backlog (moved from published indexes)
+
+The tables below used to live under a "Planned articles" heading in the
+published section indexes. That leaked internal authoring-tracker content to
+operators, so they were removed from the public guide (enhancedchannelmanager-qq0na)
+and relocated here verbatim. This is the writers' backlog, not
+reader-facing content — do not restore these tables to the published
+`index.md` files.
+
+**Note:** at the time of this move, every filename below already exists as a
+written file on disk in its section directory, but none of them are linked
+from their section's index or listed in `mkdocs.yml`'s `nav:`, so they are
+unreachable from the published site. That's a separate stale-tracker problem
+from the one this move fixes — see the PO decision flagged in the
+enhancedchannelmanager-qq0na close-out before wiring any of these in.
+
+### Channels & Streams
+
+| Article | Purpose |
+|-|-|
+| `streams-overview.md` | The Streams pane: what a stream is, where it came from (M3U source), and how it relates to a channel. |
+| `assign-streams-to-channels.md` | The matching workflow: manual assignment, the impact of normalization on auto-matching, what happens when a stream's source moves. |
+| `channel-groups-and-tags.md` | When to use channel groups vs. tags, how Dispatcharr consumes them, ordering semantics. |
+| `the-journal.md` | The Journal page: what changes ECM records, how to filter by entity, how to find the change that broke something. |
+| `logos.md` | The Logo Manager: uploading logos, where they're stored, how Dispatcharr picks them up. |
+
+### Getting Started
+
+| Article | Purpose |
+|-|-|
+| `verify-healthy-connection.md` | What a healthy connection looks like (channels visible, streams visible, no banner warnings), plus the `/health` endpoint as the operator-friendly readiness check. This is currently covered inline in `connect-dispatcharr.md`'s "Confirm the connection is healthy" section; a dedicated article may be split out later. |
+
+### Normalization
+
+| Article | Purpose |
+|-|-|
+| `concepts.md` | What normalization is and isn't, in operator language. The three places it runs (Test Rules, Auto Create, Apply to existing channels) and why they must agree. Quick pointer to the parity contract for operators who care. |
+| `author-your-first-rule.md` | Walk-through: open Settings → Normalization Rules, add a rule, preview it in Test Rules, save it. Includes the "iterate before saving" discipline. |
+| `rule-groups-and-ordering.md` | Why groups exist, group priority vs. rule priority, the pipeline semantics (each rule sees the previous rule's output). |
+| `condition-and-action-types.md` | Tour of the available condition types (regex, prefix, contains, etc.) and action types (replace, strip, lowercase, etc.) with short examples. |
+| `apply-to-existing-channels.md` | The one-time bulk rewrite flow: when to use it, what gets changed, undo/safety notes, expected duration on a large library. |
+| `when-things-look-wrong.md` | "Test Rules and Auto Create disagree": what that means, why it's a bug not a configuration issue, and the path to escalation (link to the canary-divergence runbook). |
+
+### Notifications & Alert Methods
+
+This index covers the workflow end-to-end. As the surface grows, the following deeper articles will be split off:
+
+| Article | Purpose |
+|-|-|
+| `email-recipients-deep-dive.md` | RFC 5322 edge cases, paste normalization rules, the Alert Methods data model behind the scenes, migrating from older free-text recipient fields. |
+| `discord-webhook-customization.md` | Embed formatting, mentioning roles in alerts, channel routing strategies if you outgrow a single shared webhook. |
+| `telegram-bot-setup.md` | Step-by-step BotFather walk-through with screenshots, locating chat IDs in groups vs. channels vs. supergroups, bot privacy mode caveats. |
+| `alert-routing-patterns.md` | Worked examples: "send only errors to Discord, all severities to email," "info alerts for one task only," etc. |
+
+### Troubleshooting
+
+| Article | Purpose |
+|-|-|
+| `common-issues.md` | Top failure modes by category (connection, Channel Pipeline, normalization, EPG, restore), with the first-three-things-to-check for each. |
+| `read-the-logs.md` | Where ECM logs to, what severity levels mean, how to grep effectively, the `[SAFE_REGEX]` and other tagged messages an operator might encounter. Cross-references the `logs` skill. |
+| `ui-banners-and-warnings.md` | Catalogue of the warning banners ECM may surface and what each one means. |
+| `gather-support-information.md` | What to capture before asking for help: version (`docs/versioning.md` for context), recent journal entries, relevant log slice, Dispatcharr version, browser if it's a UI bug. Focused on making the support loop short. |
+| `escalation-paths.md` | Where to ask for help: Discord, GitHub issues, and (for self-hosted operators with on-call) the runbooks tree. |
+| `recovery-patterns.md` | "I made a change I want to undo": the journal, undo/redo, restore from backup, when to use which. |

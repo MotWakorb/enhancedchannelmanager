@@ -39,8 +39,7 @@ zeroed summary row shown above.
 
 **Result:** a one-click path from a single session to "show me
 everything else like this." **On this instance:** there were no rows to
-expand. This step is described from `WatchHistoryPanel.tsx`, not
-confirmed against a live render.
+expand, so this step has not been confirmed against a live render.
 
 ## Going deeper
 
@@ -49,5 +48,5 @@ confirmed against a live render.
   observations this log lists individually.
 - [Users panel](users-panel.md): per-user totals, if you want a summary
   by viewer rather than a session-by-session log.
-- [`docs/api.md`](../../api.md#enhanced-stats): `GET /api/stats/watch-history`
-  (paginated, filterable by channel/IP/days, includes user attribution).
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#enhanced-stats): the API reference for this log
+  (paginated, filterable by channel/IP/days, includes user attribution), useful if you want to query it programmatically instead of through the UI.

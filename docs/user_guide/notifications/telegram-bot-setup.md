@@ -157,7 +157,7 @@ The Notification Settings page never creates such a row, and the **Alert
 Methods** list at the bottom of that page is read-only: it lists, tests and
 deletes, but does not create. Creating a Telegram alert method is an API
 operation today. See
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) in the repository.
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository.
 
 Note the split if you do create one: scheduled-task alerts still go out
 over the shared **Bot Token** and **Chat ID** above, while per-source EPG
@@ -183,5 +183,5 @@ those lines.
   of the Notification Settings page.
 - [Alert routing patterns](alert-routing-patterns.md): choosing which
   severities and which tasks reach Telegram.
-- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) (GitHub): the
+- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub): the
   Telegram alert method and its optional settings.

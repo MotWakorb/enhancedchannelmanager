@@ -123,5 +123,5 @@ becomes its own channel, named after the stream.
   above.
 - [Channel Sort vs. Channel Numbering](sort-vs-numbering.md): the
   Sort Group action and the Create Channel numbering interaction, in full.
-- [`docs/api.md`](../../api.md): the `/channel-pipeline` router, including
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the `/channel-pipeline` router, including
   the JSON shape a condition/action serializes to.

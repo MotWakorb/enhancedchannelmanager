@@ -67,4 +67,4 @@ need to request or upload a new one before HTTPS works again.
 ## Going deeper
 
 - [Backup & Restore](../backup-restore/index.md): a Full Backup includes your TLS certificates; relevant if you're migrating to a new host.
-- [`docs/architecture.md`](../../architecture.md): the dual-port (HTTP fallback + HTTPS) model this page configures.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): the dual-port (HTTP fallback + HTTPS) model this page configures.

@@ -1,7 +1,5 @@
 # Backup & Restore: Overview
 
-> **Status:** Shipped in v0.18.0 (epic `0i2vt`, ADR-012).
-
 ---
 
 ## What a backup is
@@ -121,4 +119,4 @@ See [Restore a backup](restore-a-backup.md) for the full restore flow.
 - [Restore a backup](restore-a-backup.md): full restore flow with safety semantics.
 - [Configure cloud destinations](configure-cloud-destinations.md): off-host storage for durability.
 - [Migrate to a new install](migrate-to-a-new-install.md): end-to-end migration walkthrough.
-- [`docs/security/threat_model_dbas_import.md`](../../security/threat_model_dbas_import.md): security context for import and restore, for operators evaluating the trust boundary.
+- [`docs/security/threat_model_dbas_import.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_dbas_import.md): security context for import and restore, for operators evaluating the trust boundary.

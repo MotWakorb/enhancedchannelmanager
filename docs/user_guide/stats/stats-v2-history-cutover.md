@@ -30,7 +30,7 @@ UNION window doubles read cost on every query with no natural close.
 
 The full DBA reasoning lives in
 [`docs/database_migrations.md` → "Backfill policy for
-session_telemetry"](../../database_migrations.md#backfill-policy-for-session_telemetry).
+session_telemetry"](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/database_migrations.md#backfill-policy-for-session_telemetry).
 
 ## What you will see
 
@@ -109,9 +109,6 @@ container restart. If you want the opt-out to survive container
 restarts, set the env var in your compose/run command so it persists
 across restarts.
 
-> **Tracking:** bead `bd-tp1pd` (operator-global telemetry opt-out
-> toggle). The Stats v2 epic is `bd-skqln`.
-
 ## Excluding a specific viewer (`ECM_TELEMETRY_EXCLUDE_USERS`): deprecated
 
 > **Deprecated; scheduled for removal in v0.18.0.** You no longer need this
@@ -142,16 +139,4 @@ one-time deprecation warning at the first stats poll:
 ```
 
 If you no longer need the exclusion, unset the var. If you still rely on it,
-no action is required before v0.18.0. The removal is tracked under bead
-`bd-lbpl7`.
-
-## Tracking
-
-- Bead `bd-skqln.3` (single-write refactor + read repointing).
-- Bead `bd-tp1pd` (operator-facing Stats v2 telemetry opt-out: the
-  `ECM_STATS_TELEMETRY_OPT_OUT` env var documented above).
-- Bead `bd-gsn3r` (namespace-collision architectural fix: migration 0011
-  adds `session_telemetry.dispatcharr_username`).
-- Bead `bd-ye075` (soft-deprecation of `ECM_TELEMETRY_EXCLUDE_USERS`).
-- Bead `bd-lbpl7` (v0.18.0 removal of `ECM_TELEMETRY_EXCLUDE_USERS`).
-- ADR-007 (retention policy for `session_telemetry`).
+no action is required before v0.18.0.

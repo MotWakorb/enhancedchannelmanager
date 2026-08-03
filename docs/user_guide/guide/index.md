@@ -31,7 +31,7 @@ elsewhere actually landed.
 **Result:** you can see, per channel, whether real programming is airing.
 Channel rows with no live programme data may still show a cell. Some
 providers (particularly single-event/PPV feeds handled through [Event
-Sync](../../event_sync.md)) publish their own placeholder title, such as
+Sync](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md)) publish their own placeholder title, such as
 "NO EVENT," between events. That's the provider telling you nothing is on
 right now, not a matching failure. A channel where the *EPG match itself*
 is missing is a different problem, covered in
@@ -92,7 +92,7 @@ and channel-number ranges you chose.
 - [EPG](../epg/index.md): adding and configuring EPG sources, dummy EPG for
   channels with no upstream guide, bulk channel-to-EPG matching, and the
   duplicate-EPG-link audit for channels sharing one guide row.
-- [`docs/event_sync.md`](../../event_sync.md): the single-event/PPV channel
+- [`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md): the single-event/PPV channel
   workflow behind the "no event scheduled" placeholder titles you'll see on
   some channels between events.
 - [Channels & Streams](../channels-streams/index.md): the full channel

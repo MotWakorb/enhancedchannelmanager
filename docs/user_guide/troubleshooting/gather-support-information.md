@@ -30,7 +30,7 @@ Quote the whole string, build suffix included. `0.18.1` and `0.18.1-0006` are no
 the same thing: the four-digit suffix is a CI build number, and a fix can be in
 one build and not the one before it. `git_commit` pins it exactly.
 
-See [`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/versioning.md) for how to read a version string
+See [`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/versioning.md) for how to read a version string
 and check whether a specific fix is in your build.
 
 ## 2. What you did, what you expected, what happened
@@ -69,7 +69,7 @@ doing what you expect, and the App bundle when the problem is anything else.
 The Pipeline bundle has a second use: it can be analysed without touching your
 live installation. Somebody helping you can run the rule analyzer against the
 bundle you sent them, on their own machine, and never see your live channel data.
-See [Debugging Rules](../channel-pipeline/debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode).
+See [Debugging Rules](../channel-pipeline/debugging-rules.md#bundle-mode).
 
 ### What the bundle redacts, and what it does not
 
@@ -167,4 +167,4 @@ Attached:               (debug bundle / log slice / journal entries / console ou
 - [Escalation paths](escalation-paths.md): where to send all of this.
 - [Read the logs](read-the-logs.md): producing a useful log slice.
 - [General Settings](../settings/general-settings.md): the Logging controls and the App Debug Bundle in their own settings context.
-- [`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/versioning.md): reading a version string and checking whether a fix is in your build.
+- [`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/versioning.md): reading a version string and checking whether a fix is in your build.

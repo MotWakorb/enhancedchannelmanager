@@ -149,5 +149,5 @@ probes go through the correct endpoint.
   Sort criteria, including M3U Priority.
 - [Settings → M3U Change Digest](../settings/m3u-digest.md): email/Discord
   notifications for M3U changes, instead of checking M3U Changes manually.
-- [`docs/api.md`](../../api.md): HTTP endpoints behind every action on
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): HTTP endpoints behind every action on
   this page.

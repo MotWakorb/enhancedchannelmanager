@@ -35,4 +35,4 @@ M3U Changes is ECM's read-only log of what each provider added or removed on the
 
 - [Set Up Your First Channels](../getting-started/your-first-channels.md#3-choose-which-stream-groups-to-sync): where you actually act on a change, enabling or disabling a stream group in M3U Manager.
 - [Notifications & Alert Methods](../notifications/index.md): the M3U Digest is an email/Discord summary of the same change data, on a schedule, for operators who don't want to check this tab manually.
-- [`docs/api.md#m3u-digest`](../../api.md#m3u-digest): the `/api/m3u/changes` endpoint this page reads from, and the digest settings endpoints.
+- [`docs/api.md#m3u-digest`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#m3u-digest): the API reference for M3U Changes and the digest settings, useful if you want to query this data programmatically instead of through the UI.

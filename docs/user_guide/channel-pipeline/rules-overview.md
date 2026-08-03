@@ -80,7 +80,7 @@ whole rule set rather than one rule: **Dry Run** (preview every enabled rule
 against live streams, nothing written), **Import**, **Export**, and
 **Pipeline Debug Bundle** (a support bundle you can hand to someone helping
 you, or run through the rule analyzer; see [Debugging
-rules](debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode)).
+rules](debugging-rules.md#bundle-mode)).
 
 ## Going deeper
 

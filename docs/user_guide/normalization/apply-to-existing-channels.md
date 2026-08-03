@@ -175,5 +175,5 @@ rule set produced a given run.
   the proposed names are not what you expected.
 - [Journal](../journal/index.md): the record of every rename and merge this
   operation performs.
-- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#re-normalize-existing-channels):
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#re-normalize-existing-channels):
   the reference treatment, including the API-level shape of the operation.

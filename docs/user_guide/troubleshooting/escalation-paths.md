@@ -32,7 +32,7 @@ GitHub mark linking to the repository.
 Before you open an issue, search the existing ones. ECM ships frequently, and a
 symptom you are seeing today is often a known issue with a fix already in a build
 you have not pulled. Check your build against the fix with
-[`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/versioning.md) before reporting a regression.
+[`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/versioning.md) before reporting a regression.
 
 What makes an issue actionable, in rough order of value:
 
@@ -91,13 +91,13 @@ repository on GitHub:
 
 | Runbook | When |
 |-|-|
-| [Request timeouts, concurrency, CPU offload](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/request-timeout.md) | 503s, 504s, `Exceeded concurrency limit.`, or requests that hang. |
-| [Readiness availability](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/readiness_availability.md) | `/api/health/ready` failing, across one sub-check or several. |
-| [Infra-side cache invalidation](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/infra-cache-invalidation.md) | The UI is stale after an upgrade and a hard reload does not fix it, because a proxy or CDN in front of ECM is serving old assets. |
-| [Disaster recovery restore](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/disaster-recovery-restore.md) | Rebuilding an instance from a backup after losing the original. |
-| [Database size warning](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/database-size-warn.md) | The database has grown beyond its expected envelope. |
+| [Request timeouts, concurrency, CPU offload](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/request-timeout.md) | 503s, 504s, `Exceeded concurrency limit.`, or requests that hang. |
+| [Readiness availability](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/readiness_availability.md) | `/api/health/ready` failing, across one sub-check or several. |
+| [Infra-side cache invalidation](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/infra-cache-invalidation.md) | The UI is stale after an upgrade and a hard reload does not fix it, because a proxy or CDN in front of ECM is serving old assets. |
+| [Disaster recovery restore](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/disaster-recovery-restore.md) | Rebuilding an instance from a backup after losing the original. |
+| [Database size warning](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/database-size-warn.md) | The database has grown beyond its expected envelope. |
 
-The full index is in [`docs/runbooks/README.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/README.md).
+The full index is in [`docs/runbooks/README.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/README.md).
 
 ## What to do while you wait
 
@@ -113,4 +113,4 @@ Escalating does not have to mean stopping. Two things are usually available:
 
 - [Gather support information](gather-support-information.md): what to bring, whichever route you take.
 - [Recovery patterns](recovery-patterns.md): getting back to a working state while you wait.
-- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/README.md): the full incident-response index.
+- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/README.md): the full incident-response index.

@@ -6,7 +6,7 @@ Bulk operations save time, but they multiply mistakes at the same rate they mult
 
 ### Understand what's reversible
 
-Select two or more channels in the Channels panel (their row checkboxes) to reveal a floating selection toolbar at the bottom of the panel: **Delete**, **Probe**, **Find Duplicates**, **Renumber**, **Assign EPG**, **Merge**, and a **More** menu with Move to group, Normalize Names, Set Logo, Sort Streams, and **Fetch Gracenote IDs**.
+Row checkboxes only exist in **Edit Mode**: turn it on first. With Edit Mode on, select two or more channels in the Channels panel (their row checkboxes) to reveal a floating selection toolbar at the bottom of the panel: **Delete**, **Probe**, **Find Duplicates**, **Renumber**, **Assign EPG**, **Merge**, and a **More** menu (grouped into MOVE / SELECTION / PROFILES headers) with Move to group, Normalize Names, **Set Logo from M3U**, **Set Logo from EPG**, Sort Streams, **Fetch Gracenote IDs**, and **Profile visibility**.
 
 ![Floating selection toolbar reading "2 selected" with Delete, Probe, Find Duplicates, Renumber, Assign EPG, Merge, More, and Clear controls](../../images/user_guide/channels-streams/1-bulk-selection-toolbar.png)
 
@@ -98,4 +98,4 @@ If your provider's stream names are close enough to an existing channel that ECM
 
 - [Channel Manager](channels-overview.md): Edit Mode, staging, and the undo/redo/checkpoint model these bulk actions plug into.
 - [Stream Deduplication](stream-dedup.md): the Pending Merges queue, confidence threshold, and MCP tools for the automatic (M3U-refresh-triggered) dedup path.
-- [`docs/api.md`](../../api.md): the channel import, EPG assignment, and merge endpoints behind these dialogs.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md) (in the repository, not part of this published guide): the channel import, EPG assignment, and merge endpoints behind these dialogs.

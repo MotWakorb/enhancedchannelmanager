@@ -136,7 +136,7 @@ The result is truncated to an integer. Buckets where `SUM(poll_interval_ms) == 0
 
 ## Data horizon and retention
 
-ECM retains raw `session_telemetry` rows for **30 days** from the observation date (per ADR-007). Queries for the 7-day and 30-day windows read raw rows. Queries for the 90-day window read from daily pre-aggregated rollup tables for the portion beyond 30 days.
+ECM retains raw `session_telemetry` rows for **30 days** from the observation date. Queries for the 7-day and 30-day windows read raw rows. Queries for the 90-day window read from daily pre-aggregated rollup tables for the portion beyond 30 days.
 
 After a fresh v0.17.0 install or upgrade:
 
@@ -168,5 +168,4 @@ The `ecm_provider_resolution_total` resolved/unresolved ratio is the data-consis
 
 - [Users panel](users-panel.md): how the Users panel is built from these metrics.
 - [Stats v2 history cutover](stats-v2-history-cutover.md): why history starts from the v0.17.0 deploy date.
-- [ADR-007: session_telemetry retention policy](../../adr/ADR-007-session-telemetry-retention.md): raw retention (30 days), rollup design, and the 400-day rollup horizon.
-- [`docs/api.md`](../../api.md): the API endpoints that power the Stats v2 panels.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the API endpoints that power the Stats v2 panels.

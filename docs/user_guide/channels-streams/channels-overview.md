@@ -64,5 +64,5 @@ While Edit Mode is on:
 
 - [Bulk Channel Operations](bulk-edit.md): CSV import, bulk EPG assignment, Gracenote IDs, Find Duplicates, and Merge Channels for working across many channels at once, and which of those are staged vs. immediate.
 - [Stream Deduplication](stream-dedup.md): what happens when a stream you're adding looks like it belongs to a channel you already have.
-- [`docs/api.md`](../../api.md): the channel and stream API endpoints behind Edit Mode's Apply All commit.
-- [`docs/architecture.md`](../../architecture.md): how staged edits are batched and sent to Dispatcharr.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the channel and stream API endpoints behind Edit Mode's Apply All commit.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): how staged edits are batched and sent to Dispatcharr.

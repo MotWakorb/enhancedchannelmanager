@@ -55,9 +55,8 @@ score calculated yet for this channel." instead of the score grid. See
 below for how that score gets calculated.
 
 > **Not independently screenshot-verified.** No channel had an active
-> viewer on this instance, so there was no drill-down trigger to click.
-> The description above is read directly from
-> `ChannelStatsDetailModal.tsx`, not confirmed against a live render.
+> viewer on this instance, so there was no drill-down trigger to click and
+> the description above has not been confirmed against a live render.
 
 ### Watch recent activity
 
@@ -94,7 +93,4 @@ top-watched channel to show, and this instance has none.
 - [Providers](providers.md): per-provider connection badges in the
   live-counts strip are the same attribution the Providers panel charts
   by provider.
-- [`docs/api.md`](../../api.md#enhanced-stats): `GET /api/stats/channels`,
-  `GET /api/stats/channels/{id}`, `GET /api/stats/activity`,
-  `GET /api/stats/top-watched`, and the stop/stop-client actions behind
-  the channel card buttons.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#enhanced-stats): the API reference for this panel's data and the stop/stop-client actions behind the channel card buttons, useful if you want to query or trigger these programmatically instead of through the UI.

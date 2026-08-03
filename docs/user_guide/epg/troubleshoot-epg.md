@@ -20,5 +20,5 @@
   bulk-match walkthrough, including confidence-score guidance.
 - [Add and refresh EPG sources](epg-sources.md): reading a source's health
   status.
-- [`docs/runbooks/`](../../runbooks/): if an EPG problem has escalated into
+- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/tree/main/docs/runbooks): if an EPG problem has escalated into
   an on-call/incident situation rather than routine troubleshooting.

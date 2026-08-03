@@ -65,8 +65,7 @@ commas are discarded.
 ## What gets rejected, and the exact wording
 
 Each address is checked against the HTML standard's valid-email-address
-production, a pragmatic subset of RFC 5322 (`isValidHtml5EmailAddress` in
-`frontend/src/utils/smtpRecipients.ts`). Validation runs when you leave the
+production, a pragmatic subset of RFC 5322. Validation runs when you leave the
 field and again when you click **Save Recipients**.
 
 Validation short-circuits on the **first** bad entry, so a list with three
@@ -203,7 +202,7 @@ verbatim. See [Read the logs](../troubleshooting/read-the-logs.md).
 - [Alert routing patterns](alert-routing-patterns.md): sending different
   severities to different channels, and the two dispatch paths that decide
   which alerts can reach which channel.
-- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) (GitHub):
+- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
   creating additional SMTP methods with their own recipient sets and severity
   opt-ins, which the UI cannot do.
 - [M3U Digest](../settings/m3u-digest.md): the other email report, with its

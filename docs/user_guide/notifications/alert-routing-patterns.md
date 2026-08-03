@@ -44,7 +44,7 @@ instance is:
 
 If you need those source-level alerts in Discord or Telegram, you have to
 create an alert method of that type through the API. See
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) in the
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the
 repository, and the
 per-channel notes in
 [What ECM posts to Discord](discord-webhook-customization.md#the-embed-path-and-when-it-applies)
@@ -121,10 +121,9 @@ There is no global control for this. It is per task, every task.
 **Result:** info alerts now reach Discord and Telegram for that task.
 
 **They will not reach email.** The `Email` alert method the UI creates has
-its info opt-in off, and the UI offers no way to change it. If you need
-info alerts by email, flip `notify_info` on that method with
-`PATCH /api/alert-methods/{id}`; see
-[Manage the Email Alert Recipients list](email-recipients-deep-dive.md#what-the-field-is-and-what-it-creates).
+its info opt-in off, and the UI offers no way to change it today; see
+[Manage the Email Alert Recipients list](email-recipients-deep-dive.md#what-the-field-is-and-what-it-creates)
+for the current gap.
 
 ### Route one EPG source's failures to a different recipient set
 
@@ -140,7 +139,7 @@ ones.
 
 Both the second method and the filter are API-only today. The request
 shapes and the filter schema are in
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) in the repository.
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository.
 
 ### Stop a noisy probe from alerting until it is really bad
 
@@ -184,8 +183,8 @@ are logged with the reason. See
   format and the limits of Discord customization.
 - [Set up the Telegram bot](telegram-bot-setup.md): the two fields and
   their failure modes.
-- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) (GitHub):
+- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
   everything the UI cannot configure, including additional methods and source
   filters.
-- [API reference → Scheduled Tasks](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#scheduled-tasks) (GitHub):
+- [API reference → Scheduled Tasks](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#scheduled-tasks) (GitHub):
   updating per-task alert configuration without the UI.

@@ -134,7 +134,7 @@ The Google Drive adapter uses service account (app-only) authentication.
 
 **Status: Code exists but DEFERRED in v0.18.0. Configuring an OneDrive target will produce a per-target failure on each backup run without uploading anything.**
 
-OneDrive support using the Microsoft Graph API (client credentials OAuth2 flow) is planned but not wired for upload in v0.18.0. The adapter code is present (`backend/cloud_storage/onedrive_adapter.py`) and will be connected in a follow-up release.
+OneDrive support using the Microsoft Graph API (client credentials OAuth2 flow) is planned but not wired for upload in v0.18.0. It will be connected in a follow-up release.
 
 Do not configure an OneDrive cloud destination in v0.18.0. If you have one configured, remove it or switch to a different provider until this is resolved.
 
@@ -144,7 +144,7 @@ Do not configure an OneDrive cloud destination in v0.18.0. If you have one confi
 
 **Status: Code exists but DEFERRED in v0.18.0. Configuring a Dropbox target will produce a per-target failure on each backup run without uploading anything.**
 
-Dropbox support is planned but not wired for upload in v0.18.0. The adapter code is present (`backend/cloud_storage/dropbox_adapter.py`) and will be connected in a follow-up release.
+Dropbox support is planned but not wired for upload in v0.18.0. It will be connected in a follow-up release.
 
 Do not configure a Dropbox cloud destination in v0.18.0. If you have one configured, remove it or switch to a different provider until this is resolved.
 

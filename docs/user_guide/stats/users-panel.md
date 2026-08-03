@@ -53,7 +53,7 @@ Both views support a date-range filter. The available windows are:
 
 Selecting a range restricts all rows to observations within that window. Watch time, times watched, and last-watched all reflect only observations inside the chosen range.
 
-> **Raw data retention is 30 days.** Observations older than 30 days are pruned from the database per the ADR-007 retention policy. For 90-day queries, data older than 30 days is served from the daily rollup table, not raw rows. In practice, 7-day and 30-day queries feel identical; a 90-day query on an installation younger than 90 days will show zeros for the missing history. See [stats-v2-history-cutover.md](stats-v2-history-cutover.md) for the "metrics start on deploy day" caveat.
+> **Raw data retention is 30 days.** Observations older than 30 days are pruned from the database. For 90-day queries, data older than 30 days is served from the daily rollup table, not raw rows. In practice, 7-day and 30-day queries feel identical; a 90-day query on an installation younger than 90 days will show zeros for the missing history. See [stats-v2-history-cutover.md](stats-v2-history-cutover.md) for the "metrics start on deploy day" caveat.
 
 > **TODO: screenshot placeholder.** Date-range selector UI. Awaiting container deployment refresh.
 
@@ -103,5 +103,4 @@ Poll observations where no Dispatcharr user was identified (no auth, or an Dispa
 
 - [Metric glossary](metric-glossary.md): precise definition of every number shown in this panel.
 - [Stats v2 history cutover](stats-v2-history-cutover.md): why data starts from the v0.17.0 deploy date and not before.
-- [ADR-007: session_telemetry retention policy](../../adr/ADR-007-session-telemetry-retention.md): the 30-day raw retention and rollup design.
-- [`docs/api.md`](../../api.md): the `/api/stats/watch-time` and `/api/stats/watch-time/{user_id}` endpoints that back this panel.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the API reference for this panel's data, useful if you want to query it programmatically instead of through the UI.

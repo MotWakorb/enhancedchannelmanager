@@ -141,7 +141,7 @@ granular `alert_sources` filter, which is the only mechanism in ECM for
 routing (say) one EPG source's failures to a different webhook than
 another's. See [Alert routing patterns](alert-routing-patterns.md) for what
 that buys you and
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) in the repository
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository
 for the request shapes.
 
 ## When alerts stop arriving
@@ -165,5 +165,5 @@ include the HTTP status Discord returned. See
   can reach Discord at all, and the worked routing examples.
 - [M3U Digest](../settings/m3u-digest.md): the other feature that posts to
   this webhook, on its own schedule.
-- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#alert-methods) (GitHub):
+- [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
   creating the Discord alert method that unlocks the embed renderer.

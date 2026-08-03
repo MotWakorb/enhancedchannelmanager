@@ -131,5 +131,5 @@ The restore ledger is stored at `/config/dbas/restore_ledger_<id>.json` while a 
 ## Still stuck?
 
 - [Backup & Restore overview](backup-overview.md): to understand the artifact format and what each category contains.
-- [`docs/security/threat_model_dbas_import.md`](../../security/threat_model_dbas_import.md): the security analysis of the restore pipeline.
-- [Disaster Recovery runbook](../../runbooks/disaster-recovery-restore.md): for structured incident response.
+- [`docs/security/threat_model_dbas_import.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_dbas_import.md): the security analysis of the restore pipeline.
+- [Disaster Recovery runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/disaster-recovery-restore.md): for structured incident response.

@@ -126,6 +126,5 @@ troubleshooting, see the **[MCP Integration reference](mcp.md)**.
 
 ## Going deeper
 
-- API response fields: [`docs/api.md`: Enhanced Stats § Per-channel attribution fields](../../api.md)
-- Pipeline internals: [`docs/architecture.md`: User Attribution Pipeline](../../architecture.md)
-- MCP OAuth history: [`docs/adr/ADR-009`](../../adr/ADR-009-mcp-oauth-authorization-server-split.md) (Superseded): the retired OAuth Authorization Server offering (`bd-9axgc`)
+- API response fields: [`docs/api.md`: Enhanced Stats § Per-channel attribution fields](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md)
+- Pipeline internals: [`docs/architecture.md`: User Attribution Pipeline](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md)

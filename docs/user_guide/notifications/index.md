@@ -1,12 +1,21 @@
 # Notifications & Alert Methods
 
-> **Status:** In progress. The index covers the operator workflow end-to-end. Per-channel deep dives are planned articles below.
+This index covers the operator workflow end-to-end: configuring each channel and wiring it into scheduled tasks. Per-channel deep dives are linked below and in the Articles table.
 
 ## Section purpose
 
 Show operators how to configure ECM's three external notification channels: **Email (SMTP)**, **Discord**, and **Telegram**. Also show how those channels actually get used by **Scheduled Tasks**.
 
 The most common operator question this section answers: *"I enabled email alerts on a scheduled task and nothing arrived. Why?"* The short answer is that two things must both be configured: the channel itself (under **Settings → Notification Settings**), and the task's per-channel toggle (under **Settings → Scheduled Tasks → Edit**). The rest of this page walks through both.
+
+## Articles
+
+| Article | Purpose |
+|-|-|
+| [Manage the Email Alert Recipients List](email-recipients-deep-dive.md) | RFC 5322 edge cases, paste normalization rules, the Alert Methods data model behind the scenes, migrating from older free-text recipient fields. |
+| [What ECM Posts to Discord, and What You Can Change](discord-webhook-customization.md) | Embed formatting, mentioning roles in alerts, channel routing strategies if you outgrow a single shared webhook. |
+| [Set Up the Telegram Bot](telegram-bot-setup.md) | Step-by-step BotFather walk-through with screenshots, locating chat IDs in groups vs. channels vs. supergroups, bot privacy mode caveats. |
+| [Route Alerts to the Right Channel](alert-routing-patterns.md) | Worked examples: "send only errors to Discord, all severities to email," "info alerts for one task only," etc. |
 
 ## How alerts get delivered (the short version)
 
@@ -20,7 +29,7 @@ If gate 1 or 2 blocks, nothing is sent anywhere. If gate 3 blocks for a channel,
 
 The in-app **Notification Center** (the bell icon) is governed by a separate `show_notifications` toggle on the task; it is independent of the three gates above.
 
-> **Going deeper:** see [API reference → Alert Methods](../../api.md#alert-methods) for the request/response shapes and [API reference → Scheduled Tasks](../../api.md#scheduled-tasks) for the task-update endpoints.
+> **Going deeper:** see API reference → Alert Methods ([`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md), in the repository, not part of this published guide) for the request/response shapes and API reference → Scheduled Tasks (same file) for the task-update endpoints.
 
 ## Settings → Notification Settings → SMTP
 
@@ -40,10 +49,10 @@ SMTP is configured **once, globally**. Both M3U Digest reports and per-task emai
 
 **Verifying it works:**
 
-1. Fill in the SMTP fields above and save.
+1. Fill in the SMTP fields above. This page has several save controls: a **Save Recipients** button (for the recipients list below), a page-level **Save Settings** control, and a floating **Save changes** bar. Use the floating **Save changes** bar to save the SMTP fields; it's the verified working path.
 2. Scroll to **Test Connection**.
 3. Enter a recipient address you control and click **Send Test Email**.
-4. A successful test produces a toast that reads *"Test email sent successfully"* and an email in the destination inbox within a few seconds. The Subject is *"ECM SMTP Test"*.
+4. A successful test produces a toast that reads *"Test email sent to `<recipient>`"* (for example, "Test email sent to you@example.com") and an email in the destination inbox within a few seconds. The Subject is *"ECM SMTP Test"*.
 5. A failed test surfaces the SMTP error verbatim (auth failure, connection refused, TLS handshake error, etc.). Read the error before changing settings.
 
 The **Configured / Unconfigured** badge next to the SMTP heading reflects whether SMTP Host and From Email are both populated. It is independent of whether the test has been run.
@@ -118,13 +127,15 @@ message to that method) and a delete icon. When no alert methods exist yet,
 it reads *"No alert methods configured yet. Configure SMTP, Discord, or
 Telegram above to create one."*
 
-> **This list does not live-update.** Saving SMTP settings or Email Alert
-> Recipients, the Discord Webhook, or the Telegram Bot creates or updates the
-> underlying alert method immediately on the backend, but the Alert Methods
-> list on the same page keeps showing its previous state, including "No
-> alert methods configured yet," until you reload the page. Reload after
-> saving a channel for the first time to see its row (and the send/delete
-> icons) appear.
+> **This list does not live-update.** Saving the Discord Webhook or the
+> Telegram Bot creates or updates the underlying alert method immediately on
+> the backend, but the Alert Methods list on the same page keeps showing its
+> previous state, including "No alert methods configured yet," until you
+> reload the page. **Email works differently:** saving SMTP settings alone
+> does not create the Email (SMTP) alert method. The row appears only after
+> you've also saved at least one address in Email Alert Recipients, and then
+> reloaded the page. Reload after saving a channel for the first time to see
+> its row (and the send/delete icons) appear.
 
 ## How scheduled tasks dispatch external alerts
 
@@ -167,21 +178,10 @@ task fires alert (severity=error, say)
 2. The task's per-severity toggle for the fired severity is off. *Success alerts especially are often disabled by default to reduce noise.*
 3. The per-channel toggle is on, but the channel itself is **Unconfigured** (badge is grey). Configure the channel under Notification Settings.
 4. **Email-specific:** SMTP is configured but the **Email Alert Recipients** list is empty. The hint under the recipients field warns about this; the toast/notification on save also calls it out.
-5. The destination provider rejected the message. This surfaces in the backend logs as `[ALERTS-SMTP]`, `[ALERTS-DISCORD]`, or `[ALERTS-TELEGRAM]` warnings/errors. Check the logs (see [Troubleshooting](../troubleshooting/index.md#planned-articles)) when channels are configured but alerts still go missing.
-
-## Planned articles
-
-This index covers the workflow end-to-end. As the surface grows, the following deeper articles will be split off:
-
-| Article | Purpose |
-|-|-|
-| `email-recipients-deep-dive.md` | RFC 5322 edge cases, paste normalization rules, the Alert Methods data model behind the scenes, migrating from older free-text recipient fields. |
-| `discord-webhook-customization.md` | Embed formatting, mentioning roles in alerts, channel routing strategies if you outgrow a single shared webhook. |
-| `telegram-bot-setup.md` | Step-by-step BotFather walk-through with screenshots, locating chat IDs in groups vs. channels vs. supergroups, bot privacy mode caveats. |
-| `alert-routing-patterns.md` | Worked examples: "send only errors to Discord, all severities to email," "info alerts for one task only," etc. |
+5. The destination provider rejected the message. This surfaces in the backend logs as `[ALERTS-SMTP]`, `[ALERTS-DISCORD]`, or `[ALERTS-TELEGRAM]` warnings/errors. Check the logs (see [Troubleshooting](../troubleshooting/index.md)) when channels are configured but alerts still go missing.
 
 ## Going deeper
 
-- [API reference → Alert Methods](../../api.md#alert-methods): endpoints for listing/creating/testing alert methods programmatically.
-- [API reference → Scheduled Tasks](../../api.md#scheduled-tasks): endpoints for updating per-task alert configuration without using the UI.
+- API reference → Alert Methods ([`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md), in the repository, not part of this published guide): endpoints for listing/creating/testing alert methods programmatically.
+- API reference → Scheduled Tasks (same file): endpoints for updating per-task alert configuration without using the UI.
 - [Troubleshooting](../troubleshooting/index.md): when an alert channel is configured but alerts still aren't arriving, start here for log inspection and the support-information checklist.

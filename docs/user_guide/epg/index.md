@@ -36,18 +36,18 @@ templates](dummy-epg-templates.md).
 
 | Article | Purpose |
 |-|-|
-| [`epg-sources.md`](epg-sources.md) | Adding an XMLTV URL, refresh interval, what happens right after you add a source, what a healthy source looks like. |
-| [`schedules-direct.md`](schedules-direct.md) | Adding a Schedules Direct account, adding lineups, logo/poster options, rate limits. |
-| [`channel-to-epg-matching.md`](channel-to-epg-matching.md) | The Bulk EPG Assignment workflow, reading confidence scores, fixing unmatched channels, and timezone/region-aware ranking. |
-| [`dummy-epg-overview.md`](dummy-epg-overview.md) | What dummy EPG is, when to use it, Dummy EPG Profiles vs. the deprecated legacy Dummy EPG Sources path. |
-| [`dummy-epg-templates.md`](dummy-epg-templates.md) | Authoring patterns and templates in the profile editor; defers to `docs/template_engine.md` for full syntax. |
-| [`troubleshoot-epg.md`](troubleshoot-epg.md) | Common EPG issues (blank guide, wrong listings, slow/stuck refresh, bad bulk matches) and how to diagnose them. |
-| [`migrate-guides.md`](migrate-guides.md) | Preview and safely apply IPTV ↔ Gracenote guide assignment migrations using LCN/Gracenote station identifiers. |
-| [`finding-mislinked-channels.md`](finding-mislinked-channels.md) | Find & fix channels sharing one EPG row (the West-shows-East mis-link) using the read-only duplicate-link audit. |
-| [`lookup-tables-retired.md`](lookup-tables-retired.md) | **Upgrade note.** Lookup Tables and the `{key\|lookup:<table>}` pipe were removed; export any rows before upgrading. |
+| [Add and Refresh EPG Sources](epg-sources.md) | Adding an XMLTV URL, refresh interval, what happens right after you add a source, what a healthy source looks like. |
+| [Connect a Schedules Direct Account](schedules-direct.md) | Adding a Schedules Direct account, adding lineups, logo/poster options, rate limits. |
+| [Match Channels to EPG Data](channel-to-epg-matching.md) | The Bulk EPG Assignment workflow, reading confidence scores, fixing unmatched channels, and timezone/region-aware ranking. |
+| [Dummy EPG Overview](dummy-epg-overview.md) | What dummy EPG is, when to use it, Dummy EPG Profiles vs. the deprecated legacy Dummy EPG Sources path. |
+| [Author Dummy EPG Templates](dummy-epg-templates.md) | Authoring patterns and templates in the profile editor; defers to `docs/template_engine.md` for full syntax. |
+| [Troubleshoot EPG Issues](troubleshoot-epg.md) | Common EPG issues (blank guide, wrong listings, slow/stuck refresh, bad bulk matches) and how to diagnose them. |
+| [Migrate Guides](migrate-guides.md) | Preview and safely apply IPTV ↔ Gracenote guide assignment migrations using LCN/Gracenote station identifiers. |
+| [Finding & Fixing Mis-linked Channels](finding-mislinked-channels.md) | Find & fix channels sharing one EPG row (the West-shows-East mis-link) using the read-only duplicate-link audit. |
+| [Lookup Tables Retired](lookup-tables-retired.md) | **Upgrade note.** Lookup Tables and the `{key\|lookup:<table>}` pipe were removed; export any rows before upgrading. |
 
 ## Going deeper
 
-- [`docs/template_engine.md`](../../template_engine.md): full dummy EPG template syntax reference (placeholders, pipes, conditionals).
-- [`docs/api.md`](../../api.md): the `/epg` router endpoints.
-- [`docs/event_sync.md`](../../event_sync.md#automatic-guide-data-for-master-channels-dummy-epg): wiring a Dummy EPG Profile into an Event Sync rule.
+- [`docs/template_engine.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md): full dummy EPG template syntax reference (placeholders, pipes, conditionals).
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the `/epg` router endpoints.
+- [`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#automatic-guide-data-for-master-channels-dummy-epg): wiring a Dummy EPG Profile into an Event Sync rule.

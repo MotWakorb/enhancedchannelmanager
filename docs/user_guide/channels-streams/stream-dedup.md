@@ -1,7 +1,5 @@
 # Stream Deduplication
 
-> **Feature version:** v0.17.1 (ADR-008)
-
 ## What the dedup feature does
 
 When a stream's name is similar to an existing channel in the same group, ECM intercepts the "create a new channel" action and asks you whether to **merge into the existing channel** instead of creating a new one. A confidence score (0–100%) shows how closely the incoming stream name matches the candidate channel.
@@ -40,14 +38,14 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 
 ### What the StreamDedupModal shows
 
-The modal presents:
+The modal opens titled **"Stream matches an existing channel"** and presents:
 
 - The incoming **stream name**.
-- The **candidate channel** (the best matching existing channel), with its name and confidence score.
-- Two primary actions:
-  - **Merge into existing channel**: routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
-  - **Create new channel**: bypasses the dedup check and creates a new channel as usual.
-- A dismiss (close) action: leaves the stream unassigned and closes the modal.
+- The **candidate channel** (the best matching existing channel), with its name and a confidence score. For a 100% match, the score renders as the words **"Exact match"** instead of a percentage.
+- Three buttons:
+  - **Merge**: routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
+  - **Create New**: bypasses the dedup check and creates a new channel as usual.
+  - **Cancel**: leaves the stream unassigned and closes the modal.
 
 ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%). If no candidate meets the threshold, the dedup check is silent and a new channel is created as normal.
 
@@ -117,7 +115,7 @@ If a **Merge** action fails, an error message appears inline next to the row. Th
 | Target channel no longer exists | Candidate channel was deleted after the row was queued | Dismiss the row; re-run M3U refresh |
 | Invalid state | Row was already resolved (merged or dismissed) by another session | Refresh the page |
 
-Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely and are accessible via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`) for historical review.
+Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely as a historical record; there is currently no UI that lists them.
 
 ---
 
@@ -174,7 +172,7 @@ Not in v0.17.1. The threshold is a single global setting. Per-group overrides ar
 
 **What happens to merged and dismissed rows?**
 
-They are retained indefinitely in ECM's database as an audit trail. You can view them via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`). No automatic pruning occurs in v0.17.1.
+They are retained indefinitely in ECM's database as an audit trail; there is currently no UI that lists them. No automatic pruning occurs in v0.17.1.
 
 **Does the dedup feature affect the Channel Pipeline feature's own collision detection?**
 

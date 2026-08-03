@@ -18,7 +18,7 @@ Typical candidates:
   title like `Flo Racing 02: FLORACING 002 | 2026 USAC INDIANA SPRINT WEEK…`.
 - Auto-created master channels from the Channel Pipeline's Event Sync
   feature, which by design have no upstream guide (see [Automatic guide
-  data for master channels](../../event_sync.md#automatic-guide-data-for-master-channels-dummy-epg)).
+  data for master channels](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#automatic-guide-data-for-master-channels-dummy-epg)).
 - Any 24/7 or filler channel where "what's on" is either constant or
   meaningless, and a simple `{channel}` title is enough.
 
@@ -55,13 +55,13 @@ workflow.
 
 - [Author dummy EPG templates](dummy-epg-templates.md): the operator-level
   walkthrough for building patterns and templates in the profile editor.
-- [`docs/template_engine.md`](../../template_engine.md): the full template
+- [`docs/template_engine.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md): the full template
   syntax reference (placeholders, pipes, conditionals) that the profile
   editor's fields accept.
 - [Lookup Tables retired](lookup-tables-retired.md): if you're upgrading
   an older profile that used the `{key|lookup:<table>}` pipe, read this
   first; the feature and pipe are gone.
-- [Automatic guide data for master channels](../../event_sync.md#automatic-guide-data-for-master-channels-dummy-epg):
+- [Automatic guide data for master channels](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#automatic-guide-data-for-master-channels-dummy-epg):
   wiring a profile into an Event Sync rule so new auto-created channels
   get guide data on every run.
 - [Add and refresh EPG sources](epg-sources.md): for channels that *do*

@@ -74,4 +74,4 @@ When Dispatcharr's playlist refresh stops matching a stream that a channel still
 - [Streams](streams-overview.md): reading and filtering the Streams panel before you act on it.
 - [Stream Deduplication](stream-dedup.md): the prompt that interrupts an assignment when the stream looks like an existing channel.
 - [Normalization](../normalization/index.md): the rules that decide what the created channels are called and which streams collapse together.
-- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md): the stream-assignment endpoints behind Apply All.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the stream-assignment endpoints behind Apply All.

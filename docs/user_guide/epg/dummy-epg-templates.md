@@ -3,7 +3,7 @@
 This is the operator-level walkthrough for the profile editor. It teaches
 the workflow and the placeholders you'll actually reach for first; the
 complete pipe/conditional syntax reference is
-[`docs/template_engine.md`](../../template_engine.md). This article
+[`docs/template_engine.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md). This article
 doesn't duplicate that list; it gets you to your first working template.
 
 ## Build extraction variables from an example title
@@ -46,7 +46,7 @@ into what actually shows up in the guide:
 
 **Result:** The template fields accept the same `{name}`, `{name|pipe}`,
 and `{if:...}...{/if}` syntax documented in full in
-[`docs/template_engine.md`](../../template_engine.md#syntax). Use that
+[`docs/template_engine.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md#syntax). Use that
 reference once you need pipes (`uppercase`, `titlecase`, `replace:from:to`,
 …) or conditionals beyond straight variable substitution.
 
@@ -76,12 +76,12 @@ end user noticing broken-looking guide entries.
 
 ## Going deeper
 
-- [`docs/template_engine.md`](../../template_engine.md): full syntax
+- [`docs/template_engine.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md): full syntax
   reference: every pipe, conditional form, and the length/limit table.
 - [Dummy EPG overview](dummy-epg-overview.md): when to reach for dummy EPG
   at all, and Dummy EPG Profiles vs. the legacy Dummy EPG Sources path.
 - [Lookup Tables retired](lookup-tables-retired.md): upgrading a template
   that still references the removed `{key|lookup:<table>}` pipe.
-- [Automatic guide data for master channels](../../event_sync.md#automatic-guide-data-for-master-channels-dummy-epg):
+- [Automatic guide data for master channels](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#automatic-guide-data-for-master-channels-dummy-epg):
   reusing an Event Sync rule's own parse patterns instead of authoring a
   second copy for the profile.

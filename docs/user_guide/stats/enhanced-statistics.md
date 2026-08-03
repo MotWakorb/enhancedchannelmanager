@@ -52,5 +52,4 @@ window and this instance has no recent watch activity.
 - [Metric glossary](metric-glossary.md): Stats v2's `total_watch_seconds`
   and `provider_id` definitions, for comparison with this panel's
   independent (pre-Stats-v2) watch-time and connection counting.
-- [`docs/api.md`](../../api.md#enhanced-stats): `GET /api/stats/unique-viewers`,
-  `GET /api/stats/channel-bandwidth`, `GET /api/stats/unique-viewers-by-channel`.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#enhanced-stats): the API reference for this panel's data, useful if you want to query it programmatically instead of through the UI.

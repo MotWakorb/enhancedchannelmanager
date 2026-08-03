@@ -164,7 +164,7 @@ around. That is exactly what
 [GitHub issue #755](https://github.com/MotWakorb/enhancedchannelmanager/issues/755)
 was. If the burst is a genuine one-off spike, raising `ECM_LIMIT_CONCURRENCY` is
 the appropriate response. The full triage lives in the
-[request-timeout runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/request-timeout.md) in the ECM
+[request-timeout runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/request-timeout.md) in the ECM
 repository.
 
 ## The Channel Pipeline isn't creating channels
@@ -268,4 +268,4 @@ message. That surfaces in the backend logs under `[ALERTS-SMTP]`,
 - [UI banners and warnings](ui-banners-and-warnings.md): the full catalogue of persistent banners, including the ones referenced here.
 - [Recovery patterns](recovery-patterns.md): once you know what went wrong, how to undo it.
 - [Gather support information](gather-support-information.md): what to collect before asking for help.
-- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/README.md): incident-grade procedures for when a troubleshooting session has become an outage.
+- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/README.md): incident-grade procedures for when a troubleshooting session has become an outage.

@@ -62,7 +62,7 @@ match; raising it means more channels wait for manual review.
 2. Under **Stream Deduplication**, set **Dedup confidence threshold**
    (60–100%, default 80). Streams scoring at or above this against an
    existing channel are offered as merge candidates. ECM will not surface
-   candidates below 60%. That floor is fixed (ADR-008) and isn't adjustable
+   candidates below 60%. That floor is fixed and isn't adjustable
    from this slider.
 3. Optionally check **Suppress "pending merges queued" toast after M3U
    refresh** if you find the toast noisy. Pending merges are still queued
@@ -106,4 +106,4 @@ instead of ranking them purely by quality stats.
 
 - [Stream deduplication](../channels-streams/stream-dedup.md): the merge workflow these thresholds feed into.
 - [Channel Pipeline](../channel-pipeline/index.md): rule-based automation that runs ahead of these defaults.
-- [`docs/api.md`](../../api.md): API reference for reading or writing these settings programmatically.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): API reference for reading or writing these settings programmatically.

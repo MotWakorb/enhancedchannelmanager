@@ -52,4 +52,4 @@ Logo Manager only manages the catalog of images. Assigning one to a specific cha
 
 - [Set Up Your First Channels](../getting-started/your-first-channels.md): the Edit Mode / staged-changes / Apply All model that governs any channel edit, including a logo assignment.
 - [EPG](../epg/index.md): assigning EPG data to a channel is what makes **Use EPG Logo** available.
-- [`docs/api.md#logos`](../../api.md#logos): the HTTP endpoints behind logo upload, search, and delete.
+- [`docs/api.md#logos`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#logos): the HTTP endpoints behind logo upload, search, and delete.
