@@ -77,7 +77,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0018"
+APP_VERSION = "0.18.1-0019"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -460,21 +460,29 @@ class BackupArtifact:
             (ADR-012 D12 / u81kh); the manifest/schema_version then live INSIDE
             the ciphertext and only the envelope ``format_version`` is readable
             pre-decrypt.
+        degraded_categories: Sorted list of ``RESTORABLE_SECTIONS`` category
+            keys whose Dispatcharr gather failed and were written into the
+            artifact as a ``{"_warning": ...}`` stub instead of real data
+            (enhancedchannelmanager-zt3kf). Empty when every category gathered
+            cleanly. The caller (:class:`tasks.dbas_backup.DbasBackupTask`)
+            uses this to report a degraded-but-built backup as a WARNING
+            rather than a silent clean success.
     """
 
     __slots__ = (
         "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
-        "encrypted",
+        "encrypted", "degraded_categories",
     )
 
     def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
-                 encrypted=False):
+                 encrypted=False, degraded_categories=None):
         self.zip_path = zip_path
         self.sidecar_path = sidecar_path
         self.schema_version = schema_version
         self.sha256 = sha256
         self.file_count = file_count
         self.encrypted = encrypted
+        self.degraded_categories = list(degraded_categories or [])
 
 
 def _compute_sha256_streaming(path: Path) -> str:
@@ -564,7 +572,9 @@ def _build_artifact_manifest(
     }
 
 
-async def _gather_redacted_categories(include_credentials: bool = False) -> dict[str, str]:
+async def _gather_redacted_categories(
+    include_credentials: bool = False,
+) -> tuple[dict[str, str], list[str]]:
     """Produce the per-category redacted YAML payloads for the artifact.
 
     REUSES build_yaml_export / _gather_settings / _gather_db_tables /
@@ -573,9 +583,21 @@ async def _gather_redacted_categories(include_credentials: bool = False) -> dict
     redaction list: settings credentials are masked by _gather_settings via the
     shared _SETTINGS_CREDENTIAL_FIELDS denylist before any byte is emitted.
 
-    Returns a mapping of ``<category-name>.yaml`` -> YAML text. Each restorable
-    section is emitted as its own file so a future selective restore (Phase 2)
-    can read one category without parsing the whole archive.
+    Returns a ``(categories, degraded)`` pair:
+
+    * ``categories`` — a mapping of ``<category-name>.yaml`` -> YAML text. Each
+      restorable section is emitted as its own file so a future selective
+      restore (Phase 2) can read one category without parsing the whole
+      archive.
+    * ``degraded`` — sorted list of category keys whose Dispatcharr gather
+      produced a ``{"_warning": ...}`` stub instead of real data
+      (enhancedchannelmanager-zt3kf). This function calls
+      :func:`_gather_dispatcharr_sections` ONE KEY AT A TIME (below), so each
+      category's stub-or-not outcome is independent by construction — the
+      per-fetch isolation contract documented on
+      :func:`_gather_dispatcharr_sections` is what makes that true for the
+      MULTI-section ``/export?sections=...`` caller too, not just this
+      one-key-per-call pattern.
     """
     # include_credentials (D12) preserves the approved migration-cred allowlist
     # (== _REDACT_KEYS; password_hash is never in that set and so is never
@@ -585,6 +607,7 @@ async def _gather_redacted_categories(include_credentials: bool = False) -> dict
     # AND set a passphrase (enforced in build_backup_artifact).
     preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
     out: dict[str, str] = {}
+    degraded: list[str] = []
     for key in RESTORABLE_SECTIONS:
         # build_yaml_export routes settings/db/dispatcharr correctly and applies
         # the settings-field redaction. That is NOT sufficient on its own:
@@ -596,10 +619,15 @@ async def _gather_redacted_categories(include_credentials: bool = False) -> dict
         yaml_text = await build_yaml_export({key}, include_credentials=include_credentials)
         parsed = yaml.safe_load(yaml_text)
         redacted = _redact_credentials_deep(parsed, preserve_keys)
+        dispatcharr_blob = redacted.get("dispatcharr") if isinstance(redacted, dict) else None
+        if isinstance(dispatcharr_blob, dict):
+            section_value = dispatcharr_blob.get(key)
+            if isinstance(section_value, dict) and "_warning" in section_value:
+                degraded.append(key)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
-    return out
+    return out, sorted(degraded)
 
 
 def _logo_basename_key(value) -> str | None:
@@ -788,7 +816,9 @@ async def build_backup_artifact(
     # never leaves a half-written ZIP on disk. include_credentials only ever
     # re-injects the approved migration creds (and only with a passphrase set,
     # validated above); redaction still runs over everything else.
-    categories = await _gather_redacted_categories(include_credentials=include_credentials)
+    categories, degraded_categories = await _gather_redacted_categories(
+        include_credentials=include_credentials
+    )
     # Source-logo id correlation (PR #743 item 1) — best-effort join of each
     # on-disk logo file to its Dispatcharr logo record, carried in metadata.json.
     source_logo_index = await _fetch_source_logo_index()
@@ -922,6 +952,7 @@ async def build_backup_artifact(
             sha256=artifact_sha,
             file_count=len(file_hashes),
             encrypted=encrypt,
+            degraded_categories=degraded_categories,
         )
     except Exception:
         # Clean up partial temp artifacts on ANY failure.
@@ -2048,11 +2079,40 @@ def _redact_marked_setting_values(blob: dict) -> dict:
     return out
 
 
+def _degraded_section(key: str, exc: Exception) -> dict:
+    """Build a per-section ``{"_warning": ...}`` stub for one failed fetch.
+
+    A fresh dict per call (never a shared/reused reference) — two degraded
+    sections in the same gather (e.g. ``core_settings`` + ``comskip`` sharing
+    one upstream call) must not alias the same mutable object.
+    """
+    return {"_warning": "Failed to fetch %s — %s" % (key, exc)}
+
+
 async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
     """Fetch full Dispatcharr data for selected sections.
 
     Returns a dict keyed by section name with full data suitable for restore.
     Only fetches sections that are in the selected set.
+
+    Isolation contract (routed finding from lsa0s, enhancedchannelmanager-zt3kf):
+    each requested section's upstream fetch is wrapped in ITS OWN try/except —
+    a failure fetching one section (e.g. ``get_epg_sources()`` raises) degrades
+    ONLY that section's value to ``{"_warning": ...}`` and never prevents the
+    OTHER sections requested in the SAME call from being fetched normally. This
+    is an explicit per-fetch contract, not an accident of a caller happening to
+    invoke this function once per category — the artifact builder
+    (:func:`_gather_redacted_categories`) does call it that way today, but a
+    direct multi-section call (``build_yaml_export({"epg_sources",
+    "m3u_accounts"})`` via the legacy ``/export?sections=...`` path) gets the
+    SAME per-section isolation, not a shared blast radius.
+
+    The one case that is deliberately NOT per-section is total client
+    unavailability: when ``get_client()`` returns falsy (or raises) BEFORE any
+    per-section fetch is attempted, every requested section is equally
+    unreachable — there is nothing section-specific to isolate — so the whole
+    Dispatcharr-managed blob degrades together under a single top-level
+    ``{"_warning": ...}`` (the long-standing shape callers already handle).
     """
     dispatcharr_keys = {k for k, v in RESTORABLE_SECTIONS.items() if v.get("dispatcharr")}
     needed = selected & dispatcharr_keys
@@ -2061,51 +2121,105 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
 
     try:
         client = get_client()
-        if not client:
-            return {"_warning": "Dispatcharr not connected — Dispatcharr sections skipped"}
+    except Exception as e:
+        logger.warning("[BACKUP] Failed to obtain Dispatcharr client: %s", e)
+        return {"_warning": "Dispatcharr not connected — %s" % str(e)}
 
-        result = {}
-        if "m3u_accounts" in needed:
+    if not client:
+        return {"_warning": "Dispatcharr not connected — Dispatcharr sections skipped"}
+
+    result: dict = {}
+
+    if "m3u_accounts" in needed:
+        try:
             accounts = await client.get_m3u_accounts()
             result["m3u_accounts"] = accounts or []
-        if "epg_sources" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch m3u_accounts: %s", e)
+            result["m3u_accounts"] = _degraded_section("m3u_accounts", e)
+
+    if "epg_sources" in needed:
+        try:
             sources = await client.get_epg_sources()
             result["epg_sources"] = sources or []
-        if "channel_groups" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch epg_sources: %s", e)
+            result["epg_sources"] = _degraded_section("epg_sources", e)
+
+    if "channel_groups" in needed:
+        try:
             groups = await client.get_channel_groups()
             result["channel_groups"] = groups or []
-        if "channel_profiles" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch channel_groups: %s", e)
+            result["channel_groups"] = _degraded_section("channel_groups", e)
+
+    if "channel_profiles" in needed:
+        try:
             profiles = await client.get_channel_profiles()
             result["channel_profiles"] = profiles or []
-        if "stream_profiles" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch channel_profiles: %s", e)
+            result["channel_profiles"] = _degraded_section("channel_profiles", e)
+
+    if "stream_profiles" in needed:
+        try:
             profiles = await client.get_stream_profiles()
             result["stream_profiles"] = profiles or []
-        if "channels" in needed:
-            # Channels carry embedded streams reduced to credential-free match
-            # fields (7i8rf). This is the producer the restore channels importer
-            # (dbas/importers/channels.py) consumes.
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch stream_profiles: %s", e)
+            result["stream_profiles"] = _degraded_section("stream_profiles", e)
+
+    if "channels" in needed:
+        # Channels carry embedded streams reduced to credential-free match
+        # fields (7i8rf). This is the producer the restore channels importer
+        # (dbas/importers/channels.py) consumes.
+        try:
             result["channels"] = await _gather_channels_with_streams(client)
-        if "dispatcharr_users" in needed:
-            # Dispatcharr user accounts (Django auth). A GET never returns a
-            # password/hash (see dbas/importers/users.py policy 1); the deep
-            # redactor scrubs any credential-class field as a backstop.
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch channels: %s", e)
+            result["channels"] = _degraded_section("channels", e)
+
+    if "dispatcharr_users" in needed:
+        # Dispatcharr user accounts (Django auth). A GET never returns a
+        # password/hash (see dbas/importers/users.py policy 1); the deep
+        # redactor scrubs any credential-class field as a backstop.
+        try:
             users = await client.get_users()
             result["dispatcharr_users"] = users or []
-        # lc6zu — the settings/agents producer set consumed by the Phase-2
-        # settings_agents importer. User agents and DVR rules (Dispatcharr
-        # recurring recording rules — lsa0s) are benign entity lists; the deep
-        # redactor still runs over them as defense in depth.
-        if "user_agents" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch dispatcharr_users: %s", e)
+            result["dispatcharr_users"] = _degraded_section("dispatcharr_users", e)
+
+    # lc6zu — the settings/agents producer set consumed by the Phase-2
+    # settings_agents importer. User agents and DVR rules (Dispatcharr
+    # recurring recording rules — lsa0s) are benign entity lists; the deep
+    # redactor still runs over them as defense in depth.
+    if "user_agents" in needed:
+        try:
             agents = await client.get_user_agents()
             result["user_agents"] = agents or []
-        if "dvr_rules" in needed:
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch user_agents: %s", e)
+            result["user_agents"] = _degraded_section("user_agents", e)
+
+    if "dvr_rules" in needed:
+        try:
             rules = await client.get_dvr_rules()
             result["dvr_rules"] = rules or []
-        if "core_settings" in needed or "comskip" in needed:
-            # ONE fetch backs both sections (no comskip endpoint exists — see
-            # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
-            # here at the gather chokepoint so every downstream serialization
-            # (artifact category YAML, explicit ?sections= export) is covered.
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch dvr_rules: %s", e)
+            result["dvr_rules"] = _degraded_section("dvr_rules", e)
+
+    if "core_settings" in needed or "comskip" in needed:
+        # ONE fetch backs both sections (no comskip endpoint exists — see
+        # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
+        # here at the gather chokepoint so every downstream serialization
+        # (artifact category YAML, explicit ?sections= export) is covered. A
+        # failure of this ONE shared fetch degrades BOTH requested sections
+        # (they have no independent upstream call to isolate between) — each
+        # gets its OWN stub dict, never a shared/aliased reference.
+        try:
             raw_settings = await client.get_core_settings()
             core_blob, comskip_blob = _split_comskip_settings(
                 _normalize_core_settings(raw_settings)
@@ -2114,11 +2228,14 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
                 result["core_settings"] = _redact_marked_setting_values(core_blob)
             if "comskip" in needed:
                 result["comskip"] = _redact_marked_setting_values(comskip_blob)
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch core settings: %s", e)
+            if "core_settings" in needed:
+                result["core_settings"] = _degraded_section("core_settings", e)
+            if "comskip" in needed:
+                result["comskip"] = _degraded_section("comskip", e)
 
-        return result
-    except Exception as e:
-        logger.warning("[BACKUP] Failed to fetch Dispatcharr data: %s", e)
-        return {"_warning": "Dispatcharr not connected — %s" % str(e)}
+    return result
 
 
 async def build_yaml_export(

@@ -92,7 +92,7 @@ def _make_target(session, **overrides) -> CloudStorageTarget:
     return target
 
 
-def _fake_artifact(dest_dir: Path) -> BackupArtifact:
+def _fake_artifact(dest_dir: Path, *, degraded_categories=None) -> BackupArtifact:
     """Materialize a fake sealed artifact + sidecar in dest_dir so the
     happy-path assertions can confirm files actually land there."""
     dest_dir = Path(dest_dir)
@@ -107,6 +107,7 @@ def _fake_artifact(dest_dir: Path) -> BackupArtifact:
         schema_version=1,
         sha256="deadbeef",
         file_count=7,
+        degraded_categories=degraded_categories,
     )
 
 
@@ -191,6 +192,11 @@ async def test_execute_builds_artifact_in_backups_dir(
     assert result.details["sha256"] == "deadbeef"
     assert result.details["file_count"] == 7
     assert result.details["filename"] == zips[0].name
+    # zt3kf — a clean gather (no degraded categories) reports a coherent
+    # clean-success count, and details carries no degraded_categories key.
+    assert result.success_count == 1
+    assert result.failed_count == 0
+    assert "degraded_categories" not in result.details
 
     assert _counter_value("success") == 1.0
     assert _counter_value("skipped") == 0.0
@@ -219,6 +225,155 @@ async def test_no_cloud_target_config_runs_normally(
 
     assert result.success is True
     assert _counter_value("success") == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Degraded gather severity (enhancedchannelmanager-zt3kf)
+#
+# When build_backup_artifact returns an artifact whose Dispatcharr gather
+# stubbed one or more categories, the task must report a WARNING-level result
+# (success=True, failed_count>0) naming the degraded categories in
+# details["degraded_categories"] — never a clean SUCCESS. This is what makes
+# task_engine.py's existing "Completed with Warnings" branch reachable for a
+# degraded DBAS backup (mirrors the tyei5/PR #766 dbas_restore counts-wiring
+# pattern; see test_task_notification_formatting.py for the message-naming
+# proof at the notification layer).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_degraded_gather_is_warning_not_clean_success(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(dest_dir, degraded_categories=["dvr_rules"])
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        task = DbasBackupTask()
+        result = await task.execute()
+
+    # WARNING-level: still an overall success (a real artifact WAS built and
+    # verified), but failed_count>0 makes task_engine.py's existing
+    # "Completed with Warnings" branch reachable — never a hard failure.
+    assert result.success is True
+    assert result.failed_count == 1
+    assert result.success_count == 0
+    assert result.total_items == 1
+    assert result.details["degraded_categories"] == ["dvr_rules"]
+    assert "dvr_rules" in result.message
+
+    # The build itself still counts as a clean local success for the metric —
+    # this is about GATHER completeness, not local-artifact/upload health.
+    assert _counter_value("success") == 1.0
+    assert _counter_value("failed") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_degraded_gather_names_multiple_categories(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(
+            dest_dir, degraded_categories=["core_settings", "dvr_rules"]
+        )
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        task = DbasBackupTask()
+        result = await task.execute()
+
+    assert result.success is True
+    assert result.failed_count == 1
+    assert result.details["degraded_categories"] == ["core_settings", "dvr_rules"]
+    assert "core_settings" in result.message
+    assert "dvr_rules" in result.message
+
+
+@pytest.mark.asyncio
+async def test_clean_gather_is_unaffected_by_degraded_wiring(
+    _wire_db, _reset_metrics, tmp_path
+):
+    """Regression guard: a clean (empty) degraded_categories list must not
+    perturb the existing clean-success envelope."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(dest_dir, degraded_categories=[])
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        task = DbasBackupTask()
+        result = await task.execute()
+
+    assert result.success is True
+    assert result.failed_count == 0
+    assert result.success_count == 1
+    assert "degraded_categories" not in result.details
+
+
+@pytest.mark.asyncio
+async def test_degraded_gather_reaches_completed_with_warnings_notification(
+    _wire_db, _reset_metrics, tmp_path, test_session
+):
+    """Engine-level seam proof (zt3kf): a degraded-gather TaskResult, run
+    through the REAL TaskEngine (not a synthetic task), produces exactly ONE
+    completion notification — a WARNING naming the degraded category — not a
+    green success and not a hard failure. Mirrors the engine-level class in
+    test_channel_pipeline_task_failed_action_notify.py."""
+    from tasks import dbas_backup
+    from task_engine import TaskEngine
+    from models import ScheduledTask
+
+    backups_dir = tmp_path / "backups"
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(dest_dir, degraded_categories=["dvr_rules"])
+
+    test_session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == "dbas_backup"
+    ).delete()
+    test_session.add(ScheduledTask(
+        task_id="dbas_backup",
+        task_name="DBAS Backup",
+        description="test",
+        enabled=True,
+        schedule_type="manual",
+        send_alerts=True,
+        alert_on_warning=True,
+        show_notifications=True,
+    ))
+    test_session.commit()
+
+    engine = TaskEngine()
+    notify = AsyncMock(return_value={"id": 1})
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ), patch("services.notification_service.create_notification_internal", new=notify):
+        await engine._execute_task(task_id="dbas_backup", triggered_by="test")
+
+    assert notify.await_count == 1
+    kwargs = notify.await_args.kwargs
+    assert kwargs["notification_type"] == "warning"
+    assert kwargs["title"].startswith("Task Completed with Warnings")
+    assert "dvr_rules" in kwargs["message"]
+    assert kwargs["send_alerts"] is True
 
 
 # ---------------------------------------------------------------------------

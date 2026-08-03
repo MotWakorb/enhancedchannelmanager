@@ -837,6 +837,86 @@ async def test_rollback_without_applied_settings_has_no_settings_note(tmp_path):
     assert not any("setting" in note.lower() for note in out.notes)
 
 
+@pytest.mark.asyncio
+async def test_rollback_notes_settings_dependency_unresolved_retry_wont_help(tmp_path):
+    # zt3kf (PO decision 2026-08-03, rollback policy): a settings-key
+    # DEPENDENCY_UNRESOLVED failure aborts the WHOLE restore and triggers full
+    # rollback exactly like any other failed category — no per-key
+    # skip-with-warning. But because this specific reason means "the archive
+    # references a settings key the destination does not have," a retry of
+    # the SAME restore against the SAME destination will fail identically.
+    # The operator-facing note must say so, so nobody burns a retry on it.
+    client = _client()
+
+    async def _settings_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.SETTINGS)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_setting_key",
+                message="setting key not found on destination",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[ImporterStep(EntityType.SETTINGS, _settings_step)],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert any(
+        "retry" in note.lower() and ("will fail" in note.lower() or "cannot" in note.lower() or "won't" in note.lower() or "will not" in note.lower())
+        for note in out.notes
+    )
+    # Points the operator at the actual remediation, not just "it failed".
+    assert any(
+        "category selection" in note.lower() or "destination" in note.lower()
+        for note in out.notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_rollback_notes_other_category_dependency_unresolved_no_settings_retry_note(tmp_path):
+    """The settings-key retry-guidance note is SETTINGS-specific — a FK-target
+    DEPENDENCY_UNRESOLVED failure on an unrelated category (a different
+    failure shape: an id, not a settings key) must not get the same wording."""
+    client = _client()
+
+    async def _failing_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.CHANNEL_GROUP)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_group",
+                message="FK target missing",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[ImporterStep(EntityType.CHANNEL_GROUP, _failing_step)],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert not any("settings key" in note.lower() for note in out.notes)
+
+
 # ---------------------------------------------------------------------------
 # 10. EPG-download wait wiring (kxcjf — the 0i2vt.11 acceptance item)
 # ---------------------------------------------------------------------------

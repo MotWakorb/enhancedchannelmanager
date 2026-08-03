@@ -292,6 +292,51 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
     return f"Successfully completed. {result.success_count} items processed{skip_note}{dur}"
 
 
+def _warning_task_completion_message(task_id: str, result: TaskResult) -> str:
+    """Human-readable partial-success ('Completed with Warnings') line.
+
+    Mirrors :func:`_success_task_completion_message`'s per-task_id branching so
+    a task that needs a richer partial-success message (rather than the
+    generic "N failures out of M items" phrasing) gets one WITHOUT a new
+    notification path — this still feeds the single existing "Completed with
+    Warnings" branch in the scheduler loop below (enhancedchannelmanager-zt3kf:
+    reuse the existing branch, invent no new copy).
+    """
+    details = result.details if isinstance(result.details, dict) else {}
+
+    if task_id == "stream_probe":
+        return (
+            f"Completed with {result.failed_count} failures out of {result.total_items} streams. "
+            f"({result.success_count} ok, {result.skipped_count} skipped)"
+        )
+
+    if task_id == "dbas_backup":
+        # zt3kf — a DBAS backup whose gather stubbed one or more Dispatcharr
+        # categories (upstream fetch failure) is a WARNING, not a clean
+        # success: the artifact was built but is missing real data for the
+        # named category/categories. Name them here so the operator does not
+        # have to open the artifact to discover what is missing.
+        degraded = details.get("degraded_categories") or []
+        if degraded:
+            plural = len(degraded) != 1
+            return (
+                "Backup artifact built, but %d Dispatcharr categor%s could not "
+                "be fetched from Dispatcharr and %s degraded in this backup: "
+                "%s. Check Dispatcharr connectivity and re-run to fill the "
+                "gap." % (
+                    len(degraded),
+                    "ies" if plural else "y",
+                    "are" if plural else "is",
+                    ", ".join(degraded),
+                )
+            )
+
+    return (
+        f"Completed with {result.failed_count} failures out of {result.total_items} items. "
+        f"({result.success_count} succeeded, {result.skipped_count} skipped)"
+    )
+
+
 class TaskEngine:
     """
     Background execution engine for scheduled tasks.
@@ -1061,16 +1106,7 @@ class TaskEngine:
                     )
                 elif result.failed_count > 0:
                     # Partial success - some items failed
-                    if task_id == "stream_probe":
-                        warn_msg = (
-                            f"Completed with {result.failed_count} failures out of {result.total_items} streams. "
-                            f"({result.success_count} ok, {result.skipped_count} skipped)"
-                        )
-                    else:
-                        warn_msg = (
-                            f"Completed with {result.failed_count} failures out of {result.total_items} items. "
-                            f"({result.success_count} succeeded, {result.skipped_count} skipped)"
-                        )
+                    warn_msg = _warning_task_completion_message(task_id, result)
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
