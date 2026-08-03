@@ -811,6 +811,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
     from dbas.importers.logos import import_logos
     from dbas.importers.m3u_accounts import import_m3u_accounts
     from dbas.importers.settings_agents import (
+        CoreSettingIdResolver,
         import_comskip,
         import_core_settings,
         import_dvr_rules,
@@ -918,6 +919,11 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         # ``EntityType.SETTINGS`` report category (updated/skipped, never
         # created, never ledgered — settings rollback is out of scope, see
         # ``settings_agents.py``).
+        # ONE key->row-id resolver for the whole step: core_settings and comskip
+        # share Dispatcharr's single core-settings namespace, whose detail route
+        # is keyed by integer pk, so the apply run costs one
+        # GET /api/core/settings/ (bead …-q6xjl).
+        id_resolver = CoreSettingIdResolver(ctx.client)
         selected = _selected(ctx, EntityType.SETTINGS)
         for record in _entities(ctx, EntityType.SETTINGS):
             section = record.get("section")
@@ -930,6 +936,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                     report=ctx.report,
                     ledger=ctx.ledger,
                     is_dry_run=ctx.is_dry_run,
+                    id_resolver=id_resolver,
                 )
             elif section == "comskip":
                 await import_comskip(
@@ -939,6 +946,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                     report=ctx.report,
                     ledger=ctx.ledger,
                     is_dry_run=ctx.is_dry_run,
+                    id_resolver=id_resolver,
                 )
             else:
                 logger.warning(

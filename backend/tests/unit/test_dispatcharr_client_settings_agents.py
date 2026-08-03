@@ -12,6 +12,9 @@ Mocking pattern follows test_dispatcharr_client_user_crud.py: construct a real
 ``DispatcharrClient`` and ``patch.object(client, "_request", AsyncMock(...))`` so
 the exact method + path forwarded upstream is asserted without a live instance.
 """
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -24,6 +27,38 @@ from dispatcharr_client import (
     _DVR_RULES_PATH,
     _USER_AGENTS_PATH,
 )
+
+_RECORDED_CORE_SETTINGS = json.loads(
+    (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "dispatcharr_core_settings_recorded.json"
+    ).read_text()
+)
+
+_RECORDED_OPENAPI = json.loads(
+    (
+        Path(__file__).parent.parent / "fixtures" / "dispatcharr_openapi_recorded.json"
+    ).read_text()
+)
+
+
+def test_recorded_schema_keys_core_settings_detail_route_by_integer_id():
+    """The RECORDED Dispatcharr 0.28.2 OpenAPI document is the authority for the
+    core-settings detail route — and it is keyed by an INTEGER id.
+
+    This is the premise the ``update_core_setting`` fix rests on
+    (enhancedchannelmanager-q6xjl). If a future Dispatcharr adds a key-string
+    lookup, re-record the fixture and this test says so out loud.
+    """
+    paths = _RECORDED_OPENAPI["schema"]["paths"]
+    assert "/api/core/settings/{id}/" in paths
+    # No key-string detail route exists — the 404 the restore hit.
+    assert "/api/core/settings/{key}/" not in paths
+    patch_params = paths["/api/core/settings/{id}/"]["patch"]["parameters"]
+    id_param = next(p for p in patch_params if p["name"] == "id")
+    assert id_param["in"] == "path"
+    assert id_param["schema"]["type"] == "integer"
 
 
 def _response(status_code: int, json_body=None, text: str = "", content=b"x"):
@@ -158,17 +193,92 @@ async def test_get_core_settings_gets_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_update_core_setting_patches_single_key():
-    """A single key is PATCHed at its sub-path with a {value:...} body — never a
-    bulk PUT that could clobber unrelated keys."""
+async def test_get_core_setting_id_map_from_recorded_response():
+    """The key->id map is built from the RECORDED Dispatcharr 0.28.2 list payload.
+
+    Regression pin for enhancedchannelmanager-q6xjl: the detail route is keyed by
+    the integer row id, and the recorded ids are non-contiguous and unrelated to
+    list position — so the map must come from the row's own ``id``, never from an
+    index or the key string.
+    """
+    recorded = _RECORDED_CORE_SETTINGS["core_settings_list"]
+    client = _make_client()
+    try:
+        rm = AsyncMock(return_value=_response(200, recorded))
+        with patch.object(client, "_request", rm):
+            id_map = await client.get_core_setting_id_map()
+        method, path = rm.await_args.args
+        assert (method, path) == ("GET", _CORE_SETTINGS_PATH)
+        assert id_map == {
+            "network_access": 6,
+            "dvr_settings": 18,
+            "backup_settings": 19,
+            "user_limit_settings": 21,
+            "stream_settings": 17,
+            "system_settings": 20,
+            "proxy_settings": 7,
+        }
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_core_setting_id_map_handles_paginated_envelope():
+    """A DRF-paginated ``{"results": [...]}`` body resolves the same as a bare list."""
+    client = _make_client()
+    try:
+        body = {"count": 1, "results": [{"id": 42, "key": "ui_theme", "value": "dark"}]}
+        rm = AsyncMock(return_value=_response(200, body))
+        with patch.object(client, "_request", rm):
+            id_map = await client.get_core_setting_id_map()
+        assert id_map == {"ui_theme": 42}
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_core_setting_id_map_drops_unusable_rows():
+    """Rows without a usable string key or an integer id are dropped, not guessed.
+
+    Mirrors ``routers.backup._normalize_core_settings``: a row we cannot key is
+    better absent (the caller then fails that key explicitly) than mapped to a
+    wrong id that would PATCH an unrelated setting.
+    """
+    client = _make_client()
+    try:
+        body = [
+            {"id": 1, "key": "ui_theme"},
+            {"id": 2},  # no key
+            {"key": "no_id"},  # no id
+            {"id": "not-an-int", "key": "bad_id"},
+            "not-a-row",
+        ]
+        rm = AsyncMock(return_value=_response(200, body))
+        with patch.object(client, "_request", rm):
+            id_map = await client.get_core_setting_id_map()
+        assert id_map == {"ui_theme": 1}
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_core_setting_patches_by_integer_row_id():
+    """A single setting is PATCHed at its INTEGER-id sub-path with a {value:...}
+    body — never a bulk PUT, and never a key-string URL.
+
+    Regression pin for enhancedchannelmanager-q6xjl: Dispatcharr's
+    ``CoreSettingsViewSet`` is a plain ModelViewSet with the default ``pk``
+    lookup, so ``/api/core/settings/<key>/`` matches no route and 404s. The
+    destination row id must be resolved first and used in the path.
+    """
     client = _make_client()
     try:
         rm = AsyncMock(return_value=_response(200, {"key": "ui_theme", "value": "dark"}))
         with patch.object(client, "_request", rm):
-            result = await client.update_core_setting("ui_theme", "dark")
+            result = await client.update_core_setting(42, "dark")
         assert result == {"key": "ui_theme", "value": "dark"}
         method, path = rm.await_args.args
-        assert (method, path) == ("PATCH", f"{_CORE_SETTINGS_PATH}ui_theme/")
+        assert (method, path) == ("PATCH", f"{_CORE_SETTINGS_PATH}42/")
         assert rm.await_args.kwargs["json"] == {"value": "dark"}
     finally:
         await client._client.aclose()
@@ -196,7 +306,7 @@ async def test_update_core_setting_error_carries_no_payload():
         rm = AsyncMock(side_effect=leaky)
         with patch.object(client, "_request", rm):
             with pytest.raises(Exception) as excinfo:
-                await client.update_core_setting(setting_name, secret_value)
+                await client.update_core_setting(31, secret_value)
         message = str(excinfo.value)
         assert secret_value not in message
         assert setting_name not in message

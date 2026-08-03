@@ -224,9 +224,8 @@ class DispatcharrClient:
         """Make an authenticated request with automatic token refresh."""
         # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
         # sink in this method. ``path`` is attacker-influenced/credential-tainted
-        # in practice -- callers such as ``update_core_setting`` build it from a
-        # settings key (``f"{_CORE_SETTINGS_PATH}{setting_name}/"``), and a path
-        # *could* in principle carry a query string with a token. CodeQL's
+        # in practice -- callers interpolate caller-supplied identifiers into it,
+        # and a path *could* in principle carry a query string with a token. CodeQL's
         # py/clear-text-logging-sensitive-data correctly traces that credential
         # source into ``path`` and flags every ``logger.*(..., path)`` sink here.
         # These logs use only NON-sensitive fields -- HTTP method, status code,
@@ -1605,7 +1604,15 @@ class DispatcharrClient:
         Returns an empty set if the schema cannot be parsed — the importer treats
         an unparseable schema as "cannot confirm safety" and also fails closed.
         """
-        response = await self._request("GET", "/api/schema/")
+        # ``?format=json`` is REQUIRED (enhancedchannelmanager-q6xjl).
+        # drf-spectacular's default renderer for /api/schema/ is YAML
+        # (content-type ``application/vnd.oai.openapi``), so a bare GET returns a
+        # YAML document and ``.json()`` raises "Expecting value: line 1 column 1
+        # (char 0)". That exception failed the whole dispatcharr_users restore
+        # category CLOSED on every run against Dispatcharr 0.28.2.
+        response = await self._request(
+            "GET", "/api/schema/", params={"format": "json"}
+        )
         response.raise_for_status()
         doc = response.json()
         if not isinstance(doc, dict):
@@ -1791,30 +1798,72 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def update_core_setting(self, setting_name: str, setting_value) -> dict:
-        """Apply ONE core setting name->value via PATCH.
+    async def get_core_setting_id_map(self) -> dict:
+        """Return a ``{setting key -> destination row id}`` map in ONE request.
 
-        Per-key application (NOT a bulk PUT that could clobber unrelated keys).
-        The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
-        credential/auth/instance-identity key. ``setting_value`` is forwarded
-        as-is; this method NEVER logs the value (it may be sensitive for a
-        non-allowlisted key if a future caller misuses it).
+        Dispatcharr's ``CoreSettingsViewSet`` is a plain DRF ``ModelViewSet``
+        with the default ``pk`` lookup, so the detail route is
+        ``/api/core/settings/{integer id}/`` — there is NO key-string detail
+        route (see ``tests/fixtures/dispatcharr_openapi_recorded.json``). Ids are
+        per-instance and are deliberately NOT carried in a backup artifact
+        (``routers.backup`` flattens core settings to key->value), so a restore
+        must resolve them against the DESTINATION at apply time. Callers hold the
+        returned map for the whole apply run — one GET, never one per key
+        (enhancedchannelmanager-q6xjl).
+
+        Accepts either a bare list of rows or a DRF-paginated
+        ``{"results": [...]}`` envelope. A row without a usable string key or an
+        integer id is DROPPED rather than guessed at — an absent key makes the
+        caller fail that key explicitly, whereas a guessed id would PATCH an
+        unrelated setting.
+        """
+        response = await self._request("GET", _CORE_SETTINGS_PATH)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("results")
+        if not isinstance(payload, list):
+            return {}
+
+        id_map: dict = {}
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            setting_name = row.get("key")
+            if not isinstance(setting_name, str) or not setting_name:
+                continue
+            row_id = row.get("id")
+            # bool is an int subclass; a boolean id is not a row id.
+            if not isinstance(row_id, int) or isinstance(row_id, bool):
+                continue
+            id_map[setting_name] = row_id
+        return id_map
+
+    async def update_core_setting(self, setting_id: int, setting_value) -> dict:
+        """Apply ONE core setting by its destination row id via PATCH.
+
+        Per-row application (NOT a bulk PUT that could clobber unrelated keys).
+        ``setting_id`` is the destination's own integer row id, resolved by
+        :meth:`get_core_setting_id_map` — a key-string URL matches no route and
+        404s (enhancedchannelmanager-q6xjl). The DBAS importer only calls this for
+        ALLOWLISTED safe keys — never for a credential/auth/instance-identity key.
+        ``setting_value`` is forwarded as-is; this method NEVER logs the value (it
+        may be sensitive for a non-allowlisted key if a future caller misuses it).
 
         Clear-text-logging hygiene (bead 0i2vt.13): the parameters are named
-        ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
-        ``value``. CodeQL's py/clear-text-logging-sensitive-data taints any value
-        flowing from a ``key``-named variable as a secret; a ``key`` parameter
-        here would taint the request ``path`` (and the JSON body the
-        ``setting_value``), both of which reach the shared ``_request`` log/exc
-        sinks. We also catch any upstream error and re-raise a generic,
-        payload-free message so neither the setting name, the setting value, nor
-        an upstream response body can propagate into ``_request``'s
-        ``logger.exception(..., e)`` sink via the raised exception.
+        ``setting_id`` / ``setting_value`` — deliberately NOT ``key`` / ``value``.
+        CodeQL's py/clear-text-logging-sensitive-data taints any value flowing
+        from a ``key``-named variable as a secret; such a parameter here would
+        taint the request ``path`` (and the JSON body the ``setting_value``), both
+        of which reach the shared ``_request`` log/exc sinks. We also catch any
+        upstream error and re-raise a generic, payload-free message so neither the
+        setting value nor an upstream response body can propagate into
+        ``_request``'s ``logger.exception(..., e)`` sink via the raised exception.
         """
         try:
             response = await self._request(
                 "PATCH",
-                f"{_CORE_SETTINGS_PATH}{setting_name}/",
+                f"{_CORE_SETTINGS_PATH}{setting_id}/",
                 json={"value": setting_value},
             )
             response.raise_for_status()

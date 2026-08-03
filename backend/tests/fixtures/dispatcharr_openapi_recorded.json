@@ -1,0 +1,495 @@
+{
+ "capture": {
+  "source": "Live GET /api/schema/?format=json from Dispatcharr 0.28.2 (doc-test instance, bead enhancedchannelmanager-q6xjl)",
+  "fixture_kind": "literal slice of a real response",
+  "literal_raw_capture": true,
+  "captured_at": "2026-08-03",
+  "dispatcharr_version": "0.28.2",
+  "slice": "Only the three paths and three component schemas ECM's client actually reads are retained; the full document is ~700 KB. Nothing inside the retained subtrees was edited.",
+  "why": "Two contract facts this fixture pins: (1) POST /api/accounts/users/ references components.schemas.User via $ref, and the real User schema marks id/api_key readOnly and exposes NO pre-hashed-password write field; (2) the core-settings DETAIL route is /api/core/settings/{id}/ with an INTEGER path parameter -- a key-string URL has no route and 404s, which is the q6xjl restore failure.",
+  "renderer_note": "drf-spectacular serves this document as YAML by default (content-type application/vnd.oai.openapi). ECM must request ?format=json to get the JSON rendering captured here."
+ },
+ "schema": {
+  "openapi": "3.0.3",
+  "info": {
+   "title": "Dispatcharr API",
+   "version": "1.0.0",
+   "description": "API documentation for Dispatcharr"
+  },
+  "paths": {
+   "/api/accounts/users/": {
+    "get": {
+     "operationId": "api_accounts_users_list",
+     "description": "Retrieve a list of users",
+     "tags": [
+      "api"
+     ],
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "type": "array",
+          "items": {
+           "$ref": "#/components/schemas/User"
+          }
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    },
+    "post": {
+     "operationId": "api_accounts_users_create",
+     "description": "Create a new user",
+     "tags": [
+      "api"
+     ],
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/User"
+        }
+       },
+       "application/x-www-form-urlencoded": {
+        "schema": {
+         "$ref": "#/components/schemas/User"
+        }
+       },
+       "multipart/form-data": {
+        "schema": {
+         "$ref": "#/components/schemas/User"
+        }
+       }
+      },
+      "required": true
+     },
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "201": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/User"
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    }
+   },
+   "/api/core/settings/": {
+    "get": {
+     "operationId": "api_core_settings_list",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "tags": [
+      "api"
+     ],
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "type": "array",
+          "items": {
+           "$ref": "#/components/schemas/CoreSettings"
+          }
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    },
+    "post": {
+     "operationId": "api_core_settings_create",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "tags": [
+      "api"
+     ],
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       },
+       "application/x-www-form-urlencoded": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       },
+       "multipart/form-data": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       }
+      },
+      "required": true
+     },
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "201": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/CoreSettings"
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    }
+   },
+   "/api/core/settings/{id}/": {
+    "get": {
+     "operationId": "api_core_settings_retrieve",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "parameters": [
+      {
+       "in": "path",
+       "name": "id",
+       "schema": {
+        "type": "integer"
+       },
+       "description": "A unique integer value identifying this core settings.",
+       "required": true
+      }
+     ],
+     "tags": [
+      "api"
+     ],
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/CoreSettings"
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    },
+    "put": {
+     "operationId": "api_core_settings_update",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "parameters": [
+      {
+       "in": "path",
+       "name": "id",
+       "schema": {
+        "type": "integer"
+       },
+       "description": "A unique integer value identifying this core settings.",
+       "required": true
+      }
+     ],
+     "tags": [
+      "api"
+     ],
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       },
+       "application/x-www-form-urlencoded": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       },
+       "multipart/form-data": {
+        "schema": {
+         "$ref": "#/components/schemas/CoreSettings"
+        }
+       }
+      },
+      "required": true
+     },
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/CoreSettings"
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    },
+    "patch": {
+     "operationId": "api_core_settings_partial_update",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "parameters": [
+      {
+       "in": "path",
+       "name": "id",
+       "schema": {
+        "type": "integer"
+       },
+       "description": "A unique integer value identifying this core settings.",
+       "required": true
+      }
+     ],
+     "tags": [
+      "api"
+     ],
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PatchedCoreSettings"
+        }
+       },
+       "application/x-www-form-urlencoded": {
+        "schema": {
+         "$ref": "#/components/schemas/PatchedCoreSettings"
+        }
+       },
+       "multipart/form-data": {
+        "schema": {
+         "$ref": "#/components/schemas/PatchedCoreSettings"
+        }
+       }
+      }
+     },
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/CoreSettings"
+         }
+        }
+       },
+       "description": ""
+      }
+     }
+    },
+    "delete": {
+     "operationId": "api_core_settings_destroy",
+     "description": "API endpoint for editing core settings.\nThis is treated as a singleton: only one instance should exist.",
+     "parameters": [
+      {
+       "in": "path",
+       "name": "id",
+       "schema": {
+        "type": "integer"
+       },
+       "description": "A unique integer value identifying this core settings.",
+       "required": true
+      }
+     ],
+     "tags": [
+      "api"
+     ],
+     "security": [
+      {
+       "jwtAuth": []
+      },
+      {
+       "ApiKeyAuth": []
+      }
+     ],
+     "responses": {
+      "204": {
+       "description": "No response body"
+      }
+     }
+    }
+   }
+  },
+  "components": {
+   "schemas": {
+    "User": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "readOnly": true
+      },
+      "username": {
+       "type": "string",
+       "description": "Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.",
+       "pattern": "^[\\w.@+-]+$",
+       "maxLength": 150
+      },
+      "api_key": {
+       "type": "string",
+       "readOnly": true,
+       "nullable": true
+      },
+      "email": {
+       "type": "string",
+       "format": "email",
+       "title": "Email address",
+       "maxLength": 254
+      },
+      "user_level": {
+       "type": "integer",
+       "maximum": 2147483647,
+       "minimum": -2147483648
+      },
+      "password": {
+       "type": "string",
+       "writeOnly": true
+      },
+      "channel_profiles": {
+       "type": "array",
+       "items": {
+        "type": "integer"
+       }
+      },
+      "custom_properties": {
+       "nullable": true
+      },
+      "avatar_config": {
+       "nullable": true
+      },
+      "stream_limit": {
+       "type": "integer",
+       "maximum": 2147483647,
+       "minimum": -2147483648
+      },
+      "is_staff": {
+       "type": "boolean",
+       "title": "Staff status",
+       "description": "Designates whether the user can log into this admin site."
+      },
+      "is_superuser": {
+       "type": "boolean",
+       "title": "Superuser status",
+       "description": "Designates that this user has all permissions without explicitly assigning them."
+      },
+      "last_login": {
+       "type": "string",
+       "format": "date-time",
+       "nullable": true
+      },
+      "date_joined": {
+       "type": "string",
+       "format": "date-time"
+      },
+      "first_name": {
+       "type": "string",
+       "maxLength": 150
+      },
+      "last_name": {
+       "type": "string",
+       "maxLength": 150
+      }
+     },
+     "required": [
+      "api_key",
+      "id",
+      "username"
+     ]
+    },
+    "CoreSettings": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "readOnly": true
+      },
+      "key": {
+       "type": "string",
+       "maxLength": 255
+      },
+      "name": {
+       "type": "string",
+       "maxLength": 255
+      },
+      "value": {}
+     },
+     "required": [
+      "id",
+      "key",
+      "name"
+     ]
+    },
+    "PatchedCoreSettings": {
+     "type": "object",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "readOnly": true
+      },
+      "key": {
+       "type": "string",
+       "maxLength": 255
+      },
+      "name": {
+       "type": "string",
+       "maxLength": 255
+      },
+      "value": {}
+     }
+    }
+   }
+  }
+ }
+}
