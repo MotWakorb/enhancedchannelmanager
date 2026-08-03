@@ -33,9 +33,13 @@ id-remapped, NOT ledgered as creates:
   (``client.update_core_setting``). The archive carries key->value only, and
   Dispatcharr's detail route is keyed by an integer pk, so each key is first
   resolved to the DESTINATION's row id by the run-scoped
-  :class:`CoreSettingIdResolver` — one ``GET /api/core/settings/`` per apply run
-  (bead ``…-q6xjl``; the previous key-string URL 404'd on every key). Reported as
-  ``updated`` / ``skipped`` / ``failed`` on the ``EntityType.SETTINGS`` report
+  :class:`CoreSettingIdResolver` — one ``GET /api/core/settings/`` per run,
+  apply OR dry-run (bead ``…-q6xjl``; the previous key-string URL 404'd on every
+  key). A key that resolves is ``updated`` (or ``would_update`` on dry-run); a
+  key with no row on the destination is ``failed`` DEPENDENCY_UNRESOLVED on
+  BOTH apply and dry-run (bead ``…-y6zg6``) — the preview resolves against the
+  SAME destination the apply would, so a dry-run cannot certify WOULD-UPDATE for
+  a key the apply then fails on. Reported on the ``EntityType.SETTINGS`` report
   category — never ``created``, never ledgered.
 * **comskip** (:func:`import_comskip`) — same shape; a comskip config blob applied
   conservatively.
@@ -571,7 +575,20 @@ async def _apply_settings_blob(
     destination row id ``id_resolver`` resolves for that key. Dangerous keys are
     skipped (reported by NAME only — never their value). Results land on the
     ``EntityType.SETTINGS`` report category as ``updated`` / ``skipped`` /
-    ``failed`` (or ``would_update`` / ``would_skip`` on dry-run). NEVER ledgered
+    ``failed`` on apply — or ``would_update`` / ``would_skip`` on dry-run.
+
+    ``failed`` / ``failure_details`` are populated on BOTH apply AND dry-run
+    (enhancedchannelmanager-y6zg6): whether a key resolves to a destination row
+    id is a FACT about the destination, true regardless of whether this run
+    actually applies, so the dry-run branch resolves each safe key through the
+    SAME ``id_resolver`` the apply branch uses before deciding would-update vs
+    would-fail. There is no separate ``would_fail`` counter — this mirrors the
+    existing convention for per-item conflicts that are facts about the source
+    data (see ``dbas/importers/channels.py``'s ambiguous-null-key collision and
+    ``tasks/dbas_sync.py``'s ``_counts_from_report`` docstring). Before this fix,
+    the dry-run branch never contacted upstream at all and unconditionally
+    reported would_update, which is what let a preview certify "Settings 7 WILL
+    UPDATE / 0 FAILED" for an apply that then failed 7/7 (q6xjl). NEVER ledgered
     (settings are config, not created entities — rollback of settings is out of
     scope). NEVER logs/echoes a setting VALUE.
     """
@@ -627,14 +644,14 @@ async def _apply_settings_blob(
             )
             continue
 
-        if is_dry_run:
-            cat.would_update += 1
-            continue
-
-        # Resolve the DESTINATION row id for this key before PATCHing — the
-        # detail route is keyed by integer pk, and an archive carries no ids
-        # (enhancedchannelmanager-q6xjl). The resolver fetches the list once per
-        # apply run and serves every later lookup from memory.
+        # Resolve the DESTINATION row id for this key BEFORE deciding
+        # would-update vs would-fail — the detail route is keyed by integer pk,
+        # and an archive carries no ids (enhancedchannelmanager-q6xjl). This
+        # runs on dry-run too (enhancedchannelmanager-y6zg6): whether the key
+        # resolves is a fact about the destination the preview must surface, not
+        # something only the apply run discovers. The resolver fetches the list
+        # once per run (dry-run OR apply) and serves every later lookup —
+        # including the comskip blob's — from memory.
         try:
             setting_id = await id_resolver.resolve(setting_name)
         except CoreSettingNotFoundError:
@@ -675,6 +692,10 @@ async def _apply_settings_blob(
                 source_label,
                 _safe_key_label(setting_index, setting_name),
             )
+            continue
+
+        if is_dry_run:
+            cat.would_update += 1
             continue
 
         try:
@@ -722,11 +743,17 @@ async def import_core_settings(
     reported updated/skipped on ``EntityType.SETTINGS``, NEVER created, NEVER
     ledgered (settings rollback is out of scope). NEVER logs a setting value.
 
+    On ``is_dry_run=True`` a safe key is still resolved against the destination
+    (bead ``…-y6zg6``): a key that resolves reports ``would_update``; a key with
+    no destination row reports ``failed`` DEPENDENCY_UNRESOLVED — the SAME
+    reason/wording the apply path uses — so the preview cannot certify
+    WOULD-UPDATE for a key the apply run then fails on.
+
     Args:
         id_resolver: The run-scoped key->row-id resolver. Pass the SAME instance
-            used for :func:`import_comskip` so one apply run costs one
-            ``GET /api/core/settings/``; omitted, a private one is created (still
-            one GET, just not shared).
+            used for :func:`import_comskip` so one run (apply OR dry-run) costs
+            one ``GET /api/core/settings/``; omitted, a private one is created
+            (still one GET, just not shared).
     """
     await _apply_settings_blob(
         archive_settings=archive_core_settings,
@@ -751,8 +778,10 @@ async def import_comskip(
 ) -> None:
     """Apply archived comskip config conservatively — same shape as core settings.
 
-    Dangerous keys skipped (by name), safe keys applied; reported updated/skipped;
-    never created, never ledgered. NEVER logs a setting value.
+    Dangerous keys skipped (by name), safe keys applied; reported updated/skipped
+    on apply, would_update/failed(DEPENDENCY_UNRESOLVED) on dry-run per key
+    resolution (bead ``…-y6zg6`` — see :func:`import_core_settings`); never
+    created, never ledgered. NEVER logs a setting value.
 
     Comskip config lives in the SAME Dispatcharr core-settings namespace (there is
     no comskip endpoint), so ``id_resolver`` is the same run-scoped resolver the

@@ -141,7 +141,18 @@ async def _build_real_artifact(tmp_path):
 
 
 def _restore_client():
-    """An empty-destination AsyncMock client — every archived entity is a create."""
+    """An empty-destination AsyncMock client — every archived ENTITY is a create.
+
+    Settings are NOT an entity category: a fresh Dispatcharr instance still HAS
+    its own settings rows from install, it just may not have every key the
+    archive carries (enhancedchannelmanager-y6zg6 — the dry-run resolver now
+    checks this, so the map must reflect a real destination's rows, not an
+    empty dict). ``legacy_removed_setting`` (added to the archive's
+    core_settings by :func:`_build_real_artifact`) is deliberately ABSENT here —
+    it is the genuinely-missing-on-the-destination case the dry-run preview must
+    report WOULD-FAIL, matching :func:`_apply_client`'s id map exactly so
+    dry-run and apply agree.
+    """
     client = AsyncMock()
     client.get_m3u_accounts = AsyncMock(return_value=[])
     client.get_epg_sources = AsyncMock(return_value=[])
@@ -154,6 +165,13 @@ def _restore_client():
     client.get_channels = AsyncMock(return_value={"results": [], "count": 0})
     client.get_streams = AsyncMock(return_value={"results": [], "count": 0})
     client.get_all_logos_paginated = AsyncMock(return_value=[])
+    client.get_core_setting_id_map = AsyncMock(
+        return_value={
+            "default_user_agent": 6,
+            "comskip_ini": 17,
+            "provider_api_key": 21,
+        }
+    )
     return client
 
 
@@ -218,12 +236,18 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     # lc6zu round-trip: the settings/agents categories flow from the produced
     # artifact all the way into the dry-run counts. The DVR rule's channel FK
     # resolves through the dry-run CHANNEL remap; the dangerous core-settings
-    # key is skipped by name, the two safe keys would be applied.
+    # key is skipped by name, the two safe+resolvable keys would be applied.
     assert report.category(EntityType.USER_AGENT).would_create == 1
     assert report.category(EntityType.DVR_RULE).would_create == 1
     settings_report = report.category(EntityType.SETTINGS)
     assert settings_report.would_update == 2
     assert settings_report.would_skip == 1
+    # y6zg6: every safe key here DOES resolve against `_restore_client()`'s id
+    # map (it mirrors a genuine destination's settings rows), so this clean
+    # fixture reports zero WOULD-FAIL — the missing-key WOULD-FAIL case is
+    # covered end-to-end, through this same orchestrator seam, by
+    # test_settings_dry_run_apply_parity_on_missing_key below.
+    assert settings_report.failed == 0
     # PR #743 item 1: from a GENUINE artifact, the missed logo (empty
     # destination) reports its archived affected channel. Dry-run never emits a
     # destination channel id (the remap holds provisional ids) — name only.
@@ -411,6 +435,13 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     assert apply_report.outcome == RestoreOutcome.SUCCESS
 
     # --- 3. THE parity bar: dry-run counts == apply counts, ALL categories. ---
+    # ``failed`` is compared against ``dry_cat.failed`` (NOT a hardcoded 0,
+    # enhancedchannelmanager-y6zg6): a settings key absent on the destination is
+    # WOULD-FAIL on dry-run and FAILED on apply, both DEPENDENCY_UNRESOLVED, so
+    # this loop now proves parity on the failure count too — the settings
+    # category has a non-zero dry_cat.failed here (legacy_removed_setting) and
+    # this assertion is the parity check that would have caught the ORIGINAL
+    # q6xjl divergence (preview: 0 failed; apply: 7/7 failed).
     for entity_type in _ALL_REGISTRY_CATEGORIES:
         dry_cat = dry_report.category(entity_type)
         apply_cat = apply_report.category(entity_type)
@@ -423,7 +454,7 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
             dry_cat.would_create,
             dry_cat.would_update,
             dry_cat.would_skip,
-            0,
+            dry_cat.failed,
         ), "dry-run/apply divergence for %s" % entity_type.value
 
     # --- 4. Every category actually MUTATED the destination (the silent-skip
@@ -477,3 +508,106 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     assert apply_miss.source_export_id == 21
     assert apply_miss.label == "ESPN"
     assert [(c.channel_id, c.name) for c in apply_miss.channels] == [(505, "CNN")]
+
+
+# ---------------------------------------------------------------------------
+# y6zg6 — dry-run/apply parity through the ORCHESTRATOR seam for a settings key
+# that does not resolve on the destination.
+# ---------------------------------------------------------------------------
+#
+# The q6xjl incident's dry-run preview certified "Settings 7 WILL UPDATE / 0
+# FAILED" for an apply that then failed 7/7 on a same-instance round-trip: the
+# dry-run branch never contacted upstream at all. This test proves the fix at
+# the ORCHESTRATOR wiring level (restore_orchestrator.py's ``_settings``
+# importer-step callable, the exact seam both q6xjl and this bead touch) — a
+# key absent on the destination is WOULD-FAIL on preview and FAILED on apply,
+# both DEPENDENCY_UNRESOLVED, so the two verdicts agree.
+#
+# This is deliberately a SEPARATE, narrow plan rather than an addition to
+# ``_build_real_artifact`` above: a settings-category failure intentionally
+# halts the WHOLE restore (rollback of every other category — settings changes
+# are never compensated, see settings_agents.py's module docstring), which
+# would defeat the multi-category happy-path fixture's own purpose (proving
+# every category creates cleanly to a SUCCESS outcome). Isolating the missing-
+# key case here keeps both tests focused on what each is actually proving.
+# ---------------------------------------------------------------------------
+
+
+def _settings_only_plan(values: dict) -> "ImportPlan":
+    from dbas.preflight import ImportPlan, PlanCategory
+
+    plan = ImportPlan(manifest={"schema_version": 1})
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.SETTINGS,
+            selected=True,
+            entities=[{"section": "core_settings", "values": values}],
+        )
+    )
+    return plan
+
+
+def _settings_destination_client(id_map: dict):
+    client = AsyncMock()
+    client.get_core_setting_id_map = AsyncMock(return_value=id_map)
+    client.update_core_setting = AsyncMock(return_value={})
+    return client
+
+
+@pytest.mark.asyncio
+async def test_settings_dry_run_apply_parity_on_missing_key():
+    from dbas.restore_contracts import (
+        FailureReason,
+        IdRemapTable,
+        RestoreOutcome,
+        RestoreReport,
+        RollbackLedger,
+    )
+    from dbas.restore_orchestrator import (
+        default_importer_steps,
+        new_restore_id,
+        run_dry_run,
+        run_restore,
+    )
+
+    # The destination has 'ui_theme' but not 'not_on_destination' — the exact
+    # per-key resolution split the resolver's key->id map produces.
+    archive_values = {"ui_theme": "dark", "not_on_destination": "x"}
+    destination_id_map = {"ui_theme": 21}
+
+    dry_report = await run_dry_run(
+        plan=_settings_only_plan(archive_values),
+        client=_settings_destination_client(destination_id_map),
+    )
+    dry_cat = dry_report.category(EntityType.SETTINGS)
+    assert dry_cat.would_update == 1
+    assert dry_cat.failed == 1
+    assert {d.reason for d in dry_cat.failure_details} == {
+        FailureReason.DEPENDENCY_UNRESOLVED
+    }
+
+    apply_client = _settings_destination_client(destination_id_map)
+    apply_report = await run_restore(
+        plan=_settings_only_plan(archive_values),
+        client=apply_client,
+        steps=default_importer_steps(),
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id=new_restore_id()),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+    )
+    apply_cat = apply_report.category(EntityType.SETTINGS)
+
+    # THE parity bar for the missing-key case: preview and apply agree exactly.
+    assert (apply_cat.updated, apply_cat.failed) == (dry_cat.would_update, dry_cat.failed)
+    assert {d.reason for d in apply_cat.failure_details} == {
+        FailureReason.DEPENDENCY_UNRESOLVED
+    }
+    # The resolvable key still applied — one bad key does not poison the run's
+    # OTHER keys, on dry-run any more than on apply.
+    apply_client.update_core_setting.assert_awaited_once_with(21, "dark")
+    # A settings-category failure halts the whole restore (settings are never
+    # ledgered/compensated) — confirms this bead's fix reproduces the ORIGINAL
+    # q6xjl incident's "restore rolled back" apply-side behavior, now ALSO
+    # visible on the preview before the operator ever confirms the apply.
+    assert apply_report.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
