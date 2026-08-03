@@ -51,7 +51,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from task_registry import register_task
 from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
@@ -79,6 +79,34 @@ _STAGE_KEYS: tuple[str, ...] = (
     "finalize",
 )
 _TOTAL_STAGES = len(_STAGE_KEYS)
+
+
+class RestoreCounts(NamedTuple):
+    """Per-run item counts summed from ``RestoreReport.categories``.
+
+    Mirrors ``tasks.dbas_sync.SyncCounts`` (enhancedchannelmanager-tyei5):
+    the ``TaskResult`` numeric badges (Task History UI, and
+    ``task_engine.py``'s ``elif result.failed_count > 0`` "Completed with
+    Warnings" branch) must reflect the REAL per-category sums, not the
+    task-level stage count (``_TOTAL_STAGES``) previously hardcoded into
+    ``total_items``/``success_count`` here.
+
+    * ``total_items`` — success_count + skipped_count + failed_count.
+    * ``success_count`` — dry-run: would_create + would_update; apply:
+      created + updated.
+    * ``failed_count`` — sum of ``category.failed`` on BOTH dry-run and
+      apply. A dry-run plan cannot FAIL an apply attempt, but ``cat.failed``
+      also carries per-item CONFLICTs an importer surfaces unconditionally
+      (see ``EntityCategoryReport.failed``'s docstring) — those are facts
+      about the source data, populated on a dry-run preview too, so this
+      bucket is identical in both branches.
+    * ``skipped_count`` — dry-run: would_skip; apply: skipped.
+    """
+
+    total_items: int
+    success_count: int
+    failed_count: int
+    skipped_count: int
 
 
 @register_task
@@ -317,13 +345,16 @@ class DbasRestoreTask(TaskScheduler):
             "[DBAS-RESTORE] Restore task complete (mode=%s, outcome=%s, %d categories)",
             mode, outcome, len(report.categories),
         )
+        counts = self._counts_from_report(report, is_apply)
         return TaskResult(
             success=self._report_succeeded(report, is_apply),
             message=self._summary_message(report, is_apply),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
-            total_items=_TOTAL_STAGES,
-            success_count=_TOTAL_STAGES,
+            total_items=counts.total_items,
+            success_count=counts.success_count,
+            failed_count=counts.failed_count,
+            skipped_count=counts.skipped_count,
             details={
                 "is_dry_run": report.is_dry_run,
                 "outcome": outcome,
@@ -379,15 +410,48 @@ class DbasRestoreTask(TaskScheduler):
         return report.outcome == RestoreOutcome.SUCCESS
 
     @staticmethod
+    def _counts_from_report(report, is_apply: bool) -> RestoreCounts:
+        """Sum the REAL per-category item counts across ``report.categories``.
+
+        Mirrors ``tasks.dbas_sync.DbasSyncTask._counts_from_report`` — same
+        underlying counts as :meth:`_summary_message`, so the human-readable
+        message and the numeric ``TaskResult`` badges never disagree.
+        """
+        failed_count = sum(c.failed for c in report.categories)
+        if report.is_dry_run or not is_apply:
+            success_count = sum(
+                c.would_create + c.would_update for c in report.categories
+            )
+            skipped_count = sum(c.would_skip for c in report.categories)
+        else:
+            success_count = sum(c.created + c.updated for c in report.categories)
+            skipped_count = sum(c.skipped for c in report.categories)
+        total_items = success_count + skipped_count + failed_count
+        return RestoreCounts(
+            total_items=total_items,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+        )
+
+    @staticmethod
     def _summary_message(report, is_apply: bool) -> str:
         if report.is_dry_run or not is_apply:
             total_create = sum(c.would_create for c in report.categories)
             total_update = sum(c.would_update for c in report.categories)
             total_skip = sum(c.would_skip for c in report.categories)
+            # `failed` is populated on a dry-run preview by the per-item
+            # conflict paths (source-side duplicate name, ambiguous
+            # null-channel-number collision) — surface it here too so this
+            # message never disagrees with the numeric failed_count badge.
+            # Mirrors tasks.dbas_sync.DbasSyncTask._summary_message's dry-run
+            # branch (enhancedchannelmanager-tyei5).
+            total_conflict = sum(c.failed for c in report.categories)
             return (
-                "Dry-run complete: would create %d, update %d, skip %d "
-                "across %d categories" % (
-                    total_create, total_update, total_skip, len(report.categories),
+                "Dry-run complete: would create %d, update %d, skip %d, "
+                "%d conflict(s) across %d categories" % (
+                    total_create, total_update, total_skip, total_conflict,
+                    len(report.categories),
                 )
             )
         outcome = report.outcome.value if report.outcome else "unknown"

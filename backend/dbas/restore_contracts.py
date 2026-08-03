@@ -259,6 +259,17 @@ class EntityCategoryReport(BaseModel):
       diff tree is deferred to v0.19.x). It MAY still populate
       :attr:`skip_details` (e.g. would-skip-because-already-exists) so the
       operator sees *why* before applying.
+    - :attr:`failed` / :attr:`failure_details` are NOT exclusively an
+      apply-flavour signal: there is no separate ``would_fail`` counter, and an
+      importer MAY populate :attr:`failed` on a dry-run too when the failure is
+      a FACT about the source/destination data rather than about whether the
+      run applied — e.g. a channel's ambiguous null-key collision
+      (``dbas/importers/channels.py``), a source-side duplicate name
+      (``tasks/dbas_sync_engine.py``), or a settings key absent on the
+      destination (``dbas/importers/settings_agents.py``, bead ``…-y6zg6``: the
+      preview resolves each key against the SAME destination the apply would, so
+      it cannot certify would-update for a key the apply then fails). A renderer
+      reads :attr:`failed` the same way on both flavours.
 
     The detail lists are the source of truth for the reasons; the integer
     counts are conveniences derived from them. A renderer that wants the

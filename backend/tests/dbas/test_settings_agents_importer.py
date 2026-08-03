@@ -580,6 +580,96 @@ async def test_core_settings_dry_run_applies_nothing():
 
 
 @pytest.mark.asyncio
+async def test_core_settings_dry_run_missing_key_reports_would_fail():
+    """Regression pin for enhancedchannelmanager-y6zg6: the ORIGINAL q6xjl
+    incident had the preview certify 'Settings 7 WILL UPDATE / 0 FAILED' for an
+    apply that then failed 7/7 — the dry-run branch never contacted upstream to
+    check whether a key resolves. A key absent on the destination must now be
+    WOULD-FAIL with the SAME DEPENDENCY_UNRESOLVED reason/wording the apply path
+    uses, so the preview and the apply verdict agree. The present key still
+    would-update — one bad key does not poison the whole blob, on dry-run any
+    more than on apply."""
+    client = _client(setting_id_map={"ui_theme": 21})
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "not_on_destination": "x"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.would_update == 1
+    assert cat.failed == 1
+    assert cat.updated == 0  # dry-run never actually applies
+
+    detail = next(
+        d for d in cat.failure_details if d.label.endswith(":not_on_destination")
+    )
+    assert detail.reason == FailureReason.DEPENDENCY_UNRESOLVED
+    assert "not_on_destination" in detail.message
+    assert "not present" in detail.message.lower()
+    # A dry-run never PATCHes, even for the key that DID resolve.
+    client.update_core_setting.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_core_settings_dry_run_resolver_fetch_failure_reports_would_fail():
+    """If the destination's settings list GET itself fails during a dry-run,
+    every key fails UPSTREAM_API_ERROR (fail-closed preview) rather than
+    silently reporting WOULD-UPDATE for a destination ECM could not even read —
+    a lying preview beats nothing, but a fail-closed one beats a lying one."""
+    client = _client(setting_id_map_side_effect=RuntimeError("boom"))
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "default_user_agent": "VLC"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.failed == 2
+    assert cat.would_update == 0
+    assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
+    client.update_core_setting.assert_not_called()
+    # The GET is not retried per key even though every key hit the failure path.
+    assert client.get_core_setting_id_map.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_core_settings_dry_run_denylisted_key_never_resolved():
+    """A denylisted key keeps its existing dry-run treatment: it is would-skip
+    by NAME and is NEVER passed to the resolver — resolving it would cost an
+    upstream lookup for a key that will never be applied either way."""
+    id_map = {"dispatcharr_api_key": 99, "ui_theme": 21}
+    client = _client(setting_id_map=id_map)
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "dispatcharr_api_key": "SECRET"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.would_skip == 1
+    assert cat.would_update == 1
+    assert cat.failed == 0
+    assert cat.skip_details[0].reason == SkipReason.EXCLUDED_BY_OPERATOR
+    assert cat.skip_details[0].label.endswith(":dispatcharr_api_key")
+
+
+@pytest.mark.asyncio
 async def test_core_settings_opt_in_off_applies_nothing():
     archive = {"default_user_agent": "VLC"}
     client = _client()
@@ -726,18 +816,24 @@ async def test_settings_id_map_fetched_once_per_apply_run():
 
 @pytest.mark.asyncio
 async def test_settings_id_map_not_fetched_when_nothing_to_apply():
-    """The map is resolved LAZILY — a dry-run or an opted-out category costs no
-    upstream GET at all."""
-    dry_client = _client()
+    """The map is resolved LAZILY — an opted-out category, or a dry-run whose
+    archive blob has no keys to preview, costs no upstream GET at all.
+
+    A dry-run WITH keys to preview is NOT one of these zero-GET cases as of
+    enhancedchannelmanager-y6zg6: previewing WOULD-UPDATE vs WOULD-FAIL requires
+    knowing whether the destination has each key, so it fetches — see
+    :func:`test_settings_id_map_fetched_once_on_dry_run_when_selected`.
+    """
+    empty_dry_client = _client()
     await import_core_settings(
-        archive_core_settings={"ui_theme": "dark"},
-        client=dry_client,
+        archive_core_settings={},
+        client=empty_dry_client,
         selected=True,
         report=_report(is_dry_run=True),
         ledger=_ledger(),
         is_dry_run=True,
     )
-    dry_client.get_core_setting_id_map.assert_not_called()
+    empty_dry_client.get_core_setting_id_map.assert_not_called()
 
     off_client = _client()
     await import_core_settings(
@@ -748,6 +844,37 @@ async def test_settings_id_map_not_fetched_when_nothing_to_apply():
         ledger=_ledger(),
     )
     off_client.get_core_setting_id_map.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetched_once_on_dry_run_when_selected():
+    """A dry-run preview that actually has keys to plan DOES fetch the
+    destination's settings list — once, shared across BOTH core_settings and
+    comskip in the same run, matching the apply-path contract exactly
+    (enhancedchannelmanager-y6zg6). Without this fetch the preview cannot tell
+    WOULD-UPDATE from WOULD-FAIL, which is the exact defect q6xjl found."""
+    client = _client()
+    report, ledger = _report(is_dry_run=True), _ledger()
+
+    await import_settings_agents(
+        archive={
+            "core_settings": {"ui_theme": "dark", "default_user_agent": "VLC"},
+            "comskip": {"comskip_enabled": True},
+        },
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=_remap(),
+        select_core_settings=True,
+        select_comskip=True,
+        is_dry_run=True,
+    )
+
+    assert client.get_core_setting_id_map.await_count == 1
+    client.update_core_setting.assert_not_called()
+    settings_cat = _settings_category(report)
+    assert settings_cat.would_update == 3
+    assert settings_cat.failed == 0
 
 
 @pytest.mark.asyncio

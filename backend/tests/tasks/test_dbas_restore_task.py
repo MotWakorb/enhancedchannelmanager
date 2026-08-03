@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from dbas.restore_contracts import (
+    EntityCategoryReport,
     EntityType,
     RestoreOutcome,
     RestoreReport,
@@ -225,3 +226,192 @@ class TestTempCleanup:
              patch("dispatcharr_client.get_client", return_value=AsyncMock()):
             await task.execute()
         assert art.exists()
+
+
+# ---------------------------------------------------------------------------
+# enhancedchannelmanager-tyei5 — dry-run failed/conflict counts must be
+# visible in BOTH the summary message and the numeric TaskResult badges,
+# mirroring the pattern dbas_sync.py already carries (SyncCounts /
+# _counts_from_report / the "N conflict(s)" summary phrase).
+# ---------------------------------------------------------------------------
+
+
+def _dry_run_report_with_categories() -> RestoreReport:
+    """A dry-run plan across 2 categories with a mix of would_create/
+    would_update/would_skip — the real per-entity scope a preview should
+    surface, NOT the stage-count ('13 of 13') task-level placeholder."""
+    report = RestoreReport(is_dry_run=True)
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            would_create=10, would_update=5, would_skip=2,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL_GROUP,
+            would_create=3, would_update=1, would_skip=1,
+        ),
+    ]
+    return report
+
+
+def _dry_run_report_with_conflict() -> RestoreReport:
+    """A dry-run plan where ONE category surfaces a per-item CONFLICT.
+
+    Mirrors ``EntityCategoryReport.failed``'s docstring: it is NOT
+    exclusively an apply-time signal — an importer MAY populate it on a
+    dry-run too when the failure is a fact about the source data (not about
+    whether the run applied). This fixture proves a dry-run report CAN carry
+    a nonzero ``failed`` alongside normal ``would_create`` counts elsewhere.
+    """
+    report = RestoreReport(is_dry_run=True)
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL_GROUP,
+            would_create=1, would_update=0, would_skip=0, failed=1,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.M3U_ACCOUNT,
+            would_create=1, would_update=0, would_skip=0,
+        ),
+    ]
+    return report
+
+
+def _apply_success_report_with_categories() -> RestoreReport:
+    """A clean SUCCESS apply across 2 categories with created/updated/skipped
+    (no failures — a clean success has zero failed entities)."""
+    report = RestoreReport(is_dry_run=False, outcome=RestoreOutcome.SUCCESS)
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            created=8, updated=4, skipped=1, failed=0,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.M3U_ACCOUNT,
+            created=2, updated=0, skipped=0, failed=0,
+        ),
+    ]
+    return report
+
+
+def _apply_partial_report_with_categories() -> RestoreReport:
+    """A mixed/rolled-back apply with real failures across categories."""
+    report = RestoreReport(
+        is_dry_run=False, outcome=RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    )
+    report.categories = [
+        EntityCategoryReport(
+            entity_type=EntityType.CHANNEL,
+            created=5, updated=2, skipped=1, failed=3,
+        ),
+        EntityCategoryReport(
+            entity_type=EntityType.EPG_SOURCE,
+            created=1, updated=1, skipped=0, failed=0,
+        ),
+    ]
+    return report
+
+
+@pytest.mark.asyncio
+class TestSummaryMessageFailedVisibility:
+    """``_summary_message``'s dry-run branch must surface a failed/conflict
+    count the same way the apply branch (and dbas_sync's dry-run branch)
+    already do."""
+
+    async def test_dry_run_summary_unchanged_when_no_failures(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(return_value=_dry_run_report_with_categories()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert "would create 13, update 6, skip 3" in result.message
+        # No categories failed — the conflict phrase reports 0, matching
+        # dbas_sync's unconditional "N conflict(s)" phrasing exactly.
+        assert "0 conflict(s)" in result.message
+
+    async def test_dry_run_summary_mentions_conflict_count_when_failed(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(return_value=_dry_run_report_with_conflict()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        # Mirrors dbas_sync's "N conflict(s)" phrasing so a WOULD-FAIL dry-run
+        # is visible in the one-line summary, not just the rich report UI.
+        assert "1 conflict(s)" in result.message
+
+
+@pytest.mark.asyncio
+class TestTaskResultCountsWiring:
+    """``TaskResult.failed_count``/``skipped_count`` must reflect the REAL
+    per-category sums so ``task_engine.py``'s ``elif result.failed_count > 0``
+    ("Completed with Warnings") branch is reachable for DBAS restores."""
+
+    async def test_dry_run_counts_reflect_real_category_sums(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(return_value=_dry_run_report_with_categories()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is True
+        # would_create (10+3) + would_update (5+1) = 19
+        assert result.success_count == 19
+        # would_skip (2+1) = 3
+        assert result.skipped_count == 3
+        assert result.failed_count == 0
+        assert result.total_items == 22
+
+    async def test_dry_run_counts_surface_conflict_failed_count(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(return_value=_dry_run_report_with_conflict()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.failed_count == 1
+        assert result.success_count == 2
+        assert result.skipped_count == 0
+        assert result.total_items == 3
+
+    async def test_apply_success_counts_reflect_real_category_sums(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+        with patch(
+            "dbas.restore_orchestrator.run_restore",
+            AsyncMock(return_value=_apply_success_report_with_categories()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is True
+        # created (8+2) + updated (4+0) = 14
+        assert result.success_count == 14
+        assert result.skipped_count == 1
+        assert result.failed_count == 0
+        assert result.total_items == 15
+
+    async def test_apply_partial_counts_reflect_real_failures(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+        with patch(
+            "dbas.restore_orchestrator.run_restore",
+            AsyncMock(return_value=_apply_partial_report_with_categories()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is False
+        # created (5+1) + updated (2+1) = 9
+        assert result.success_count == 9
+        assert result.skipped_count == 1
+        # failed (3+0) = 3 — the REAL failure count, not the old stage-count.
+        assert result.failed_count == 3
+        assert result.total_items == 13
