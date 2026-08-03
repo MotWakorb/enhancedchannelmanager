@@ -114,6 +114,86 @@ describe('DbasRestoreModal', () => {
     );
   });
 
+  it('applying from a completed dry-run requires typing the exact file name in the confirm dialog', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /apply these changes/i }));
+
+    const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'wrong-name.zip' } });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'backup.zip' } });
+    expect(applyConfirm).toBeEnabled();
+    fireEvent.click(applyConfirm);
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), true, undefined),
+    );
+  });
+
+  it('selecting Apply at the configure step also gates the mutation behind the confirm dialog', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('radio', { name: /^apply/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^apply restore/i }));
+
+    // No mutation yet — the confirm dialog must appear first.
+    expect(api.startDbasRestore).not.toHaveBeenCalled();
+    const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'wrong-name.zip' } });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'backup.zip' } });
+    expect(applyConfirm).toBeEnabled();
+    fireEvent.click(applyConfirm);
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), true, undefined),
+    );
+  });
+
+  it('Preview (dry run) remains one click even with the confirm gate in place', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, undefined),
+    );
+    expect(screen.queryByRole('button', { name: 'Apply restore' })).not.toBeInTheDocument();
+  });
+
   it('passes the passphrase through for an encrypted artifact', async () => {
     (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
       status: 'started', task_id: 'dbas_restore', is_dry_run: true,

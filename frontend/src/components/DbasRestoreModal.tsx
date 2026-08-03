@@ -3,6 +3,7 @@ import { ModalOverlay } from './ModalOverlay';
 import { RestoreProgress } from './RestoreProgress';
 import { RestoreCompleteSummary } from './RestoreCompleteSummary';
 import { LogoMissBanner } from './LogoMissBanner';
+import { TypeToConfirmDialog } from './TypeToConfirmDialog';
 import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
@@ -21,6 +22,11 @@ import './DbasRestoreModal.css';
  * RestoreReport from task history -> RestoreCompleteSummary + logo-miss banner.
  * A dry-run result offers an "Apply these changes" follow-through using the same
  * file + passphrase, so the operator previews before the one-way apply.
+ *
+ * Both apply entry points — the configure-step "Apply" mode and the post-dry-run
+ * "Apply these changes" follow-through — are gated behind a TypeToConfirmDialog
+ * requiring the operator to type the uploaded file's name, mirroring the
+ * saved-backups path's filename-based confirm (DbasRestoreSavedModal).
  *
  * Distinct from BackupRestoreModal (the legacy section-level .yaml restore); the
  * two share the RestoreProgress / RestoreCompleteSummary / LogoMissBanner
@@ -55,6 +61,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
   const finalizedRef = useRef(false);
 
   // Dispatcharr base URL drives the logo-miss banner's "Fix in Dispatcharr"
@@ -281,16 +288,20 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
               <button
                 className="modal-btn modal-btn-primary"
                 disabled={!canStart}
-                onClick={() => start(applyMode)}
+                onClick={() => (applyMode ? setShowApplyConfirm(true) : start(false))}
               >
-                {applyMode ? 'Apply restore' : 'Run preview'}
+                {applyMode ? 'Apply restore…' : 'Run preview'}
               </button>
             </>
           )}
           {step === 'results' && restoreReport && (
             <>
               {restoreReport.is_dry_run && (
-                <button className="modal-btn modal-btn-primary" disabled={busy} onClick={() => start(true)}>
+                <button
+                  className="modal-btn modal-btn-primary"
+                  disabled={busy}
+                  onClick={() => setShowApplyConfirm(true)}
+                >
                   Apply these changes
                 </button>
               )}
@@ -299,6 +310,26 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </div>
+
+      {showApplyConfirm && file && (
+        <TypeToConfirmDialog
+          title="Apply DBAS Restore"
+          message={
+            <>
+              This overwrites current ECM/Dispatcharr configuration with the contents of{' '}
+              <strong>{file.name}</strong>. This cannot be undone.
+            </>
+          }
+          confirmText={file.name}
+          confirmLabel="Apply restore"
+          busy={busy}
+          onCancel={() => setShowApplyConfirm(false)}
+          onConfirm={() => {
+            setShowApplyConfirm(false);
+            start(true);
+          }}
+        />
+      )}
     </ModalOverlay>
   );
 }
