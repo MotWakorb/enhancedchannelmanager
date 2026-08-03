@@ -6,10 +6,12 @@ FOUR categories, TWO shapes:
 ENTITY categories (create rows, remappable, ledger-tracked):
   1. user_agents -> EntityType.USER_AGENT — create + remap + ledger; identity by
      name; collision -> ALREADY_EXISTS_IDENTICAL + remap to existing.
-  2. dvr_rules -> EntityType.DVR_RULE — create + remap + ledger; identity by a
-     stable key (name/title); FK ``channel`` reference remapped through the
-     IdRemapTable; unresolvable FK -> FailureReason.DEPENDENCY_UNRESOLVED (skip
-     DEPENDENCY_UNRESOLVED on dry-run).
+  2. dvr_rules -> EntityType.DVR_RULE — create + remap + ledger against
+     Dispatcharr's recurring-recording-rules resource (lsa0s); identity by
+     name/title with a schedule fallback for unnamed rules; FK ``channel``
+     reference remapped through the IdRemapTable; unresolvable FK ->
+     FailureReason.DEPENDENCY_UNRESOLVED, reported IDENTICALLY on dry-run and
+     apply (the y6zg6 preview-parity rule).
 
 SETTINGS categories (APPLY key/value config; NOT entity-create; NOT id-remapped;
 NOT ledgered as creates):
@@ -408,12 +410,86 @@ async def test_dvr_rules_unresolvable_fk_fails_dependency_unresolved():
 
 
 @pytest.mark.asyncio
-async def test_dvr_rules_unresolvable_fk_dry_run_skips_dependency_unresolved():
-    """On dry-run, an unresolvable FK is a would_skip DEPENDENCY_UNRESOLVED, not a
-    failure."""
+async def test_dvr_rules_unresolvable_fk_dry_run_matches_apply_exactly():
+    """Dry-run reports an unresolvable FK the SAME way apply does.
+
+    lsa0s, following the y6zg6 ruling: whether a rule's ``channel`` resolves is a
+    FACT about the run's remap state, identically true on dry-run (the channels
+    importer registers a provisional remap for every would-create channel) and on
+    apply. Reporting it as a would_skip while the apply reports a failure is a
+    preview that lies about the outcome, so both modes now emit the SAME
+    FailureReason and the SAME message.
+    """
     archive = [{"id": 1, "name": "Record News", "channel": 999}]
-    client = _client()
-    report = _report(is_dry_run=True)
+    remap_kwargs = {"channel": {5: 105}}  # 999 not mapped
+
+    apply_report = _report()
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=_client(),
+        selected=True,
+        report=apply_report,
+        ledger=_ledger(),
+        remap=_remap(**remap_kwargs),
+    )
+
+    dry_client = _client()
+    dry_report = _report(is_dry_run=True)
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=dry_client,
+        selected=True,
+        report=dry_report,
+        ledger=_ledger(),
+        remap=_remap(**remap_kwargs),
+        is_dry_run=True,
+    )
+
+    applied = _cat(apply_report, EntityType.DVR_RULE)
+    previewed = _cat(dry_report, EntityType.DVR_RULE)
+    assert previewed.failed == applied.failed == 1
+    assert previewed.would_skip == 0
+    assert (
+        previewed.failure_details[0].reason
+        == applied.failure_details[0].reason
+        == FailureReason.DEPENDENCY_UNRESOLVED
+    )
+    assert previewed.failure_details[0].message == applied.failure_details[0].message
+    dry_client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_matches_existing_by_schedule():
+    """A rule with no name is identified by its SCHEDULE, not by "<unknown>".
+
+    ``name`` is optional on Dispatcharr's RecurringRecordingRule (lsa0s recorded
+    fixture: ``name`` is absent from the schema's ``required`` list), so a
+    name-only identity would re-create every unnamed rule on each restore. The
+    fallback key is (destination channel, days_of_week, start_time, end_time).
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [2, 0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0, 2],
+                "start_time": "20:00:00",
+                "end_time": "21:00:00",
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
     remap = _remap(channel={5: 105})
 
     await import_dvr_rules(
@@ -421,15 +497,150 @@ async def test_dvr_rules_unresolvable_fk_dry_run_skips_dependency_unresolved():
         client=client,
         selected=True,
         report=report,
-        ledger=_ledger(),
+        ledger=ledger,
         remap=remap,
-        is_dry_run=True,
     )
 
     cat = _cat(report, EntityType.DVR_RULE)
-    assert cat.would_skip == 1
-    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert remap.resolve(EntityType.DVR_RULE, 1) == 444
     client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_differing_enabled_is_not_collapsed():
+    """An unnamed ENABLED rule is not "already" a disabled one with the same slot.
+
+    PR #768 review Warn 1: ``enabled`` is what decides whether the rule actually
+    records, so two unnamed rules that agree on channel, weekdays, clock window
+    and date range but disagree on ``enabled`` are NOT the same rule. Leaving it
+    out of the identity key made a restore silently adopt the destination's
+    disabled rule and drop the archived enabled one — the recordings the operator
+    backed up would never run.
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+            "enabled": True,
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0],
+                "start_time": "20:00:00",
+                "end_time": "21:00:00",
+                "enabled": False,
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
+
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=_remap(channel={5: 105}),
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    sent = client.create_dvr_rule.call_args.args[0]
+    assert sent["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_same_enabled_still_matches():
+    """The ``enabled`` field sharpens the key without breaking it.
+
+    Companion to the test above: two unnamed rules agreeing on the schedule AND
+    on ``enabled`` are still the same rule and must not be duplicated.
+    """
+    slot = {
+        "channel": 5,
+        "days_of_week": [0],
+        "start_time": "20:00:00",
+        "end_time": "21:00:00",
+        "enabled": True,
+    }
+    client = _client(
+        existing_dvr_rules=[{"id": 444, "name": "", **{**slot, "channel": 105}}]
+    )
+    report, ledger = _report(), _ledger()
+    remap = _remap(channel={5: 105})
+
+    await import_dvr_rules(
+        archive_dvr_rules=[{"id": 1, "name": "", **slot}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert remap.resolve(EntityType.DVR_RULE, 1) == 444
+    client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_different_schedule_is_created():
+    """The schedule fallback must not collapse two DIFFERENT unnamed rules.
+
+    Same channel, different start time — a distinct rule that must still be
+    created rather than swallowed as an already-exists skip.
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0],
+                "start_time": "06:00:00",
+                "end_time": "07:00:00",
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
+
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=_remap(channel={5: 105}),
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    client.create_dvr_rule.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -169,6 +169,41 @@ class TestSettingsAgentsDecode:
         assert dvr is not None
         assert dvr.entities[0]["channel"] == 5
 
+    def test_legacy_dvr_rules_warning_stub_decodes_to_an_empty_category(self):
+        """Artifacts taken BEFORE lsa0s restore without crashing.
+
+        Every backup written while ``_DVR_RULES_PATH`` pointed at the dead
+        ``/api/dvr/rules/`` route carries a ``categories/dvr_rules.yaml`` whose
+        ``dispatcharr`` block is the gather failure stub — a MAPPING with a
+        ``_warning`` key and no ``dvr_rules`` list at all. Those artifacts stay
+        readable: the category decodes to zero entities (so the operator sees
+        "0" rather than a gap or a traceback), and the rest of the artifact
+        decodes normally.
+        """
+        legacy_stub = yaml.dump(
+            {
+                "ecm_export": {"version": "0.18.1-0015", "sections_included": ["dvr_rules"]},
+                "dispatcharr": {
+                    "_warning": (
+                        "Dispatcharr not connected — Expecting value: line 1 column 1 (char 0)"
+                    )
+                },
+            },
+            sort_keys=False,
+        ).encode("utf-8")
+        art = _build_artifact(
+            m3u=[{"id": 1, "name": "P"}],
+            extra_members={"categories/dvr_rules.yaml": legacy_stub},
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+
+        dvr = plan.category(EntityType.DVR_RULE)
+        assert dvr is not None
+        assert dvr.entities == []
+        # The neighbouring categories are unaffected by the stub.
+        assert plan.category(EntityType.M3U_ACCOUNT).entities[0]["name"] == "P"
+
     def test_decodes_settings_blobs_into_section_records(self):
         art = _build_artifact(
             core_settings={"default_user_agent": "ECM/1.0"},

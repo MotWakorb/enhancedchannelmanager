@@ -116,12 +116,29 @@ _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 # DBAS-restore endpoint paths (enhancedchannelmanager-0i2vt.13). Isolated as
 # constants so a single live-verification follow-up can correct any path string
 # without editing the methods. Dispatcharr groups core resources under
-# ``/api/core/`` (confirmed for streamprofiles/version/system-events); the DVR
-# module lives under ``/api/dvr/``. These specific paths are best-known and not
-# yet live-confirmed — see the method block for the deferred-verification note.
+# ``/api/core/`` (confirmed for streamprofiles/version/system-events).
+#
+# DVR (enhancedchannelmanager-lsa0s): this used to read ``/api/dvr/rules/``, a
+# guessed path with NO route on Dispatcharr 0.28.2 — it fell through to the
+# frontend SPA catch-all, which answers 200 ``text/html``, so every
+# ``get_dvr_rules()`` died inside ``response.json()`` instead of raising an
+# honest 404. Dispatcharr's DVR-rule resource is a ModelViewSet under the
+# channels app: ``/api/channels/recurring-rules/`` (a RecurringRecordingRule —
+# optional ``name``, one integer ``channel`` FK, ``days_of_week``, start/end
+# time and date, ``enabled``), with list/create on the collection and delete on
+# ``{id}/``. Live-verified against 0.28.2 and recorded in
+# ``tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json``.
+#
+# Two neighbouring DVR surfaces deliberately NOT bound here:
+#   * ``/api/channels/series-rules/`` — series rules are stored INSIDE the
+#     ``dvr_settings`` core-settings row, which the ``core_settings`` backup
+#     category already carries and the settings importer already applies. Going
+#     through this client too would apply the same state twice.
+#   * ``/api/channels/recordings/`` — individual scheduled/completed recording
+#     INSTANCES, not rules; see routers/backup.py's dvr_rules section note.
 _USER_AGENTS_PATH = "/api/core/useragents/"
 _CORE_SETTINGS_PATH = "/api/core/settings/"
-_DVR_RULES_PATH = "/api/dvr/rules/"
+_DVR_RECURRING_RULES_PATH = "/api/channels/recurring-rules/"
 # Defensive cap on how many DRF-paginated pages ``get_core_setting_id_map`` will
 # follow via ``next`` before giving up loudly. The recorded live response is a
 # bare (unpaginated) list of ~7 rows (see
@@ -1724,15 +1741,16 @@ class DispatcharrClient:
     # user_agent / comskip / dvr / core_settings dispatcharr_client.py`` = 0
     # method hits at the start of the bead).
     #
-    # ENDPOINT NOTE (verify-then-size): Dispatcharr groups core resources under
-    # the ``/api/core/`` namespace (confirmed live for ``streamprofiles``,
-    # ``version``, ``system-events`` — see those methods above), so user agents and
-    # core settings are placed there. The DVR-rules path lives under Dispatcharr's
-    # DVR module (``/api/dvr/``). The exact path strings below are the best-known
-    # values from the Dispatcharr REST surface; they are isolated to module-level
-    # constants so a single live-verification follow-up can correct any one path
-    # without touching the importer. No live Dispatcharr instance was available to
-    # confirm them tonight — flagged as a deferred verification follow-up.
+    # ENDPOINT NOTE: Dispatcharr groups core resources under the ``/api/core/``
+    # namespace (confirmed live for ``streamprofiles``, ``version``,
+    # ``system-events`` — see those methods above), so user agents and core
+    # settings are placed there. Every path used below is now LIVE-VERIFIED
+    # against Dispatcharr 0.28.2 and pinned by a recorded fixture; the
+    # deferred-verification note that used to stand here was closed by
+    # enhancedchannelmanager-q6xjl (core settings) and
+    # enhancedchannelmanager-lsa0s (DVR rules — the one guessed path that was
+    # actually wrong). Paths stay isolated in module-level constants so a future
+    # upstream move is a one-line correction.
     # -------------------------------------------------------------------------
 
     async def get_user_agents(self) -> list:
@@ -1767,22 +1785,35 @@ class DispatcharrClient:
         response.raise_for_status()
 
     async def get_dvr_rules(self) -> list:
-        """Get all Dispatcharr DVR / recording rules.
+        """Get all Dispatcharr DVR rules (recurring recording rules).
 
-        Used by the DBAS restore importer (enhancedchannelmanager-0i2vt.13) to
-        detect collisions by name/title before creating.
+        Used by the backup producer (``routers.backup``) and by the DBAS restore
+        importer (enhancedchannelmanager-0i2vt.13) to detect collisions before
+        creating. Targets :data:`_DVR_RECURRING_RULES_PATH` — see that constant
+        for why the original ``/api/dvr/rules/`` guess produced a warning stub on
+        every backup (enhancedchannelmanager-lsa0s).
+
+        ALWAYS returns a list. The live 0.28.2 response is a bare JSON array
+        (recorded fixture), but a destination that paginates this ViewSet would
+        answer a DRF ``{"results": [...]}`` envelope; returning that dict raw
+        would make the importer's collision index empty and duplicate every rule
+        on restore, so both shapes normalize to a list here.
         """
-        response = await self._request("GET", _DVR_RULES_PATH)
+        response = await self._request("GET", _DVR_RECURRING_RULES_PATH)
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict):
+            results = payload.get("results")
+            return results if isinstance(results, list) else []
+        return payload if isinstance(payload, list) else []
 
     async def create_dvr_rule(self, data: dict) -> dict:
-        """Create a Dispatcharr DVR / recording rule.
+        """Create a Dispatcharr DVR rule (recurring recording rule).
 
         FK references (e.g. ``channel``) MUST already be remapped to destination
         ids by the caller — this method forwards the payload as given.
         """
-        response = await self._request("POST", _DVR_RULES_PATH, json=data)
+        response = await self._request("POST", _DVR_RECURRING_RULES_PATH, json=data)
         response.raise_for_status()
         return response.json()
 
@@ -1791,7 +1822,9 @@ class DispatcharrClient:
 
         A 404 means already-gone — treated as successful idempotent compensation.
         """
-        response = await self._request("DELETE", f"{_DVR_RULES_PATH}{rule_id}/")
+        response = await self._request(
+            "DELETE", f"{_DVR_RECURRING_RULES_PATH}{rule_id}/"
+        )
         response.raise_for_status()
 
     async def get_core_settings(self) -> dict:

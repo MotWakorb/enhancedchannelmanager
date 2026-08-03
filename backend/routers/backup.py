@@ -77,7 +77,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0016"
+APP_VERSION = "0.18.1-0017"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1969,12 +1969,19 @@ async def _gather_channels_with_streams(client) -> list[dict]:
 
 
 # Core-settings keys whose lower-cased name starts with this prefix belong to
-# the ``comskip`` artifact section, not ``core_settings``. Dispatcharr has NO
-# separate comskip endpoint: comskip config (``comskip_ini``, toggles, …) lives
-# in the same GET /api/core/settings/ namespace the settings importer PATCHes
-# per-key (see dispatcharr_client.get_core_settings / update_core_setting), so
-# the producer fetches once and SPLITS by this prefix. The split is disjoint —
-# no key can be applied twice on restore.
+# the ``comskip`` artifact section, not ``core_settings``. Comskip CONFIG VALUES
+# live in the same GET /api/core/settings/ namespace the settings importer
+# PATCHes per-key (see dispatcharr_client.get_core_settings /
+# update_core_setting), so the producer fetches once and SPLITS by this prefix.
+# The split is disjoint — no key can be applied twice on restore.
+#
+# CORRECTION (enhancedchannelmanager-lsa0s): this note used to claim Dispatcharr
+# has NO separate comskip endpoint. It does — ``/api/channels/dvr/comskip-config/``
+# — but that endpoint is not a backup source and does not change the split above:
+# its GET returns only ``{"path", "exists"}`` (never the comskip.ini CONTENT) and
+# its POST takes a multipart ``.ini`` upload, so there is nothing to export from
+# it and nothing to restore into it. Both facts are pinned by
+# ``tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json``.
 _COMSKIP_KEY_PREFIX = "comskip"
 
 
@@ -2085,8 +2092,9 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             users = await client.get_users()
             result["dispatcharr_users"] = users or []
         # lc6zu — the settings/agents producer set consumed by the Phase-2
-        # settings_agents importer. User agents and DVR rules are benign entity
-        # lists; the deep redactor still runs over them as defense in depth.
+        # settings_agents importer. User agents and DVR rules (Dispatcharr
+        # recurring recording rules — lsa0s) are benign entity lists; the deep
+        # redactor still runs over them as defense in depth.
         if "user_agents" in needed:
             agents = await client.get_user_agents()
             result["user_agents"] = agents or []
@@ -2257,9 +2265,20 @@ RESTORABLE_SECTIONS = {
     # dispatcharr_users: produced into the DBAS artifact and consumed by the
     # Phase-2 settings_agents importer; the legacy per-section YAML path has no
     # restorer for them. ``core_settings`` + ``comskip`` are gathered from ONE
-    # endpoint (GET /api/core/settings/ — Dispatcharr has no separate comskip
-    # endpoint; the importer applies both via per-key PATCH on that same
-    # namespace) and split by the ``comskip`` key prefix.
+    # endpoint (GET /api/core/settings/ — see _COMSKIP_KEY_PREFIX for why
+    # Dispatcharr's comskip-config endpoint is not a backup source; the importer
+    # applies both via per-key PATCH on that same namespace) and split by the
+    # ``comskip`` key prefix.
+    #
+    # ``dvr_rules`` (lsa0s) carries Dispatcharr's RECURRING RECORDING RULES
+    # (client.get_dvr_rules -> /api/channels/recurring-rules/). Two neighbouring
+    # DVR surfaces are deliberately NOT in this category: SERIES rules, which
+    # Dispatcharr stores inside the ``dvr_settings`` row that ``core_settings``
+    # already carries (routing them here as well would apply the same state
+    # twice), and RECORDINGS (/api/channels/recordings/), which are individual
+    # scheduled/completed recording INSTANCES pinned to absolute timestamps and,
+    # once completed, to a media file on the SOURCE instance's disk — restoring
+    # those would manufacture phantom DVR entries, not restore configuration.
     "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
     "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
     "core_settings": {

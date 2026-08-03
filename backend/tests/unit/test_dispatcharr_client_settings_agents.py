@@ -5,7 +5,9 @@ These client methods were ADDED by 0i2vt.13 to back the settings_agents restore
 importer (none existed before). They cover four categories' upstream calls:
 
 * user agents — GET / POST / DELETE on the core useragents endpoint.
-* DVR rules   — GET / POST / DELETE on the DVR rules endpoint.
+* DVR rules   — GET / POST / DELETE on the recurring-recording-rules endpoint
+  (retargeted from the non-existent ``/api/dvr/rules/`` by
+  enhancedchannelmanager-lsa0s; see the DVR section below).
 * core settings — GET (read) + per-key PATCH (apply ONE key conservatively).
 
 Mocking pattern follows test_dispatcharr_client_user_crud.py: construct a real
@@ -24,7 +26,7 @@ from config import DispatcharrSettings
 from dispatcharr_client import (
     DispatcharrClient,
     _CORE_SETTINGS_PATH,
-    _DVR_RULES_PATH,
+    _DVR_RECURRING_RULES_PATH,
     _USER_AGENTS_PATH,
 )
 
@@ -39,6 +41,14 @@ _RECORDED_CORE_SETTINGS = json.loads(
 _RECORDED_OPENAPI = json.loads(
     (
         Path(__file__).parent.parent / "fixtures" / "dispatcharr_openapi_recorded.json"
+    ).read_text()
+)
+
+_RECORDED_DVR = json.loads(
+    (
+        Path(__file__).parent.parent
+        / "fixtures"
+        / "dispatcharr_dvr_recurring_rules_recorded.json"
     ).read_text()
 )
 
@@ -131,6 +141,67 @@ async def test_delete_user_agent_deletes_by_id():
 
 
 # --- DVR rules -------------------------------------------------------------
+#
+# lsa0s: the DVR-rule methods used to point at ``/api/dvr/rules/``, a path that
+# has NO route on Dispatcharr 0.28.2 — it fell through to the SPA catch-all and
+# answered 200 text/html, so ``get_dvr_rules()`` raised a JSONDecodeError and
+# the backup exporter wrote a ``_warning`` stub for the category on EVERY run.
+# The tests below are pinned to the RECORDED live surface, not to a guess.
+
+
+def test_recorded_schema_has_no_route_for_the_old_dvr_rules_path():
+    """The former ``_DVR_RULES_PATH`` is absent from the live 0.28.2 document.
+
+    The recorded capture also keeps what that path actually answered: 200 with
+    ``text/html`` (the SPA shell), which is why the JSON parse blew up rather
+    than surfacing an honest 404.
+    """
+    dead = _RECORDED_DVR["dead_dvr_rules_path"]
+    assert dead["path"] == "/api/dvr/rules/"
+    assert dead["present_in_openapi_paths"] is False
+    assert dead["status_code"] == 200
+    assert dead["content_type"].startswith("text/html")
+
+
+def test_recorded_schema_keys_dvr_rules_to_the_recurring_rules_resource():
+    """The RECORDED 0.28.2 OpenAPI document is the authority for the DVR-rule
+    resource ECM's client targets: ``/api/channels/recurring-rules/``.
+
+    Pins the three operations the importer needs (list, create, delete-by-id)
+    and the two contract properties the importer relies on: a ``name`` identity
+    field and a single integer ``channel`` FK.
+    """
+    paths = _RECORDED_DVR["openapi_slice"]["paths"]
+    assert _DVR_RECURRING_RULES_PATH in paths
+    assert set(paths[_DVR_RECURRING_RULES_PATH]) >= {"get", "post"}
+    detail = _DVR_RECURRING_RULES_PATH + "{id}/"
+    assert "delete" in paths[detail]
+
+    schema = _RECORDED_DVR["openapi_slice"]["components"]["schemas"][
+        "RecurringRecordingRule"
+    ]
+    assert schema["properties"]["name"]["type"] == "string"
+    assert schema["properties"]["channel"]["type"] == "integer"
+    # ``name`` is NOT required upstream — the importer must survive a blank one.
+    assert "name" not in schema["required"]
+
+
+@pytest.mark.asyncio
+async def test_get_dvr_rules_parses_the_recorded_live_list_response():
+    """The recorded live GET body is a BARE JSON array, not a paginated
+    envelope — ``get_dvr_rules`` returns it as a list."""
+    recorded = _RECORDED_DVR["recurring_rules_list_response"]
+    assert recorded["path"] == _DVR_RECURRING_RULES_PATH
+    client = _make_client()
+    try:
+        rm = AsyncMock(return_value=_response(200, recorded["body"]))
+        with patch.object(client, "_request", rm):
+            result = await client.get_dvr_rules()
+        assert result == []
+        method, path = rm.await_args.args
+        assert (method, path) == ("GET", _DVR_RECURRING_RULES_PATH)
+    finally:
+        await client._client.aclose()
 
 
 @pytest.mark.asyncio
@@ -142,7 +213,25 @@ async def test_get_dvr_rules_gets_endpoint():
             result = await client.get_dvr_rules()
         assert result == [{"id": 1, "name": "R1"}]
         method, path = rm.await_args.args
-        assert (method, path) == ("GET", _DVR_RULES_PATH)
+        assert (method, path) == ("GET", _DVR_RECURRING_RULES_PATH)
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_dvr_rules_unwraps_a_paginated_envelope():
+    """A destination that paginates this list must not degrade to "no rules".
+
+    A bare dict would make the collision index empty and duplicate every rule on
+    restore, so the client normalizes both DRF shapes to a list.
+    """
+    client = _make_client()
+    try:
+        envelope = {"count": 1, "next": None, "results": [{"id": 1, "name": "R1"}]}
+        rm = AsyncMock(return_value=_response(200, envelope))
+        with patch.object(client, "_request", rm):
+            result = await client.get_dvr_rules()
+        assert result == [{"id": 1, "name": "R1"}]
     finally:
         await client._client.aclose()
 
@@ -156,7 +245,7 @@ async def test_create_dvr_rule_posts_endpoint():
             result = await client.create_dvr_rule({"name": "R1", "channel": 105})
         assert result["id"] == 9
         method, path = rm.await_args.args
-        assert (method, path) == ("POST", _DVR_RULES_PATH)
+        assert (method, path) == ("POST", _DVR_RECURRING_RULES_PATH)
         assert rm.await_args.kwargs["json"]["channel"] == 105
     finally:
         await client._client.aclose()
@@ -170,7 +259,7 @@ async def test_delete_dvr_rule_deletes_by_id():
         with patch.object(client, "_request", rm):
             await client.delete_dvr_rule(3)
         method, path = rm.await_args.args
-        assert (method, path) == ("DELETE", f"{_DVR_RULES_PATH}3/")
+        assert (method, path) == ("DELETE", f"{_DVR_RECURRING_RULES_PATH}3/")
     finally:
         await client._client.aclose()
 
