@@ -1800,7 +1800,7 @@ reopened a previously-fixed false-positive class.
 
 ### Debug bundle: `event_sync_matching.json` (bead 03nji, extended by yjchp)
 
-The Channel Pipeline [debug bundle](user_guide/channel-pipeline/debugging-rules.md#2-upload-a-debug-bundle-from-bundle-mode)
+The Channel Pipeline [debug bundle](user_guide/channel-pipeline/debugging-rules.md#bundle-mode)
 (`POST /api/channel-pipeline/debug-bundle`, then poll `GET
 /api/channel-pipeline/debug-bundle/{job_id}`) carries an
 `event_sync_matching.json` entry: one object per **enabled** event_sync
