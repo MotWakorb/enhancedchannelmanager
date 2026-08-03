@@ -122,6 +122,15 @@ _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 _USER_AGENTS_PATH = "/api/core/useragents/"
 _CORE_SETTINGS_PATH = "/api/core/settings/"
 _DVR_RULES_PATH = "/api/dvr/rules/"
+# Defensive cap on how many DRF-paginated pages ``get_core_setting_id_map`` will
+# follow via ``next`` before giving up loudly. The recorded live response is a
+# bare (unpaginated) list of ~7 rows (see
+# ``tests/fixtures/dispatcharr_core_settings_recorded.json``), so this never
+# bites today -- it exists so a future, much larger settings list fails LOUD
+# (a raised error the resolver's broad except turns into UPSTREAM_API_ERROR for
+# every key) instead of silently resolving only the first page and failing
+# every key past it as DEPENDENCY_UNRESOLVED.
+_CORE_SETTINGS_MAX_PAGES = 20
 _EPG_DATA_BYTES_PER_RESULT = 2048
 _EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
 
@@ -1799,7 +1808,7 @@ class DispatcharrClient:
         return response.json()
 
     async def get_core_setting_id_map(self) -> dict:
-        """Return a ``{setting key -> destination row id}`` map in ONE request.
+        """Return a ``{setting key -> destination row id}`` map, ONE run.
 
         Dispatcharr's ``CoreSettingsViewSet`` is a plain DRF ``ModelViewSet``
         with the default ``pk`` lookup, so the detail route is
@@ -1808,35 +1817,75 @@ class DispatcharrClient:
         per-instance and are deliberately NOT carried in a backup artifact
         (``routers.backup`` flattens core settings to key->value), so a restore
         must resolve them against the DESTINATION at apply time. Callers hold the
-        returned map for the whole apply run — one GET, never one per key
+        returned map for the whole apply run — one fetch, never one per key
         (enhancedchannelmanager-q6xjl).
 
         Accepts either a bare list of rows or a DRF-paginated
-        ``{"results": [...]}`` envelope. A row without a usable string key or an
-        integer id is DROPPED rather than guessed at — an absent key makes the
-        caller fail that key explicitly, whereas a guessed id would PATCH an
-        unrelated setting.
-        """
-        response = await self._request("GET", _CORE_SETTINGS_PATH)
-        response.raise_for_status()
-        payload = response.json()
-        if isinstance(payload, dict):
-            payload = payload.get("results")
-        if not isinstance(payload, list):
-            return {}
+        ``{"results": [...], "next": ...}`` envelope. When paginated, EVERY page
+        is followed via ``next`` until exhausted (the live recorded response is
+        a bare list today, but the docstring has long claimed paginated-envelope
+        support and a future/larger settings list could genuinely paginate) —
+        bounded by :data:`_CORE_SETTINGS_MAX_PAGES` so a misbehaving or
+        infinitely-linking destination cannot hang a restore run; exceeding the
+        cap raises loudly rather than silently returning a partial map. A row
+        without a usable string key or an integer id is DROPPED rather than
+        guessed at — an absent key makes the caller fail that key explicitly,
+        whereas a guessed id would PATCH an unrelated setting.
 
+        Raises:
+            RuntimeError: the destination's ``next`` chain exceeds
+                :data:`_CORE_SETTINGS_MAX_PAGES` pages.
+        """
         id_map: dict = {}
-        for row in payload:
-            if not isinstance(row, dict):
-                continue
-            setting_name = row.get("key")
-            if not isinstance(setting_name, str) or not setting_name:
-                continue
-            row_id = row.get("id")
-            # bool is an int subclass; a boolean id is not a row id.
-            if not isinstance(row_id, int) or isinstance(row_id, bool):
-                continue
-            id_map[setting_name] = row_id
+        page = 1
+        params = None
+        while True:
+            response = await self._request(
+                "GET", _CORE_SETTINGS_PATH, params=params
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            if isinstance(payload, dict):
+                rows = payload.get("results")
+                next_link = payload.get("next")
+            elif isinstance(payload, list):
+                rows = payload
+                next_link = None
+            else:
+                rows = None
+                next_link = None
+
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    setting_name = row.get("key")
+                    if not isinstance(setting_name, str) or not setting_name:
+                        continue
+                    row_id = row.get("id")
+                    # bool is an int subclass; a boolean id is not a row id.
+                    if not isinstance(row_id, int) or isinstance(row_id, bool):
+                        continue
+                    id_map[setting_name] = row_id
+
+            if not next_link:
+                break
+
+            page += 1
+            if page > _CORE_SETTINGS_MAX_PAGES:
+                logger.warning(
+                    "[DISPATCHARR] Core-settings list exceeded %d pages; "
+                    "refusing to keep paginating.",
+                    _CORE_SETTINGS_MAX_PAGES,
+                )
+                raise RuntimeError(
+                    "Core-settings list exceeded "
+                    f"{_CORE_SETTINGS_MAX_PAGES} pages while paginating; "
+                    "refusing to continue."
+                )
+            params = {"page": page}
+
         return id_map
 
     async def update_core_setting(self, setting_id: int, setting_value) -> dict:
