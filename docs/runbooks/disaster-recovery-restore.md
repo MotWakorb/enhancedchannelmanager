@@ -4,7 +4,7 @@
 
 - **Severity**: P1 (complete configuration loss) / P2 (partial data loss, instance degraded)
 - **Owner**: SRE / Operator
-- **Last reviewed**: 2026-06-28
+- **Last reviewed**: 2026-08-03
 - **Related beads**: `enhancedchannelmanager-0i2vt` (epic), `enhancedchannelmanager-sxx9x` (this doc)
 - **Related ADR**: ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`)
 
@@ -215,6 +215,28 @@ If the restore repeatedly fails or if the rollback-incomplete state cannot be re
 - [ ] Update cloud destination configuration if the incident exposed a gap in off-host storage coverage.
 - [ ] Consider enabling [Cross-Instance Sync](../user_guide/backup-restore/cross-instance-sync.md) for a standing DR standby.
 - [ ] Schedule a postmortem if this was P1 (use `/postmortem` skill).
+
+---
+
+## Recurring maintenance
+
+> Added 2026-08-03 (bead `enhancedchannelmanager-nvhg7`). `COMPONENTS.md` tags `dbas-backup` as the highest-care home-lab component: "restore must stay periodically exercised." Before this section, nothing prompted or enforced that — the only round-trip exercise this restore pipeline had ever received was a manual one-off doc-test run. **Tier: home-lab.** This is a documentation-level operational habit, not enforced infrastructure — there is no scheduled task or CI gate behind it (see "Future automation path" below).
+
+**Do this monthly**, or immediately after any change to the backup/restore pipeline itself:
+
+1. Go to **Settings → Saved Backups** and locate the most recent artifact (the one your regular schedule actually produced — don't manufacture a fresh one for this check; the point is to exercise what you would actually reach for in an incident).
+2. Open **Settings → Backup & Restore → Restore DBAS Backup**, upload that artifact, and run **Preview**. This is a dry-run — nothing is written. See [Verify a backup](../user_guide/backup-restore/verify-a-backup.md) for the full walkthrough of what the upload step validates before the preview even runs (decompression-bomb guard, manifest integrity, schema-version gate, per-member SHA-256).
+3. **What to check in the report:**
+   - Every category you expect present (M3U accounts, channel groups, channels, EPG sources, settings, etc.) has a row, and its counts are in the neighborhood you expect for your instance — not zero, not wildly off.
+   - **FAILED is 0**, or every non-zero FAILED row has a reason you already understand (e.g., a settings key you know is denylisted for safety — see `docs/dispatcharr_api.md` — is reported skipped, not failed).
+   - As of build 0015 (bead `y6zg6`), the dry-run **resolves settings keys against the destination** and reports `DEPENDENCY_UNRESOLVED` for any key that would 404 on apply — the same check and the same message the apply path uses. A clean preview on the Settings category is a real signal that those keys would apply; it is not a claim your Dispatcharr credentials or connectivity are also fine (see "What the preview does not check" in the Verify-a-Backup guide) — the preview cannot predict every class of upstream error.
+   - No unexpected warning banner on the artifact itself. As of build 0019 (bead `zt3kf`), a backup that failed to gather one or more categories from Dispatcharr at capture time reports **warning-level, with the affected categories named** — it no longer masquerades as a clean SUCCESS. If your monthly artifact carries this warning, the backup you'd be restoring from is degraded; treat that as the finding, not the dry-run.
+4. **Do not click Apply** as part of this exercise — a monthly maintenance check is a preview only, against a real artifact, on your real instance. (If you do want to prove the apply path end-to-end, do it against a disposable/throwaway Dispatcharr instance, never the production one — see `tests/dbas-test-env/` for the project's own disposable-instance tooling.)
+5. **On any failure or surprise** (unexpected FAILED rows, a degraded-backup warning, counts that don't match expectations): file a bead capturing the artifact name/date, the report's counts and failure details, and whether this is the first month it's happened. Do not silently re-run and move on — a monthly check that "resolves itself" on retry without an explanation is exactly the kind of drift this section exists to catch.
+
+### Future automation path
+
+If this project ever moves up-tier from home-lab, a periodic restore exercise could be wired into CI rather than remaining a manual monthly habit: bead `1zwmr` (referenced from `backend/dbas/stream_matcher.py` and its tests) already flags stream-matching behavior that needs a seeded Dispatcharr instance to confirm, and bead `zqtjj`'s disposable-instance/seed tooling (`tests/dbas-test-env/`, documented in `docs/testing/dbas-test-env.md`) is the closest existing building block for a repeatable, non-production restore-exercise environment. Neither is currently wired into a schedule or CI job — this is a noted path, not a commitment.
 
 ---
 
