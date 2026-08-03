@@ -1910,6 +1910,12 @@ class DispatcharrClient:
                     # bool is an int subclass; a boolean id is not a row id.
                     if not isinstance(row_id, int) or isinstance(row_id, bool):
                         continue
+                    # zt3kf parked note: assumes ``key`` is UNIQUE per Dispatcharr
+                    # core-settings row. On a duplicate key across rows/pages this
+                    # is last-write-wins (the later row's id silently replaces the
+                    # earlier one) — never validated against a live Dispatcharr
+                    # instance, carried forward as a documented assumption rather
+                    # than defended against.
                     id_map[setting_name] = row_id
 
             if not next_link:

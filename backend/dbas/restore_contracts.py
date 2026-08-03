@@ -124,7 +124,13 @@ class FailureReason(str, Enum):
     """
 
     VALIDATION_ERROR = "validation_error"          # pre-flight or field validation
-    DEPENDENCY_UNRESOLVED = "dependency_unresolved"  # FK target absent at apply time
+    # FK target absent at apply time. REUSED (no dedicated value added) by
+    # dbas.importers.settings_agents for a settings KEY absent on the
+    # destination — same "the id/key I need to reference isn't there" shape,
+    # just a string key instead of an FK id (zt3kf; see restore_orchestrator's
+    # ABORT-ON-ANY-FAILED-KEY docstring section for the resulting rollback
+    # policy on that reuse).
+    DEPENDENCY_UNRESOLVED = "dependency_unresolved"
     UPSTREAM_API_ERROR = "upstream_api_error"      # Dispatcharr returned an error
     UPSTREAM_TIMEOUT = "upstream_timeout"          # Dispatcharr did not respond in time
     CONFLICT = "conflict"                          # uniqueness / name collision

@@ -55,8 +55,31 @@ prefix), a ``journal`` entry, AND a NotificationCenter notification, and
 returns ``TaskResult(success=False, ...)``. A scheduled backup that silently
 stops = false safety.
 
+Degraded gather = WARNING, never a silent clean success (bead zt3kf)
+---------------------------------------------------------------------
+``build_backup_artifact`` gathers Dispatcharr-managed categories per-key
+(``routers.backup._gather_dispatcharr_sections``), and each category's fetch
+is isolated: a single upstream failure stubs ONLY that category into the
+artifact as ``{"_warning": ...}`` rather than aborting the whole gather or
+degrading unrelated categories. Before this fix, that stub was invisible
+downstream — a backup missing an entire category (e.g. every
+``dvr_rules.yaml`` on a run where the Dispatcharr endpoint errored) still
+reported a clean ``TaskResult(success=True, failed_count=0)``. Now:
+``artifact.degraded_categories`` (populated by the builder) is threaded into
+``details["degraded_categories"]`` and the run is reported as WARNING-level —
+``success`` stays ``True`` (a real, checksum-verified artifact WAS produced
+and is useful), but ``failed_count`` is set so task_engine.py's existing
+"Completed with Warnings" branch fires, naming the degraded category/
+categories in both the task message and the completion notification
+(``task_engine._warning_task_completion_message``). Cloud-upload health
+(below) takes precedence when both are unhealthy — an upload failure is the
+more severe, already-notified condition.
+
 Metrics: ``ecm_backup_runs_total{result="success"|"partial"|"skipped"|"failed"}``
-and ``ecm_backup_upload_total{provider,result}`` (per-upload outcome).
+and ``ecm_backup_upload_total{provider,result}`` (per-upload outcome). Gather
+degradation does not get its own metric label — it is a data-completeness
+signal on the local artifact, orthogonal to the upload-destination health this
+metric tracks.
 
 Concurrency: the engine's ``TaskScheduler.run()`` already rejects a second
 concurrent run of the same ``task_id`` (ALREADY_RUNNING guard), so no extra
@@ -299,12 +322,32 @@ class DbasBackupTask(TaskScheduler):
                     logger.warning("[DBAS_BACKUP] Local retention prune failed: %s", e)
 
             self._set_progress(current=1, total=1, status="completed")
+
+            # zt3kf — a category whose Dispatcharr gather stubbed to
+            # {"_warning": ...} instead of real data (upstream fetch failure,
+            # isolated per-category by routers.backup._gather_dispatcharr_sections)
+            # makes this artifact DEGRADED: it was built and is on disk, but is
+            # missing real data for the named category/categories. Never silent —
+            # WARN log + named in details/message so the operator does not have
+            # to open the artifact to discover what is missing.
+            degraded_categories = list(artifact.degraded_categories or [])
+            if degraded_categories:
+                logger.warning(
+                    "[DBAS_BACKUP] Backup artifact %s built with %d degraded "
+                    "Dispatcharr categor%s (Dispatcharr fetch failed): %s",
+                    filename, len(degraded_categories),
+                    "y" if len(degraded_categories) == 1 else "ies",
+                    ", ".join(degraded_categories),
+                )
+
             details = {
                 "filename": filename,
                 "schema_version": artifact.schema_version,
                 "sha256": artifact.sha256,
                 "file_count": artifact.file_count,
             }
+            if degraded_categories:
+                details["degraded_categories"] = degraded_categories
             if upload_summary["attempted"]:
                 details["upload"] = {
                     "run_result": run_result,
@@ -316,23 +359,46 @@ class DbasBackupTask(TaskScheduler):
             message = "Built DBAS backup %s (schema v%d, %d files)" % (
                 filename, artifact.schema_version, artifact.file_count,
             )
+            if degraded_categories:
+                message += "; %d Dispatcharr categor%s degraded: %s" % (
+                    len(degraded_categories),
+                    "y" if len(degraded_categories) == 1 else "ies",
+                    ", ".join(degraded_categories),
+                )
             if upload_summary["attempted"]:
                 message += "; cloud upload: %s (%d ok, %d failed)" % (
                     run_result, upload_summary["succeeded"], upload_summary["failed"],
                 )
 
+            # PO decision: a backup run whose configured uploads did NOT all
+            # succeed is NOT reported as a clean success — partial/failed
+            # reconcile against the scheduled-job health metric. Cloud-upload
+            # health takes precedence over gather-completeness when both are
+            # unhealthy (an upload failure is the more severe condition and
+            # already drives its own dedicated notification via
+            # _notify_upload_outcome); gather degradation alone — uploads fine
+            # or not configured — is WARNING-level (success stays True,
+            # failed_count>0), which is what makes task_engine.py's existing
+            # "Completed with Warnings" branch reachable instead of a silent
+            # clean success (zt3kf; mirrors the tyei5/dbas_restore counts-wiring
+            # pattern — real counts, no new notification path).
+            success = (run_result == "success")
+            if success:
+                success_count = 0 if degraded_categories else 1
+                failed_count = 1 if degraded_categories else 0
+            else:
+                success_count = 0
+                failed_count = 1
+
             return TaskResult(
-                # PO decision: a backup run whose configured uploads did NOT all
-                # succeed is NOT reported as a clean success — partial/failed
-                # reconcile against the scheduled-job health metric.
-                success=(run_result == "success"),
+                success=success,
                 message=message,
                 error=None if run_result == "success" else "CLOUD_UPLOAD_%s" % run_result.upper(),
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
                 total_items=1,
-                success_count=1 if run_result == "success" else 0,
-                failed_count=0 if run_result == "success" else 1,
+                success_count=success_count,
+                failed_count=failed_count,
                 details=details,
             )
         except Exception as e:

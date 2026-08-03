@@ -585,6 +585,14 @@ class TestExportYaml:
 
         mock_client = AsyncMock()
         mock_client.get_m3u_accounts.side_effect = Exception("Connection refused")
+        # Siblings requested in the SAME export call must still fetch normally
+        # (isolation contract, enhancedchannelmanager-zt3kf) — configure them
+        # with real data so the test can prove m3u_accounts degrading does not
+        # blast-radius the rest of the dispatcharr blob.
+        mock_client.get_epg_sources.return_value = [{"id": 1, "name": "EPG1", "url": "http://epg"}]
+        mock_client.get_channel_groups.return_value = [{"id": 1, "name": "News"}]
+        mock_client.get_channel_profiles.return_value = [{"id": 1, "name": "HD"}]
+        mock_client.get_stream_profiles.return_value = [{"id": 1, "name": "Default"}]
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
              patch("routers.backup.get_client", return_value=mock_client):
@@ -593,8 +601,16 @@ class TestExportYaml:
         assert response.status_code == 200
         data = yaml.safe_load(response.text)
         dispatcharr = data.get("dispatcharr", {})
-        assert "_warning" in dispatcharr
-        assert "Connection refused" in dispatcharr["_warning"]
+        # The failing category is stubbed UNDER ITS OWN KEY, not at the top of
+        # the dispatcharr blob (zt3kf — explicit per-category isolation, not a
+        # shared connectivity-style failure).
+        assert "_warning" in dispatcharr["m3u_accounts"]
+        assert "Connection refused" in dispatcharr["m3u_accounts"]["_warning"]
+        # Sibling categories requested in the SAME call are unaffected.
+        assert dispatcharr["epg_sources"] == [{"id": 1, "name": "EPG1", "url": "http://epg"}]
+        assert dispatcharr["channel_groups"] == [{"id": 1, "name": "News"}]
+        assert dispatcharr["channel_profiles"] == [{"id": 1, "name": "HD"}]
+        assert dispatcharr["stream_profiles"] == [{"id": 1, "name": "Default"}]
 
     @pytest.mark.asyncio
     async def test_export_metadata(self, async_client, test_session):

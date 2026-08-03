@@ -102,10 +102,27 @@ def _seed_journal_db(path):
         conn.close()
 
 
-def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
+def _patched_build(
+    tmp_path, *, with_logos=False, dest_dir=None, client_overrides=None,
+    get_client_override=None,
+):
     """Run build_backup_artifact with CONFIG_DIR/JOURNAL_DB_FILE pointed at
     tmp_path, settings carrying secrets, and Dispatcharr returning M3U accounts
-    that embed an M3U password sentinel."""
+    that embed an M3U password sentinel.
+
+    ``client_overrides`` maps a Dispatcharr client method name -> an Exception
+    instance to raise instead of returning the default fixture data (zt3kf —
+    used to prove degraded-category isolation: a failing category must not
+    blast-radius the rest of the gather).
+
+    ``get_client_override`` — a dict of kwargs (``return_value`` or
+    ``side_effect``) for patching ``get_client`` ITSELF, instead of returning
+    the default fully-mocked client. Used to reproduce total client
+    unavailability (PR #770 review) — ``get_client()`` returning falsy or
+    raising BEFORE any per-key fetch is attempted — which is a DIFFERENT
+    failure shape than a single method on an otherwise-working client
+    raising (``client_overrides`` above).
+    """
     config_dir = tmp_path
     journal = config_dir / "journal.db"
     _seed_journal_db(journal)
@@ -131,6 +148,13 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
     mock_client.get_channel_groups = AsyncMock(return_value=[])
     mock_client.get_channel_profiles = AsyncMock(return_value=[])
     mock_client.get_stream_profiles = AsyncMock(return_value=[])
+    # channels / dispatcharr_users categories (7i8rf) — configured with clean
+    # empty-page responses so the default build is genuinely clean (no
+    # category degraded); zt3kf's degraded-category tests override exactly one
+    # of these per test to prove isolation.
+    mock_client.get_channels = AsyncMock(return_value={"count": 0, "next": None, "results": []})
+    mock_client.get_streams = AsyncMock(return_value={"count": 0, "next": None, "results": []})
+    mock_client.get_users = AsyncMock(return_value=[])
     # lc6zu — the settings/agents producer set. Core settings come back in the
     # list-of-{key,value} shape (the client returns the raw payload; the
     # producer normalizes). One key is dangerous-marked (``api_key``) and its
@@ -159,6 +183,8 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
             {"id": 21, "name": "ABC Logo", "url": "http://dispatcharr/media/logos/abc.png"},
         ]
     )
+    for method_name, exc in (client_overrides or {}).items():
+        getattr(mock_client, method_name).side_effect = exc
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -166,13 +192,15 @@ def _patched_build(tmp_path, *, with_logos=False, dest_dir=None):
     session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
     session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
 
+    get_client_kwargs = get_client_override or {"return_value": mock_client}
+
     with patch.object(backup_mod, "CONFIG_DIR", config_dir), \
          patch.object(backup_mod, "CONFIG_FILE", settings_file), \
          patch.object(backup_mod, "JOURNAL_DB_FILE", journal), \
          patch.object(backup_mod, "get_engine", return_value=_mock_engine()), \
          patch.object(backup_mod, "get_settings", return_value=_mock_settings_with_secrets()), \
          patch.object(backup_mod, "get_session", return_value=session), \
-         patch.object(backup_mod, "get_client", return_value=mock_client):
+         patch.object(backup_mod, "get_client", **get_client_kwargs):
         import asyncio
         return asyncio.get_event_loop().run_until_complete(
             build_backup_artifact(dest_dir=dest_dir)
@@ -365,6 +393,75 @@ class TestCategories:
             parsed = yaml.safe_load(zf.read("categories/settings.yaml"))
         assert isinstance(parsed, dict)
         assert "ecm_export" in parsed
+
+
+class TestDegradedCategoryReporting:
+    """zt3kf — a Dispatcharr fetch failure for one category must be visible on
+    the built BackupArtifact (not just silently stubbed inside the ZIP), and
+    must NOT degrade sibling categories in the same build (isolation
+    contract)."""
+
+    def test_clean_build_has_no_degraded_categories(self, tmp_path):
+        art = _patched_build(tmp_path)
+        assert art.degraded_categories == []
+
+    def test_one_failing_category_is_reported_degraded(self, tmp_path):
+        art = _patched_build(
+            tmp_path,
+            client_overrides={"get_dvr_rules": Exception("Dispatcharr 500")},
+        )
+        assert art.degraded_categories == ["dvr_rules"]
+
+    def test_degraded_category_stub_is_isolated_from_siblings(self, tmp_path):
+        """The failing category's YAML carries the _warning stub; every OTHER
+        category's YAML still carries real gathered data, not a stub."""
+        art = _patched_build(
+            tmp_path,
+            client_overrides={"get_dvr_rules": Exception("Dispatcharr 500")},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            dvr = yaml.safe_load(zf.read("categories/dvr_rules.yaml"))
+            m3u = yaml.safe_load(zf.read("categories/m3u_accounts.yaml"))
+            user_agents = yaml.safe_load(zf.read("categories/user_agents.yaml"))
+        assert "_warning" in dvr["dispatcharr"]["dvr_rules"]
+        # Siblings gathered in their OWN per-category call are untouched.
+        assert m3u["dispatcharr"]["m3u_accounts"][0]["id"] == 1
+        assert user_agents["dispatcharr"]["user_agents"][0]["id"] == 31
+
+    def test_multiple_failing_categories_all_reported(self, tmp_path):
+        art = _patched_build(
+            tmp_path,
+            client_overrides={
+                "get_dvr_rules": Exception("Dispatcharr 500"),
+                "get_user_agents": Exception("Dispatcharr 500"),
+            },
+        )
+        assert sorted(art.degraded_categories) == ["dvr_rules", "user_agents"]
+
+    # -----------------------------------------------------------------
+    # PR #770 review BLOCK: total client unavailability (get_client()
+    # falsy/raising BEFORE any per-key fetch) produces the UN-NESTED
+    # {"_warning": ...} shape rather than the per-key nested shape above.
+    # The reviewer's repro: patch get_client to raise/return None, run the
+    # real build_backup_artifact -> degraded_categories must list EVERY
+    # requested dispatcharr category, not stay empty.
+    # -----------------------------------------------------------------
+
+    def _all_dispatcharr_keys(self):
+        return sorted(
+            k for k, v in backup_mod.RESTORABLE_SECTIONS.items() if v.get("dispatcharr")
+        )
+
+    def test_client_returns_none_degrades_every_dispatcharr_category(self, tmp_path):
+        art = _patched_build(tmp_path, get_client_override={"return_value": None})
+        assert sorted(art.degraded_categories) == self._all_dispatcharr_keys()
+
+    def test_client_raises_degrades_every_dispatcharr_category(self, tmp_path):
+        art = _patched_build(
+            tmp_path,
+            get_client_override={"side_effect": Exception("Dispatcharr unreachable")},
+        )
+        assert sorted(art.degraded_categories) == self._all_dispatcharr_keys()
 
 
 class TestFreeDiskGuard:

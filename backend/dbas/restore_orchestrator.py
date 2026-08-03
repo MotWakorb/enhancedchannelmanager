@@ -55,6 +55,41 @@ the sync engine's config-only registry), but neither default registry carries
 one. PLUGINS are deliberately absent from both (ADR-012 D10).
 
 ----------------------------------------------------------------------------
+ABORT-ON-ANY-FAILED-KEY (PO decision 2026-08-03, enhancedchannelmanager-zt3kf)
+----------------------------------------------------------------------------
+
+The apply loop below aborts the WHOLE restore and rolls back on the FIRST
+category that reports ANY ``failed`` count greater than zero (see ``if
+cat.failed > 0`` a few lines below ``run_restore``) — including a category
+whose only failures are benign-sounding ``FailureReason.DEPENDENCY_UNRESOLVED``
+entries (e.g. a settings key present in the archive but absent on the
+destination; see ``dbas.importers.settings_agents``). This is a DELIBERATE,
+PO-confirmed policy, not an accident of the current importer wiring:
+
+* There is NO per-key skip-with-warning path. A restore that could partially
+  apply settings (skip only the unresolved keys, apply the rest) was
+  considered and REJECTED — partial application of a config category is a
+  worse failure mode than a clean full rollback: an operator staring at "12
+  of 13 settings applied" cannot tell which one is missing without reading a
+  report, and a half-applied settings category is the ONE thing in this
+  orchestrator that CANNOT be compensated (see the settings-not-rolled-back
+  note below) — so letting it partially land at all is strictly worse than
+  refusing.
+* Rationale: Dispatcharr has no transactions (ADR-012), so "abort on first
+  failure, always" is the one rule simple enough to reason about under a
+  crash mid-rollback, and it matches every OTHER category's failure handling
+  (channel groups, channels, users, …) — settings does not get a bespoke,
+  softer rule just because its failure mode reads as benign.
+* Operator-facing consequence: when the aborting category is SETTINGS and its
+  failure reason is ``DEPENDENCY_UNRESOLVED``, :func:`run_restore` appends an
+  explicit report note that a RETRY of the same restore against the SAME
+  destination will fail identically (the artifact carries a settings key the
+  destination does not have — no upstream flake, nothing to retry past). The
+  remediation is to edit the category selection (exclude Settings) or restore
+  against a destination whose Dispatcharr version has that key — never "try
+  again."
+
+----------------------------------------------------------------------------
 404-AS-SUCCESS + the credential-hygiene rule (the bead .8 lesson)
 ----------------------------------------------------------------------------
 
@@ -88,6 +123,7 @@ from config import CONFIG_DIR
 from dbas.preflight import ImportPlan, PreflightResult, run_preflight
 from dbas.restore_contracts import (
     EntityType,
+    FailureReason,
     LedgerEntry,
     RestoreOutcome,
     RestoreReport,
@@ -618,6 +654,25 @@ async def run_restore(
             report.notes.append(
                 f"NOTE: {settings_cat.updated} applied setting(s) were NOT rolled back — "
                 "settings changes are not compensatable and remain applied."
+            )
+        # zt3kf (PO decision 2026-08-03, rollback policy — see the module
+        # docstring's ABORT-ON-ANY-FAILED-KEY section): when the category that
+        # aborted the restore is SETTINGS and its failure is
+        # DEPENDENCY_UNRESOLVED, the archive references a settings key the
+        # destination does not have. Retrying the SAME restore against the
+        # SAME destination will fail identically — say so explicitly instead
+        # of leaving the operator to guess whether a retry might help.
+        if settings_cat is not None and any(
+            fd.reason == FailureReason.DEPENDENCY_UNRESOLVED
+            for fd in settings_cat.failure_details
+        ):
+            report.notes.append(
+                "NOTE: this restore failed because one or more settings keys "
+                "in the archive do not exist on this destination "
+                "(DEPENDENCY_UNRESOLVED) — retrying the same restore will "
+                "fail the same way. Edit the category selection to exclude "
+                "Settings, or restore against a destination whose "
+                "Dispatcharr version has those keys."
             )
 
     # --- 3b. Deferred phase (clean run only) — applied LAST. ---
