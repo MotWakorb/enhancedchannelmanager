@@ -175,7 +175,7 @@ clears it. If it persists with no browser open, report it.
 
 Emitted at `INFO` for any request taking more than one second. One of these
 during a large refresh is normal. A steady stream of them is the signal to read
-the [request-timeout runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/request-timeout.md) in the ECM
+the [request-timeout runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/request-timeout.md) in the ECM
 repository.
 
 ### `Exceeded concurrency limit.`
@@ -221,4 +221,4 @@ App Debug Bundle does this scrubbing for you; see
 - [Common Issues](common-issues.md): the failure modes these tags usually accompany.
 - [General Settings](../settings/general-settings.md): the Logging controls in their own settings context.
 - [Gather support information](gather-support-information.md): turning a log slice into a support request.
-- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/README.md): what to do when the log tells you something is broken at scale.
+- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/README.md): what to do when the log tells you something is broken at scale.

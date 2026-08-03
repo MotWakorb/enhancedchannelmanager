@@ -1,6 +1,6 @@
 # Cross-Instance Sync
 
-> **Status:** Shipped in v0.18.1 (epic `i39wu`). UI path: **Settings → Backup & Restore → Cross-Instance Sync**.
+UI path: **Settings → Backup & Restore → Cross-Instance Sync**.
 
 ---
 
@@ -131,7 +131,7 @@ One case surfaces as a conflict rather than a silent overwrite: **a channel with
 
 ### Sync is failing or B appears to have drifted
 
-Check whether the `ECMSyncStalledTargetDrift` alert has fired. This alert triggers when the sync task has not recorded a full success in approximately 3 hours (3 missed cycles on the hourly cadence). Follow the [Sync Target Stalled / Target Drift runbook](../../runbooks/sync-target-stalled-drift.md) for step-by-step diagnosis.
+Check whether the `ECMSyncStalledTargetDrift` alert has fired. This alert triggers when the sync task has not recorded a full success in approximately 3 hours (3 missed cycles on the hourly cadence). Follow the [Sync Target Stalled / Target Drift runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/sync-target-stalled-drift.md) for step-by-step diagnosis.
 
 Common causes:
 - **B is unreachable**: confirm connectivity to `base_url` from the ECM container.
@@ -155,6 +155,5 @@ If you enabled **Allow insecure TLS** on a target, every sync cycle logs an audi
 
 ## Going deeper
 
-- [ADR-013: Cross-Instance Live Sync](../../adr/ADR-013-cross-instance-live-sync.md): the architecture decision record; covers conflict policy, security controls, category decisions, and phasing.
-- [Security threat model, Addendum D](../../security/threat_model_dbas_import.md#11-addendum-d-cross-instance-live-sync-v0181-one-way-ab-config-replication), covering STRIDE analysis of the sync egress surface: why credentials are redacted, why users never sync, SSRF controls.
-- [Runbook: ECMSyncStalledTargetDrift](../../runbooks/sync-target-stalled-drift.md): step-by-step when the sync stalls alert fires.
+- [Security threat model, Addendum D](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_dbas_import.md#11-addendum-d-cross-instance-live-sync-v0181-one-way-ab-config-replication), covering STRIDE analysis of the sync egress surface: why credentials are redacted, why users never sync, SSRF controls.
+- [Runbook: ECMSyncStalledTargetDrift](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/sync-target-stalled-drift.md): step-by-step when the sync stalls alert fires.

@@ -50,5 +50,5 @@ normalization rules to reference, the same as a built-in group.
 
 ## Going deeper
 
-- [`docs/normalization.md`](../../normalization.md): how rules use tag groups for pattern matching.
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md): how rules use tag groups for pattern matching.
 - [Channel Normalization](channel-normalization.md): the two Settings-level normalization toggles.

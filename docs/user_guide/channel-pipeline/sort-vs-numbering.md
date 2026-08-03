@@ -108,13 +108,3 @@ processed) Sort Group alphabetically sorts and renumbers the whole group.
 Because it renumbers the **whole group** each time (not just channels
 created this run), new channels always land in the right alphabetical slot
 relative to existing ones.
-
-## Deep reference
-
-| Topic | Where |
-|-|-|
-| Rule-level renumber pass (Pass 3) | `backend/channel_pipeline_engine.py`: `_get_rule_starting_number`, Pass 3 in `run()` |
-| Sort Group pass (Pass 3.6) | `backend/channel_pipeline_engine.py`: `_sort_channel_groups` |
-| Shared sort comparator (manual + automated) | `backend/channel_pipeline_sort.py`: `sort_channels_by_name` |
-| Action schema | `backend/channel_pipeline_schema.py`: `CreateChannelAction.channel_number`, `ActionType.SORT_GROUP` |
-| Rule builder UI | `frontend/src/components/channelPipeline/RuleBuilder.tsx` (Channel Sort field), `frontend/src/components/channelPipeline/ActionEditor.tsx` (Sort Group action config) |

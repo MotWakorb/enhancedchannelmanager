@@ -70,4 +70,4 @@ email recipients).
 ## Going deeper
 
 - [Notifications & Alert Methods](../notifications/index.md): configuring SMTP, Discord, and Telegram; how scheduled-task alerts differ from this digest.
-- [`docs/api.md`](../../api.md): API reference for the M3U digest settings endpoints.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): API reference for the M3U digest settings endpoints.

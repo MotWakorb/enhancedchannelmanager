@@ -58,7 +58,7 @@ have evidence of homoglyph collisions in your feed.
 
 The full policy, including exactly which characters survive and which do
 not, is documented in
-[`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#normalizationpolicy-the-unicode-preprocessor).
+[`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#normalizationpolicy-the-unicode-preprocessor).
 
 ## The four places normalization runs
 
@@ -72,7 +72,7 @@ not, is documented in
 All four call the same engine with the same preprocessing policy. For the
 same input and the same set of groups they produce the same output. That
 is the *parity contract*, and it is checked nightly by an automated canary
-tied to [SLO-5](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/sre/slos.md#slo-5-normalization-correctness) (GitHub).
+tied to [SLO-5](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md#slo-5-normalization-correctness) (GitHub).
 If two
 surfaces disagree on the same input with the same groups, that is a defect
 in ECM, not something to work around with an extra rule. See
@@ -125,8 +125,8 @@ part after the prefix.
   walkthrough.
 - [Rule groups and ordering](rule-groups-and-ordering.md): priority,
   chaining, and the multi-pass loop.
-- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md): the full dual-audience
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md): the full dual-audience
   reference. The Unicode policy, the confusables fold, the parity contract,
   the metrics, and the developer reference all live there.
-- [`docs/runbooks/normalization-canary-divergence.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/normalization-canary-divergence.md):
+- [`docs/runbooks/normalization-canary-divergence.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/normalization-canary-divergence.md):
   what happens when the parity canary fires.

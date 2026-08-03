@@ -85,21 +85,23 @@ any time to pull the latest stream list from your provider.
 
 ![M3U Accounts table row after a refresh, showing an updated stream-processing summary, a reduced groups count, and a fresh Last Updated timestamp](../../images/user_guide/getting-started/6-refresh-m3u.png)
 
-**Result:** The row's status message reports how many streams were created,
-updated, or removed, and **Last Updated** advances to the refresh time.
+**Result:** **Last Updated** advances to the refresh time. The row itself
+doesn't print how many streams were created, updated, or removed; hover the
+row's status badge to see that breakdown in a tooltip (for example,
+"Processing completed in 2.4 seconds. Streams: 0 created, 0 updated, 0
+marked stale, 0 removed. Total processed: 430.").
 
 ### 5. Create a few channels
 
 Channels are what Dispatcharr actually serves: a channel is a number and a
 name that one or more streams attach to.
 
-The Channels panel has its own group filter dropdown (defaults to "No
-groups selected"), separate from the provider stream groups you toggled in
-step 3. It is not sticky: reloading the page, or coming back later, resets
-it to "No groups selected" and hides every named channel group from view,
-even though the groups and channels themselves are untouched. If your
-just-created group and channel seem to have vanished after a reload, open
-this filter and select the group again. Nothing was lost.
+The Channels panel has its own group filter dropdown, separate from the
+provider stream groups you toggled in step 3. On a fresh instance it
+defaults to "No groups selected," which hides every named channel group
+from view until you pick one. Once you select groups here, the selection
+persists: it survives a full page reload and a session expiry followed by
+re-login, so you shouldn't need to reselect it each time you come back.
 
 1. Open **Channel Manager**.
 2. Click **Edit Mode** (top right). Channel Manager batches channel changes
@@ -135,11 +137,11 @@ from the provider stream groups you toggled in step 3.
 3. Repeat for each group you need. Set a channel's group from the **Create
    Channel** dialog (step 5) when creating it, or drag an existing channel
    row onto a group's header in the Channels panel to move it afterward.
-   Dropping a channel on a group header opens a **Move Channel to Group**
-   dialog with a required numbering decision (**Keep current numbers**,
-   **Assign sequential numbers**, or a custom starting number, against the
-   target group's number range). Pick **Keep current numbers** if you just
-   want the move without renumbering, then click **Move Channel**.
+   Dropping a single channel on a group header opens a **Move Channel to
+   Group** dialog with a required numbering decision: **Keep current
+   numbers**, or a custom starting number against the target group's number
+   range. Pick **Keep current numbers** if you just want the move without
+   renumbering, then click **Move Channel**.
 
 ![Create New Channel Group modal with a group name entered](../../images/user_guide/getting-started/9-create-channel-group-modal.png)
 
@@ -174,10 +176,16 @@ actually wires a channel up to content.
 assignments are committed to Dispatcharr. Your channels are now playable.
 Open **Guide** or a media client pointed at ECM/Dispatcharr to confirm.
 
+Any channel you left under Uncategorized during staging does not stay
+there: after the commit, Uncategorized shows 0/Empty and the channel is
+committed into a system group named **Default Group** that you never
+created yourself. This is expected. If a channel you staged without a group
+seems to be missing, look for it in Default Group rather than Uncategorized.
+
 ## Going deeper
 
 - [`docs/user_guide/channels-streams/index.md`](../channels-streams/index.md): day-to-day channel and stream management once your first batch exists.
 - [`docs/user_guide/epg/index.md`](../epg/index.md): matching channels to EPG data and the dummy EPG template engine.
 - [`docs/user_guide/channel-pipeline/index.md`](../channel-pipeline/index.md): automate channel creation from incoming streams instead of creating them one at a time.
-- [`docs/architecture.md`](../../architecture.md): how the M3U → Channel Pipeline → Dispatcharr data flow fits together under the hood.
-- [`docs/api.md`](../../api.md): the HTTP endpoints behind every action in this walkthrough, for scripting or automation.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md) (in the repository, not part of this published guide): how the M3U → Channel Pipeline → Dispatcharr data flow fits together under the hood.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md) (in the repository, not part of this published guide): the HTTP endpoints behind every action in this walkthrough, for scripting or automation.

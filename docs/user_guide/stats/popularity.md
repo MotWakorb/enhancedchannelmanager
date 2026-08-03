@@ -49,5 +49,4 @@ has no scored channels yet.
   without opening this panel.
 - [Metric glossary](metric-glossary.md): how the underlying watch-count
   and watch-time numbers are computed.
-- [`docs/api.md`](../../api.md#popularity): `GET /api/stats/popularity/rankings`,
-  `GET /api/stats/popularity/trending`, `POST /api/stats/popularity/calculate`.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#popularity): the API reference for popularity rankings, trending, and score calculation, useful if you want to query or trigger these programmatically instead of through the UI.

@@ -19,11 +19,9 @@ and streams are fine; only the EPG pointer is wrong.
 The audit is **read-only**. It inspects your channels and reports; it never
 changes anything.
 
-- **On demand (whole fleet):** for a complete check across every channel, ask the
-  assistant to *"audit EPG duplicates"* (MCP tool `audit_epg_duplicates`), or call
-  `GET /api/epg/audit-duplicates` directly. This is the only way to see shared-EPG
-  results today. There is no equivalent button in the EPG Manager or Channel
-  Manager UI, so use the MCP tool or the API endpoint directly.
+- **On demand (whole fleet):** there is currently no way to run this audit from
+  the web UI. There is no equivalent button in the EPG Manager or Channel
+  Manager UI.
 
 > **Correction (2026-07-31):** an earlier version of this page said the
 > [Bulk EPG Assignment](channel-to-epg-matching.md) result "now includes a

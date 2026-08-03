@@ -85,6 +85,11 @@ nav:
       - Channel Manager: user_guide/channels-streams/channels-overview.md
       - Bulk Channel Operations: user_guide/channels-streams/bulk-edit.md
       - Stream Deduplication: user_guide/channels-streams/stream-dedup.md
+      - Streams: user_guide/channels-streams/streams-overview.md
+      - Assign Streams to Channels: user_guide/channels-streams/assign-streams-to-channels.md
+      - Channel Groups and Tags: user_guide/channels-streams/channel-groups-and-tags.md
+      - Find Out What Changed on a Channel: user_guide/channels-streams/the-journal.md
+      - Put Logos on Channels: user_guide/channels-streams/logos.md
   - M3U Manager:
       - user_guide/m3u-manager/index.md
       - Choose Which Stream Groups Sync: user_guide/m3u-manager/manage-stream-groups.md
@@ -101,7 +106,14 @@ nav:
       - Runaway Safety Cap: user_guide/channel-pipeline/runaway-safety-cap.md
       - Debugging Rules: user_guide/channel-pipeline/debugging-rules.md
       - Fuzzy Matching for Local / OTA Channels: user_guide/channel-pipeline/fuzzy-locals-matching.md
-  - Normalization: user_guide/normalization/index.md
+  - Normalization:
+      - user_guide/normalization/index.md
+      - How Normalization Works: user_guide/normalization/concepts.md
+      - Author Your First Normalization Rule: user_guide/normalization/author-your-first-rule.md
+      - Rule Groups and Ordering: user_guide/normalization/rule-groups-and-ordering.md
+      - Condition and Action Types: user_guide/normalization/condition-and-action-types.md
+      - Apply Rules to Existing Channels: user_guide/normalization/apply-to-existing-channels.md
+      - When Normalization Looks Wrong: user_guide/normalization/when-things-look-wrong.md
   - EPG:
       - user_guide/epg/index.md
       - Add and Refresh EPG Sources: user_guide/epg/epg-sources.md
@@ -115,7 +127,12 @@ nav:
       - Lookup Tables Retired: user_guide/epg/lookup-tables-retired.md
   - Guide: user_guide/guide/index.md
   - Logo Manager: user_guide/logo-manager/index.md
-  - Notifications & Alerts: user_guide/notifications/index.md
+  - Notifications & Alerts:
+      - user_guide/notifications/index.md
+      - Manage the Email Alert Recipients List: user_guide/notifications/email-recipients-deep-dive.md
+      - What ECM Posts to Discord, and What You Can Change: user_guide/notifications/discord-webhook-customization.md
+      - Set Up the Telegram Bot: user_guide/notifications/telegram-bot-setup.md
+      - Route Alerts to the Right Channel: user_guide/notifications/alert-routing-patterns.md
   - Stats:
       - user_guide/stats/index.md
       - Overview, Top Watched & Channel Drill-Down: user_guide/stats/overview-top-watched.md
@@ -157,5 +174,12 @@ nav:
       - User Management: user_guide/settings/user-management.md
       - TLS Certificates: user_guide/settings/tls-certificates.md
       - MCP Integration: user_guide/settings/mcp-integration.md
-  - Troubleshooting: user_guide/troubleshooting/index.md
+  - Troubleshooting:
+      - user_guide/troubleshooting/index.md
+      - Common Issues: user_guide/troubleshooting/common-issues.md
+      - Read the Logs: user_guide/troubleshooting/read-the-logs.md
+      - UI Banners and Warnings: user_guide/troubleshooting/ui-banners-and-warnings.md
+      - Gather Support Information: user_guide/troubleshooting/gather-support-information.md
+      - Escalation Paths: user_guide/troubleshooting/escalation-paths.md
+      - Recovery Patterns: user_guide/troubleshooting/recovery-patterns.md
   - Error Telemetry & Opt-out: user_guide/error-telemetry-opt-out.md

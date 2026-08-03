@@ -4,7 +4,7 @@ Event Sync is a second rule kind alongside the Standard rule covered in
 [Rules overview](rules-overview.md): instead of conditions and actions, it
 matches secondary providers' event streams onto one "master" provider's
 channels. This page is a thin quick-start pointing at
-[`docs/event_sync.md`](../../event_sync.md), which already has the full
+[`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md), which already has the full
 walkthrough, the pattern cookbook, and the troubleshooting reference. Read
 this page to get oriented and reach your first preview, then follow the
 link for depth.
@@ -46,20 +46,20 @@ button to actually attach matched streams.
 
 ## What to read next
 
-[`docs/event_sync.md`](../../event_sync.md) is the complete guide and
+[`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md) is the complete guide and
 covers everything past this first preview:
 
-- [Quick start: Consolidate event groups across providers](../../event_sync.md#quick-start-consolidate-event-groups-across-providers):
+- [Quick start: Consolidate event groups across providers](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#quick-start-consolidate-event-groups-across-providers):
   the same walkthrough as above, in more depth, including turning off
   `auto_channel_sync` on your secondary providers (skipping this step is
   the most common cause of "I still see duplicate channels").
-- [Pattern cookbook](../../event_sync.md#pattern-cookbook): if the shipped
+- [Pattern cookbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#pattern-cookbook): if the shipped
   parse patterns don't fit your providers' naming.
-- [Threshold and bands](../../event_sync.md#threshold-and-bands): how a
+- [Threshold and bands](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#threshold-and-bands): how a
   match becomes an auto-attach vs. an ambiguous review item.
-- [Troubleshooting](../../event_sync.md#troubleshooting): duplicate
+- [Troubleshooting](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#troubleshooting): duplicate
   channels still appearing, nothing matching, and events missing entirely.
-- [Undo a bad event_sync run](../../event_sync.md#undo-a-bad-event_sync-run):
+- [Undo a bad event_sync run](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md#undo-a-bad-event_sync-run):
   every live run is reversible by execution id.
 
 ## How Event Sync relates to Standard rules
@@ -75,7 +75,7 @@ Standard rules only.
 
 ## Going deeper
 
-- [`docs/event_sync.md`](../../event_sync.md): the full developer- and
+- [`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md): the full developer- and
   operator-facing guide.
 - [Rules overview](rules-overview.md): the Standard rule dialog, for
   comparison.

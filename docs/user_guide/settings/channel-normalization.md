@@ -36,6 +36,6 @@ them with a consistent separator format.
 
 ## Going deeper
 
-- [`docs/normalization.md`](../../normalization.md): the full normalization guide: rule groups and ordering, condition/action types, testing a rule before committing, re-normalizing existing channels, troubleshooting, and the developer reference.
-- [`docs/normalization.md#quick-start`](../../normalization.md#quick-start): write your first rule.
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md): the full normalization guide: rule groups and ordering, condition/action types, testing a rule before committing, re-normalizing existing channels, troubleshooting, and the developer reference.
+- [`docs/normalization.md#quick-start`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#quick-start): write your first rule.
 - [Tags](tags.md): the tag vocabularies these rules match against.

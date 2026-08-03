@@ -48,4 +48,4 @@ have enabled.
 
 - [User Management](user-management.md): creating and managing local user accounts.
 - [Linked Accounts](linked-accounts.md): linking an external identity to your own account, as distinct from the instance-wide provider toggles here.
-- [`docs/auth_middleware.md`](../../auth_middleware.md): how ECM's auth middleware evaluates these settings on every request.
+- [`docs/auth_middleware.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/auth_middleware.md): how ECM's auth middleware evaluates these settings on every request.

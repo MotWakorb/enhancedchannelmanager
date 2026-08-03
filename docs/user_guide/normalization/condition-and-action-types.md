@@ -147,7 +147,7 @@ signal is a `[SAFE_REGEX]` warning in the ECM logs naming the rule.
 If a rule with a regex condition works on short names and silently stops
 working on long ones, suspect the timeout and check the logs. The rewrite
 guidance is in the Regex section of
-[`docs/style_guide.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/style_guide.md).
+[`docs/style_guide.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/style_guide.md).
 
 ## Going deeper
 
@@ -157,6 +157,6 @@ guidance is in the Regex section of
   rules combine.
 - [Tags](../settings/tags.md): managing the vocabularies that **Tag Group**
   conditions match against.
-- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#safe_regex-log-entries):
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#safe_regex-log-entries):
   how to read the `[SAFE_REGEX]` log lines a timed-out pattern leaves
   behind.

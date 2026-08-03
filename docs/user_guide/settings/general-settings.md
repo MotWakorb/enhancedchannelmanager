@@ -79,5 +79,5 @@ Channel Pipeline page instead.
 ## Going deeper
 
 - [Getting Started](../getting-started/index.md): first-time Dispatcharr connection setup.
-- [`docs/architecture.md`](../../architecture.md): how ECM's polling and stats pipeline works end-to-end.
-- [`docs/api.md`](../../api.md): API reference if you want to read or update these settings programmatically.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): how ECM's polling and stats pipeline works end-to-end.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): API reference if you want to read or update these settings programmatically.

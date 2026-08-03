@@ -141,9 +141,9 @@ duplicated there.
 
 | Looking for… | Try… |
 |-|-|
-| The HTTP API | [`docs/api.md`](../api.md) |
-| System architecture | [`docs/architecture.md`](../architecture.md) |
-| On-call runbooks (incident response) | [`docs/runbooks/`](../runbooks/) |
-| Service-level objectives | [`docs/sre/slos.md`](../sre/slos.md) |
-| Release notes | Discord release-notes channel (see [`docs/discord_release_notes.md`](../discord_release_notes.md)) |
+| The HTTP API | [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md) |
+| System architecture | [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md) |
+| On-call runbooks (incident response) | [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/tree/main/docs/runbooks) |
+| Service-level objectives | [`docs/sre/slos.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md) |
+| Release notes | Discord release-notes channel (see [`docs/discord_release_notes.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/discord_release_notes.md)) |
 | Error telemetry & how to opt out | [`error-telemetry-opt-out.md`](error-telemetry-opt-out.md) |

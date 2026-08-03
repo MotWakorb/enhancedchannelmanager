@@ -60,4 +60,4 @@ Providers rename and retire streams constantly. When Dispatcharr's own playlist 
 - [Assign Streams to Channels](assign-streams-to-channels.md): turning the streams you found here into channels, and what is staged versus what is immediate.
 - [Stream Deduplication](stream-dedup.md): what happens when the stream you are adding looks like a channel you already have.
 - [M3U Manager](../m3u-manager/index.md): where streams come from in the first place, and how to refresh a provider playlist.
-- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md): the stream endpoints behind this panel, when you want to script something.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the stream endpoints behind this panel, when you want to script something.

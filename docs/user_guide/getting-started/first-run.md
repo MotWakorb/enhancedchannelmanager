@@ -90,15 +90,11 @@ you're signed in automatically. There's no separate login step. ECM then takes y
 straight into the Dispatcharr connection setup; see
 [Connect ECM to Dispatcharr](connect-dispatcharr.md).
 
-> **What's observed vs. derived:** the exact preflight transcript above was
-> captured from a running ECM container's logs. It's real output. The admin
-> account setup screen itself (fields, validation rules, copy) is described
-> from the frontend source (`SetupPage.tsx`) rather than a live screenshot:
-> this section's verification instance already has an admin account, so the
-> one-time setup screen can't be photographed there without tearing down its
-> auth state, which would disrupt other work in progress against that shared
-> instance. Do not mistake the sign-in screenshot below for it. They are
-> different screens.
+> **Note:** the admin account setup screen only appears once, before any
+> admin account exists. This section's verification instance already has an
+> admin account, so the setup screen could not be screenshotted without
+> tearing down its auth state. Do not mistake the sign-in screenshot below
+> for it — they are different screens.
 
 ### Recognize the sign-in screen on a later visit
 
@@ -118,4 +114,4 @@ existing account.
 
 - [Connect ECM to Dispatcharr](connect-dispatcharr.md): what happens right after you create the admin account.
 - [Install ECM](installation.md): the config-persistence warning in more detail, including how to fix it.
-- [`docs/auth_middleware.md`](../../auth_middleware.md): how ECM's auth model works, if you need more than the setup flow (SSO, multiple users, password reset).
+- [`docs/auth_middleware.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/auth_middleware.md) (in the repository, not part of this published guide): how ECM's auth model works, if you need more than the setup flow (SSO, multiple users, password reset).

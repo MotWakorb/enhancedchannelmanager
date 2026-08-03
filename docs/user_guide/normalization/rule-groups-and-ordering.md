@@ -123,5 +123,5 @@ Two things a disabled group does **not** do:
   individual rule can match and do.
 - [When things look wrong](when-things-look-wrong.md): the diagnostic path
   when the trace does not explain the output.
-- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#rule-groups-and-ordering):
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#rule-groups-and-ordering):
   the reference treatment of ordering and idempotence.

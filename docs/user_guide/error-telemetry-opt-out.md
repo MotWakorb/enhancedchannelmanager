@@ -1,14 +1,12 @@
 # Error Telemetry & Opt-out
 
-> **Status:** Complete (ADR-006 Phase 1 behavior, bead `i6a1m`).
-
 Enhanced Channel Manager ships with **local-sink** frontend error telemetry. When the UI crashes in your browser, ECM captures a structured record of *what broke, where, and roughly what browser* and writes it to the container's own `/metrics` endpoint and structured log stream. **Nothing is sent outside your container.** No third party, no Sentry, no Datadog, no phone-home.
 
 This page explains exactly what is and isn't captured, where it goes, and how to turn it off.
 
 ## What gets collected
 
-Each time the ECM UI catches a runtime error, the reporter sends one small record to `POST /api/client-errors` inside your own container:
+Each time the ECM UI catches a runtime error, the reporter sends one small record to a backend endpoint inside your own container:
 
 | Field | Example | Why |
 |-|-|-|
@@ -89,7 +87,7 @@ Changes take effect on the next settings reload (usually immediate; restart the 
 ## What happens when it's off
 
 - The frontend reporter **short-circuits** before building the payload. No network call is issued.
-- The backend `/api/client-errors` endpoint **returns 204** immediately without reading the body, validating it, incrementing any counter, or writing any log line.
+- The backend endpoint that receives these reports **returns 204** immediately without reading the body, validating it, incrementing any counter, or writing any log line.
 - The three `ecm_client_errors_*` metrics stay flat.
 - Your app still works the same way it did before. Crashes are still handled by the React `ErrorBoundary` and the user-visible fallback UI; you just don't get a counter increment.
 
@@ -105,6 +103,5 @@ Without this signal, the only way to find out ECM crashed was to notice the UI w
 
 ## Related
 
-- **[ADR-006](../adr/ADR-006-frontend-error-telemetry.md)**: full architecture record for this feature, including why we chose local-sink over Sentry/GlitchTip/OTel SDK.
-- **[SLO-6 in `docs/sre/slos.md`](../sre/slos.md)**: the error-free-session-rate SLO defined on top of this data.
-- **[`docs/sre/prometheus_rules.yaml`](../sre/prometheus_rules.yaml)**: alert rule `ECMClientErrorRatioElevated` / `ECMClientErrorRatioCritical` for operators running Prometheus + Alertmanager.
+- **[SLO-6 in `docs/sre/slos.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md)**: the error-free-session-rate SLO defined on top of this data.
+- **[`docs/sre/prometheus_rules.yaml`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/prometheus_rules.yaml)**: alert rule `ECMClientErrorRatioElevated` / `ECMClientErrorRatioCritical` for operators running Prometheus + Alertmanager.

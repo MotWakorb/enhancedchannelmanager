@@ -45,7 +45,11 @@ appear.
 To get real programming showing for newly-matched channels, run the **EPG
 Refresh** task: **Settings → Scheduled Tasks → EPG Refresh → Run Now** (or
 wait for its next scheduled run). Once that completes, Guide's Refresh
-button will show the new programme data.
+button will show the new programme data. For large feeds, allow a few
+minutes after the task reports success before expecting Guide's Refresh to
+show it: Dispatcharr's own ingest keeps running behind the task's
+"complete" status, and this took roughly 3-5 minutes on a 14,000-channel
+feed during verification.
 
 ## Why review matters: read the confidence score
 
@@ -148,21 +152,11 @@ non-regional networks) is unaffected.
   it above the plain `AMC` entry because West↔Pacific agree. `AMC West` now
   links to `AMC (Pacific)`.
 
-**Checking your fleet.** There is currently no UI surface for this audit; a
-UI path is tracked separately (bead `enhancedchannelmanager-0r0w7`). Today
-the only way to run the [duplicate-EPG-link
-audit](finding-mislinked-channels.md) is the `audit_epg_duplicates` MCP tool
-or `GET /api/epg/audit-duplicates` directly, both of which require API or
-MCP access rather than just the ECM web UI. It finds channels still
-mis-linked: either left over from before this fix, or a region combination
-the matcher doesn't have enough signal to disambiguate automatically.
-
-> **Dev note:** this logic lives in `backend/epg_matching.py`:
-> `detect_region()`, the region-collapse step in `epg_match_key()`, and the
-> `region_consistency` tie-break in `_sort_matches()`. The separate
-> auto-creation matcher (`channel_pipeline_executor._match_epg_data`) reuses
-> `detect_region()` for its own region-consistency tie-break within each
-> match tier (one shared source of regional truth for both matchers).
+**Checking your fleet.** There is currently no UI surface for this audit, and
+no way to run the [duplicate-EPG-link audit](finding-mislinked-channels.md)
+from the ECM web UI. It finds channels still mis-linked: either left over
+from before this fix, or a region combination the matcher doesn't have
+enough signal to disambiguate automatically.
 
 ## Going deeper
 
@@ -174,5 +168,5 @@ the matcher doesn't have enough signal to disambiguate automatically.
 - [Migrate channel guides between IPTV and Gracenote](migrate-guides.md):
   bulk-move existing (already-matched) assignments to a different source,
   rather than rematching from scratch.
-- [`docs/api.md`](../../api.md): the `/epg` router, including the match
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md) (in the repository, not part of this published guide): the `/epg` router, including the match
   endpoint this dialog calls.

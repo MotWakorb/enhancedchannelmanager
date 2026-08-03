@@ -179,5 +179,5 @@ exactly what each match tier compared and rejected. This is useful for support.
 
 - [Integrations overview](index.md): all three media-server integrations
   side by side, plus the multi-viewer and same-IP limitations.
-- [`docs/api.md`: Enhanced Stats § per-channel attribution fields](../../api.md)
-- [`docs/architecture.md`: User Attribution Pipeline](../../architecture.md)
+- [`docs/api.md`: Enhanced Stats § per-channel attribution fields](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md)
+- [`docs/architecture.md`: User Attribution Pipeline](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md)

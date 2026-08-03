@@ -46,26 +46,20 @@ This section documents the Stats page for operators:
 
 ## Articles
 
-| Article | Status | Purpose |
-|-|-|-|
-| `overview-top-watched.md` | **Done** | Live-counts header, Active Channels, Recent Events, Top Watched Channels, and the per-channel drill-down modal: the "what's streaming right now" tour that replaces the earlier planned `stats-tab-overview.md`. |
-| `bandwidth.md` | **Done** | Bandwidth Usage (headline totals + 7-day chart) and Bandwidth In/Out (inbound vs. outbound, peak bitrates), both part of ECM's legacy bandwidth pipeline, unaffected by the Stats v2 telemetry opt-out. |
-| `enhanced-statistics.md` | **Done** | The Enhanced Statistics panel: 7-day unique-viewer counts and per-channel bandwidth/connections/watch-time ranking. |
-| `popularity.md` | **Done** | Popularity Rankings and Trending: how the score is calculated and refreshed. |
-| `watch-history.md` | **Done** | Session-by-session watch log with time/channel/IP filters. |
-| `metric-glossary.md` | **Done** | One entry per metric: name, definition, units, what causes it to move. |
-| `users-panel.md` | **Done** | Operator guide to the Users panel (admin-only). |
-| `providers.md` | **Done** | The admin-only Providers telemetry panel (buffering, watch time, top channels, bitrate, per provider) and the non-admin Provider Stream Usage catalog table. |
-| `interpretation-guide.md` | Planned | "What does it mean when X is Y?" (common patterns and what they indicate). |
-| `stats-vs-slos.md` | Planned | How the operator-facing Stats relate to the SRE-facing SLOs in `docs/sre/slos.md`. |
+| Article | Purpose |
+|-|-|
+| `overview-top-watched.md` | Live-counts header, Active Channels, Recent Events, Top Watched Channels, and the per-channel drill-down modal: the "what's streaming right now" tour that replaces the earlier planned `stats-tab-overview.md`. |
+| `bandwidth.md` | Bandwidth Usage (headline totals + 7-day chart) and Bandwidth In/Out (inbound vs. outbound, peak bitrates), both part of ECM's legacy bandwidth pipeline, unaffected by the Stats v2 telemetry opt-out. |
+| `enhanced-statistics.md` | The Enhanced Statistics panel: 7-day unique-viewer counts and per-channel bandwidth/connections/watch-time ranking. |
+| `popularity.md` | Popularity Rankings and Trending: how the score is calculated and refreshed. |
+| `watch-history.md` | Session-by-session watch log with time/channel/IP filters. |
+| `metric-glossary.md` | One entry per metric: name, definition, units, what causes it to move. |
+| `users-panel.md` | Operator guide to the Users panel (admin-only). |
+| `providers.md` | The admin-only Providers telemetry panel (buffering, watch time, top channels, bitrate, per provider) and the non-admin Provider Stream Usage catalog table. |
+| `interpretation-guide.md` | "What does it mean when X is Y?" (common patterns and what they indicate). |
+| `stats-vs-slos.md` | How the operator-facing Stats relate to the SRE-facing SLOs in `docs/sre/slos.md`. |
 
 ## Going deeper
 
-- [`docs/sre/slos.md`](../../sre/slos.md): the SLO definitions ECM is measured against.
-- The `/api/stats/watch-time` and `/api/stats/providers/*` API routes (see [`docs/api.md`](../../api.md)): what the Stats v2 panels consume under the hood.
-- [ADR-007: session_telemetry retention policy](../../adr/ADR-007-session-telemetry-retention.md): the 30-day raw retention and rollup design.
-
-## Tracking
-
-- bd-skqln.9 (*Stats v2: user guide entry + metric glossary*): delivered this section.
-- enhancedchannelmanager-gsnw0.9 (*Stats tutorials: per-panel walkthroughs*): delivered `overview-top-watched.md`, `bandwidth.md`, `enhanced-statistics.md`, `popularity.md`, `watch-history.md`, `providers.md`, and this page's "Start here" table.
+- [`docs/sre/slos.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md): the SLO definitions ECM is measured against.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the API reference for the Stats v2 panels, useful if you want to query the data programmatically instead of through the UI.

@@ -18,7 +18,7 @@ The Journal is ECM's record of every change it made or observed. This article is
 
 **Result, for a channel changed only through Edit Mode in the UI:** "No journal entries." The Channel category still contains a **Bulk Commit** row for the session that touched it, but that row's **Entity** and **Action** both read **Bulk Commit**, not the channel's name, so the search can't find it. Expanding it shows only aggregate counters (`operations_applied`, `channels_created`, and so on) and the **Batch:** identifier: no per-channel before/after values.
 
-Tracing a UI-driven channel's history by name is tracked as an open product defect: bead `enhancedchannelmanager-r9py9`. The per-channel recording itself works; it's specifically the Edit Mode commit path that doesn't write to it.
+Tracing a UI-driven channel's history by name is not currently possible; this is a known product limitation. The per-channel recording itself works; it's specifically the Edit Mode commit path that doesn't write to it.
 
 ### Understand what you are looking at
 
@@ -34,11 +34,11 @@ Three things about these rows regularly trip operators up.
 
 1. Expand a row that was part of a batch. The detail area shows **Batch:** followed by an identifier.
 
-**Result:** Every change applied together shares that identifier, but the Journal page only displays it: it is not a link, and there is no batch filter in the filter row (Category, Action, Source, and free-text search only). From the UI, the closest you can get is searching for something the rows have in common, such as a shared description fragment or time window. Making the Batch id clickable, or adding a batch filter, is tracked as an open product defect: bead `enhancedchannelmanager-d2kdg`. Reconstructing a batch precisely by its id currently requires API access (`GET /api/journal?batch_id=<id>`), outside the ECM web UI.
+**Result:** Every change applied together shares that identifier, but the Journal page only displays it: it is not a link, and there is no batch filter in the filter row (Category, Action, Source, and free-text search only). From the UI, the closest you can get is searching for something the rows have in common, such as a shared description fragment or time window. Making the Batch id clickable, or adding a batch filter, is not available today, and there is currently no way to reconstruct a batch precisely by its id from the ECM web UI.
 
 ## Going deeper
 
 - [Journal](../journal/index.md): the full page, including the other categories, reading the Before/After diff, and purging old entries.
 - [Channel Manager](channels-overview.md): the Edit Mode session that produces the Bulk Commit rows.
 - [Bulk Channel Operations](bulk-edit.md): the operations that write straight through, which is what you are usually chasing when a channel changed and there was nothing to undo.
-- [`docs/api.md#journal`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/api.md#journal): the `/api/journal` endpoints, including the `batch_id` filter.
+- [`docs/api.md#journal`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#journal): the API reference for the Journal, including the batch id filter, useful if you want to query it programmatically instead of filtering in the UI.

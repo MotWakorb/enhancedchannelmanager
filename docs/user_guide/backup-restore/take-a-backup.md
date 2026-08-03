@@ -22,7 +22,7 @@ The Backup & Restore page does not have a "Backup" card or a "Back Up Now" butto
 
 ECM builds the artifact in the background via the `dbas_backup` task. A notification appears when the backup completes. The artifact and a `.sha256` sidecar are saved to `/config/backups/` on the ECM host.
 
-> A single-click "Back Up Now" control on the Backup & Restore page itself does not exist yet; it is tracked separately (bead `enhancedchannelmanager-pui76`) and may be added in a future release. Until then, Scheduled Tasks → DBAS Backup → Run Now is the supported on-demand path.
+> A single-click "Back Up Now" control on the Backup & Restore page itself does not exist yet and may be added in a future release. Until then, Scheduled Tasks → DBAS Backup → Run Now is the supported on-demand path.
 
 If you need credentials to travel with the artifact instead, use the Encrypted Backup card described below. That card **does** live on the Backup & Restore page.
 
@@ -33,9 +33,9 @@ If you need credentials (M3U passwords, EPG passwords, SMTP config) to travel wi
 1. Go to **Settings → Backup & Restore**.
 2. Find the **Encrypted Backup (Migration)** card.
 3. Check the acknowledgement: *"I understand that a lost passphrase means this backup cannot be recovered."*
-4. Enter a passphrase of at least 12 characters. Write it down somewhere safe before proceeding. ECM never stores the passphrase.
+4. Enter a passphrase of at least 12 characters in the **Passphrase** field, then repeat it in the **Confirm passphrase** field. Write it down somewhere safe before proceeding. ECM never stores the passphrase.
 5. Enable **Include credentials** if you want M3U/EPG passwords included in the encrypted artifact.
-6. Click **Create encrypted backup**.
+6. Click **Create Encrypted Backup**.
 
 > **Warning:** A lost passphrase means the encrypted artifact is permanently unrecoverable. There is no reset or recovery path. Store the passphrase in a password manager.
 
@@ -71,9 +71,11 @@ A `.sha256` sidecar file is written alongside each `.zip`, containing the artifa
 
 ### Listing saved backups
 
-The **Saved Backups** card on **Settings → Backup & Restore** is scoped to YAML exports only: its own caption reads "YAML backups saved on the server by the scheduled backup task." It does not list, download, or delete DBAS `.zip` artifacts, which are what Option A and Option B above produce. Take a DBAS backup and open Saved Backups right after, and it will still read "No saved backups" even though the artifact exists on disk.
+The **Saved Backups** card on **Settings → Backup & Restore** lists the DBAS `.zip` artifacts that Option A and Option B above produce, each with **restore**, **download**, and **delete** actions. Take a DBAS backup and open Saved Backups right after, and the new artifact appears in the list (for example, `ecm-backup-2026-08-03_000043.zip · 995.4 KB`).
 
-There is currently no UI listing for DBAS artifacts. To confirm one exists, use the completion notification, the History expander on the DBAS Backup task card, or check `/config/backups/` on the host filesystem directly.
+The card's own caption still reads "YAML backups saved on the server by the scheduled backup task." That caption is stale and describes an older behavior; the card lists DBAS `.zip` artifacts, not YAML exports. This is a known issue; treat the caption as leftover copy, not a description of what the card actually shows.
+
+To download an artifact directly from the card, or to verify one before you need it, see [Verify a backup](verify-a-backup.md#verifying-a-scheduled-backup-proactively).
 
 ---
 
@@ -96,7 +98,7 @@ When a backup runs, ECM:
 
 - **Notifications panel**: a success or failure notification is emitted after each backup run.
 - **Scheduled Tasks → DBAS Backup → History**: shows the last run time, duration, and outcome for the task. There is no separate "Task History" destination in Settings.
-- **Settings → Backup & Restore → Saved Backups**: lists YAML exports only. It does not list DBAS `.zip` artifacts; see [Listing saved backups](#listing-saved-backups) above.
+- **Settings → Backup & Restore → Saved Backups**: lists the DBAS `.zip` artifacts themselves, with restore, download, and delete actions; see [Listing saved backups](#listing-saved-backups) above.
 
 ---
 

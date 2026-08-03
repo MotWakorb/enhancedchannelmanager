@@ -110,6 +110,6 @@ which is what makes it usable for external health checks and the Docker
 ## Going deeper
 
 - [First run](first-run.md): what you'll see the first time you load the UI, and how the preflight checks and config-persistence warning work.
-- The project's root `README.md` (in the repository, not part of this published guide): the full compose reference, including the optional MCP server overlay and `PUID`/`PGID`/port environment variables.
+- The project's root [`README.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/README.md) (in the repository, not part of this published guide): the full compose reference, including the optional MCP server overlay and `PUID`/`PGID`/port environment variables.
 - [Troubleshooting](../troubleshooting/index.md): if the container fails to start or exits immediately after `docker compose up`, this is where the dedicated `container-wont-start.md` article will live once written (tracked separately; not yet published).
-- [`docs/runbooks/`](../../runbooks/README.md): operational runbooks for post-install incidents (SLO breaches, rollback procedures).
+- [`docs/runbooks/`](https://github.com/MotWakorb/enhancedchannelmanager/tree/main/docs/runbooks) (in the repository, not part of this published guide): operational runbooks for post-install incidents (SLO breaches, rollback procedures).

@@ -1,7 +1,5 @@
 # Fuzzy Matching for Local / OTA Channels
 
-> **Shipped:** v0.17.3-0006 (bead jnzst).
-
 ## What it is
 
 ECM's Channel Pipeline engine defaults to **exact normalized-name equality** when
@@ -75,19 +73,10 @@ channels (e.g., "Locals", "OTA"). You will need these group IDs for the
 ### Step 2: preview before writing
 
 Use the preview tool to see what would match at your intended threshold before
-saving any rule.
-
-**Via MCP:**
+saving any rule, via the MCP `preview_fuzzy_matches` tool:
 
 ```
 preview_fuzzy_matches(group_ids=[14, 22], min_score=0.75)
-```
-
-**Via API:**
-
-```
-GET /api/channel-pipeline/fuzzy-preview
-  ?group_ids=14&group_ids=22&min_score=0.75
 ```
 
 The preview returns scored `(stream, channel)` pairs in descending score order.
@@ -123,14 +112,8 @@ Add a `merge_streams` action to your rule with these fields:
 
 ### Step 4: run dry-run first
 
-Run the pipeline in dry-run mode before enabling the rule:
-
-```
-POST /api/channel-pipeline/run
-{ "dry_run": true, "rule_ids": [<your rule id>] }
-```
-
-Or via MCP:
+Run the pipeline in dry-run mode before enabling the rule, via the MCP
+`match_streams_to_channels` tool:
 
 ```
 match_streams_to_channels(group_ids=[14, 22], min_score=0.75, apply=false)
@@ -141,13 +124,14 @@ writing anything.
 
 ### Step 5: enable and monitor
 
-Enable the rule and watch the journal (`GET /api/journal` or the Journal page).
+Enable the rule and watch the [Journal](../journal/index.md) page.
 Each scored-fuzzy merge writes a journal entry with the score, `callsign_verdict`,
 signal, and the callsigns that were parsed. This lets you audit exactly why each
 merge fired.
 
-If a run produces unexpected matches, use
-`POST /api/channel-pipeline/executions/{id}/rollback` to undo it.
+If a run produces unexpected matches, use **Undo this run** or **Rollback** on
+the Channel Pipeline's Execution History panel to undo it (see
+[Recovery Patterns](../troubleshooting/recovery-patterns.md#undo-a-pipeline-run)).
 
 ## No-callsign opt-in
 
@@ -165,14 +149,14 @@ callsigns. `allow_no_callsign` does not affect that case.
 
 ## Safety guarantees
 
-- **Dry-run by default.** Both `match_streams_to_channels` (MCP) and
-  `POST /api/channel-pipeline/run` support `dry_run: true`. The `preview_fuzzy_matches`
-  MCP tool and `GET /api/channel-pipeline/fuzzy-preview` endpoint never write under
-  any circumstances.
-- **Admin-gated.** The `fuzzy-preview` endpoint requires admin authentication
-  when auth is enabled.
-- **Rollback-able.** Channel Pipeline executions are recorded and reversible via
-  `POST /api/channel-pipeline/executions/{id}/rollback`.
+- **Dry-run by default.** The `match_streams_to_channels` MCP tool supports
+  `dry_run: true`. The `preview_fuzzy_matches` MCP tool never writes under any
+  circumstances.
+- **Admin-gated.** Fuzzy-preview access requires admin authentication when
+  auth is enabled.
+- **Rollback-able.** Channel Pipeline executions are recorded and reversible
+  from the Execution History panel (see
+  [Recovery Patterns](../troubleshooting/recovery-patterns.md#undo-a-pipeline-run)).
 - **Scoping required.** The schema refuses to save a scored-fuzzy rule without
   a non-empty `target_channel_in_group` allowlist.
 - **Callsign hard-reject.** Pairs with conflicting callsigns on both sides are
@@ -202,8 +186,6 @@ non-admissible pairs.
 
 | Topic | Where |
 |-|-|
-| Scoring core internals | `backend/services/dedup_matcher.py`: `score_one`, `score_all`, `is_admissible`, `_normalize(mode=LOCALS)` |
-| Rule schema validation | `backend/channel_pipeline_schema.py`: `min_score` / `target_channel_in_group` constraints |
-| Preview endpoint | [`docs/api.md`](../../api.md): `GET /api/channel-pipeline/fuzzy-preview` |
-| Scored-fuzzy rule path (dev reference) | [`docs/channel_pipeline_rule_analyzer.md`](../../channel_pipeline_rule_analyzer.md): "Scored-fuzzy rule path" section |
-| Confidence floor (ADR-008 §D2) | `CONFIDENCE_FLOOR = 0.60` in `services.dedup_matcher`: same constant used by interactive stream dedup |
+| Preview API reference | [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the fuzzy-preview endpoint reference |
+| Scored-fuzzy rule path (dev reference) | [`docs/channel_pipeline_rule_analyzer.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/channel_pipeline_rule_analyzer.md): "Scored-fuzzy rule path" section |
+| Confidence floor | 0.60 — the same floor used by interactive stream dedup |

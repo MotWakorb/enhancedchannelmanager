@@ -114,5 +114,5 @@ account-level filter excluded first.
 - [Settings → Channel Defaults](../settings/channel-defaults.md): Channel
   Profile defaults that Auto-Sync's Channel Profile Assignment interacts
   with.
-- [`docs/api.md`](../../api.md): HTTP endpoints behind Manage Groups and
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): HTTP endpoints behind Manage Groups and
   Auto-Sync Settings.

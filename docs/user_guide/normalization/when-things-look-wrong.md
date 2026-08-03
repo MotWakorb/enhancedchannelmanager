@@ -109,7 +109,7 @@ the name still changed, it was the Unicode preprocessing policy:
   mark are removed.
 
 This is not configurable per rule. It is documented in
-[`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#normalizationpolicy-the-unicode-preprocessor).
+[`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#normalizationpolicy-the-unicode-preprocessor).
 
 The mirror image of this is a pattern that will not match because of an
 invisible or look-alike character in the input. Two characters that render
@@ -135,7 +135,7 @@ Group A creates a channel with a different name.
 Every surface runs one engine with one preprocessing policy, and that they
 agree is a contract ECM enforces, not an aspiration. It is checked nightly
 by an automated canary, and a divergence is tracked as a zero-tolerance
-breach of [SLO-5](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/sre/slos.md#slo-5-normalization-correctness) (GitHub).
+breach of [SLO-5](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md#slo-5-normalization-correctness) (GitHub).
 
 So if you have genuinely ruled out the group-scope difference above, do not
 paper over it with an extra rule. A workaround rule hides the divergence
@@ -153,10 +153,10 @@ fixed.
 - The approximate time, so the run can be found in the logs.
 
 **Where it goes:**
-[`docs/runbooks/normalization-canary-divergence.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/normalization-canary-divergence.md)
+[`docs/runbooks/normalization-canary-divergence.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/normalization-canary-divergence.md)
 is the response procedure. If your instance recently rolled back the
 unified Unicode policy, read
-[`docs/runbooks/normalization-unified-policy.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/normalization-unified-policy.md)
+[`docs/runbooks/normalization-unified-policy.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/normalization-unified-policy.md)
 first: running in the legacy mode deliberately changes what the
 preprocessor does, and can look like a divergence.
 
@@ -168,7 +168,7 @@ preprocessor does, and can look like a divergence.
   chaining, and the repeat loop.
 - [Condition and action types](condition-and-action-types.md): the exact
   matching rules for each condition type.
-- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/normalization.md#troubleshooting): the
+- [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#troubleshooting): the
   reference troubleshooting section, including log lines and metrics.
 - [Troubleshooting](../troubleshooting/index.md): the general
   troubleshooting section for problems that are not normalization-specific.

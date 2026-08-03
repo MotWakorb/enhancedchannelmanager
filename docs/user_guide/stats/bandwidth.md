@@ -61,5 +61,4 @@ re-pull the latest numbers without reloading the page.
 - [Enhanced Statistics](enhanced-statistics.md): per-channel bandwidth
   breakdown, if the question is "which channel" rather than "how much
   total."
-- [`docs/api.md`](../../api.md#enhanced-stats): `GET /api/stats/bandwidth`,
-  the endpoint both panels read.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#enhanced-stats): the API reference both panels' data is available through, useful if you want to query it programmatically instead of through the UI.

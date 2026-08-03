@@ -1,6 +1,6 @@
 # Channels & Streams
 
-> **Status:** In progress. Core editing (Edit Mode/staging) and bulk & dedup workflows are written; the remaining articles below are still planned. For the current layout, start with [Find Your Way Around the Operator Workspace](../operator-workspace.md).
+Core editing (Edit Mode/staging), bulk & dedup workflows, and the deep-dive articles on streams, stream assignment, groups and tags, per-channel history, and logos are all covered below. For the current layout, start with [Find Your Way Around the Operator Workspace](../operator-workspace.md).
 
 ## Section purpose
 
@@ -17,23 +17,18 @@ Document the core ECM workflow: viewing channels and streams, editing them, assi
 
 ## Articles
 
-| Article | Purpose | Status |
-|-|-|-|
-| [`channels-overview.md`](channels-overview.md) | The Channel Manager page: Edit Mode, the staging model, Apply/Discard, and Undo/Redo/checkpoints. | **Shipped** |
-| [`bulk-edit.md`](bulk-edit.md) | CSV import, bulk EPG assignment, Gracenote IDs, Find Duplicates, and manual merge, including which of those are staged vs. immediate. | **Shipped** |
-| [`stream-dedup.md`](stream-dedup.md) | The automatic dedup prompt (drag-drop, Create in…, and the Pending Merges queue from M3U refreshes), confidence threshold, and MCP tools. | **Shipped** |
-
-## Planned articles
-
 | Article | Purpose |
 |-|-|
-| `streams-overview.md` | The Streams pane: what a stream is, where it came from (M3U source), and how it relates to a channel. |
-| `assign-streams-to-channels.md` | The matching workflow: manual assignment, the impact of normalization on auto-matching, what happens when a stream's source moves. |
-| `channel-groups-and-tags.md` | When to use channel groups vs. tags, how Dispatcharr consumes them, ordering semantics. |
-| `the-journal.md` | The Journal page: what changes ECM records, how to filter by entity, how to find the change that broke something. |
-| `logos.md` | The Logo Manager: uploading logos, where they're stored, how Dispatcharr picks them up. |
+| [Channel Manager](channels-overview.md) | The Channel Manager page: Edit Mode, the staging model, Apply/Discard, and Undo/Redo/checkpoints. |
+| [Bulk Channel Operations](bulk-edit.md) | CSV import, bulk EPG assignment, Gracenote IDs, Find Duplicates, and manual merge, including which of those are staged vs. immediate. |
+| [Stream Deduplication](stream-dedup.md) | The automatic dedup prompt (drag-drop, Create in…, and the Pending Merges queue from M3U refreshes), confidence threshold, and MCP tools. |
+| [Streams](streams-overview.md) | The Streams pane: what a stream is, where it came from (M3U source), and how it relates to a channel. |
+| [Assign Streams to Channels](assign-streams-to-channels.md) | The matching workflow: manual assignment, the impact of normalization on auto-matching, what happens when a stream's source moves. |
+| [Channel Groups and Tags](channel-groups-and-tags.md) | When to use channel groups vs. tags, how Dispatcharr consumes them, ordering semantics. |
+| [Find Out What Changed on a Channel](the-journal.md) | The Journal page: what changes ECM records, how to filter by entity, how to find the change that broke something. |
+| [Put Logos on Channels](logos.md) | The Logo Manager: uploading logos, where they're stored, how Dispatcharr picks them up. |
 
 ## Going deeper (for now)
 
-- [`docs/api.md`](../../api.md): the channel and stream API endpoints, when an operator wants to script something.
-- [`docs/architecture.md`](../../architecture.md): the data layer (SQLite at `/config/journal.db`) and how channels/streams flow through it.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the channel and stream API endpoints, when an operator wants to script something.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): the data layer (SQLite at `/config/journal.db`) and how channels/streams flow through it.

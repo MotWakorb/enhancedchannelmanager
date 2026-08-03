@@ -1,8 +1,7 @@
 # MCP Integration: Claude AI Connection Reference
 
 > **Status:** Current as of v0.17.1. MCP authenticates with a static API key via
-> the `?api_key=` path. (The OAuth 2.1 "Custom Connector" offering was retired:
-> see [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md).)
+> the `?api_key=` path. (The OAuth 2.1 "Custom Connector" offering was retired.)
 
 This is the full operator reference for connecting Claude to ECM via the Model
 Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration)
@@ -44,8 +43,7 @@ machine. ECM never has to be reachable from the internet.
 
 > **Why not use Settings → Connectors → Add custom connector?**
 > Claude Desktop's built-in "Connectors" UI requires OAuth 2.1 per the MCP
-> spec. ECM does not support OAuth (that offering was retired: see
-> [ADR-009](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)). Do
+> spec. ECM does not support OAuth (that offering was retired). Do
 > not use the Connectors path; it will not work. The `mcp-remote` bridge below
 > is the supported path.
 
@@ -406,11 +404,10 @@ unchanged.
 
 ## Going deeper
 
-- **Architecture**: [`docs/architecture.md`](../../architecture.md), covering the MCP
+- **Architecture**: [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md), covering the MCP
   Server static-key baseline and `settings.json` credential schema.
 - **README**: [MCP Server (Claude Integration)](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration),
   covering quick-start setup and the "choose your method" overview table.
-- **Retired OAuth offering**: [ADR-009 (Superseded)](../../adr/ADR-009-mcp-oauth-authorization-server-split.md)
-  and `docs/security/threat_model_mcp_oauth.md` (Superseded): history of
-  the OAuth 2.1 "Custom Connector" offering that was retired (`bd-9axgc`) and
-  whose code was removed from the tree in v0.17.3 (`bd-jir0m`).
+- **Retired OAuth offering**: `docs/security/threat_model_mcp_oauth.md`
+  (Superseded): history of the OAuth 2.1 "Custom Connector" offering that was
+  retired, and whose code was removed from the tree in v0.17.3.

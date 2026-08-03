@@ -97,4 +97,4 @@ the debug bundle generator writes, without generating a full bundle.
 
 - [Scheduled Tasks](scheduled-tasks.md): where probing, struck-stream cleanup, and other maintenance tasks are actually scheduled and run.
 - [General Settings](general-settings.md): the App Debug Bundle, which includes the Channel Groups Diagnostic output.
-- [`docs/api.md`](../../api.md): API reference for the maintenance and probing endpoints.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): API reference for the maintenance and probing endpoints.

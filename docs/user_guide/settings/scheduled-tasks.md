@@ -70,4 +70,4 @@ manual-only task just means nobody has run it yet, not that it's failing.
 
 - [Maintenance](maintenance.md): the probing, strike, and stale-stream settings several of these tasks act on.
 - [Backup & Restore](../backup-restore/index.md): the YAML/DBAS backup and restore tasks in full detail.
-- [`docs/api.md`](../../api.md): API reference for reading or triggering scheduled tasks programmatically.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): API reference for reading or triggering scheduled tasks programmatically.

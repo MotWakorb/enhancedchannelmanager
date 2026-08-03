@@ -102,7 +102,7 @@ that remain, none of which were touched:
   channel level rather than in the EPG template.
 
 Full remaining syntax: [Dummy EPG Template
-Engine](../../template_engine.md).
+Engine](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/template_engine.md).
 
 ## Rolling back
 
@@ -111,6 +111,3 @@ the schema is fully reversible, but the table comes back **empty**. There is
 no down migration that restores the rows. To get the data back you need the
 JSON dump above, your pre-upgrade export, or a backup taken before the
 upgrade.
-
-Reference: bead `enhancedchannelmanager-70u0r.1`, PO decision D2 on epic
-`enhancedchannelmanager-70u0r`.

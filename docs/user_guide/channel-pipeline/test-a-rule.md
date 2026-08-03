@@ -78,5 +78,5 @@ interaction matter, not just one rule in isolation.
 - [Rules overview](rules-overview.md): the rule dialog and its Logic,
   Targeting, and Output & Run tabs.
 - [Bulk-edit multiple rules](bulk-rule-settings.md).
-- [`docs/api.md`](../../api.md): the `/channel-pipeline/run` endpoint's
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the `/channel-pipeline/run` endpoint's
   `dry_run` parameter, for testing via the API or MCP directly.
