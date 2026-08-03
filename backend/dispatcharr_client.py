@@ -1822,10 +1822,20 @@ class DispatcharrClient:
 
         Accepts either a bare list of rows or a DRF-paginated
         ``{"results": [...], "next": ...}`` envelope. When paginated, EVERY page
-        is followed via ``next`` until exhausted (the live recorded response is
-        a bare list today, but the docstring has long claimed paginated-envelope
-        support and a future/larger settings list could genuinely paginate) —
-        bounded by :data:`_CORE_SETTINGS_MAX_PAGES` so a misbehaving or
+        is fetched until exhausted (the live recorded response is a bare list
+        today, but the docstring has long claimed paginated-envelope support
+        and a future/larger settings list could genuinely paginate): a non-null
+        ``next`` is treated as a more-pages SIGNAL, not a URL to dereference —
+        this client's ``_request`` convention takes a path only, so each
+        subsequent page is re-requested against the SAME ``_CORE_SETTINGS_PATH``
+        with an incrementing ``page`` query param, never the literal ``next``
+        URL. This assumes Dispatcharr's page-numbered DRF pagination; it would
+        stop working (falsely conclude "no more pages" after page 1) if a
+        future Dispatcharr switched this endpoint to cursor/offset-based
+        pagination, where ``next`` doesn't correspond to a plain incrementing
+        page number — the :data:`_CORE_SETTINGS_MAX_PAGES` cap below is the
+        backstop for a runaway/mismatched pagination scheme, not a fix for that
+        case. Bounded by :data:`_CORE_SETTINGS_MAX_PAGES` so a misbehaving or
         infinitely-linking destination cannot hang a restore run; exceeding the
         cap raises loudly rather than silently returning a partial map. A row
         without a usable string key or an integer id is DROPPED rather than

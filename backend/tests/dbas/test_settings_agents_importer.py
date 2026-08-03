@@ -194,7 +194,12 @@ def test_auto_id_map_eq_delegates_to_dict_contents():
     assert a != b  # the mint advanced a's contents (new key), not just its counter
 
     c = _AutoIdMap({"ui_theme": 1000})
-    assert a == a  # reflexive
+    # A second, freshly-constructed instance with the SAME contents as `a`
+    # (including the minted key) is equal to it -- proves equality is a
+    # property of contents, not object identity (no self-comparison, which
+    # trips CodeQL's py/comparison-of-identical-expressions).
+    a_same_contents = _AutoIdMap({"ui_theme": 1000, "default_user_agent": a["default_user_agent"]})
+    assert a == a_same_contents
     assert b == c  # same contents, same untouched counters
     assert b == {"ui_theme": 1000}  # equal to a plain dict with the same entries
     assert b != {"ui_theme": 1000, "other": 2}
@@ -999,11 +1004,14 @@ async def test_core_settings_patch_failure_after_resolution_fails_that_key():
     fails (upstream 500, network blip, ...) fails ONLY that key
     UPSTREAM_API_ERROR — successful id resolution is not a guarantee the apply
     succeeds. Other keys in the same blob still apply; one bad PATCH does not
-    poison the whole run. This is the original enhancedchannelmanager-q6xjl
-    failure text ("Upstream rejected applying setting ...") with no dedicated
-    pin before this test.
+    poison the whole run. The failing key is deliberately FIRST in the archive
+    (not last) so an early-return regression -- one that stops processing the
+    blob after the first failure instead of continuing to later keys -- cannot
+    escape this test. This is the original enhancedchannelmanager-q6xjl failure
+    text ("Upstream rejected applying setting ...") with no dedicated pin
+    before this test.
     """
-    id_map = {"ui_theme": 21, "default_user_agent": 6}
+    id_map = {"default_user_agent": 6, "ui_theme": 21}
 
     def _patch_side_effect(setting_id, value):
         if setting_id == id_map["default_user_agent"]:
@@ -1016,7 +1024,7 @@ async def test_core_settings_patch_failure_after_resolution_fails_that_key():
     report = _report()
 
     await import_core_settings(
-        archive_core_settings={"ui_theme": "dark", "default_user_agent": "VLC"},
+        archive_core_settings={"default_user_agent": "VLC", "ui_theme": "dark"},
         client=client,
         selected=True,
         report=report,
