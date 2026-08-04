@@ -650,3 +650,164 @@ def test_config_round_trip():
     cfg = task.get_config()
     assert cfg["cloud_target_id"] == 5
     assert cfg["cloud_credential_version"] == 9
+
+
+# ---------------------------------------------------------------------------
+# Encryption transients are ONE-SHOT (bead …-cytzj)
+# ---------------------------------------------------------------------------
+#
+# passphrase / include_credentials / acknowledge_unrecoverable are manual-run
+# transients: get_config() deliberately omits them so nothing is persisted to
+# journal.db. But the task is a LIVE SINGLETON, so without an explicit reset a
+# single manual "Create Encrypted Backup" made every LATER run in the same
+# process — including an unattended SCHEDULED one — produce an encrypted,
+# credential-bearing artifact under that one-off passphrase. The task's own
+# stated invariant is "A SCHEDULED run therefore always produces the default
+# redact-by-default backup."
+
+
+def _build_arg_recorder(backups_dir, calls):
+    """A build_backup_artifact stand-in that records the encryption kwargs."""
+
+    async def _fake_build(dest_dir=None, **kwargs):
+        calls.append({
+            "passphrase": kwargs.get("passphrase"),
+            "include_credentials": kwargs.get("include_credentials"),
+            "acknowledge_unrecoverable": kwargs.get("acknowledge_unrecoverable"),
+        })
+        return _fake_artifact(dest_dir)
+
+    return _fake_build
+
+
+@pytest.mark.asyncio
+async def test_encrypted_manual_run_does_not_contaminate_the_next_run(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+    calls: list[dict] = []
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact",
+        side_effect=_build_arg_recorder(backups_dir, calls),
+    ):
+        task = DbasBackupTask()
+
+        # Run 1 — plain scheduled run: redact-by-default.
+        await task.execute()
+        # Manual encrypted, credential-carrying export.
+        task.update_config({
+            "passphrase": "correct horse battery staple",
+            "include_credentials": True,
+            "acknowledge_unrecoverable": True,
+        })
+        await task.execute()
+        # Run 3 — nothing else changed. MUST be back to the default.
+        await task.execute()
+
+    assert calls[0] == {
+        "passphrase": None,
+        "include_credentials": False,
+        "acknowledge_unrecoverable": False,
+    }
+    assert calls[1] == {
+        "passphrase": "correct horse battery staple",
+        "include_credentials": True,
+        "acknowledge_unrecoverable": True,
+    }
+    assert calls[2] == {
+        "passphrase": None,
+        "include_credentials": False,
+        "acknowledge_unrecoverable": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_transients_reset_even_when_the_run_raises(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+
+    async def _boom(dest_dir=None, **_kwargs):
+        raise OSError("no space left on device")
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_boom
+    ):
+        task = DbasBackupTask()
+        task.update_config({
+            "passphrase": "one-shot",
+            "include_credentials": True,
+            "acknowledge_unrecoverable": True,
+        })
+        result = await task.execute()
+
+    assert result.success is False
+    assert task.passphrase is None
+    assert task.include_credentials is False
+    assert task.acknowledge_unrecoverable is False
+
+
+@pytest.mark.asyncio
+async def test_transients_reset_when_the_freshness_gate_aborts_the_run(
+    _wire_db, _reset_metrics, tmp_path
+):
+    """The gate returns BEFORE the build, so its early return must reset too."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir):
+        task = DbasBackupTask()
+        # No CloudStorageTarget with this id exists -> gate aborts with a SKIP.
+        task.update_config({
+            "cloud_target_id": 4242,
+            "cloud_credential_version": 1,
+            "passphrase": "one-shot",
+            "include_credentials": True,
+            "acknowledge_unrecoverable": True,
+        })
+        result = await task.execute()
+
+    assert result.success is False
+    assert task.passphrase is None
+    assert task.include_credentials is False
+    assert task.acknowledge_unrecoverable is False
+
+
+@pytest.mark.asyncio
+async def test_get_config_never_carries_the_encryption_transients(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    backups_dir = tmp_path / "backups"
+    calls: list[dict] = []
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", backups_dir), patch.object(
+        dbas_backup, "build_backup_artifact",
+        side_effect=_build_arg_recorder(backups_dir, calls),
+    ):
+        task = DbasBackupTask()
+        task.update_config({
+            "passphrase": "never-persist-me",
+            "include_credentials": True,
+            "acknowledge_unrecoverable": True,
+        })
+        before = task.get_config()
+        await task.execute()
+        after = task.get_config()
+
+    for cfg in (before, after):
+        assert "passphrase" not in cfg
+        assert "include_credentials" not in cfg
+        assert "acknowledge_unrecoverable" not in cfg
+    assert "never-persist-me" not in repr(before) + repr(after)
