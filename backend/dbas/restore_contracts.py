@@ -12,7 +12,7 @@ The three contracts:
    (bead ``…-0i2vt.16``), the apply/rollback path (bead ``…-0i2vt.18``), and the
    restore-complete summary UX (bead ``…-0i2vt.20``). Carries per-entity-category
    created / updated / skipped(with reason) / failed(with reason) counts, an
-   overall tri-state :class:`RestoreOutcome`, and the logo-miss aggregate that the
+   overall :class:`RestoreOutcome`, and the logo-miss aggregate that the
    logo beads (``.15`` / ``.19``) consume. The dry-run flavour reuses the SAME
    shape (would-create / would-update / would-skip) so one UI component renders
    both — see :attr:`EntityCategoryReport.would_create` etc.
@@ -139,17 +139,22 @@ class FailureReason(str, Enum):
 
 
 class RestoreOutcome(str, Enum):
-    """Overall tri-state result of a restore.
+    """Overall result of a restore.
 
     The contract is: NEVER report ``SUCCESS`` on mixed state. If any entity
-    failed and the rollback ran, the outcome is one of the two rolled-back
-    states — the UX (bead ``…-0i2vt.20``) labels these "restore failed — state
-    rolled back", never "success".
+    failed, the outcome is one of the non-success states — the UX (bead
+    ``…-0i2vt.20``) never labels those "success".
 
     - ``SUCCESS`` — every selected entity was created/updated/skipped cleanly;
       nothing failed; no compensation was needed.
-    - ``PARTIAL_FAILED_ROLLED_BACK`` — at least one entity failed, the
-      compensating-delete rollback ran, and every created entity was
+    - ``COMPLETED_WITH_FAILURES`` — the restore ran to completion and NOTHING was
+      rolled back, but at least one entity in a NON-FATAL category failed (bead
+      ``…-y65si``: only ``dispatcharr_users`` is non-fatal — losing one archived
+      user must not cost the operator their channels, groups, profiles and
+      settings). The applied state is real and kept; the failed rows are counted
+      in their category and listed in ``failure_details``.
+    - ``PARTIAL_FAILED_ROLLED_BACK`` — at least one entity in a FATAL category
+      failed, the compensating-delete rollback ran, and every created entity was
       successfully removed (or confirmed already-gone — 404 counts as success).
       The instance is back to its pre-restore state.
     - ``FAILED_ROLLBACK_INCOMPLETE`` — a failure occurred AND the compensating
@@ -161,6 +166,7 @@ class RestoreOutcome(str, Enum):
     """
 
     SUCCESS = "success"
+    COMPLETED_WITH_FAILURES = "completed_with_failures"
     PARTIAL_FAILED_ROLLED_BACK = "partial_failed_rolled_back"
     FAILED_ROLLBACK_INCOMPLETE = "failed_rollback_incomplete"
 
@@ -311,7 +317,7 @@ class RestoreReport(BaseModel):
     (bead ``…-0i2vt.20``). The dry-run and the real restore return the SAME type
     so one UI component handles both — :attr:`is_dry_run` tells them apart.
 
-    Tri-state discipline: :attr:`outcome` is :class:`RestoreOutcome` and is
+    Outcome discipline: :attr:`outcome` is :class:`RestoreOutcome` and is
     NEVER ``SUCCESS`` when any category has failures. On a dry-run,
     :attr:`outcome` is left ``None`` — a plan has no realized outcome.
     """
@@ -323,7 +329,7 @@ class RestoreReport(BaseModel):
     )
     outcome: RestoreOutcome | None = Field(
         default=None,
-        description="Tri-state result of a realized restore. None on a dry-run "
+        description="Result of a realized restore. None on a dry-run "
         "(a plan has no realized outcome). Never SUCCESS on mixed state.",
     )
 

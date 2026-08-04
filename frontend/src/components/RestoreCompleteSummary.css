@@ -33,6 +33,11 @@
   border-left-color: var(--success);
 }
 
+.rcs-tone-warning {
+  background-color: var(--warning-bg);
+  border-left-color: var(--warning);
+}
+
 .rcs-tone-error {
   background-color: var(--error-bg);
   border-left-color: var(--error);
@@ -45,6 +50,10 @@
 
 .rcs-tone-success .rcs-outcome-icon {
   color: var(--success);
+}
+
+.rcs-tone-warning .rcs-outcome-icon {
+  color: var(--warning-text);
 }
 
 .rcs-tone-error .rcs-outcome-icon {

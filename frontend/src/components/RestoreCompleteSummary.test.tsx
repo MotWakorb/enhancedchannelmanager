@@ -202,6 +202,43 @@ describe('RestoreCompleteSummary — tri-state outcome banner', () => {
     expect(banner.textContent ?? '').not.toMatch(/restore complete/i);
   });
 
+  it('labels completed_with_failures as applied-but-degraded — not a rollback, not a success', () => {
+    // Bead …-y65si: a non-fatal (dispatcharr_users) failure leaves the restore
+    // APPLIED. Telling the operator it "failed and was rolled back" would send
+    // them looking for a rollback that never ran; telling them it succeeded
+    // would hide the failed rows.
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          outcome: 'completed_with_failures',
+          categories: [
+            category({
+              entity_type: 'user',
+              failed: 1,
+              failure_details: [
+                {
+                  reason: 'upstream_api_error',
+                  label: 'drilladmin',
+                  message: 'User creation failed: 500 - Server Error (500)',
+                },
+              ],
+            }),
+          ],
+        })}
+      />
+    );
+    const banner = screen.getByTestId('rcs-outcome-banner');
+    expect(banner).toHaveAttribute('data-outcome', 'completed_with_failures');
+    expect(banner).toHaveTextContent(/could not be restored/i);
+    expect(banner).toHaveTextContent(/nothing was rolled back/i);
+    expect(banner.textContent ?? '').not.toMatch(/restore failed/i);
+    // The failed row is still visible and counted.
+    const row = screen.getByTestId('rcs-category-user');
+    expect(within(row).getByTestId('rcs-count-failed')).toHaveTextContent('1');
+    // No residue/manual-cleanup note — nothing was left behind by a rollback.
+    expect(screen.queryByTestId('rcs-residue-note')).not.toBeInTheDocument();
+  });
+
   it('gives failed_rollback_incomplete the loudest treatment + residue note', () => {
     render(
       <RestoreCompleteSummary

@@ -1147,7 +1147,7 @@ These endpoints operate on the new-format `.zip` artifacts produced by the `dbas
 
 | Endpoint | Description |
 |-|-|
-| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (tri-state: `success`, `partial_failed_rolled_back`, `failed_rollback_incomplete`). |
+| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (`success`, `completed_with_failures`, `partial_failed_rolled_back`, `failed_rollback_incomplete`). |
 | `POST /api/backup/restore-dbas-saved` | Restore a saved DBAS artifact by filename (artifact must be in `/config/backups/`). Same dry-run/apply semantics as `/restore-dbas`. The saved file is not deleted. |
 | `GET /api/backup/saved` | List saved DBAS backup artifacts under `/config/backups/`. Returns filename, size, and creation time. |
 | `GET /api/backup/saved/{filename}` | Download a saved backup artifact (streamed). |
@@ -1188,7 +1188,8 @@ These endpoints operate on the new-format `.zip` artifacts produced by the `dbas
 
 - `is_dry_run: true` → `would_*` counts are populated; `created/updated/skipped/failed` are zero.
 - `is_dry_run: false` → `created/updated/skipped/failed` counts are populated.
-- `outcome` is `null` on a dry-run (a plan has no realized outcome). On an apply: `success`, `partial_failed_rolled_back`, or `failed_rollback_incomplete`.
+- `outcome` is `null` on a dry-run (a plan has no realized outcome). On an apply: `success`, `completed_with_failures`, `partial_failed_rolled_back`, or `failed_rollback_incomplete`.
+- `completed_with_failures` means the restore ran to completion and **nothing was rolled back**, but at least one row in a non-fatal category failed (only `dispatcharr_users` is non-fatal). The applied state stands; the failed rows are counted in their category's `failed` / `failure_details`.
 - `logo_misses` is an aggregate count of logos that could not be matched or applied.
 
 #### Error responses

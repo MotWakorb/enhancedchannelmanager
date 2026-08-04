@@ -591,15 +591,17 @@ def test_delete_dispatch_registers_epg_and_stream_profile():
 
 
 def test_compute_outcome_never_success_on_mixed_state():
-    # A report carrying a failure can NEVER yield SUCCESS, even if the caller
-    # somehow passes failure_occurred=False.
+    # A report carrying a failure can NEVER yield SUCCESS. With no abort and no
+    # rollback (``failure_occurred=False``) the honest state is
+    # COMPLETED_WITH_FAILURES (y65si) — the run finished, some rows did not, and
+    # nothing was undone. It is emphatically not SUCCESS.
     report = RestoreReport(is_dry_run=False)
     cat = report.category(EntityType.CHANNEL)
     cat.created = 3
     cat.failed = 1  # mixed state
     outcome = compute_outcome(report=report, failure_occurred=False, rollback=None)
     assert outcome != RestoreOutcome.SUCCESS
-    assert outcome == RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
+    assert outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
 
 
 def test_compute_outcome_clean_is_success():
@@ -695,6 +697,10 @@ def test_default_importer_steps_order_and_wiring():
     assert order.index(EntityType.CHANNEL_PROFILE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.STREAM_PROFILE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER_AGENT) < order.index(EntityType.CHANNEL)
+    # lvfwd — a stream profile's ``user_agent`` FK remaps through the USER_AGENT
+    # namespace, so user agents MUST be restored first. Reversing these two
+    # aborted the whole restore on a fresh Dispatcharr (400 "Invalid pk").
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.STREAM_PROFILE)
     assert order.index(EntityType.SETTINGS) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER) < order.index(EntityType.CHANNEL)
     # A DVR rule's ``channel`` FK remaps through the CHANNEL namespace, so DVR
@@ -719,6 +725,11 @@ def test_dry_run_and_apply_registries_cover_the_same_categories():
     assert apply_order == dry_order
     # And the dry-run registry is fully wired too (no seam rows).
     assert all(s.importer is not None for s in dry_run_importer_steps())
+    # lvfwd — the FK ordering holds on the PREVIEW registry too, or the operator
+    # previews a stream-profile count the apply cannot deliver.
+    assert dry_order.index(EntityType.USER_AGENT) < dry_order.index(
+        EntityType.STREAM_PROFILE
+    )
 
 
 def test_delete_dispatch_registers_all_ledgerable_types():
@@ -915,6 +926,154 @@ async def test_rollback_notes_other_category_dependency_unresolved_no_settings_r
     )
     assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
     assert not any("settings key" in note.lower() for note in out.notes)
+
+
+# ---------------------------------------------------------------------------
+# 9d. NON-FATAL categories (bead enhancedchannelmanager-y65si)
+#
+# A dispatcharr_users row that upstream refuses must NOT cost the operator their
+# channels, groups, profiles and settings. It is counted as a failure and the
+# restore runs to completion instead of rolling the whole instance back.
+# ---------------------------------------------------------------------------
+
+
+def _user_failure_step():
+    """A USER step that reports one per-row create failure (no raise)."""
+
+    async def _importer(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.USER)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.UPSTREAM_API_ERROR,
+                label="drilladmin",
+                message="User creation failed: 500 - Server Error (500)",
+            )
+        )
+        return None
+
+    return ImporterStep(EntityType.USER, _importer)
+
+
+@pytest.mark.asyncio
+async def test_user_category_failure_does_not_roll_back_the_restore(tmp_path):
+    """y65si: a user-create failure is COUNTED but never fatal.
+
+    The drill lost an entire restore — M3U account, EPG source, two channel
+    groups, a channel profile — because one archived Dispatcharr user could not
+    be created on a rebuilt instance. Everything created before AND after the
+    failing user category must survive, and no compensating DELETE may fire.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _user_failure_step(),
+        _creating_step(EntityType.CHANNEL, 501),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    # The failure is VISIBLE and COUNTED, not swallowed.
+    assert out.category(EntityType.USER).failed == 1
+    assert out.category(EntityType.USER).failure_details[0].label == "drilladmin"
+    # …and the restore ran to completion: the step AFTER users still applied.
+    assert out.category(EntityType.CHANNEL).created == 1
+    assert out.category(EntityType.M3U_ACCOUNT).created == 1
+    # NOTHING was compensated — the ledger entries are intact and untouched.
+    client.delete_m3u_account.assert_not_called()
+    client.delete_channel.assert_not_called()
+    assert [e.destination_id for e in ledger.entries] == [901, 501]
+    assert all(not e.compensated for e in ledger.entries)
+    # Honest outcome: completed, but NOT a clean success.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert out.outcome != RestoreOutcome.SUCCESS
+    assert not any("rollback" in note.lower() for note in out.notes)
+    # The operator is told which category degraded and that nothing was undone.
+    assert any("user" in note.lower() for note in out.notes)
+
+
+@pytest.mark.asyncio
+async def test_non_fatal_set_is_exactly_the_user_category(tmp_path):
+    """Guard: users are the ONLY non-fatal category — the rest still roll back."""
+    from dbas.restore_orchestrator import NON_FATAL_FAILURE_CATEGORIES
+
+    assert NON_FATAL_FAILURE_CATEGORIES == frozenset({EntityType.USER})
+
+
+@pytest.mark.asyncio
+async def test_non_user_category_failure_still_rolls_back(tmp_path):
+    """The same failure shape on a load-bearing category is STILL fatal."""
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _reporting_failure_step(EntityType.CHANNEL_GROUP, 761),
+        _creating_step(EntityType.CHANNEL, 501),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=_report(),
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    # The step AFTER the failing category never ran.
+    assert out.category(EntityType.CHANNEL).created == 0
+    client.delete_m3u_account.assert_awaited_once_with(901)
+
+
+@pytest.mark.asyncio
+async def test_user_step_that_RAISES_is_still_fatal(tmp_path):
+    """Non-fatal covers a REPORTED per-row failure, not an importer that blew up.
+
+    ``UsersCapabilityError`` (the fail-closed schema guard) surfaces as a raise;
+    that is a "we cannot reason about this destination" signal, not one bad row,
+    and must keep its rollback.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            _raising_step(EntityType.USER),
+        ],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    client.delete_m3u_account.assert_awaited_once_with(901)
+
+
+def test_compute_outcome_never_reports_success_on_a_non_fatal_failure():
+    """Direct contract check: a counted failure forbids SUCCESS even when nothing
+    was rolled back."""
+    report = _report()
+    report.category(EntityType.USER).failed = 1
+    assert (
+        compute_outcome(report=report, failure_occurred=False, rollback=None)
+        == RestoreOutcome.COMPLETED_WITH_FAILURES
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -14,12 +14,13 @@ leave a half-applied archive. This module is the safety layer that prevents that
    orchestrator persists that ledger DURABLY after each step so a mid-restore
    ECM crash leaves a recoverable record.
 3. **Compensating rollback** — if any step fails (raises, or reports a category
-   failure), the orchestrator issues compensating DELETEs in
+   failure in a FATAL category — see :data:`NON_FATAL_FAILURE_CATEGORIES`), the
+   orchestrator issues compensating DELETEs in
    :meth:`RollbackLedger.compensation_order` (reverse creation = reverse
    dependency order). A delete that 404s counts as SUCCESS (already gone); a
    non-404 delete error means the rollback is INCOMPLETE.
-4. **Tri-state outcome** (:class:`~dbas.restore_contracts.RestoreOutcome`) is
-   computed from what actually happened and is NEVER ``SUCCESS`` on mixed state.
+4. **Outcome** (:class:`~dbas.restore_contracts.RestoreOutcome`) is computed
+   from what actually happened and is NEVER ``SUCCESS`` on mixed state.
 
 ----------------------------------------------------------------------------
 HARD ORDERING (ADR-012 D-table) + the DEFERRED phase
@@ -28,8 +29,16 @@ HARD ORDERING (ADR-012 D-table) + the DEFERRED phase
 Importers run in strict dependency order::
 
     M3U accounts → EPG sources (+ bounded EPG-data download wait)
-      → channel groups/profiles/stream profiles → user agents / settings
-      → users → channels → DVR rules → logos
+      → channel groups / channel profiles → user agents → stream profiles
+      → settings → users → channels → DVR rules → logos
+
+USER AGENTS run BEFORE STREAM PROFILES (bead ``enhancedchannelmanager-lvfwd``).
+A Dispatcharr stream profile carries a ``user_agent`` FK, so the USER_AGENT
+IdRemapTable namespace must be populated before the stream-profile importer
+rewrites it. The previous order (stream profiles first) POSTed the archived
+SOURCE user-agent id at a destination that had not created the agent yet —
+``400 {"user_agent":["Invalid pk \\"4\\" - object does not exist."]}`` — which
+aborted the whole restore and rolled the instance back.
 
 then the DEFERRED phase applies LAST: the M3U importer returns auto-sync
 settings that MUST NOT fire during the run (they race the logo import on the
@@ -63,7 +72,8 @@ category that reports ANY ``failed`` count greater than zero (see ``if
 cat.failed > 0`` a few lines below ``run_restore``) — including a category
 whose only failures are benign-sounding ``FailureReason.DEPENDENCY_UNRESOLVED``
 entries (e.g. a settings key present in the archive but absent on the
-destination; see ``dbas.importers.settings_agents``). This is a DELIBERATE,
+destination; see ``dbas.importers.settings_agents``). The ONE exception is
+:data:`NON_FATAL_FAILURE_CATEGORIES` (see below). This is a DELIBERATE,
 PO-confirmed policy, not an accident of the current importer wiring:
 
 * There is NO per-key skip-with-warning path. A restore that could partially
@@ -77,8 +87,8 @@ PO-confirmed policy, not an accident of the current importer wiring:
   refusing.
 * Rationale: Dispatcharr has no transactions (ADR-012), so "abort on first
   failure, always" is the one rule simple enough to reason about under a
-  crash mid-rollback, and it matches every OTHER category's failure handling
-  (channel groups, channels, users, …) — settings does not get a bespoke,
+  crash mid-rollback, and it matches every OTHER load-bearing category's failure
+  handling (channel groups, channels, …) — settings does not get a bespoke,
   softer rule just because its failure mode reads as benign.
 * Operator-facing consequence: when the aborting category is SETTINGS and its
   failure reason is ``DEPENDENCY_UNRESOLVED``, :func:`run_restore` appends an
@@ -88,6 +98,30 @@ PO-confirmed policy, not an accident of the current importer wiring:
   remediation is to edit the category selection (exclude Settings) or restore
   against a destination whose Dispatcharr version has that key — never "try
   again."
+
+----------------------------------------------------------------------------
+THE ONE NON-FATAL CATEGORY (bead enhancedchannelmanager-y65si)
+----------------------------------------------------------------------------
+
+``dispatcharr_users`` is the sole member of :data:`NON_FATAL_FAILURE_CATEGORIES`.
+A user row upstream refuses is COUNTED as a failure in its category (visible in
+the report, listed in ``failure_details``, and it forbids a ``SUCCESS`` outcome)
+but does NOT abort the run or trigger a compensating rollback. The restore
+continues and the outcome is
+:attr:`~dbas.restore_contracts.RestoreOutcome.COMPLETED_WITH_FAILURES`.
+
+Why users and ONLY users: they are the least load-bearing category in an artifact
+— nothing else in the restore holds an FK into them, so a missing user degrades
+nothing downstream — and the drill (bead ``…-a429n``) showed the alternative is
+catastrophic. One archived user Dispatcharr would not create cost the operator
+their M3U account, EPG source, channel groups and channel profile, PLUS an ECM
+settings mutation the rollback cannot compensate at all. Every other category IS
+load-bearing, so the abort-on-any-failed-key rule above still governs it; do not
+widen this set without the same reasoning.
+
+Scope: this covers a REPORTED per-row failure. An importer that RAISES stays
+fatal even for users — ``UsersCapabilityError`` (the fail-closed User-schema
+guard) means "this destination cannot be reasoned about", not "one bad row".
 
 ----------------------------------------------------------------------------
 404-AS-SUCCESS + the credential-hygiene rule (the bead .8 lesson)
@@ -136,6 +170,13 @@ logger = logging.getLogger(__name__)
 # Durable ledger lives under the same mounted volume as journal.db / settings.json
 # (CONFIG_DIR), so a mid-restore ECM crash leaves a recoverable record.
 _LEDGER_DIR = CONFIG_DIR / "dbas"
+
+# Categories whose REPORTED per-row failures are counted but never abort the
+# restore or trigger a compensating rollback (bead …-y65si; see the module
+# docstring's "THE ONE NON-FATAL CATEGORY" section for why this is exactly one
+# entry and what it would take to add another). A raising importer is still fatal
+# regardless of category.
+NON_FATAL_FAILURE_CATEGORIES: frozenset[EntityType] = frozenset({EntityType.USER})
 
 
 # ---------------------------------------------------------------------------
@@ -428,17 +469,21 @@ def compute_outcome(
     failure_occurred: bool,
     rollback: RollbackResult | None,
 ) -> RestoreOutcome:
-    """Derive the tri-state outcome — NEVER ``SUCCESS`` on mixed state.
+    """Derive the outcome — NEVER ``SUCCESS`` on mixed state.
 
     The single guard that the whole bead exists to enforce:
 
     * ``SUCCESS`` — only when NO failure occurred AND no category reported a
       failure AND no rollback was needed. Any whiff of failure forbids SUCCESS.
-    * ``PARTIAL_FAILED_ROLLED_BACK`` — a failure occurred, a rollback ran, and it
-      was COMPLETE (every created entity deleted or confirmed 404-gone).
-    * ``FAILED_ROLLBACK_INCOMPLETE`` — a failure occurred and the rollback could
-      not fully undo (non-404 delete error, or a type with no compensator). The
-      worst state; reported loudly.
+    * ``COMPLETED_WITH_FAILURES`` — the apply never decided to abort (every
+      failure was in a :data:`NON_FATAL_FAILURE_CATEGORIES` category), so nothing
+      was rolled back and the applied state stands — but rows DID fail, so this
+      is not a success (bead ``…-y65si``).
+    * ``PARTIAL_FAILED_ROLLED_BACK`` — a fatal failure occurred, a rollback ran,
+      and it was COMPLETE (every created entity deleted or confirmed 404-gone).
+    * ``FAILED_ROLLBACK_INCOMPLETE`` — a fatal failure occurred and the rollback
+      could not fully undo (non-404 delete error, or a type with no
+      compensator). The worst state; reported loudly.
 
     Args:
         report: The shared restore report (its per-category failure counts are an
@@ -453,8 +498,15 @@ def compute_outcome(
     if not mixed:
         return RestoreOutcome.SUCCESS
 
-    # A failure happened — SUCCESS is now impossible. Distinguish the two
-    # rolled-back states by whether the rollback fully undid the created entities.
+    # A failure happened — SUCCESS is now impossible.
+    # No abort was decided => no rollback ran and the applied state is kept as-is.
+    # Describing that as "rolled back" (or as a rollback that failed) would be a
+    # lie about what is on the destination right now.
+    if not failure_occurred:
+        return RestoreOutcome.COMPLETED_WITH_FAILURES
+
+    # Distinguish the two rolled-back states by whether the rollback fully undid
+    # the created entities.
     if rollback is not None and rollback.complete:
         return RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
     return RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
@@ -619,6 +671,23 @@ async def run_restore(
         # — mixed state must never be reported as success.
         cat = report.category(step.entity_type)
         if cat.failed > 0:
+            if step.entity_type in NON_FATAL_FAILURE_CATEGORIES:
+                # y65si — counted, surfaced, and NOT fatal. Nothing downstream
+                # depends on this category, so the operator keeps everything the
+                # run has applied and will apply. The failure still forbids a
+                # SUCCESS outcome (compute_outcome reads report.categories).
+                logger.warning(
+                    "[DBAS-RESTORE] Importer step %s reported %d failure(s); "
+                    "category is NON-FATAL — continuing without rollback.",
+                    step.entity_type.value,
+                    cat.failed,
+                )
+                report.notes.append(
+                    f"{cat.failed} {step.entity_type.value} row(s) could not be "
+                    "restored; this category is non-fatal, so the rest of the "
+                    "restore was applied and nothing was rolled back."
+                )
+                continue
             failure_occurred = True
             failed_step = step.entity_type
             logger.error(
@@ -813,8 +882,12 @@ def default_importer_steps() -> list[ImporterStep]:
         before channels are created.
       * channel groups / channel profiles / stream profiles before channels —
         they populate the IdRemapTable namespaces the channels importer resolves.
-      * user agents + settings (core settings / comskip) before channels
-        (config in place before the big entity category).
+      * user agents BEFORE stream profiles (bead ``…-lvfwd``): a stream profile's
+        ``user_agent`` FK remaps through the USER_AGENT namespace, so the agents
+        must already be restored — the reverse order POSTed a raw source id and
+        aborted the whole restore on a fresh destination.
+      * settings (core settings / comskip) before channels (config in place
+        before the big entity category).
       * users before channels (the l1p4p slot; unchanged).
       * channels, then DVR rules (a DVR rule's ``channel`` FK remaps through the
         just-populated ``EntityType.CHANNEL`` namespace), then logos LAST
@@ -829,8 +902,10 @@ def default_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        # USER AGENTS before STREAM PROFILES (lvfwd): a stream profile's
+        # ``user_agent`` FK resolves through the USER_AGENT remap namespace.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
@@ -1091,8 +1166,11 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        # Same FK ordering as the apply registry (lvfwd) — a preview that ordered
+        # these differently would promise a stream-profile count the apply cannot
+        # deliver.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),

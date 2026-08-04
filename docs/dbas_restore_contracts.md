@@ -79,19 +79,29 @@ Key fields:
   logo-attach path. Both fields are additive optional: no `CONTRACT_VERSION`
   bump.
 
-### Tri-state outcome: never "success" on mixed state
+### Outcome: never "success" on mixed state
 
-`RestoreOutcome` has exactly three realized states:
+`RestoreOutcome` has exactly four realized states:
 
 | Value | Meaning |
 |---|---|
 | `success` | every selected entity created/updated/skipped cleanly; nothing failed; no compensation needed |
-| `partial_failed_rolled_back` | at least one failure; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
-| `failed_rollback_incomplete` | a failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
+| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but at least one entity in a non-fatal category failed. The applied state is real and kept; the failed rows are counted in their category |
+| `partial_failed_rolled_back` | at least one failure in a fatal category; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
+| `failed_rollback_incomplete` | a fatal failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
 
-The contract: the UX labels the two non-success states "restore failed, state
-rolled back" / "rollback incomplete", **never** "success". This is the whole
-point of the tri-state: mixed state must never read as success.
+The contract: the UX labels the three non-success states explicitly — "some
+items could not be restored" / "restore failed, state rolled back" / "rollback
+incomplete" — and **never** "success". Mixed state must never read as success.
+
+**Non-fatal categories.** `dbas.restore_orchestrator.NON_FATAL_FAILURE_CATEGORIES`
+is the single source of truth, and its sole member is `user`
+(`dispatcharr_users`). Nothing in a restore holds an FK into users, so a user row
+upstream refuses degrades nothing downstream — whereas aborting on it costs the
+operator every other category *plus* an ECM settings mutation the rollback cannot
+compensate (bead `enhancedchannelmanager-y65si`). Every other category is
+load-bearing and still aborts the whole restore on its first failure. An importer
+that *raises* is fatal regardless of category.
 
 `SkipReason` vs `FailureReason`: a **skip** is an intentional no-op that leaves
 state consistent; a **failure** is an apply attempt that errored and may have
@@ -158,6 +168,8 @@ re-implemented per importer.
   a failed compensation. A resumed rollback skips entries already marked
   `compensated`.
 - **Outcome mapping into Contract 1:**
+  - no rollback was triggered because every failure was in a non-fatal category
+    → `completed_with_failures` (the ledger stays as-is; nothing is compensated)
   - every entry compensated (deleted or 404) → `partial_failed_rolled_back`
   - any entry's DELETE failed with a non-404 error → `failed_rollback_incomplete`;
     residual uncompensated entries stay in the ledger and are surfaced in the

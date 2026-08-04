@@ -96,15 +96,18 @@ const COUNT_LABELS: Record<RestoreSummaryMode, { created: string; updated: strin
 };
 
 interface OutcomePresentation {
-  tone: 'success' | 'error';
+  tone: 'success' | 'warning' | 'error';
   icon: string;
   title: string;
   detail?: string;
 }
 
 /**
- * Map the tri-state outcome to its banner treatment. The rolled-back states are
- * presented as FAILURES (error tone, explicit "failed" copy) — never as success.
+ * Map the outcome to its banner treatment. The rolled-back states are presented
+ * as FAILURES (error tone, explicit "failed" copy) — never as success, and
+ * `completed_with_failures` is presented as a WARNING: the applied state is real
+ * and kept, so calling it a failure would send the operator hunting for a
+ * rollback that never happened.
  */
 const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, OutcomePresentation> = {
   success: {
@@ -112,6 +115,13 @@ const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, Outcom
     icon: 'check_circle',
     title: 'Restore complete',
     detail: 'Your configuration was restored.',
+  },
+  completed_with_failures: {
+    tone: 'warning',
+    icon: 'warning',
+    title: 'Restore complete — some items could not be restored',
+    detail:
+      'Everything else was restored and nothing was rolled back. Expand the categories below to see which items failed and why.',
   },
   partial_failed_rolled_back: {
     tone: 'error',

@@ -4207,12 +4207,15 @@ export type RestoreFailureReason =
   | 'internal_error';
 
 /**
- * Overall tri-state result of a realized restore. `null` on a dry-run (a plan
- * has no realized outcome). NEVER `success` on mixed state — the two rolled-back
- * states are explicit failures, surfaced as such by the summary UX.
+ * Overall result of a realized restore. `null` on a dry-run (a plan has no
+ * realized outcome). NEVER `success` on mixed state — the two rolled-back states
+ * are explicit failures, and `completed_with_failures` is a restore that ran to
+ * completion with some non-fatal rows failing and NOTHING rolled back. The
+ * summary UX surfaces each of them as such.
  */
 export type RestoreOutcome =
   | 'success'
+  | 'completed_with_failures'
   | 'partial_failed_rolled_back'
   | 'failed_rollback_incomplete';
 
