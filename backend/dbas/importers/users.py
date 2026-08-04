@@ -12,13 +12,24 @@ own users table (bcrypt, ``models.py``); do not conflate them.
 MANDATORY security policy (spike ``tsfv0``, live-confirmed vs Dispatcharr
 0.26.0 — DO NOT deviate):
 
-1. **No password/hash ever crosses the boundary.** Dispatcharr's User serializer
-   exposes ``password`` as a WRITE-ONLY plaintext field; there is no
-   ``password_hash`` field and a GET never returns a hash. So each restored user
-   is created OMITTING ``password`` entirely -> Django stores an unusable
-   password, and the user is flagged **force-reset** (the operator sets a new
-   password out-of-band). We NEVER fabricate, derive, or rehash a password, and
-   we never even read an incoming hash field.
+1. **No ARCHIVE password/hash ever crosses the boundary.** Dispatcharr's User
+   serializer exposes ``password`` as a WRITE-ONLY plaintext field; there is no
+   ``password_hash`` field and a GET never returns a hash. The source instance's
+   password is unrecoverable and is never carried, derived, or rehashed — the
+   archive's ``password`` / ``password_hash`` keys are dropped and never read.
+
+   Each restored user is instead created with a **freshly generated random
+   password** (:func:`_generate_password`, :mod:`secrets`) that ECM discards
+   immediately: it is never logged, never written to the report, never stored.
+   The account is therefore still unusable until the operator sets a password
+   out-of-band, and is flagged **force-reset** in the report notes.
+
+   Why send one at all: Dispatcharr 0.28.2's user-create serializer reads
+   ``validated_data['password']`` unconditionally, so a create without the key
+   raises an uncaught ``KeyError`` and returns HTTP 500. That 500 aborted the
+   entire restore on every real disaster-recovery rebuild — the archived
+   superuser's name never matches the rebuilt instance's, so the category tries
+   to CREATE rather than skip (bead ``enhancedchannelmanager-y65si``).
 
 2. **Privilege flags are the real escalation surface** (``is_superuser``,
    ``is_staff``, ``user_level`` — all writable). We restore them
@@ -64,6 +75,7 @@ by deleting them. This importer imports the contracts module READ-ONLY.
 from __future__ import annotations
 
 import logging
+import secrets
 from collections.abc import Callable
 
 from dbas.restore_contracts import (
@@ -117,6 +129,24 @@ _CONSERVATIVE_PRIVILEGE_DEFAULTS = {
     "is_staff": False,
     "user_level": 0,
 }
+
+
+# Bytes of entropy per generated password. 32 bytes -> a 43-character
+# URL-safe token; far beyond anything Django's password validators reject and
+# beyond brute force. The value is generated, sent, and forgotten.
+_GENERATED_PASSWORD_BYTES = 32
+
+
+def _generate_password() -> str:
+    """Return a fresh, cryptographically random password for ONE restored user.
+
+    Policy item 1 (bead ``…-y65si``): Dispatcharr's serializer requires a
+    ``password`` key, so ECM supplies one that it does not keep. The value is
+    never derived from archive material, never reused across users, never
+    logged, and never recorded in the report or the ledger — the operator resets
+    the account out-of-band.
+    """
+    return secrets.token_urlsafe(_GENERATED_PASSWORD_BYTES)
 
 
 class UsersCapabilityError(RuntimeError):
@@ -323,10 +353,13 @@ async def import_users(
             continue
 
         # Policy 1 + 2 — payload is an allowlist (schema write-fields ∩ archive),
-        # omits password/hash, forces non-privileged.
+        # omits the archive's password/hash, forces non-privileged. The password
+        # travels as a separate argument so it can never be confused with, or
+        # sourced from, archive material.
         payload = _build_create_payload(archive_user, write_fields)
+        generated_password = _generate_password()
         try:
-            created = await client.create_user(payload)
+            created = await client.create_user(payload, password=generated_password)
         except Exception as exc:
             reason = _failure_reason_for(exc)
             cat.failed += 1
@@ -334,7 +367,7 @@ async def import_users(
                 FailureDetail(
                     reason=reason,
                     label=label,
-                    message=_sanitize_failure(exc),
+                    message=_sanitize_failure(exc, generated_password),
                     source_export_id=archive_user.get("id"),
                 )
             )
@@ -351,10 +384,14 @@ async def import_users(
             # from completed steps. No-op on dry-run / when unwired.
             if persist_ledger is not None:
                 persist_ledger()
-        # Policy 1 — flag force-reset (usernames only; no secret).
+        # Policy 1 — flag force-reset (usernames only; no secret). The generated
+        # password is discarded here: ECM never recorded it, so nobody — operator
+        # or attacker — can log into the restored account until it is reset.
         report.notes.append(
-            f"{CATEGORY_LABEL}: '{label}' restored with no usable password — "
-            "force-reset required (operator must set a new password out-of-band)."
+            f"{CATEGORY_LABEL}: '{label}' restored with a randomly generated "
+            "password that ECM does not record — force-reset required (the "
+            "operator must set a new password out-of-band before this account "
+            "can be used)."
         )
         logger.info("[DBAS-USERS] Restored user '%s' (id=%s); flagged force-reset.", label, dest_id)
 
@@ -393,19 +430,27 @@ def _failure_reason_for(exc: Exception) -> FailureReason:
     return FailureReason.UPSTREAM_API_ERROR
 
 
-def _sanitize_failure(exc: Exception) -> str:
+def _sanitize_failure(exc: Exception, generated_password: str | None = None) -> str:
     """Produce a sanitized, operator-facing failure message with no secrets.
 
-    create_user never sends a password, so an upstream error body cannot echo a
-    password back. But a Dispatcharr error CAN echo other request-body material
-    (e.g. an Authorization header, a token, an api_key field) verbatim. Route the
-    message through the shared credential masker so any such echoed secret is
-    redacted before it reaches the operator-facing :class:`FailureDetail`
-    (bead l1p4p, follow-up 3 — defense in depth; not exploitable today).
+    A Dispatcharr error CAN echo request-body material (e.g. an Authorization
+    header, a token, an api_key field) verbatim. Route the message through the
+    shared credential masker so any such echoed secret is redacted before it
+    reaches the operator-facing :class:`FailureDetail` (bead l1p4p, follow-up 3 —
+    defense in depth).
+
+    ``generated_password`` is the value this create sent (bead ``…-y65si``). A
+    DRF validation error normally echoes field NAMES, not values, but a
+    high-entropy random token is not something the generic masker can pattern-
+    match — so it is removed by exact substring before anything else runs. It
+    must never reach the report: nobody is meant to be able to recover it.
     """
     # Lazy import: keep the dbas importer free of a cloud_storage dependency at
     # module-import time (same pattern as tasks.dbas_backup). mask_secrets is the
     # canonical credential masker (precompiled patterns; never raises).
     from cloud_storage.upload_security import mask_secrets
 
-    return mask_secrets(_sanitize(str(exc))) or "Upstream rejected the user creation request."
+    text = _sanitize(str(exc))
+    if generated_password:
+        text = text.replace(generated_password, "***")
+    return mask_secrets(text) or "Upstream rejected the user creation request."

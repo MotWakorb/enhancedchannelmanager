@@ -42,17 +42,28 @@ delete-all-then-recreate strategy, which would destroy the very relationships th
 remap exists to preserve (kxuj2 contract; ADR-008 grooming note).
 
 ----------------------------------------------------------------------------
-FK REMAP (generic; N/A for the three real categories)
+FK REMAP
 ----------------------------------------------------------------------------
 
-The generic per-category engine supports rewriting outbound FK references through
-the IdRemapTable (unresolvable -> ``DEPENDENCY_UNRESOLVED``, never sent upstream
-with a stale archive id). The three REAL Dispatcharr categories are leaf
-dependencies with NO outbound remappable FK — a group/profile does not reference
-another remapped entity; channels reference them. So
-:attr:`CategoryConfig.remappable_fk_fields` is empty for all three. The mechanism
-is kept and tested (via a synthetic config) so a future FK-bearing category can
-be added by config alone.
+The generic per-category engine rewrites outbound FK references through the
+IdRemapTable (unresolvable -> ``DEPENDENCY_UNRESOLVED``, never sent upstream with
+a stale archive id).
+
+Channel groups and channel profiles are genuine leaf dependencies with NO
+outbound remappable FK — they do not reference another remapped entity; channels
+reference them. Their :attr:`CategoryConfig.remappable_fk_fields` is empty.
+
+STREAM PROFILES ARE NOT A LEAF (bead ``enhancedchannelmanager-lvfwd``). A
+Dispatcharr stream profile carries a ``user_agent`` FK. This module previously
+asserted the opposite and shipped an EMPTY ``remappable_fk_fields`` for the
+category, so the archived SOURCE instance's user-agent id was POSTed verbatim at
+the destination. Against a fresh Dispatcharr that 400s ("Invalid pk ... object
+does not exist") and aborts the whole restore; against a destination that happens
+to have an unrelated user agent at that id the create SUCCEEDS and silently binds
+the WRONG agent. ``stream_profiles`` therefore declares
+``{"user_agent": EntityType.USER_AGENT}`` and the orchestrator restores user
+agents BEFORE stream profiles so the namespace is populated when this runs
+(``dbas.restore_orchestrator.default_importer_steps``).
 
 ----------------------------------------------------------------------------
 CREATE-METHOD SHAPES (verify-then-size: all three client methods pre-existed)
@@ -112,10 +123,11 @@ class CategoryConfig:
 
     One config per restorable category. ``remappable_fk_fields`` maps an archive
     payload field name to the :class:`EntityType` whose IdRemapTable namespace
-    rewrites it; it is EMPTY for the three real leaf categories (they carry no
-    outbound FK). ``payload_style`` selects the client create calling convention:
-    ``"name"`` calls ``create(name_string)`` (channel groups), ``"dict"`` calls
-    ``create(payload_dict)`` (channel/stream profiles).
+    rewrites it; it is EMPTY for the two genuine leaf categories (channel groups
+    and channel profiles carry no outbound FK) and carries ``user_agent`` for
+    stream profiles (bead ``…-lvfwd``). ``payload_style`` selects the client
+    create calling convention: ``"name"`` calls ``create(name_string)`` (channel
+    groups), ``"dict"`` calls ``create(payload_dict)`` (channel/stream profiles).
     """
 
     entity_type: EntityType
@@ -126,8 +138,8 @@ class CategoryConfig:
     remappable_fk_fields: dict = field(default_factory=dict)
 
 
-# Canonical config table for the three real leaf categories. Keyed by the archive
-# section name used in the export (and by the bulk entry's ``selected`` map).
+# Canonical config table for the three categories. Keyed by the archive section
+# name used in the export (and by the bulk entry's ``selected`` map).
 _CATEGORY_CONFIGS: dict[str, CategoryConfig] = {
     "channel_groups": CategoryConfig(
         entity_type=EntityType.CHANNEL_GROUP,
@@ -149,6 +161,9 @@ _CATEGORY_CONFIGS: dict[str, CategoryConfig] = {
         creator="create_stream_profile",
         log_prefix="DBAS-STRPROFILE",
         payload_style="dict",
+        # lvfwd — NOT a leaf. A stream profile points at a user agent, whose id
+        # the restore reassigns; send the DESTINATION id or nothing at all.
+        remappable_fk_fields={"user_agent": EntityType.USER_AGENT},
     ),
 }
 
@@ -474,11 +489,12 @@ async def import_stream_profiles(
     )
 
 
-# Order the bulk entry restores the categories within this bead's scope. NOTE:
-# all three are leaf dependencies (no FK between them), so intra-bundle order is
-# not load-bearing — but the BUNDLE as a whole runs AFTER M3U/EPG and BEFORE
-# Channels. That cross-bead ordering is the orchestrator's job (bead …-0i2vt.18),
-# not this module's.
+# Order the bulk entry restores the categories in. There is no FK BETWEEN the
+# three, so intra-bundle order is not load-bearing — but the BUNDLE as a whole
+# runs AFTER M3U/EPG and BEFORE Channels, and stream profiles additionally
+# require USER AGENTS to have been restored already (their ``user_agent`` FK
+# resolves through that namespace — bead …-lvfwd). Both cross-category orderings
+# are the orchestrator's job (bead …-0i2vt.18), not this module's.
 _BULK_ORDER = ("channel_groups", "channel_profiles", "stream_profiles")
 
 

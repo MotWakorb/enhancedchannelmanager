@@ -403,6 +403,13 @@ async def import_user_agents(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so a stream profile whose ``user_agent`` FK points
+            # at this would-be-created agent resolves on the PREVIEW exactly as it
+            # will on apply (bead …-lvfwd; same anti-drift device as
+            # ``importers/groups_profiles``). The source id doubles as a stable
+            # provisional destination id — a dry-run sends nothing upstream.
+            if source_id is not None:
+                remap.add(EntityType.USER_AGENT, int(source_id), int(source_id))
             continue
 
         payload = _build_create_payload(rec)

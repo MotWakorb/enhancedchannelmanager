@@ -128,12 +128,29 @@ describe('RestoreCompleteSummary — per-entity counts', () => {
     // Bead lc6zu: the backend report carries an EntityType.SETTINGS category
     // (updated/skipped apply counts for core_settings + comskip) — it must
     // render with a human label, not an undefined lookup.
+    // Bead dfkbn renamed the label to "Dispatcharr settings" because a SECOND
+    // settings category now exists (`ecm_settings`), and a report showing two
+    // rows both labelled "Settings" is exactly the ambiguity that let the drill
+    // read `settings updated=7` as proof ECM's own settings had been restored.
     const report = appliedReport({
       categories: [category({ entity_type: 'settings', updated: 2, skipped: 1 })],
     });
     render(<RestoreCompleteSummary report={report} />);
     const row = screen.getByTestId('rcs-category-settings');
-    expect(within(row).getByText('Settings')).toBeInTheDocument();
+    expect(within(row).getByText('Dispatcharr settings')).toBeInTheDocument();
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
+  });
+
+  it('labels ECM settings distinctly from Dispatcharr settings', () => {
+    // Bead dfkbn item 4: ECM's own settings.json is a DIFFERENT namespace and
+    // must be readable as such — the drill's `settings updated=7` was
+    // Dispatcharr's, while user_timezone / stats_poll_interval silently reverted.
+    const report = appliedReport({
+      categories: [category({ entity_type: 'ecm_settings', updated: 2 })],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-ecm_settings');
+    expect(within(row).getByText('ECM settings')).toBeInTheDocument();
     expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
   });
 });
@@ -202,6 +219,43 @@ describe('RestoreCompleteSummary — tri-state outcome banner', () => {
     expect(banner.textContent ?? '').not.toMatch(/restore complete/i);
   });
 
+  it('labels completed_with_failures as applied-but-degraded — not a rollback, not a success', () => {
+    // Bead …-y65si: a non-fatal (dispatcharr_users) failure leaves the restore
+    // APPLIED. Telling the operator it "failed and was rolled back" would send
+    // them looking for a rollback that never ran; telling them it succeeded
+    // would hide the failed rows.
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          outcome: 'completed_with_failures',
+          categories: [
+            category({
+              entity_type: 'user',
+              failed: 1,
+              failure_details: [
+                {
+                  reason: 'upstream_api_error',
+                  label: 'drilladmin',
+                  message: 'User creation failed: 500 - Server Error (500)',
+                },
+              ],
+            }),
+          ],
+        })}
+      />
+    );
+    const banner = screen.getByTestId('rcs-outcome-banner');
+    expect(banner).toHaveAttribute('data-outcome', 'completed_with_failures');
+    expect(banner).toHaveTextContent(/could not be restored/i);
+    expect(banner).toHaveTextContent(/nothing was rolled back/i);
+    expect(banner.textContent ?? '').not.toMatch(/restore failed/i);
+    // The failed row is still visible and counted.
+    const row = screen.getByTestId('rcs-category-user');
+    expect(within(row).getByTestId('rcs-count-failed')).toHaveTextContent('1');
+    // No residue/manual-cleanup note — nothing was left behind by a rollback.
+    expect(screen.queryByTestId('rcs-residue-note')).not.toBeInTheDocument();
+  });
+
   it('gives failed_rollback_incomplete the loudest treatment + residue note', () => {
     render(
       <RestoreCompleteSummary
@@ -264,5 +318,95 @@ describe('RestoreCompleteSummary — logo-miss banner seam (bead .19)', () => {
       />
     );
     expect(screen.getByTestId('injected-banner')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Credential re-entry action item (bead 6pilh).
+ *
+ * A restore from a STANDARD (redact-by-default) artifact creates the M3U/EPG
+ * accounts but leaves their credentials UNSET — the archive carried only the
+ * `***REDACTED***` placeholder and the importers refuse to write it through.
+ * The counts are perfect and the outcome is `success`, so this is the ONLY
+ * place the operator learns the instance will not fetch a single stream.
+ */
+describe('RestoreCompleteSummary — credential re-entry', () => {
+  it('does NOT render when no credential needs re-entering', () => {
+    render(<RestoreCompleteSummary report={appliedReport({ credentials_needing_reentry: 0 })} />);
+
+    expect(screen.queryByTestId('credential-reentry-notice')).toBeNull();
+  });
+
+  it('does NOT render when the field is absent (report from an older build)', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+
+    expect(screen.queryByTestId('credential-reentry-notice')).toBeNull();
+  });
+
+  it('names the count and every affected entity when credentials were redacted', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 2,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+            { entity_type: 'epg_source', label: 'SD Sports', fields: ['password'], destination_id: 7 },
+          ],
+        })}
+      />,
+    );
+
+    const notice = screen.getByTestId('credential-reentry-notice');
+    expect(notice.textContent).toContain('2 accounts');
+    const rows = within(notice).getAllByTestId('credential-reentry-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Infinity');
+    expect(rows[0].textContent).toContain('password');
+    expect(rows[1].textContent).toContain('SD Sports');
+  });
+
+  it('uses singular copy for a single account', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain('1 account');
+  });
+
+  it('warns on the dry-run preview too — the operator can otherwise not tell the artifact variants apart', () => {
+    render(
+      <RestoreCompleteSummary
+        report={dryRunReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: null },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain('will need');
+  });
+
+  it('announces itself to assistive tech', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').getAttribute('role')).toBe('alert');
   });
 });

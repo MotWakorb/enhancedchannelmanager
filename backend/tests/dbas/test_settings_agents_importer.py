@@ -314,6 +314,33 @@ async def test_user_agents_dry_run_creates_nothing():
 
 
 @pytest.mark.asyncio
+async def test_user_agents_dry_run_writes_a_provisional_remap():
+    """Dry-run registers a PROVISIONAL source->source remap entry.
+
+    Bead ``enhancedchannelmanager-lvfwd``: stream profiles now resolve their
+    ``user_agent`` FK through the USER_AGENT namespace. Without a provisional
+    entry a would-be-created user agent leaves the referencing stream profile
+    would_skip DEPENDENCY_UNRESOLVED on the preview while the apply creates it —
+    exactly the dry-run/apply drift ``groups_profiles`` already guards against.
+    The provisional id is never sent upstream (a dry-run creates nothing).
+    """
+    client = _client()
+    report, ledger, remap = _report(is_dry_run=True), _ledger(), _remap()
+
+    await import_user_agents(
+        archive_user_agents=[{"id": 4, "name": "Drill UA"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        is_dry_run=True,
+    )
+
+    assert remap.resolve(EntityType.USER_AGENT, 4) is not None
+
+
+@pytest.mark.asyncio
 async def test_user_agents_conflict_vs_upstream_error():
     """A create raising 'already exists' -> CONFLICT; any other error ->
     UPSTREAM_API_ERROR."""

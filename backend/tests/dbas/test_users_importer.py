@@ -4,8 +4,11 @@ security-sensitive bead in the Phase-2 epic).
 
 Security policy under test (spike tsfv0, live-confirmed vs Dispatcharr 0.26.0):
 
-1. No password/hash ever crosses the boundary — create with password omitted ->
-   unusable password; flag force-reset. Never fabricate/derive/rehash.
+1. No ARCHIVE password/hash ever crosses the boundary — the source instance's
+   secret material is dropped, never carried, never rehashed. ECM sends a
+   freshly generated random password instead (bead …-y65si: Dispatcharr's
+   serializer 500s on a missing ``password`` key) which is never recorded
+   anywhere, so the account still needs an operator-driven reset.
 2. Privilege flags (is_superuser/is_staff/user_level) restored CONSERVATIVELY:
    default non-privileged; the archive's superuser bit is NEVER trusted.
 3. The current operator is identified by AUTH SUBJECT (/api/accounts/users/me/),
@@ -58,10 +61,13 @@ def _client(
         return_value=set(schema_fields) if schema_fields is not None
         else {"username", "email", "is_superuser", "is_staff", "user_level"}
     )
-    # create_user returns a created body with an assigned id by default.
+    # create_user returns a created body with an assigned id by default. The
+    # ``password`` KEYWORD is the ECM-generated one (bead
+    # …-y65si) — it is deliberately NOT echoed back into the created body, which
+    # is what a real Dispatcharr does (the field is write-only).
     created_counter = {"n": 100}
 
-    async def _default_create(payload):
+    async def _default_create(payload, *, password=None):
         created_counter["n"] += 1
         return {"id": created_counter["n"], **payload}
 
@@ -292,14 +298,18 @@ async def test_archive_superuser_bit_not_trusted():
 
 
 # ---------------------------------------------------------------------------
-# MANDATED TEST: no-password-set
+# MANDATED TEST: no archive password/hash ever crosses the boundary
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_no_password_set():
-    """The create payload omits password entirely (and any hash field), so the
-    restored user ends with an unusable Django password."""
+async def test_archive_password_and_hash_never_forwarded():
+    """The create PAYLOAD never carries the archive's password or hash.
+
+    ECM sends a freshly generated password as a separate argument (bead
+    ``…-y65si`` — Dispatcharr's serializer 500s without one), but the SOURCE
+    instance's secret material is dropped, never carried, never rehashed.
+    """
     client = _client()
     report = _report()
     ledger = _ledger()
@@ -322,6 +332,91 @@ async def test_no_password_set():
     payload = client.create_user.await_args.args[0]
     assert "password" not in payload
     assert "password_hash" not in payload
+    # …and the generated password is nothing to do with the archive's.
+    generated = client.create_user.await_args.kwargs["password"]
+    assert generated != "hunter2"
+    assert "pbkdf2_sha256" not in generated
+
+
+# ---------------------------------------------------------------------------
+# y65si — a GENERATED password IS sent, because upstream requires the key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_sends_a_generated_password():
+    """Every user create carries a strong, freshly generated password.
+
+    Dispatcharr 0.28.2's user-create serializer reads ``validated_data
+    ['password']`` unconditionally; omitting the key raises an uncaught
+    ``KeyError`` that surfaces as a 500 and used to abort the whole restore.
+    """
+    client = _client()
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice"}, {"id": 6, "username": "bob"}],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+    )
+
+    passwords = [call.kwargs["password"] for call in client.create_user.await_args_list]
+    assert len(passwords) == 2
+    for password in passwords:
+        assert isinstance(password, str)
+        # Long enough that it is not brute-forceable, and clearly not a constant.
+        assert len(password) >= 24
+    # Distinct per user — never one shared secret across the restored accounts.
+    assert passwords[0] != passwords[1]
+
+
+@pytest.mark.asyncio
+async def test_generated_password_never_reaches_the_report_or_the_ledger():
+    """The generated password is unrecoverable by design — it is never recorded.
+
+    The restored account is not meant to be logged into with a known password;
+    the operator resets it out of band, so the value must not survive anywhere
+    an operator (or an attacker reading a report) could find it.
+    """
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+    )
+
+    generated = client.create_user.await_args.kwargs["password"]
+    blob = report.model_dump_json() + ledger.model_dump_json()
+    assert generated not in blob
+    # The operator IS told the account needs a password reset.
+    notes_blob = " ".join(report.notes).lower()
+    assert "reset" in notes_blob
+
+
+@pytest.mark.asyncio
+async def test_generated_password_never_logged(caplog):
+    """The generated password never appears in a log record either."""
+    import logging
+
+    client = _client()
+    with caplog.at_level(logging.DEBUG, logger="dbas.importers.users"):
+        await import_users(
+            archive_users=[{"id": 5, "username": "alice"}],
+            client=client,
+            selected=True,
+            report=_report(),
+            ledger=_ledger(),
+        )
+
+    generated = client.create_user.await_args.kwargs["password"]
+    blob = " ".join(r.getMessage() for r in caplog.records)
+    assert generated not in blob
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +502,12 @@ async def test_ledger_flushed_to_disk_before_each_subsequent_create():
 
     original_create = client.create_user.side_effect
 
-    async def _tracked_create(payload):
+    async def _tracked_create(payload, *, password=None):
         # At the moment we issue this create, snapshot how many entries are
         # already durably flushed (proxied by the flush call count) and how many
         # are in the in-memory ledger.
         events.append(("create", payload.get("username"), flush_calls["n"], len(ledger.entries)))
-        return await original_create(payload)
+        return await original_create(payload, password=password)
 
     client.create_user.side_effect = _tracked_create
 
@@ -549,7 +644,7 @@ async def test_failure_message_masks_echoed_secret():
     in the operator-facing FailureDetail.message — no raw secret survives."""
     secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key shape masked by mask_secrets
 
-    async def _raise_with_secret(payload):
+    async def _raise_with_secret(payload, *, password=None):
         raise RuntimeError("upstream rejected; aws_secret_access_key=%s echoed" % secret)
 
     client = _client(create_side_effect=_raise_with_secret)
@@ -576,7 +671,7 @@ async def test_create_conflict_recorded_as_failure_conflict():
     """If create_user raises a CONFLICT-shaped upstream error (race: username
     appeared between the pre-check and the create), it is recorded as a
     FailureReason.CONFLICT with a sanitized message and no secret."""
-    async def _conflict(payload):
+    async def _conflict(payload, *, password=None):
         raise Exception(
             'User creation failed: 400 - {"username": ["already exists."]}'
         )

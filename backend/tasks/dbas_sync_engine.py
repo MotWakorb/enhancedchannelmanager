@@ -756,6 +756,16 @@ def sync_config_importer_steps(
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
+        # NOTE (bead …-lvfwd): this registry carries no USER_AGENT step, even
+        # though ADR-013 S9 lists user agents in the per-cycle config set. A
+        # stream profile carrying a ``user_agent`` FK therefore finds nothing in
+        # the USER_AGENT remap namespace and is skipped DEPENDENCY_UNRESOLVED
+        # rather than created. That is strictly safer than the previous
+        # behaviour (POST the source id — a 400 that failed the whole cycle, or
+        # a silent bind to whatever occupies that id on B), but it does mean a
+        # custom-user-agent stream profile does not sync. Wiring the USER_AGENT
+        # step in changes what a cycle mutates on B, so it is a separate,
+        # ADR-scoped decision — not a drive-by here.
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         # CHANNELS (+ embedded streams) after every config dependency.
         ImporterStep(

@@ -36,6 +36,7 @@ import type {
   RestoreReport,
   RestoreSkipReason,
 } from '../services/api';
+import { CredentialReentryNotice } from './CredentialReentryNotice';
 import './RestoreCompleteSummary.css';
 
 /** Which framing the summary renders. `dry-run` reads would_* counts. */
@@ -66,7 +67,8 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
   stream: 'Streams',
   user_agent: 'User agents',
   dvr_rule: 'DVR rules',
-  settings: 'Settings',
+  settings: 'Dispatcharr settings',
+  ecm_settings: 'ECM settings',
   user: 'Users',
   logo: 'Logos',
 };
@@ -96,15 +98,18 @@ const COUNT_LABELS: Record<RestoreSummaryMode, { created: string; updated: strin
 };
 
 interface OutcomePresentation {
-  tone: 'success' | 'error';
+  tone: 'success' | 'warning' | 'error';
   icon: string;
   title: string;
   detail?: string;
 }
 
 /**
- * Map the tri-state outcome to its banner treatment. The rolled-back states are
- * presented as FAILURES (error tone, explicit "failed" copy) — never as success.
+ * Map the outcome to its banner treatment. The rolled-back states are presented
+ * as FAILURES (error tone, explicit "failed" copy) — never as success, and
+ * `completed_with_failures` is presented as a WARNING: the applied state is real
+ * and kept, so calling it a failure would send the operator hunting for a
+ * rollback that never happened.
  */
 const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, OutcomePresentation> = {
   success: {
@@ -112,6 +117,13 @@ const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, Outcom
     icon: 'check_circle',
     title: 'Restore complete',
     detail: 'Your configuration was restored.',
+  },
+  completed_with_failures: {
+    tone: 'warning',
+    icon: 'warning',
+    title: 'Restore complete — some items could not be restored',
+    detail:
+      'Everything else was restored and nothing was rolled back. Expand the categories below to see which items failed and why.',
   },
   partial_failed_rolled_back: {
     tone: 'error',
@@ -236,6 +248,15 @@ export function RestoreCompleteSummary({ report, mode, bannerSlot }: RestoreComp
     >
       {/* SEAM for bead .19 — logo-miss RED banner slots here, above everything. */}
       {bannerSlot}
+
+      {/*
+        Credential re-entry action item (bead 6pilh). Rendered FIRST-CLASS rather
+        than through `bannerSlot`: it needs nothing but the report, so every
+        caller of this component gets it — a restore whose credentials were
+        redacted has perfect counts and a `success` outcome, and this is the
+        only signal the operator has that nothing will actually fetch.
+      */}
+      <CredentialReentryNotice report={report} mode={effectiveMode} />
 
       {presentation && (
         <div

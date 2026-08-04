@@ -470,8 +470,19 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     client.create_user.assert_awaited_once()
     client.create_channel.assert_awaited_once()
     client.upload_logo_file.assert_awaited_once()
-    # The stream layer attached the Tier-3-matched destination stream.
-    client.update_channel.assert_awaited_once_with(505, {"streams": [990]})
+    # The stream layer attached the Tier-3-matched destination stream, and the
+    # post-create reattach passes (bead …-dfkbn) put the channel's LOGO back on
+    # it. Both are PATCHes against the same restored channel; before the reattach
+    # pass the second call did not exist and every restored channel came back
+    # with ``logo_id=None`` while the report claimed ``logo_misses: 0``.
+    channel_patches = [c.args for c in client.update_channel.await_args_list]
+    assert (505, {"streams": [990]}) in channel_patches
+    assert (505, {"logo_id": 995}) in channel_patches
+    # The archived channel carries no ``epg_data_id``, so no EPG relink is
+    # attempted and none is reported missing (a channel unlinked on the source
+    # must not be invented a link here).
+    assert apply_report.epg_links_unrestored == 0
+    assert len(channel_patches) == 2
 
     # The denylisted settings key was skipped by NAME and its value never sent.
     # Settings are PATCHed at the DESTINATION row id resolved for each key.
@@ -611,3 +622,263 @@ async def test_settings_dry_run_apply_parity_on_missing_key():
     # q6xjl incident's "restore rolled back" apply-side behavior, now ALSO
     # visible on the preview before the operator ever confirms the apply.
     assert apply_report.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+
+
+# ---------------------------------------------------------------------------
+# lvfwd — the stream-profile -> user-agent FK, end to end through the REAL
+# apply registry, onto a destination whose id space does NOT line up.
+# ---------------------------------------------------------------------------
+#
+# The drill (bead enhancedchannelmanager-a429n) restored an artifact carrying a
+# custom stream profile bound to a custom user agent onto a genuinely fresh
+# Dispatcharr. Two defects compounded: user agents were imported AFTER stream
+# profiles, and the stream-profile category declared no remappable FK, so the
+# SOURCE instance's user_agent id was POSTed verbatim.
+#
+# On a fresh target that 400s ("Invalid pk 4 - object does not exist") and rolls
+# the entire restore back. On a target that HAPPENS to have an unrelated user
+# agent at that id the create SUCCEEDS and silently binds the WRONG agent — no
+# error, no report entry. That is the case this test pins: the destination below
+# already occupies id 4 with a different agent, so asserting merely "the create
+# returned 2xx" would pass on the broken code. The assertion is on the NAME the
+# profile resolves to.
+# ---------------------------------------------------------------------------
+
+
+def _shifted_id_space_plan():
+    """A plan with one custom user agent + the stream profile that references it."""
+    from dbas.preflight import ImportPlan, PlanCategory
+
+    plan = ImportPlan(manifest={"schema_version": 1})
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.USER_AGENT,
+            selected=True,
+            entities=[{"id": 4, "name": "Drill UA", "user_agent": "Drill/1.0"}],
+        )
+    )
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.STREAM_PROFILE,
+            selected=True,
+            entities=[
+                {"id": 9, "name": "Drill Profile", "command": "ffmpeg", "user_agent": 4}
+            ],
+        )
+    )
+    return plan
+
+
+def _shifted_id_space_client():
+    """A destination that ALREADY occupies source id 4 with an unrelated agent."""
+    client = AsyncMock()
+    # Destination user agents: id 4 is taken, by something else entirely.
+    destination_user_agents = [{"id": 4, "name": "Unrelated UA", "user_agent": "Other/1.0"}]
+    client.get_user_agents = AsyncMock(return_value=destination_user_agents)
+    client.get_stream_profiles = AsyncMock(return_value=[])
+
+    async def _create_user_agent(payload):
+        created = {"id": 77, **payload}
+        destination_user_agents.append(created)
+        return created
+
+    client.create_user_agent = AsyncMock(side_effect=_create_user_agent)
+    client.create_stream_profile = AsyncMock(
+        side_effect=lambda payload: {"id": 88, **payload}
+    )
+    client.destination_user_agents = destination_user_agents
+    return client
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_binds_the_correctly_named_user_agent(tmp_path):
+    from dbas.restore_contracts import (
+        IdRemapTable,
+        RestoreOutcome,
+        RestoreReport,
+        RollbackLedger,
+    )
+    from dbas.restore_orchestrator import (
+        default_importer_steps,
+        new_restore_id,
+        run_restore,
+    )
+
+    client = _shifted_id_space_client()
+    report = await run_restore(
+        plan=_shifted_id_space_plan(),
+        client=client,
+        steps=default_importer_steps(),
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id=new_restore_id()),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.category(EntityType.USER_AGENT).created == 1
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+    # THE assertion the drill needed: resolve what the profile actually points at
+    # on the DESTINATION and check its NAME. A 2xx create is not evidence.
+    payload = client.create_stream_profile.await_args.args[0]
+    by_id = {row["id"]: row["name"] for row in client.destination_user_agents}
+    assert by_id[payload["user_agent"]] == "Drill UA"
+    assert by_id[payload["user_agent"]] != "Unrelated UA"
+    # And the raw source id never left ECM.
+    assert payload["user_agent"] != 4
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_user_agent_preview_matches_apply(tmp_path):
+    """Preview and apply agree on the custom-user-agent stream profile.
+
+    The drill's preview reported "stream_profiles 1 WILL CREATE, 0 FAILED" for an
+    apply that then aborted the whole restore. With the FK declared, the dry-run
+    must still promise the create (the user agent it depends on is itself a
+    would-create), not degrade to a DEPENDENCY_UNRESOLVED skip.
+    """
+    from dbas.restore_orchestrator import run_dry_run
+
+    dry = await run_dry_run(
+        plan=_shifted_id_space_plan(), client=_shifted_id_space_client()
+    )
+    assert dry.category(EntityType.STREAM_PROFILE).would_create == 1
+    assert dry.category(EntityType.STREAM_PROFILE).would_skip == 0
+    assert dry.category(EntityType.USER_AGENT).would_create == 1
+
+
+# ---------------------------------------------------------------------------
+# y65si — a user-create failure must not cost the operator everything else.
+# ---------------------------------------------------------------------------
+#
+# Dispatcharr's user-create serializer reads validated_data['password']
+# unconditionally; a create that reaches it without one raises an uncaught
+# KeyError and surfaces as a 500. ECM now (a) always sends a generated password
+# and (b) treats a user-category failure as NON-FATAL, so an upstream that still
+# refuses the create costs one user, not the whole instance.
+# ---------------------------------------------------------------------------
+
+
+def _user_failing_client():
+    client = AsyncMock()
+    client.get_channel_groups = AsyncMock(return_value=[])
+    client.create_channel_group = AsyncMock(return_value={"id": 761})
+    client.delete_channel_group = AsyncMock(return_value=None)
+    # A rebuilt Dispatcharr whose superuser is named differently from the
+    # archive's — so the category CREATES rather than skipping.
+    client.get_current_user = AsyncMock(return_value={"id": 1, "username": "newadmin"})
+    client.get_users = AsyncMock(return_value=[])
+    client.get_user_schema_write_fields = AsyncMock(return_value={"username", "email"})
+    client.create_user = AsyncMock(
+        side_effect=Exception("User creation failed: 500 - Server Error (500)")
+    )
+    return client
+
+
+def _user_plus_group_plan():
+    from dbas.preflight import ImportPlan, PlanCategory
+
+    plan = ImportPlan(manifest={"schema_version": 1})
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.CHANNEL_GROUP,
+            selected=True,
+            entities=[{"id": 61, "name": "News"}],
+        )
+    )
+    plan.categories.append(
+        PlanCategory(
+            entity_type=EntityType.USER,
+            selected=True,
+            entities=[{"id": 7, "username": "drilladmin"}],
+        )
+    )
+    return plan
+
+
+@pytest.mark.asyncio
+async def test_user_create_failure_keeps_the_rest_of_the_restore(tmp_path):
+    from dbas.restore_contracts import (
+        IdRemapTable,
+        RestoreOutcome,
+        RestoreReport,
+        RollbackLedger,
+    )
+    from dbas.restore_orchestrator import (
+        default_importer_steps,
+        new_restore_id,
+        run_restore,
+    )
+
+    client = _user_failing_client()
+    report = await run_restore(
+        plan=_user_plus_group_plan(),
+        client=client,
+        steps=default_importer_steps(),
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id=new_restore_id()),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    # Counted and visible…
+    user_cat = report.category(EntityType.USER)
+    assert user_cat.failed == 1
+    assert user_cat.failure_details[0].label == "drilladmin"
+    # …but the operator keeps their channel group.
+    assert report.category(EntityType.CHANNEL_GROUP).created == 1
+    client.delete_channel_group.assert_not_called()
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_user_create_sends_a_password_through_the_real_client_seam():
+    """The generated password reaches the HTTP layer, unlike the archive's.
+
+    Exercised through the REAL ``DispatcharrClient.create_user`` (transport
+    stubbed) because the defensive strip that used to drop every password lives
+    at that seam, not in the importer.
+    """
+    from dbas.importers.users import import_users
+    from dbas.restore_contracts import RestoreReport, RollbackLedger
+    from dispatcharr_client import DispatcharrClient
+
+    sent = {}
+
+    class _Response:
+        status_code = 201
+
+        @staticmethod
+        def json():
+            return {"id": 91, "username": "drilladmin"}
+
+    async def _request(method, path, **kwargs):
+        sent["method"] = method
+        sent["path"] = path
+        sent["json"] = kwargs.get("json")
+        return _Response()
+
+    client = DispatcharrClient.__new__(DispatcharrClient)
+    client._request = _request  # type: ignore[method-assign]
+    client.get_current_user = AsyncMock(return_value={"id": 1, "username": "newadmin"})
+    client.get_users = AsyncMock(return_value=[])
+    client.get_user_schema_write_fields = AsyncMock(return_value={"username"})
+
+    await import_users(
+        archive_users=[{"id": 7, "username": "drilladmin", "password": "hunter2"}],
+        client=client,
+        selected=True,
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id="test-restore"),
+    )
+
+    assert sent["path"] == "/api/accounts/users/"
+    body = sent["json"]
+    assert body["username"] == "drilladmin"
+    # The generated password IS on the wire (upstream requires the key)…
+    assert isinstance(body.get("password"), str) and len(body["password"]) >= 24
+    # …and it is NOT the archive's.
+    assert body["password"] != "hunter2"

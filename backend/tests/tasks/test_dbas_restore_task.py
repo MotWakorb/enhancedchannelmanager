@@ -415,3 +415,40 @@ class TestTaskResultCountsWiring:
         # failed (3+0) = 3 — the REAL failure count, not the old stage-count.
         assert result.failed_count == 3
         assert result.total_items == 13
+
+
+@pytest.mark.asyncio
+class TestSummaryMessageCredentialReentry:
+    """The one-line task message is the ONLY surface an operator who restored
+    via MCP or reads task history ever sees. A restore from a redacted artifact
+    reports a clean SUCCESS with perfect counts while every restored account is
+    unauthenticated, so the action item has to be in the message too (…-6pilh).
+    """
+
+    async def test_message_names_the_accounts_needing_credentials(self, tmp_path):
+        from dbas.restore_contracts import EntityType
+
+        report = _dry_run_report_with_categories()
+        report.record_credential_reentry(
+            EntityType.M3U_ACCOUNT, "Infinity", ["password"], source_export_id=5
+        )
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run", AsyncMock(return_value=report)
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert "1 account(s) need credentials re-entered" in result.message
+
+    async def test_message_is_unchanged_when_credentials_came_through(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(return_value=_dry_run_report_with_categories()),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert "credentials re-entered" not in result.message

@@ -1678,20 +1678,30 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def create_user(self, data: dict) -> dict:
-        """Create a Dispatcharr (Django) user account — NO password ever sent.
+    async def create_user(self, data: dict, *, password: str | None = None) -> dict:
+        """Create a Dispatcharr (Django) user account.
 
         Used by the Users restore importer (enhancedchannelmanager-l1p4p). Per
         spike tsfv0 (live-confirmed vs Dispatcharr 0.26.0): the User serializer
         exposes ``password`` as a WRITE-ONLY plaintext field and there is no
-        retrievable hash, so a restored user is created OMITTING ``password``
-        entirely -> Django stores an unusable password and the operator resets it
-        out-of-band (force-reset).
+        retrievable hash, so the SOURCE instance's password is unrecoverable and
+        is never carried across.
 
-        This method **strips ``password`` and any ``password_hash`` key** from the
-        payload defensively, so a password/hash can never cross the boundary even
-        if a caller accidentally includes one. NEVER fabricate, derive, or rehash
-        a password; never forward an incoming hash field.
+        ``data`` is therefore **stripped of ``password`` and any
+        ``password_hash`` key**, so archive secret material can never cross the
+        boundary even if a caller accidentally includes it. NEVER fabricate,
+        derive, or rehash a password from archive data; never forward an incoming
+        hash field.
+
+        The separate ``password`` KEYWORD carries a value the CALLER generated
+        fresh (``dbas.importers.users`` uses :mod:`secrets`) and is the only way a
+        password reaches the wire. It exists because Dispatcharr 0.28.2's
+        user-create serializer reads ``validated_data['password']``
+        unconditionally: omitting the key raises an uncaught ``KeyError`` that
+        surfaces as an HTTP 500 and used to abort the whole restore
+        (enhancedchannelmanager-y65si). The value is written, never read back
+        (write-only upstream), never logged, and never recorded by ECM — the
+        restored account still requires an operator-driven password reset.
 
         The error message uses the same ``"<thing> failed: <status> - <body>"``
         shape as ``create_channel`` / ``create_stream`` so ``upstream_http_exception``
@@ -1699,14 +1709,16 @@ class DispatcharrClient:
         """
         if not isinstance(data, dict):
             raise ValueError("create_user requires a dict payload")
-        # Defense in depth: never let a secret cross the boundary, regardless of
-        # what the caller passed. The importer already omits these; this is the
-        # last line of defense at the client edge.
+        # Defense in depth: never let ARCHIVE secret material cross the boundary,
+        # regardless of what the caller passed. The importer already omits these;
+        # this is the last line of defense at the client edge.
         payload = {
             k: v for k, v in data.items() if k not in ("password", "password_hash")
         }
         if not payload.get("username"):
             raise ValueError("create_user requires a username")
+        if password is not None:
+            payload["password"] = password
         response = await self._request("POST", "/api/accounts/users/", json=payload)
         if response.status_code >= 400:
             error_body = response.text

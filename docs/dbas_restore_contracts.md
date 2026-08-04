@@ -74,24 +74,71 @@ Key fields:
   namespace (the channels importer runs before the logos importer); it is
   `None` when unknown: the channel's create failed/was skipped, or the run is
   a dry-run (whose CHANNEL remap holds provisional ids that must never render
-  as real Dispatcharr links). Only the logos importer records misses. The
-  channels importer drops `logo_id` from create payloads and has no
-  logo-attach path. Both fields are additive optional: no `CONTRACT_VERSION`
-  bump.
+  as real Dispatcharr links). Both fields are additive optional: no
+  `CONTRACT_VERSION` bump.
 
-### Tri-state outcome: never "success" on mixed state
+  **Two producers feed `logo_misses`**, and `RestoreReport.record_logo_miss` is
+  the one place both the aggregate and the drill-down are written, so
+  `len(logo_miss_details) == logo_misses` holds by construction:
 
-`RestoreOutcome` has exactly three realized states:
+  1. `dbas.importers.logos` — an archived logo the destination did not already
+     have (the D9 red-banner signal).
+  2. `dbas.channel_reattach.reattach_channel_logos` — an archived logo
+     REFERENCE that could not be put back onto the channels that had it. The
+     channels importer still drops `logo_id` from the create payload (it is a
+     SOURCE id and would dangle); this pass re-derives it through the `LOGO`
+     remap afterwards. Added by bead `…-dfkbn` after a round-trip drill measured
+     `logo_misses: 0` while 12 channels lost a logo they had.
+
+### Post-restore action items (beads `…-6pilh` / `…-2o0cz` / `…-dfkbn`)
+
+Each is an **aggregate count + a named drill-down**, written through one
+recorder so the two cannot drift. None of them is a failure — the entity was
+created and `outcome` is unaffected — but every one is state the operator had
+before the backup and does not have after the restore. They exist because a
+round-trip drill produced `Restore success: created 32, failed 0` for an
+instance where not one channel could play, every logo and EPG link was gone, a
+channel profile had silently widened from 9 members to 12, and two non-default
+ECM settings had reverted. All are additive optional: no `CONTRACT_VERSION` bump.
+
+| Aggregate | Drill-down | Recorder | Means |
+|---|---|---|---|
+| `credentials_needing_reentry` | `credential_reentry_details` | `record_credential_reentry` | restored from a redacted artifact; the entity authenticates nowhere until the operator re-enters the named FIELDS |
+| `channels_needing_stream_reattach` | `stream_reattach_details` | `record_stream_reattach_needed` | still bound to a URL-less placeholder after the post-refresh rebind — **the channel cannot play** |
+| `epg_links_unrestored` | `epg_link_miss_details` | `record_epg_link_unrestored` | no destination EPG row carried the channel's archived `tvg_id` |
+| `profile_membership_drift` | `profile_membership_drift_details` | `record_profile_membership_drift` | channels the restore had to flip back to the archived selection (Dispatcharr enables every new channel in every profile) |
+
+`streams_rebound` is the informational counterpart to the first: how many
+placeholder bindings the rebind pass DID resolve onto a real provider stream.
+
+`profile_membership_drift` counts CHANNELS flipped, not profiles — the
+operator-meaningful unit ("3 channels a profile was built to exclude were
+exposed") — so unlike the others it does **not** track the length of its detail
+list. An already-correct profile records nothing.
+
+### Outcome: never "success" on mixed state
+
+`RestoreOutcome` has exactly four realized states:
 
 | Value | Meaning |
 |---|---|
 | `success` | every selected entity created/updated/skipped cleanly; nothing failed; no compensation needed |
-| `partial_failed_rolled_back` | at least one failure; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
-| `failed_rollback_incomplete` | a failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
+| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but at least one entity in a non-fatal category failed. The applied state is real and kept; the failed rows are counted in their category |
+| `partial_failed_rolled_back` | at least one failure in a fatal category; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
+| `failed_rollback_incomplete` | a fatal failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
 
-The contract: the UX labels the two non-success states "restore failed, state
-rolled back" / "rollback incomplete", **never** "success". This is the whole
-point of the tri-state: mixed state must never read as success.
+The contract: the UX labels the three non-success states explicitly — "some
+items could not be restored" / "restore failed, state rolled back" / "rollback
+incomplete" — and **never** "success". Mixed state must never read as success.
+
+**Non-fatal categories.** `dbas.restore_orchestrator.NON_FATAL_FAILURE_CATEGORIES`
+is the single source of truth, and its sole member is `user`
+(`dispatcharr_users`). Nothing in a restore holds an FK into users, so a user row
+upstream refuses degrades nothing downstream — whereas aborting on it costs the
+operator every other category *plus* an ECM settings mutation the rollback cannot
+compensate (bead `enhancedchannelmanager-y65si`). Every other category is
+load-bearing and still aborts the whole restore on its first failure. An importer
+that *raises* is fatal regardless of category.
 
 `SkipReason` vs `FailureReason`: a **skip** is an intentional no-op that leaves
 state consistent; a **failure** is an apply attempt that errored and may have
@@ -158,6 +205,8 @@ re-implemented per importer.
   a failed compensation. A resumed rollback skips entries already marked
   `compensated`.
 - **Outcome mapping into Contract 1:**
+  - no rollback was triggered because every failure was in a non-fatal category
+    → `completed_with_failures` (the ledger stays as-is; nothing is compensated)
   - every entry compensated (deleted or 404) → `partial_failed_rolled_back`
   - any entry's DELETE failed with a non-404 error → `failed_rollback_incomplete`;
     residual uncompensated entries stay in the ledger and are surfaced in the

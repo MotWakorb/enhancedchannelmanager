@@ -186,9 +186,28 @@ class DbasBackupTask(TaskScheduler):
         # the default redact-by-default backup: there is nowhere safe to keep a
         # passphrase at rest for an unattended run, so encrypted backups are
         # opt-in + interactive only.
+        #
+        # ONE-SHOT (bead …-cytzj). Excluding them from get_config keeps them out
+        # of journal.db, but this task object is a LIVE SINGLETON that outlives
+        # the run: without the unconditional reset in execute()'s finally, one
+        # manual "Create Encrypted Backup" made EVERY later run in the same
+        # process — including an unattended scheduled one — emit an encrypted,
+        # credential-bearing artifact under that one-off passphrase, with no
+        # signal to the operator and no way to notice short of a restart.
         self.passphrase: Optional[str] = None
         self.include_credentials: bool = False
         self.acknowledge_unrecoverable: bool = False
+
+    def _reset_encryption_transients(self) -> None:
+        """Return the manual-run encryption transients to their defaults.
+
+        Called from execute()'s ``finally`` so it runs on EVERY exit path —
+        success, build failure, an exception, and the freshness gate's early
+        SKIP return — which is what makes "these apply to a single run" true.
+        """
+        self.passphrase = None
+        self.include_credentials = False
+        self.acknowledge_unrecoverable = False
 
     def get_config(self) -> dict:
         # Encryption transients (passphrase/include_credentials/
@@ -246,6 +265,17 @@ class DbasBackupTask(TaskScheduler):
             self.acknowledge_unrecoverable = bool(config["acknowledge_unrecoverable"])
 
     async def execute(self) -> TaskResult:
+        """Run one backup, then unconditionally disarm the encryption transients.
+
+        The ``finally`` is the whole point (bead …-cytzj): the transients must
+        not survive the run that supplied them, no matter how that run ended.
+        """
+        try:
+            return await self._execute_run()
+        finally:
+            self._reset_encryption_transients()
+
+    async def _execute_run(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
         self._set_progress(
             total=1, current=0, status="starting",

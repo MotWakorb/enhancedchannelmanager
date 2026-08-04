@@ -435,6 +435,35 @@ class DbasRestoreTask(TaskScheduler):
         )
 
     @staticmethod
+    def _credential_reentry_suffix(report) -> str:
+        """Name every post-restore ACTION ITEM in the one-line summary.
+
+        The task-history row and the MCP tool result are the ONLY surfaces an
+        operator who did not use the restore modal ever sees. Each item below is
+        state the operator HAD before the backup and does NOT have after the
+        restore — none of them is a failure, so none of them moves the counts,
+        which is exactly how the drill's ``Restore success: created 32, failed 0``
+        described an instance where not one channel could play, every logo and
+        EPG link was gone, and a channel profile had silently widened
+        (beads …-6pilh / …-2o0cz / …-dfkbn). They belong in the message itself,
+        not only in ``details``.
+        """
+        parts: list[str] = []
+        for attribute, template in (
+            ("credentials_needing_reentry", "%d account(s) need credentials re-entered"),
+            ("channels_needing_stream_reattach", "%d channel(s) have NO playable stream"),
+            ("logo_misses", "%d logo(s) could not be reinstated"),
+            ("epg_links_unrestored", "%d channel(s) restored without an EPG link"),
+            ("profile_membership_drift", "%d profile membership(s) corrected"),
+        ):
+            count = getattr(report, attribute, 0) or 0
+            if count > 0:
+                parts.append(template % count)
+        if not parts:
+            return ""
+        return "; " + "; ".join(parts)
+
+    @staticmethod
     def _summary_message(report, is_apply: bool) -> str:
         if report.is_dry_run or not is_apply:
             total_create = sum(c.would_create for c in report.categories)
@@ -453,7 +482,7 @@ class DbasRestoreTask(TaskScheduler):
                     total_create, total_update, total_skip, total_conflict,
                     len(report.categories),
                 )
-            )
+            ) + DbasRestoreTask._credential_reentry_suffix(report)
         outcome = report.outcome.value if report.outcome else "unknown"
         total_created = sum(c.created for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
@@ -461,7 +490,7 @@ class DbasRestoreTask(TaskScheduler):
             "Restore %s: created %d, failed %d across %d categories" % (
                 outcome, total_created, total_failed, len(report.categories),
             )
-        )
+        ) + DbasRestoreTask._credential_reentry_suffix(report)
 
     def _fail(self, started_at: datetime, message: str) -> TaskResult:
         """Build a failed TaskResult and mark progress failed (sanitized message)."""

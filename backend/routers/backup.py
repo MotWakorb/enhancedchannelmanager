@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
+from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
 from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
@@ -77,7 +78,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0022"
+APP_VERSION = "0.18.1-0023"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -88,7 +89,13 @@ APP_VERSION = "0.18.1-0022"
 # Starts at 1 for the first v0.18.0 DBAS artifact (0i2vt.7).
 BACKUP_SCHEMA_VERSION = 1
 
-REDACTED = "***REDACTED***"
+# The redaction placeholder. Defined once in the ``credential_sentinel`` leaf
+# module so the restore side can recognize what this side wrote (bead …-6pilh):
+# the DBAS importers strip it rather than writing it into a destination
+# credential field, and ``credential_is_present`` refuses to read it as a
+# configured credential. ``REDACTED`` is kept as the local name because the
+# whole module (and the shipped artifact format) is written against it.
+REDACTED = REDACTION_SENTINEL
 
 # Credential fields in DispatcharrSettings that must never appear raw in an
 # exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
@@ -118,12 +125,23 @@ _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_ke
 # D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
 # (_redact_credentials_deep) that runs over EVERY category — including
 # Dispatcharr-sourced sections (M3U / EPG accounts), which the shipped YAML
-# export does NOT scrub on its own. Production Dispatcharr happens to never
-# return the M3U password (write-only, SHA1-hashed at fetch — see
-# docs/dispatcharr_api.md), but the artifact MUST NOT depend on that: redaction
-# is defense-in-depth and runs before any byte enters the archive. This union
-# folds in the settings + alert-method denylists so there is exactly one list
-# to maintain. Matched case-insensitively against dict keys.
+# export does NOT scrub on its own.
+#
+# CORRECTION (bead …-6pilh, verified against Dispatcharr 0.28.2 source): this
+# comment previously claimed Dispatcharr never returns the M3U password. It
+# does. ``M3UAccountSerializer`` marks ``password`` ``write_only``, but its
+# ``to_representation`` then RE-ADDS it (``data["password"] = instance.password
+# or ""``) for any caller with ``user_level >= 10`` — which ECM always is. The
+# value is stored and returned in CLEARTEXT; the SHA1-at-fetch note in
+# docs/dispatcharr_api.md is about the SCHEDULES-DIRECT (EPG) password, which
+# genuinely is write-only with no admin re-add, and does not transfer to M3U.
+# So this redactor is not merely defense-in-depth for M3U accounts — it is the
+# only thing keeping a live provider password out of the artifact. Correctness
+# on the restore side is the matching half: dbas/importers strip the sentinel
+# rather than writing it into the destination credential field.
+#
+# This union folds in the settings + alert-method denylists so there is exactly
+# one list to maintain. Matched case-insensitively against dict keys.
 _REDACT_KEYS = frozenset(
     {k.lower() for k in _SETTINGS_CREDENTIAL_FIELDS}
     | {k.lower() for k in _ALERT_METHOD_CREDENTIAL_KEYS}
@@ -2211,6 +2229,20 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             logger.warning("[BACKUP] Failed to fetch channels: %s", e)
             result["channels"] = _degraded_section("channels", e)
 
+    if "logos" in needed:
+        # dfkbn item 1 — the logo INVENTORY (id + name + url), not the bytes.
+        # This is what lets a remotely-hosted logo round-trip at all: the
+        # binary subtree carries only ECM's own uploads dir, which is empty on a
+        # real install because ECM's Logo Manager writes into Dispatcharr's
+        # volume. Logo records are ``{id, name, url}`` — no credential class —
+        # and the deep redactor still runs over them as defense in depth.
+        try:
+            logos = await client.get_all_logos_paginated()
+            result["logos"] = logos or []
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch logos: %s", e)
+            result["logos"] = _degraded_section("logos", e)
+
     if "dispatcharr_users" in needed:
         # Dispatcharr user accounts (Django auth). A GET never returns a
         # password/hash (see dbas/importers/users.py policy 1); the deep
@@ -2407,6 +2439,19 @@ RESTORABLE_SECTIONS = {
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
     },
+    # dfkbn item 1 — the Dispatcharr LOGO INVENTORY (id + name + url). NOT the
+    # bytes: those are the ``binary/logos`` subtree, which only ever carried
+    # ECM's OWN ``/config/uploads/logos/``. The drill proved that subtree is the
+    # wrong (and, in practice, empty) source of truth: a logo uploaded through
+    # ECM's own Logo Manager is written to DISPATCHARR's ``/data/logos/``, so
+    # ``binary/metadata.json`` was ``{"logo_count": 0, "logos": []}`` while 13
+    # logos existed, and the other 12 were remote CDN URLs with no local bytes at
+    # all. Their URLs are the only thing that CAN round-trip, and Dispatcharr's
+    # Logo model is exactly ``{name, url}`` (0.28.2 apps/channels/models.py) —
+    # so this inventory restores a CDN logo byte-identically and, for a
+    # volume-local one, at least names it so the loss is reported instead of
+    # silent. ``artifact_only`` for the same reason as its neighbours.
+    "logos": {"label": "Logos", "dispatcharr": True, "artifact_only": True},
     # lc6zu — the settings/agents producer set completing coverage of all 12
     # categories in the v0.18 scope (plugins remain excluded per ADR-012
     # D10). Same ``artifact_only`` rationale as channels /

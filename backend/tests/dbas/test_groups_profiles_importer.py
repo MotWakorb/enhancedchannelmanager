@@ -22,12 +22,14 @@ For EACH category the same behaviours are exercised:
 * CONFLICT vs UPSTREAM_API_ERROR — a create that races into a uniqueness
   conflict is failed CONFLICT; a non-conflict error is UPSTREAM_API_ERROR.
 
-FK remap + DEPENDENCY_UNRESOLVED: the three real Dispatcharr categories are
-leaf dependencies (a group/profile has no outbound FK to another remapped
-entity — channels point at THEM, not the reverse). The generic FK-remap path is
-still exercised via a synthetic category config that declares a remappable FK,
-proving an unresolvable FK is skipped DEPENDENCY_UNRESOLVED rather than created
-with a stale archive id.
+FK remap + DEPENDENCY_UNRESOLVED: channel groups and channel profiles are leaf
+dependencies (no outbound FK to another remapped entity — channels point at
+THEM, not the reverse). STREAM PROFILES ARE NOT: a Dispatcharr stream profile
+carries a ``user_agent`` FK (bead ``enhancedchannelmanager-lvfwd``), so its
+config declares that remap and the tests below pin it. The generic FK-remap path
+is additionally exercised via a synthetic category config, proving an
+unresolvable FK is skipped DEPENDENCY_UNRESOLVED rather than created with a
+stale archive id.
 
 The Dispatcharr client is mocked at the importer module level
 (``dbas.importers.groups_profiles``); the importer is exercised with an
@@ -586,14 +588,151 @@ async def test_import_groups_profiles_defaults_selection_to_off():
 
 
 def test_category_configs_cover_the_three_entity_types():
-    """The module's canonical config table covers exactly the three leaf
-    categories, each with NO outbound remappable FK (they are leaf dependencies
-    that channels point at — the FK direction is owned by the Channels importer)."""
+    """The module's canonical config table covers exactly the three categories.
+
+    Channel groups and channel profiles are genuine leaf dependencies with NO
+    outbound remappable FK. STREAM PROFILES ARE NOT (bead
+    ``enhancedchannelmanager-lvfwd``): a Dispatcharr stream profile carries a
+    ``user_agent`` FK, so its config MUST declare that remap.
+    """
     etypes = {c.entity_type for c in _CATEGORY_CONFIGS.values()}
     assert etypes == {
         EntityType.CHANNEL_GROUP,
         EntityType.CHANNEL_PROFILE,
         EntityType.STREAM_PROFILE,
     }
-    for config in _CATEGORY_CONFIGS.values():
-        assert config.remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["channel_groups"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["channel_profiles"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["stream_profiles"].remappable_fk_fields == {
+        "user_agent": EntityType.USER_AGENT
+    }
+
+
+# ---------------------------------------------------------------------------
+# lvfwd — the stream-profile -> user-agent FK (the SILENT WRONG-BINDING defect)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_user_agent_fk_is_remapped_not_passed_through():
+    """A stream profile's ``user_agent`` id is rewritten through the remap.
+
+    Bead ``enhancedchannelmanager-lvfwd`` defect 2. The archived SOURCE id must
+    never reach the destination: a restore reassigns ids, so posting the source
+    id either 400s (id absent) or — far worse — SUCCEEDS and silently binds a
+    completely unrelated user agent that happens to occupy that id on the target.
+    """
+    client = _client()
+    remap = _remap()
+    remap.add(EntityType.USER_AGENT, 4, 77)  # archived UA 4 -> dest 77
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[{"id": 9, "name": "Drill Profile", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    payload = client.create_stream_profile.await_args.args[0]
+    assert payload["user_agent"] == 77, "source user_agent id was passed through raw"
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_with_unresolvable_user_agent_is_skipped():
+    """An unresolvable ``user_agent`` skips the profile DEPENDENCY_UNRESOLVED.
+
+    Never create it with a stale archive id — that is the exact silent
+    wrong-binding path bead ``…-lvfwd`` found.
+    """
+    client = _client()
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[{"id": 9, "name": "Drill Profile", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),  # empty — nothing to resolve 4 against
+    )
+
+    client.create_stream_profile.assert_not_called()
+    cat = report.category(EntityType.STREAM_PROFILE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+
+
+@pytest.mark.asyncio
+async def test_locked_builtin_stream_profile_is_skipped_never_updated():
+    """A ``locked`` built-in profile is skipped + remapped — NEVER updated.
+
+    Verified against the Dispatcharr 0.28.2 image source. ``StreamProfile.save()``
+    (``/app/core/models.py`` lines 78-101) refuses any change to a locked profile:
+    it iterates ``self._meta.fields`` comparing ``field.name`` against
+    ``allowed_fields = {"user_agent_id"}``, and a ForeignKey's ``field.name`` is
+    ``"user_agent"`` — so even the one field the comment says is permitted
+    raises ``Cannot modify user_agent on a protected profile.`` over the REST
+    API (``StreamProfileViewSet`` is a plain ModelViewSet, so a PATCH lands in
+    ``save()``, not the ``update()`` classmethod).
+
+    This importer is create-or-skip by construction — it reaches exactly two
+    client methods, ``config.getter`` and ``config.creator`` — so the locked
+    guard is unreachable today. This test pins that: adding an update path here
+    would have to reckon with ``locked`` first. Dispatcharr ships ``ffmpeg``,
+    ``Proxy``, ``Redirect`` and ``streamlink`` locked, so this is the common case
+    on every restore, not a corner case.
+    """
+    client = _client(
+        stream_profiles=[
+            {"id": 1, "name": "ffmpeg", "locked": True, "user_agent": 2},
+        ]
+    )
+    remap = _remap()
+    remap.add(EntityType.USER_AGENT, 4, 77)
+    report = _report()
+
+    await import_stream_profiles(
+        # The archive's copy carries a DIFFERENT user agent than the target's.
+        archive_rows=[{"id": 9, "name": "ffmpeg", "locked": True, "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.STREAM_PROFILE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.updated == 0
+    client.create_stream_profile.assert_not_called()
+    # The ONLY upstream call was the list read — no create, no update, no patch.
+    assert {name for name, _, _ in client.mock_calls} == {"get_stream_profiles"}
+    # The source id still resolves, to the EXISTING destination row.
+    assert remap.resolve(EntityType.STREAM_PROFILE, 9) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_without_user_agent_still_creates():
+    """A profile carrying no ``user_agent`` (or an explicit null) is unaffected by
+    the FK remap — the built-in Dispatcharr profiles look like this."""
+    client = _client()
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[
+            {"id": 9, "name": "Direct"},
+            {"id": 10, "name": "Proxy", "user_agent": None},
+        ],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.category(EntityType.STREAM_PROFILE).created == 2
