@@ -66,7 +66,35 @@ _RAW_VERB_ATTRS = frozenset({"get", "post", "put", "patch", "delete"})
 # follow. Building one inside this module (``async with httpx.AsyncClient() as
 # c: await c.get(url)``) would otherwise issue requests entirely outside the
 # sweep's view, so every construction is a call site that must be reviewed.
+#
+# Matching is on the RESOLVED import binding, not the spelling: ``import httpx
+# as hx`` and ``from httpx import AsyncClient as AC`` are the same seam as
+# ``httpx.AsyncClient``, and review demonstrated both walking past a literal
+# name comparison (PR #773, W3).
 _HTTPX_CLIENT_CLASSES = frozenset({"AsyncClient", "Client"})
+_HTTPX_CLIENT_QUALNAMES = frozenset(
+    f"httpx.{name}" for name in _HTTPX_CLIENT_CLASSES
+)
+
+# Transports OTHER than httpx that this module could reach for. Deliberately a
+# small CLOSED list of the HTTP libraries a Python author actually reaches for
+# by habit, matched on the resolved import binding — not a general "unknown
+# transport" heuristic, which would be out of proportion to the risk and
+# unfalsifiable besides. ADR-014's scope statement says so explicitly: a
+# transport outside this list (a raw socket, a subprocess curl, a library nobody
+# has thought of) is NOT detected, and the sweep does not claim otherwise.
+_KNOWN_HTTP_MODULES = frozenset(
+    {"httpx", "requests", "aiohttp", "httpcore", "urllib3", "urllib.request", "http.client"}
+)
+
+# Attributes on one of those modules that put a request on the wire (or open a
+# session that will). Names NOT in this set — ``httpx.Limits``, ``httpx.Timeout``
+# — are configuration and must not be flagged: noise in the reviewed-seam
+# registry is how a registry rots into an allowlist.
+_HTTP_LIBRARY_CALL_ATTRS = _RAW_HTTP_ATTRS | frozenset(
+    {"head", "options", "urlopen", "Session", "ClientSession", "PoolManager",
+     "HTTPConnection", "HTTPSConnection"}
+)
 
 # Raw-httpx seams that carry no extractable URL template of their own because
 # they are the client's own plumbing: ``__init__`` builds the transport,
@@ -76,9 +104,10 @@ _HTTPX_CLIENT_CLASSES = frozenset({"AsyncClient", "Client"})
 # reaches httpx directly fails ``test_no_unreviewed_raw_http_call_sites`` until
 # a human classifies it.
 #
-# Owners are CLASS-QUALIFIED. That is load-bearing: the extractor walks every
-# class in the module, so an identically-named method on a second class must not
-# inherit this one's review.
+# Owners are QUALIFIED — ``Class.method``, or ``<module>.function`` for a
+# module-level one. That is load-bearing: the extractor walks every class and
+# every top-level function in the module, so an identically-named method on a
+# second class must not inherit this one's review.
 _REVIEWED_RAW_CALL_SITES = frozenset(
     {
         ("DispatcharrClient.__init__", "httpx.AsyncClient(...)"),
@@ -159,8 +188,11 @@ class RawCallSite:
     """An httpx seam whose URL the extractor cannot read.
 
     ``marker`` names the seam — ``self._client.request``, ``httpx.AsyncClient(...)``,
-    or ``alias of self._client (c)`` — and is matched against
-    ``_REVIEWED_RAW_CALL_SITES`` together with the class-qualified ``owner``.
+    ``alias of self._client (self._raw)``, ``requests.get(...)`` — and is matched
+    against ``_REVIEWED_RAW_CALL_SITES`` together with the qualified ``owner``.
+    Markers are CANONICAL rather than verbatim (an ``hx.AsyncClient()`` records
+    as ``httpx.AsyncClient(...)``) so the registry never has to enumerate
+    spellings.
     """
 
     owner: str
@@ -277,24 +309,171 @@ def _argument_annotations(function: ast.AST) -> dict[str, str]:
     return annotations
 
 
-def _is_self_client(expression: ast.expr) -> bool:
-    """True for the expression ``self._client``."""
+def _is_self_client(expression: ast.expr, self_names: frozenset[str]) -> bool:
+    """True for ``self._client`` — or the same attribute on an alias of ``self``."""
     return (
         isinstance(expression, ast.Attribute)
         and expression.attr == "_client"
         and isinstance(expression.value, ast.Name)
-        and expression.value.id == "self"
+        and expression.value.id in self_names
     )
 
 
-def _httpx_client_construction(func: ast.expr) -> Optional[str]:
-    """Return a marker if ``func`` constructs an httpx client, else ``None``."""
+def _dotted_name(expression: ast.expr) -> Optional[str]:
+    """``httpx.AsyncClient`` -> ``"httpx.AsyncClient"``; non-name shapes -> ``None``."""
+    parts: list[str] = []
+    node = expression
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Map every locally-bound import name to the dotted name it refers to.
+
+    ``import httpx`` -> ``{"httpx": "httpx"}``; ``import httpx as hx`` ->
+    ``{"hx": "httpx"}``; ``from httpx import AsyncClient as AC`` ->
+    ``{"AC": "httpx.AsyncClient"}``.
+
+    Imports inside function bodies are collected alongside module-level ones.
+    That over-approximates scope, and deliberately: the question this answers is
+    "could this name be a transport", where a false positive costs one review
+    entry and a false negative is a silent hole (PR #773 review, W3).
+    """
+    bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bindings[alias.asname] = alias.name
+                else:
+                    # ``import urllib.request`` binds the NAME ``urllib``.
+                    head = alias.name.split(".")[0]
+                    bindings[head] = head
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                local = alias.asname or alias.name
+                bindings[local] = f"{module}.{alias.name}" if module else alias.name
+    return bindings
+
+
+def _resolve_through_imports(
+    expression: ast.expr, bindings: Mapping[str, str]
+) -> Optional[str]:
+    """Resolve a dotted expression to its import-qualified name, if it is one."""
+    dotted = _dotted_name(expression)
+    if dotted is None:
+        return None
+    head, _, rest = dotted.partition(".")
+    if head not in bindings:
+        return None
+    base = bindings[head]
+    return f"{base}.{rest}" if rest else base
+
+
+def _httpx_client_construction(
+    func: ast.expr, bindings: Mapping[str, str]
+) -> Optional[str]:
+    """Return a marker if ``func`` constructs an httpx client, else ``None``.
+
+    Matched on the resolved import binding first (so ``hx.AsyncClient`` and a
+    renamed ``AC`` are both caught), then on the bare class name as a fallback
+    for a client class arriving by some route the bindings do not describe.
+    The marker is CANONICAL — always ``httpx.<Class>(...)`` — so the reviewed-seam
+    registry does not have to enumerate spellings.
+    """
+    resolved = _resolve_through_imports(func, bindings)
+    if resolved in _HTTPX_CLIENT_QUALNAMES:
+        return f"{resolved}(...)"
     if isinstance(func, ast.Attribute) and func.attr in _HTTPX_CLIENT_CLASSES:
         if isinstance(func.value, ast.Name) and func.value.id == "httpx":
             return f"httpx.{func.attr}(...)"
     if isinstance(func, ast.Name) and func.id in _HTTPX_CLIENT_CLASSES:
         return f"httpx.{func.id}(...)"
     return None
+
+
+def _http_library_call(func: ast.expr, bindings: Mapping[str, str]) -> Optional[str]:
+    """Return a marker if ``func`` is a request-issuing call on a known HTTP library.
+
+    Covers the "someone reached for ``requests`` out of habit" shape. Scope is a
+    small closed list (:data:`_KNOWN_HTTP_MODULES`) matched on the resolved
+    import binding; an unlisted transport is out of scope by ADR-014 rather than
+    silently claimed.
+    """
+    resolved = _resolve_through_imports(func, bindings)
+    if resolved is None or "." not in resolved:
+        return None
+    module, _, attribute = resolved.rpartition(".")
+    if module in _KNOWN_HTTP_MODULES and attribute in _HTTP_LIBRARY_CALL_ATTRS:
+        return f"{module}.{attribute}(...)"
+    return None
+
+
+def _binding_targets(node: ast.AST, is_bound_value) -> list[ast.expr]:
+    """Target expressions this statement binds to a value ``is_bound_value`` accepts.
+
+    Handles every assignment shape, because the alias tracker used to handle
+    exactly one (``ast.Name`` target of a plain ``ast.Assign``) and review walked
+    past it three different ways: an attribute target (``self._raw =
+    self._client``), a tuple assignment (``c, _ = self._client, None``), and
+    chained targets (``a = b = self._client``).
+    """
+
+    def pairs(target: ast.expr, value: ast.expr) -> list[ast.expr]:
+        if is_bound_value(value):
+            return [target]
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            found: list[ast.expr] = []
+            for element_target, element_value in zip(target.elts, value.elts):
+                found.extend(pairs(element_target, element_value))
+            return found
+        return []
+
+    if isinstance(node, ast.Assign):
+        found = []
+        for target in node.targets:
+            found.extend(pairs(target, node.value))
+        return found
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return pairs(node.target, node.value)
+    if isinstance(node, ast.NamedExpr):
+        return pairs(node.target, node.value)
+    return []
+
+
+def _self_alias_names(function_node: ast.AST) -> frozenset[str]:
+    """Local names bound to ``self`` — ``s = self`` and friends.
+
+    Without this, ``s = self; await s._request('GET', '/api/imaginary/')`` was
+    the worst shape review found: ``is_self_call`` compared against the literal
+    name ``self``, so the call produced neither an extracted template nor an
+    ``unresolved`` entry. It simply disappeared.
+
+    Iterated to a fixed point so a chain (``a = self; b = a``) resolves too.
+    """
+    names = {"self"}
+    for _ in range(len(names) + 3):
+        before = len(names)
+        for node in ast.walk(function_node):
+            targets = _binding_targets(
+                node, lambda value: isinstance(value, ast.Name) and value.id in names
+            )
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        if len(names) == before:
+            break
+    return frozenset(names)
 
 
 def _collect_units(tree: ast.Module) -> list[tuple[str, ast.AST]]:
@@ -398,64 +577,73 @@ def extract_client_calls(
     3. ``self._client.<verb>(<url expression>, ...)`` — the raw login /
        token-refresh posts, whose ``f"{self.base_url}/..."`` prefix is stripped.
 
-    Three kinds of *seam* are recorded in ``raw_call_sites`` instead, because
+    Four kinds of *seam* are recorded in ``raw_call_sites`` instead, because
     their URL is not readable here; each must be registered in
     ``_REVIEWED_RAW_CALL_SITES`` or it fails a test:
 
     * a non-verb call on ``self._client`` (``request``, ``send``, ``build_request``…),
     * constructing an httpx client (``async with httpx.AsyncClient() as c: …``),
-    * binding ``self._client`` to a local name (``c = self._client``), which
-      would otherwise let ``await c.get(url)`` slip past the attribute match.
+      matched on the RESOLVED import binding so ``hx.AsyncClient()`` and a
+      renamed ``AC()`` are the same seam,
+    * binding ``self._client`` to anything — any target shape, including an
+      attribute (``self._raw = self._client``), a tuple element
+      (``c, _ = self._client, None``), a walrus, or chained targets — which
+      would otherwise let ``await c.get(url)`` slip past the attribute match,
+    * a request-issuing call on one of the other HTTP libraries in
+      ``_KNOWN_HTTP_MODULES`` (``requests.get(url)``).
 
-    Anything unresolvable is recorded in ``unresolved`` so the caller can fail
-    loudly.
+    ``self`` itself is tracked through local aliases (``s = self``), so calls
+    made on one resolve normally rather than disappearing. Anything
+    unresolvable — including a ``_request`` on a receiver that cannot be
+    identified as the client — is recorded in ``unresolved`` so the caller can
+    fail loudly.
     """
     constants = {} if constants is None else constants
     tree = ast.parse(source)
+    bindings = import_bindings(tree)
     result = ExtractionResult()
 
     for owner, function_node in _collect_units(tree):
         annotations = _argument_annotations(function_node)
+        self_names = _self_alias_names(function_node)
 
-        # Local names bound to self._client are an escape hatch out of the
-        # attribute match below, so the BINDING itself is the reported seam —
-        # it fails regardless of how the alias is later used.
+        # Anything bound to self._client is an escape hatch out of the attribute
+        # match below, so the BINDING itself is the reported seam — it fails
+        # regardless of how the alias is later used, and regardless of the
+        # target's shape (name, attribute, tuple element, walrus, chained).
         aliases: set[str] = set()
         for node in ast.walk(function_node):
-            targets: list[ast.expr] = []
-            if isinstance(node, ast.Assign) and _is_self_client(node.value):
-                targets = list(node.targets)
-            elif (
-                isinstance(node, ast.AnnAssign)
-                and node.value is not None
-                and _is_self_client(node.value)
+            for target in _binding_targets(
+                node, lambda value: _is_self_client(value, self_names)
             ):
-                targets = [node.target]
-            elif isinstance(node, ast.NamedExpr) and _is_self_client(node.value):
-                targets = [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    aliases.add(target.id)
-                    result.raw_call_sites.append(
-                        RawCallSite(
-                            owner, f"alias of self._client ({target.id})", node.lineno
-                        )
+                aliases.add(ast.unparse(target))
+                result.raw_call_sites.append(
+                    RawCallSite(
+                        owner,
+                        f"alias of self._client ({ast.unparse(target)})",
+                        node.lineno,
                     )
+                )
 
         for node in ast.walk(function_node):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
 
-            construction = _httpx_client_construction(func)
+            construction = _httpx_client_construction(func, bindings)
             if construction is not None:
                 result.raw_call_sites.append(RawCallSite(owner, construction, node.lineno))
+                continue
+
+            library_call = _http_library_call(func, bindings)
+            if library_call is not None:
+                result.raw_call_sites.append(RawCallSite(owner, library_call, node.lineno))
                 continue
 
             if not isinstance(func, ast.Attribute):
                 continue
 
-            is_self_call = isinstance(func.value, ast.Name) and func.value.id == "self"
+            is_self_call = isinstance(func.value, ast.Name) and func.value.id in self_names
 
             if is_self_call and func.attr == "_request":
                 _extract_request_call(node, owner, annotations, constants, result)
@@ -468,7 +656,7 @@ def extract_client_calls(
                     constants,
                     result,
                 )
-            elif _is_self_client(func.value):
+            elif _is_self_client(func.value, self_names):
                 if func.attr in _RAW_VERB_ATTRS:
                     _extract_forwarded_call(
                         node, func.attr.upper(), owner, annotations, constants, result
@@ -477,15 +665,26 @@ def extract_client_calls(
                     result.raw_call_sites.append(
                         RawCallSite(owner, f"self._client.{func.attr}", node.lineno)
                     )
-            elif (
-                isinstance(func.value, ast.Name)
-                and func.value.id in aliases
-                and func.attr in _RAW_HTTP_ATTRS
-            ):
+            elif ast.unparse(func.value) in aliases and func.attr in _RAW_HTTP_ATTRS:
                 result.raw_call_sites.append(
                     RawCallSite(
-                        owner, f"{func.value.id}.{func.attr} (alias of self._client)",
+                        owner,
+                        f"{ast.unparse(func.value)}.{func.attr} (alias of self._client)",
                         node.lineno,
+                    )
+                )
+            elif func.attr == "_request" or func.attr in _PATH_FORWARDING_HELPERS:
+                # A request-issuing helper invoked on something the extractor
+                # cannot identify as the client. It may be perfectly legitimate,
+                # but the sweep must not decide that silently — the whole point
+                # is that an unreadable call fails loudly (property 1).
+                result.unresolved.append(
+                    UnresolvedExpression(
+                        owner,
+                        node.lineno,
+                        ast.unparse(node),
+                        f"{func.attr} called on a receiver the extractor cannot "
+                        f"identify as the client ({ast.unparse(func.value)})",
                     )
                 )
 
@@ -753,11 +952,13 @@ def test_every_client_path_expression_resolves(extraction: ExtractionResult):
 def test_no_unreviewed_raw_http_call_sites(extraction: ExtractionResult):
     """Every httpx seam THIS MODULE opens is extracted or registered as reviewed.
 
-    The three seam shapes checked are a non-verb call on ``self._client``, an
-    httpx client construction, and a local name bound to ``self._client``. This
-    is a claim about ``dispatcharr_client.py`` only — a request issued from
-    another module is outside the sweep's scope (ADR-014), not something this
-    test can see.
+    The seam shapes checked are a non-verb call on ``self._client``, an httpx
+    client construction, ANY binding of ``self._client``, and a request-issuing
+    call on one of ``_KNOWN_HTTP_MODULES``. Each is matched on shape and on the
+    resolved import binding rather than on a literal name.
+
+    Two boundaries this test does NOT cross, both by ADR-014: a request issued
+    from another module, and a transport outside ``_KNOWN_HTTP_MODULES``.
     """
     unreviewed = unreviewed_raw_call_sites(extraction)
     assert not unreviewed, (
@@ -1166,6 +1367,147 @@ def test_extractor_flags_an_httpx_client_constructed_inside_the_module():
     assert [(site.owner, site.marker) for site in unreviewed] == [
         ("DispatcharrClient.get_thing", "httpx.AsyncClient(...)")
     ]
+
+
+# ---------------------------------------------------------------------------
+# Seam detection is shape-based, not spelling-based
+# (PR #773 review, W3: six ordinary spellings were run against the real module
+# and every one of them walked past a literal-name match, six silently-green
+# holes in the "every unreadable seam is visible" property.)
+# ---------------------------------------------------------------------------
+
+
+def _markers(source: str) -> set[str]:
+    return {site.marker for site in unreviewed_raw_call_sites(extract_client_calls(source))}
+
+
+def test_extractor_flags_an_attribute_alias_of_the_transport():
+    """``self._raw = self._client`` binds the transport just as ``c =`` does.
+
+    The alias tracker used to record ``ast.Name`` targets only, so an attribute
+    target escaped both the binding check and the usage check.
+    """
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        self._raw = self._client\n"
+        "        return await self._raw.get(url)\n"
+    )
+    markers = _markers(source)
+    assert "alias of self._client (self._raw)" in markers, "the binding must be seen"
+    assert "self._raw.get (alias of self._client)" in markers, "so must the use"
+
+
+def test_extractor_flags_a_tuple_bound_alias_of_the_transport():
+    """``c, _ = self._client, None`` — the value is a tuple, not ``self._client``."""
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        c, _ = self._client, None\n"
+        "        return await c.get(url)\n"
+    )
+    assert "alias of self._client (c)" in _markers(source)
+
+
+def test_extractor_flags_a_multiple_target_alias_of_the_transport():
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        first = second = self._client\n"
+        "        return await second.get(url)\n"
+    )
+    markers = _markers(source)
+    assert "alias of self._client (first)" in markers
+    assert "alias of self._client (second)" in markers
+
+
+def test_extractor_flags_an_httpx_client_constructed_via_an_import_alias():
+    """``import httpx as hx`` — construction is matched on the resolved binding."""
+    source = "import httpx as hx\n" + _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        async with hx.AsyncClient() as c:\n"
+        "            return await c.get(url)\n"
+    )
+    assert "httpx.AsyncClient(...)" in _markers(source)
+
+
+def test_extractor_flags_an_httpx_client_imported_under_another_name():
+    """``from httpx import AsyncClient as AC`` — likewise resolved, not spelled."""
+    source = "from httpx import AsyncClient as AC\n" + _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        c = AC()\n"
+        "        return await c.get(url)\n"
+    )
+    assert "httpx.AsyncClient(...)" in _markers(source)
+
+
+def test_extractor_resolves_a_call_made_through_an_alias_of_self():
+    """``s = self`` was the worst shape: neither a seam NOR an unresolved entry.
+
+    ``is_self_call`` matched the literal name ``self``, so the whole call
+    vanished. It now resolves like any other, which means the sweep checks the
+    path — this synthetic one would fail as PATH NOT IN SCHEMA, which is the
+    point.
+    """
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self):\n"
+        "        s = self\n"
+        "        return await s._request('GET', '/api/imaginary/')\n"
+    )
+    result = extract_client_calls(source)
+    assert result.templates == {("GET", "/api/imaginary/")}
+    assert result.unresolved == []
+    assert result.calls[0].owner == "DispatcharrClient.get_thing"
+
+
+def test_extractor_sees_the_transport_through_an_alias_of_self():
+    """``s = self; s._client.stream(...)`` is still a raw seam."""
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, path):\n"
+        "        s = self\n"
+        "        return await s._client.stream('GET', path)\n"
+    )
+    assert "self._client.stream" in _markers(source)
+
+
+def test_a_request_helper_on_an_unidentifiable_receiver_fails_loudly():
+    """If the receiver cannot be identified as the client, say so — never drop it."""
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, other):\n"
+        "        return await other._request('GET', '/api/imaginary/')\n"
+    )
+    result = extract_client_calls(source)
+    assert result.calls == []
+    assert len(result.unresolved) == 1
+    assert "receiver" in result.unresolved[0].reason
+
+
+def test_extractor_flags_a_non_httpx_http_library():
+    """``import requests`` is a transport too — a small closed list, see ADR-014."""
+    source = "import requests\n" + _SYNTHETIC_CLIENT_HEADER + (
+        "    def get_thing(self, url):\n"
+        "        return requests.get(url)\n"
+    )
+    assert "requests.get(...)" in _markers(source)
+
+
+def test_extractor_flags_a_bare_name_imported_from_an_http_library():
+    source = "from requests import get\n" + _SYNTHETIC_CLIENT_HEADER + (
+        "    def get_thing(self, url):\n"
+        "        return get(url)\n"
+    )
+    assert "requests.get(...)" in _markers(source)
+
+
+def test_non_transport_calls_on_a_known_http_module_are_not_flagged():
+    """``httpx.Limits(...)`` is configuration, not a request — no false positives.
+
+    The real client calls it in ``__init__``; flagging it would put noise in the
+    reviewed-seam registry, which is how a registry rots into an allowlist.
+    """
+    source = "import httpx\n" + _SYNTHETIC_CLIENT_HEADER + (
+        "    def __init__(self):\n"
+        "        self._limits = httpx.Limits(max_connections=20)\n"
+        "        self._timeout = httpx.Timeout(30.0)\n"
+    )
+    assert _markers(source) == set()
 
 
 def test_reviewed_seams_are_matched_per_class_not_per_method_name():
