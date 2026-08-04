@@ -53,8 +53,6 @@ _MANIFEST_PATH = (
     _BACKEND_DIR / "tests" / "fixtures" / "dispatcharr_openapi_paths_manifest.json"
 )
 
-_CLIENT_CLASS_NAME = "DispatcharrClient"
-
 # Attribute names on ``self._client`` (the raw httpx.AsyncClient) that can put a
 # request on the wire. Every call site using one of these is either extracted as
 # a client call (the verb methods) or must appear in the reviewed plumbing set
@@ -64,17 +62,29 @@ _RAW_HTTP_ATTRS = frozenset(
 )
 _RAW_VERB_ATTRS = frozenset({"get", "post", "put", "patch", "delete"})
 
-# Raw-httpx call sites that carry no extractable URL template of their own
-# because they are the client's own plumbing: ``_request`` forwards a method +
-# path it was given, and ``_get_json_bounded`` forwards a path parameter whose
-# call sites ARE extracted (see ``_PATH_FORWARDING_HELPERS``). Reviewed once,
-# recorded here; anything NEW that reaches httpx directly fails
-# ``test_no_unreviewed_raw_http_call_sites`` until a human classifies it.
-_REVIEWED_PLUMBING_CALL_SITES = frozenset(
+# httpx client classes whose CONSTRUCTION opens a transport the extractor cannot
+# follow. Building one inside this module (``async with httpx.AsyncClient() as
+# c: await c.get(url)``) would otherwise issue requests entirely outside the
+# sweep's view, so every construction is a call site that must be reviewed.
+_HTTPX_CLIENT_CLASSES = frozenset({"AsyncClient", "Client"})
+
+# Raw-httpx seams that carry no extractable URL template of their own because
+# they are the client's own plumbing: ``__init__`` builds the transport,
+# ``_request`` forwards a method + path it was given, and ``_get_json_bounded``
+# forwards a path parameter whose call sites ARE extracted (see
+# ``_PATH_FORWARDING_HELPERS``). Reviewed once, recorded here; anything NEW that
+# reaches httpx directly fails ``test_no_unreviewed_raw_http_call_sites`` until
+# a human classifies it.
+#
+# Owners are CLASS-QUALIFIED. That is load-bearing: the extractor walks every
+# class in the module, so an identically-named method on a second class must not
+# inherit this one's review.
+_REVIEWED_RAW_CALL_SITES = frozenset(
     {
-        ("_request", "request"),
-        ("_get_json_bounded", "build_request"),
-        ("_get_json_bounded", "send"),
+        ("DispatcharrClient.__init__", "httpx.AsyncClient(...)"),
+        ("DispatcharrClient._request", "self._client.request"),
+        ("DispatcharrClient._get_json_bounded", "self._client.build_request"),
+        ("DispatcharrClient._get_json_bounded", "self._client.send"),
     }
 )
 
@@ -116,7 +126,7 @@ class ClientCall:
     def describe(self) -> str:
         return (
             f"{self.method} {self.template} "
-            f"(DispatcharrClient.{self.owner}, {_CLIENT_SOURCE_PATH.name}:{self.lineno})"
+            f"({self.owner}, {_CLIENT_SOURCE_PATH.name}:{self.lineno})"
         )
 
 
@@ -130,19 +140,24 @@ class UnresolvedExpression:
     reason: str
 
     def describe(self) -> str:
-        return (
-            f"DispatcharrClient.{self.owner} line {self.lineno}: {self.reason} "
-            f"-- {self.expression}"
-        )
+        return f"{self.owner} line {self.lineno}: {self.reason} -- {self.expression}"
 
 
 @dataclass(frozen=True)
 class RawCallSite:
-    """A direct ``self._client.<attr>(...)`` call site."""
+    """An httpx seam whose URL the extractor cannot read.
+
+    ``marker`` names the seam — ``self._client.request``, ``httpx.AsyncClient(...)``,
+    or ``alias of self._client (c)`` — and is matched against
+    ``_REVIEWED_RAW_CALL_SITES`` together with the class-qualified ``owner``.
+    """
 
     owner: str
-    attribute: str
+    marker: str
     lineno: int
+
+    def describe(self) -> str:
+        return f"{self.marker} in {self.owner} ({_CLIENT_SOURCE_PATH.name}:{self.lineno})"
 
 
 @dataclass
@@ -154,6 +169,15 @@ class ExtractionResult:
     @property
     def templates(self) -> set[tuple[str, str]]:
         return {(call.method, call.template) for call in self.calls}
+
+
+def unreviewed_raw_call_sites(result: ExtractionResult) -> list[RawCallSite]:
+    """Raw httpx seams that nobody has classified yet."""
+    return [
+        site
+        for site in result.raw_call_sites
+        if (site.owner, site.marker) not in _REVIEWED_RAW_CALL_SITES
+    ]
 
 
 class _Unresolvable(Exception):
@@ -242,59 +266,126 @@ def _argument_annotations(function: ast.AST) -> dict[str, str]:
     return annotations
 
 
+def _is_self_client(expression: ast.expr) -> bool:
+    """True for the expression ``self._client``."""
+    return (
+        isinstance(expression, ast.Attribute)
+        and expression.attr == "_client"
+        and isinstance(expression.value, ast.Name)
+        and expression.value.id == "self"
+    )
+
+
+def _httpx_client_construction(func: ast.expr) -> Optional[str]:
+    """Return a marker if ``func`` constructs an httpx client, else ``None``."""
+    if isinstance(func, ast.Attribute) and func.attr in _HTTPX_CLIENT_CLASSES:
+        if isinstance(func.value, ast.Name) and func.value.id == "httpx":
+            return f"httpx.{func.attr}(...)"
+    if isinstance(func, ast.Name) and func.id in _HTTPX_CLIENT_CLASSES:
+        return f"httpx.{func.id}(...)"
+    return None
+
+
+def _collect_units(tree: ast.Module) -> list[tuple[str, ast.AST]]:
+    """Return ``(class-qualified name, function node)`` for every function.
+
+    Walks the module body recursively through EVERY ``ClassDef``, not just one
+    named class: PR #773's review proved that a routine refactor — moving nine
+    methods onto a mixin base, or adding a second request-issuing class —
+    silently dropped those calls from the sweep while it still reported green.
+
+    Nested functions are NOT separate units; they are reached by ``ast.walk``
+    from their enclosing function, so a call inside ``_get_json_bounded``'s
+    local ``send()`` is still attributed to ``_get_json_bounded``.
+    """
+    units: list[tuple[str, ast.AST]] = []
+
+    def visit(body, prefix: str) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                units.append((prefix + node.name, node))
+            elif isinstance(node, ast.ClassDef):
+                visit(node.body, f"{prefix}{node.name}.")
+
+    visit(tree.body, "")
+    return units
+
+
 def extract_client_calls(
     source: str, constants: Optional[Mapping[str, str]] = None
 ) -> ExtractionResult:
-    """Derive every Dispatcharr call the client can issue from its source text.
+    """Derive every Dispatcharr call the module can issue from its source text.
+
+    Every function in the module is walked — top-level functions and the methods
+    of every class at any nesting depth — so coverage does not depend on the
+    calls living in one particular class.
 
     Three kinds of call site are extracted:
 
     1. ``self._request("<METHOD>", <path expression>, ...)`` — the shared path.
     2. ``self._get_json_bounded(<path expression>, ...)`` — the bounded-stream
        helper, which forwards its first argument to httpx as a GET.
-    3. ``self._client.<verb>(<url expression>, ...)`` — the two raw login /
+    3. ``self._client.<verb>(<url expression>, ...)`` — the raw login /
        token-refresh posts, whose ``f"{self.base_url}/..."`` prefix is stripped.
 
-    Anything else that touches ``self._client`` is recorded in
-    ``raw_call_sites`` for the plumbing-registry test; anything unresolvable is
-    recorded in ``unresolved`` so the caller can fail loudly.
+    Three kinds of *seam* are recorded in ``raw_call_sites`` instead, because
+    their URL is not readable here; each must be registered in
+    ``_REVIEWED_RAW_CALL_SITES`` or it fails a test:
+
+    * a non-verb call on ``self._client`` (``request``, ``send``, ``build_request``…),
+    * constructing an httpx client (``async with httpx.AsyncClient() as c: …``),
+    * binding ``self._client`` to a local name (``c = self._client``), which
+      would otherwise let ``await c.get(url)`` slip past the attribute match.
+
+    Anything unresolvable is recorded in ``unresolved`` so the caller can fail
+    loudly.
     """
     constants = {} if constants is None else constants
     tree = ast.parse(source)
     result = ExtractionResult()
 
-    class_node = next(
-        (
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == _CLIENT_CLASS_NAME
-        ),
-        None,
-    )
-    if class_node is None:
-        raise AssertionError(
-            f"{_CLIENT_CLASS_NAME} is not defined in the parsed source — the "
-            "extractor is looking at the wrong module or the class was renamed."
-        )
+    for owner, function_node in _collect_units(tree):
+        annotations = _argument_annotations(function_node)
 
-    for method_node in class_node.body:
-        if not isinstance(method_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        owner = method_node.name
-        annotations = _argument_annotations(method_node)
+        # Local names bound to self._client are an escape hatch out of the
+        # attribute match below, so the BINDING itself is the reported seam —
+        # it fails regardless of how the alias is later used.
+        aliases: set[str] = set()
+        for node in ast.walk(function_node):
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign) and _is_self_client(node.value):
+                targets = list(node.targets)
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and node.value is not None
+                and _is_self_client(node.value)
+            ):
+                targets = [node.target]
+            elif isinstance(node, ast.NamedExpr) and _is_self_client(node.value):
+                targets = [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    aliases.add(target.id)
+                    result.raw_call_sites.append(
+                        RawCallSite(
+                            owner, f"alias of self._client ({target.id})", node.lineno
+                        )
+                    )
 
-        for node in ast.walk(method_node):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        for node in ast.walk(function_node):
+            if not isinstance(node, ast.Call):
                 continue
             func = node.func
 
+            construction = _httpx_client_construction(func)
+            if construction is not None:
+                result.raw_call_sites.append(RawCallSite(owner, construction, node.lineno))
+                continue
+
+            if not isinstance(func, ast.Attribute):
+                continue
+
             is_self_call = isinstance(func.value, ast.Name) and func.value.id == "self"
-            is_raw_client_call = (
-                isinstance(func.value, ast.Attribute)
-                and func.value.attr == "_client"
-                and isinstance(func.value.value, ast.Name)
-                and func.value.value.id == "self"
-            )
 
             if is_self_call and func.attr == "_request":
                 _extract_request_call(node, owner, annotations, constants, result)
@@ -307,12 +398,26 @@ def extract_client_calls(
                     constants,
                     result,
                 )
-            elif is_raw_client_call:
-                result.raw_call_sites.append(RawCallSite(owner, func.attr, node.lineno))
+            elif _is_self_client(func.value):
                 if func.attr in _RAW_VERB_ATTRS:
                     _extract_forwarded_call(
                         node, func.attr.upper(), owner, annotations, constants, result
                     )
+                elif func.attr in _RAW_HTTP_ATTRS:
+                    result.raw_call_sites.append(
+                        RawCallSite(owner, f"self._client.{func.attr}", node.lineno)
+                    )
+            elif (
+                isinstance(func.value, ast.Name)
+                and func.value.id in aliases
+                and func.attr in _RAW_HTTP_ATTRS
+            ):
+                result.raw_call_sites.append(
+                    RawCallSite(
+                        owner, f"{func.value.id}.{func.attr} (alias of self._client)",
+                        node.lineno,
+                    )
+                )
 
     return result
 
@@ -576,37 +681,40 @@ def test_every_client_path_expression_resolves(extraction: ExtractionResult):
 
 
 def test_no_unreviewed_raw_http_call_sites(extraction: ExtractionResult):
-    """Every direct httpx call site is either extracted or reviewed plumbing."""
-    unreviewed = [
-        site
-        for site in extraction.raw_call_sites
-        if site.attribute in _RAW_HTTP_ATTRS
-        and site.attribute not in _RAW_VERB_ATTRS
-        and (site.owner, site.attribute) not in _REVIEWED_PLUMBING_CALL_SITES
-    ]
+    """Every httpx seam THIS MODULE opens is extracted or registered as reviewed.
+
+    The three seam shapes checked are a non-verb call on ``self._client``, an
+    httpx client construction, and a local name bound to ``self._client``. This
+    is a claim about ``dispatcharr_client.py`` only — a request issued from
+    another module is outside the sweep's scope (ADR-014), not something this
+    test can see.
+    """
+    unreviewed = unreviewed_raw_call_sites(extraction)
     assert not unreviewed, (
-        "New raw httpx call site(s) in DispatcharrClient that the sweep does not "
-        "cover:\n"
-        + "\n".join(
-            f"  self._client.{site.attribute}(...) in "
-            f"DispatcharrClient.{site.owner} (line {site.lineno})"
-            for site in unreviewed
-        )
+        "New raw httpx seam(s) in dispatcharr_client.py that the sweep cannot "
+        "read a URL from:\n"
+        + "\n".join(f"  {site.describe()}" for site in unreviewed)
         + "\n\nEither route the call through self._request (preferred), or — if "
         "it is genuinely plumbing that forwards a path its own callers supply — "
-        "add it to _REVIEWED_PLUMBING_CALL_SITES and to _PATH_FORWARDING_HELPERS "
-        "so its call sites are still swept."
+        "add it to _REVIEWED_RAW_CALL_SITES and, when it forwards a path, to "
+        "_PATH_FORWARDING_HELPERS so its call sites are still swept."
     )
 
 
 def test_extractor_call_volume_canary(extraction: ExtractionResult):
     """A broken extractor must not pass by finding nothing.
 
-    The client had 95 resolvable call sites over 90 distinct (method, template)
-    pairs when the sweep landed. The floors are deliberately well below that so
-    ordinary refactoring does not trip them, while a regression that silently
-    stops extracting (a renamed helper, a changed call convention) cannot slip
-    through as a vacuously green sweep.
+    The floors are deliberately far below the actual count (which the assertion
+    messages report, so this docstring cannot go stale) — they exist to catch a
+    total extraction failure, e.g. a renamed helper or a changed call
+    convention, not to measure coverage.
+
+    They are NOT a coverage guard and must not be mistaken for one: PR #773's
+    review dropped nine real calls with a routine refactor and these floors did
+    not move. That class of silent shrinkage is caught structurally instead, by
+    walking every class and top-level function in the module and by flagging
+    every unreadable httpx seam — see ``_collect_units`` and
+    ``test_no_unreviewed_raw_http_call_sites``.
     """
     assert len(extraction.calls) >= 50, (
         f"Extractor found only {len(extraction.calls)} Dispatcharr call sites; "
@@ -619,10 +727,8 @@ def test_extractor_call_volume_canary(extraction: ExtractionResult):
     )
 
 
-def test_extractor_covers_paths_from_all_three_call_conventions(
-    extraction: ExtractionResult,
-):
-    """The literal, module-constant and raw-login conventions are all extracted."""
+def test_extractor_covers_every_call_convention(extraction: ExtractionResult):
+    """Each convention the client actually uses produces an extracted template."""
     templates = extraction.templates
     # 1. plain literal via self._request
     assert ("GET", "/api/channels/channels/") in templates
@@ -633,6 +739,16 @@ def test_extractor_covers_paths_from_all_three_call_conventions(
     assert ("POST", "/api/accounts/token/refresh/") in templates
     # 4. the bounded-stream helper's forwarded path
     assert ("GET", "/api/epg/epgdata/") in templates
+
+
+def test_extraction_owners_are_class_qualified(extraction: ExtractionResult):
+    """Owners name their class, so a second class cannot inherit a review entry."""
+    owners = {call.owner for call in extraction.calls}
+    assert "DispatcharrClient.get_channels" in owners
+    assert all("." in owner for owner in owners), (
+        f"unqualified owner(s) in {sorted(owners)[:5]} — the reviewed-seam "
+        "registry is keyed on Class.method and would mis-match"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +894,7 @@ def test_extractor_reports_an_unresolvable_path_expression():
     result = extract_client_calls(source)
     assert result.calls == []
     assert len(result.unresolved) == 1
-    assert result.unresolved[0].owner == "get_thing"
+    assert result.unresolved[0].owner == "DispatcharrClient.get_thing"
     assert "neither a literal" in result.unresolved[0].reason
 
 
@@ -817,19 +933,122 @@ def test_extractor_reports_an_unknown_module_constant():
 
 
 def test_extractor_flags_a_new_raw_httpx_call_site():
-    """A new raw call site is visible to the plumbing-registry test."""
+    """A new raw call site is visible to the reviewed-seam test."""
     source = _SYNTHETIC_CLIENT_HEADER + (
         "    async def stream_thing(self, path):\n"
         "        return await self._client.stream('GET', path)\n"
     )
-    result = extract_client_calls(source)
-    unreviewed = [
-        site
-        for site in result.raw_call_sites
-        if site.attribute in _RAW_HTTP_ATTRS
-        and site.attribute not in _RAW_VERB_ATTRS
-        and (site.owner, site.attribute) not in _REVIEWED_PLUMBING_CALL_SITES
+    unreviewed = unreviewed_raw_call_sites(extract_client_calls(source))
+    assert [(site.owner, site.marker) for site in unreviewed] == [
+        ("DispatcharrClient.stream_thing", "self._client.stream")
     ]
-    assert [(site.owner, site.attribute) for site in unreviewed] == [
-        ("stream_thing", "stream")
+
+
+# ---------------------------------------------------------------------------
+# Extractor completeness — refactors that must NOT silently shrink the sweep
+# (PR #773 review, W2: each of these left the sweep green while dropping
+# coverage, and the 50/40 canary floors were far too coarse to notice.)
+# ---------------------------------------------------------------------------
+
+
+def test_extractor_covers_methods_inherited_from_a_mixin_in_the_module():
+    """Moving methods onto a mixin base must not drop them from the sweep."""
+    source = (
+        "class _M3UFilterMixin:\n"
+        "    async def get_m3u_filters(self, account_id: int):\n"
+        "        return await self._request('GET', f'/api/m3u/accounts/{account_id}/filters/')\n"
+        "\n"
+        "class DispatcharrClient(_M3UFilterMixin):\n"
+        "    async def get_channels(self):\n"
+        "        return await self._request('GET', '/api/channels/channels/')\n"
+    )
+    result = extract_client_calls(source)
+    assert result.templates == {
+        ("GET", "/api/m3u/accounts/{}/filters/"),
+        ("GET", "/api/channels/channels/"),
+    }
+    assert {call.owner for call in result.calls} == {
+        "_M3UFilterMixin.get_m3u_filters",
+        "DispatcharrClient.get_channels",
+    }
+
+
+def test_extractor_covers_a_second_request_issuing_class():
+    """A sibling class in the same module is swept too, not ignored."""
+    source = (
+        "class DispatcharrClient:\n"
+        "    async def get_channels(self):\n"
+        "        return await self._request('GET', '/api/channels/channels/')\n"
+        "\n"
+        "class DispatcharrAdminClient:\n"
+        "    async def get_users(self):\n"
+        "        return await self._request('GET', '/api/accounts/users/')\n"
+    )
+    result = extract_client_calls(source)
+    assert ("GET", "/api/accounts/users/") in result.templates
+
+
+def test_extractor_covers_a_top_level_function():
+    source = (
+        "async def fetch_version(self):\n"
+        "    return await self._request('GET', '/api/core/version/')\n"
+    )
+    result = extract_client_calls(source)
+    assert result.templates == {("GET", "/api/core/version/")}
+    assert result.calls[0].owner == "fetch_version"
+
+
+def test_extractor_flags_a_local_alias_of_the_transport():
+    """``c = self._client`` is an escape hatch and must be reported, not ignored."""
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, path):\n"
+        "        c = self._client\n"
+        "        return await c.get(path)\n"
+    )
+    unreviewed = unreviewed_raw_call_sites(extract_client_calls(source))
+    markers = {site.marker for site in unreviewed}
+    assert "alias of self._client (c)" in markers
+    assert all(
+        site.owner == "DispatcharrClient.get_thing" for site in unreviewed
+    )
+
+
+def test_extractor_flags_a_walrus_alias_of_the_transport():
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, path):\n"
+        "        return await (c := self._client).get(path)\n"
+    )
+    markers = {
+        site.marker for site in unreviewed_raw_call_sites(extract_client_calls(source))
+    }
+    assert "alias of self._client (c)" in markers
+
+
+def test_extractor_flags_an_httpx_client_constructed_inside_the_module():
+    """``async with httpx.AsyncClient() as c`` bypasses the transport entirely."""
+    source = _SYNTHETIC_CLIENT_HEADER + (
+        "    async def get_thing(self, url):\n"
+        "        async with httpx.AsyncClient() as c:\n"
+        "            return await c.get(url)\n"
+    )
+    unreviewed = unreviewed_raw_call_sites(extract_client_calls(source))
+    assert [(site.owner, site.marker) for site in unreviewed] == [
+        ("DispatcharrClient.get_thing", "httpx.AsyncClient(...)")
+    ]
+
+
+def test_reviewed_seams_are_matched_per_class_not_per_method_name():
+    """An identically-named method on another class does not inherit a review."""
+    source = (
+        "class DispatcharrClient:\n"
+        "    async def _request(self, method, path):\n"
+        "        return await self._client.request(method, path)\n"
+        "\n"
+        "class RogueClient:\n"
+        "    async def _request(self, method, path):\n"
+        "        return await self._client.request(method, path)\n"
+    )
+    unreviewed = unreviewed_raw_call_sites(extract_client_calls(source))
+    assert [(site.owner, site.marker) for site in unreviewed] == [
+        ("RogueClient._request", "self._client.request")
     ]
