@@ -667,6 +667,56 @@ async def test_stream_profile_with_unresolvable_user_agent_is_skipped():
 
 
 @pytest.mark.asyncio
+async def test_locked_builtin_stream_profile_is_skipped_never_updated():
+    """A ``locked`` built-in profile is skipped + remapped — NEVER updated.
+
+    Verified against the Dispatcharr 0.28.2 image source. ``StreamProfile.save()``
+    (``/app/core/models.py`` lines 78-101) refuses any change to a locked profile:
+    it iterates ``self._meta.fields`` comparing ``field.name`` against
+    ``allowed_fields = {"user_agent_id"}``, and a ForeignKey's ``field.name`` is
+    ``"user_agent"`` — so even the one field the comment says is permitted
+    raises ``Cannot modify user_agent on a protected profile.`` over the REST
+    API (``StreamProfileViewSet`` is a plain ModelViewSet, so a PATCH lands in
+    ``save()``, not the ``update()`` classmethod).
+
+    This importer is create-or-skip by construction — it reaches exactly two
+    client methods, ``config.getter`` and ``config.creator`` — so the locked
+    guard is unreachable today. This test pins that: adding an update path here
+    would have to reckon with ``locked`` first. Dispatcharr ships ``ffmpeg``,
+    ``Proxy``, ``Redirect`` and ``streamlink`` locked, so this is the common case
+    on every restore, not a corner case.
+    """
+    client = _client(
+        stream_profiles=[
+            {"id": 1, "name": "ffmpeg", "locked": True, "user_agent": 2},
+        ]
+    )
+    remap = _remap()
+    remap.add(EntityType.USER_AGENT, 4, 77)
+    report = _report()
+
+    await import_stream_profiles(
+        # The archive's copy carries a DIFFERENT user agent than the target's.
+        archive_rows=[{"id": 9, "name": "ffmpeg", "locked": True, "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.STREAM_PROFILE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.updated == 0
+    client.create_stream_profile.assert_not_called()
+    # The ONLY upstream call was the list read — no create, no update, no patch.
+    assert {name for name, _, _ in client.mock_calls} == {"get_stream_profiles"}
+    # The source id still resolves, to the EXISTING destination row.
+    assert remap.resolve(EntityType.STREAM_PROFILE, 9) == 1
+
+
+@pytest.mark.asyncio
 async def test_stream_profile_without_user_agent_still_creates():
     """A profile carrying no ``user_agent`` (or an explicit null) is unaffected by
     the FK remap — the built-in Dispatcharr profiles look like this."""
