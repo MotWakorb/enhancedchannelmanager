@@ -49,6 +49,7 @@ client.
 import pytest
 from unittest.mock import AsyncMock
 
+from credential_sentinel import REDACTION_SENTINEL
 from dbas.importers.m3u_accounts import (
     apply_deferred_auto_sync,
     import_m3u_accounts,
@@ -703,3 +704,194 @@ async def test_report_and_deferred_carry_no_credential_material():
     blob = report.model_dump_json() + ledger.model_dump_json() + repr(result.deferred_auto_sync_settings)
     for marker in secret_markers:
         assert marker not in blob
+
+
+# ---------------------------------------------------------------------------
+# Redaction-sentinel handling on restore (bead …-6pilh)
+# ---------------------------------------------------------------------------
+#
+# A STANDARD (non-encrypted, redact-by-default) artifact carries the literal
+# ``***REDACTED***`` in every credential-class field. Restoring that value
+# verbatim produced an XC account that LOOKED fully configured (populated
+# password field, every truthiness probe True) and could not authenticate — zero
+# streams, and a before/after credential-presence diff that reported the dead
+# account as byte-identical. The importer must therefore leave the credential
+# UNSET and TELL the operator which accounts need it re-entered.
+
+
+@pytest.mark.asyncio
+async def test_redacted_password_is_never_written_to_the_destination():
+    """THE regression: the sentinel must not reach create_m3u_account."""
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    payload = captured["payload"]
+    assert payload.get("password") != REDACTION_SENTINEL
+    # Left UNSET (absent), not set to a placeholder — a blank field is visibly
+    # incomplete in the Dispatcharr UI and reads as absent to every check.
+    assert "password" not in payload
+    # Non-credential fields are untouched.
+    assert payload["name"] == "Infinity"
+    assert payload["username"] == "mot2"
+
+
+@pytest.mark.asyncio
+async def test_redacted_credential_is_a_counted_post_restore_action_item():
+    client = _client()
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    assert len(report.credential_reentry_details) == 1
+    detail = report.credential_reentry_details[0]
+    assert detail.entity_type == EntityType.M3U_ACCOUNT
+    assert detail.label == "Infinity"
+    assert detail.fields == ["password"]
+    assert detail.source_export_id == 5
+    assert detail.destination_id == 901
+
+
+@pytest.mark.asyncio
+async def test_credential_reentry_detail_carries_no_secret_material():
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "server_url": "http://secret-provider/playlist.m3u",
+            "username": "secret-user",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    blob = report.model_dump_json()
+    assert "secret-provider" not in blob
+    assert "secret-user" not in blob
+    # The FIELD NAME is reported; the value never is.
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_credential_bearing_artifact_still_restores_the_real_password():
+    """The encrypted + include_credentials path is unchanged — it works today."""
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": "63832936",
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["payload"]["password"] == "63832936"
+    assert report.credentials_needing_reentry == 0
+    assert report.credential_reentry_details == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_preview_names_the_accounts_that_will_need_credentials():
+    """The preview was byte-identical between the encrypted and redacted
+    artifacts; the operator had no way to tell which variant they were about to
+    apply. The dry-run now counts the same action item, with no destination id
+    (nothing was created)."""
+    client = _client()
+    report = _report(is_dry_run=True)
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.credentials_needing_reentry == 1
+    assert report.credential_reentry_details[0].destination_id is None
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_an_already_existing_account_is_not_an_action_item():
+    """A skipped account keeps whatever credential the destination already has;
+    nothing needs re-entering."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[{"id": 77, "name": "Infinity"}]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 0

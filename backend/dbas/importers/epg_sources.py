@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import logging
 
+from credential_sentinel import strip_redaction_sentinels
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -152,7 +153,9 @@ def _existing_by_identity(existing_sources: list[dict]) -> dict[tuple, dict]:
     return index
 
 
-def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict:
+def _build_create_payload(
+    archive_source: dict, m3u_dest_id: int | None
+) -> tuple[dict, list[str]]:
     """Build the create_epg_source payload from an archive source record.
 
     Drops the archive source id and read-only / derived fields. Keeps the
@@ -160,6 +163,20 @@ def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict
     source to function — but they are NEVER logged or reported. The
     ``m3u_account`` FK, if present, is rewritten in place to the remapped
     destination id (``m3u_dest_id``).
+
+    Any ``***REDACTED***``-valued key is STRIPPED rather than written through
+    (bead ``…-6pilh``), so a redacted artifact leaves the credential visibly
+    unset instead of populating it with ECM's own placeholder.
+
+    Dispatcharr 0.28.2's ``EPGSourceSerializer`` marks ``password`` ``write_only``
+    with NO admin re-add in ``to_representation`` (unlike ``M3UAccountSerializer``,
+    which re-adds it for ``user_level >= 10``), so a live gather does not normally
+    carry an EPG password at all and there is usually nothing here to strip. The
+    guard is by VALUE and does not depend on that upstream behaviour holding.
+
+    Returns:
+        ``(payload, redacted_fields)`` — the create payload, and the credential
+        field NAMES that were stripped (never their values).
     """
     payload = {
         k: v for k, v in archive_source.items() if k not in _DROPPED_CREATE_KEYS
@@ -169,7 +186,7 @@ def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict
         # association — preserved as-is so a free-standing source stays
         # free-standing).
         payload[_M3U_ACCOUNT_FK] = m3u_dest_id
-    return payload
+    return strip_redaction_sentinels(payload)
 
 
 def _resolve_m3u_fk(
@@ -313,8 +330,18 @@ async def import_epg_sources(
             )
             continue
 
+        payload, redacted_fields = _build_create_payload(archive_source, m3u_dest_id)
+
         if is_dry_run:
             cat.would_create += 1
+            # Same action item on the PREVIEW, so the operator can tell a redacted
+            # artifact from a credential-bearing one before applying (…-6pilh).
+            report.record_credential_reentry(
+                EntityType.EPG_SOURCE,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+            )
             # Provisional remap so a downstream FK to this would-be-created source
             # resolves on the dry-run as it would on apply (anti-drift). Source id
             # used as a stable provisional destination id — never sent upstream.
@@ -322,7 +349,6 @@ async def import_epg_sources(
                 remap.add(EntityType.EPG_SOURCE, int(source_id), int(source_id))
             continue
 
-        payload = _build_create_payload(archive_source, m3u_dest_id)
         try:
             created = await client.create_epg_source(payload)
         except Exception as exc:
@@ -351,12 +377,27 @@ async def import_epg_sources(
             if source_id is not None:
                 remap.add(EntityType.EPG_SOURCE, int(source_id), dest_id)
             ledger.record_created(EntityType.EPG_SOURCE, dest_id, label)
+            report.record_credential_reentry(
+                EntityType.EPG_SOURCE,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+                destination_id=dest_id,
+            )
         logger.info(
             "[DBAS-EPG] Restored EPG source '%s' (type=%s, id=%s).",
             label,
             archive_source.get("source_type"),
             dest_id,
         )
+        if redacted_fields:
+            # WARN, never silent — field NAMES only (…-6pilh).
+            logger.warning(
+                "[DBAS-EPG] Source '%s' (id=%s) was restored from a REDACTED "
+                "artifact; %s left unset and must be re-entered before it will "
+                "refresh.",
+                label, dest_id, ", ".join(redacted_fields),
+            )
 
 
 def _skip(

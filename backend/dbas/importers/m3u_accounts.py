@@ -109,6 +109,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
+from credential_sentinel import strip_redaction_sentinels
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -249,17 +250,31 @@ def resolve_group(
     return None
 
 
-def _build_create_payload(archive_account: dict) -> dict:
+def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
     """Build the create_m3u_account payload from an archive account record.
 
     Drops the archive source id, the embedded ``channel_groups`` settings list
     (reconciled and deferred separately), and read-only/derived fields. Keeps the
     credential fields (server_url/username/password) — they MUST be recreated for
     the account to function — but they are NEVER logged or reported.
+
+    A STANDARD (redact-by-default) artifact carries the ``***REDACTED***``
+    placeholder in place of each credential. Writing that through produced an XC
+    account that LOOKED configured and could not authenticate (bead ``…-6pilh``),
+    so any sentinel-valued key is STRIPPED and the field is left unset — visibly
+    incomplete, and absent to every presence check. Detection is by VALUE, so an
+    encrypted + ``include_credentials`` artifact (which carries the real values)
+    is unaffected.
+
+    Returns:
+        ``(payload, redacted_fields)`` — the create payload, and the credential
+        field NAMES that were stripped (never their values) so the caller can
+        report them as a post-restore action item.
     """
-    return {
+    payload = {
         k: v for k, v in archive_account.items() if k not in _DROPPED_CREATE_KEYS
     }
+    return strip_redaction_sentinels(payload)
 
 
 def _extract_auto_sync_settings(archive_account: dict) -> dict | None:
@@ -418,8 +433,20 @@ async def import_m3u_accounts(
             )
             continue
 
+        payload, redacted_fields = _build_create_payload(archive_account)
+
         if is_dry_run:
             cat.would_create += 1
+            # The PREVIEW of a redacted artifact was byte-identical to a
+            # credential-bearing one, so an operator could not tell which variant
+            # they were about to apply (bead …-6pilh). Report the same action item
+            # here — with no destination id, because nothing was created.
+            report.record_credential_reentry(
+                EntityType.M3U_ACCOUNT,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+            )
             # Provisional remap so a DOWNSTREAM importer's FK to this would-be-
             # created account resolves on the dry-run exactly as it would on apply
             # (anti-drift: dry-run and apply must agree on what is creatable). The
@@ -429,7 +456,6 @@ async def import_m3u_accounts(
                 remap.add(EntityType.M3U_ACCOUNT, int(source_id), int(source_id))
             continue
 
-        payload = _build_create_payload(archive_account)
         try:
             created = await client.create_m3u_account(payload)
         except Exception as exc:
@@ -455,6 +481,16 @@ async def import_m3u_accounts(
             if source_id is not None:
                 remap.add(EntityType.M3U_ACCOUNT, int(source_id), dest_id)
             ledger.record_created(EntityType.M3U_ACCOUNT, dest_id, label)
+            # Post-restore action item, not a failure: the account exists but
+            # will not authenticate until the operator re-enters what the
+            # redacted artifact could not carry.
+            report.record_credential_reentry(
+                EntityType.M3U_ACCOUNT,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+                destination_id=dest_id,
+            )
             # Deferred auto-sync — extract settings; DO NOT trigger sync here.
             settings = _extract_auto_sync_settings(archive_account)
             if settings is not None:
@@ -462,6 +498,14 @@ async def import_m3u_accounts(
                     {"m3u_account_id": dest_id, "settings": settings}
                 )
         logger.info("[DBAS-M3U] Restored M3U account '%s' (id=%s).", label, dest_id)
+        if redacted_fields:
+            # WARN, never silent — field NAMES only (…-6pilh).
+            logger.warning(
+                "[DBAS-M3U] Account '%s' (id=%s) was restored from a REDACTED "
+                "artifact; %s left unset and must be re-entered before it will "
+                "refresh.",
+                label, dest_id, ", ".join(redacted_fields),
+            )
 
     return result
 

@@ -257,6 +257,40 @@ class LogoMissDetail(BaseModel):
     )
 
 
+class CredentialReentryDetail(BaseModel):
+    """One restored entity whose credential the archive could not carry (…-6pilh).
+
+    A STANDARD (redact-by-default) artifact replaces every credential-class value
+    with the ``***REDACTED***`` sentinel. The importers REFUSE to write that
+    placeholder into the destination — the field is left unset — which means the
+    entity is restored but not yet usable. This detail is the operator's action
+    item: which entity, and which field names to re-enter.
+
+    Counted by :attr:`RestoreReport.credentials_needing_reentry` (one per ENTITY,
+    matching ``len(credential_reentry_details)``), mirroring the
+    ``logo_misses`` / ``logo_miss_details`` aggregate-plus-drill-down pair.
+
+    ``label`` is the operator-facing entity name and ``fields`` are field NAMES
+    (``["password"]``) — never a value, a URL, or a username (same hygiene as
+    :class:`SkipDetail` / :class:`FailureDetail`).
+    """
+
+    entity_type: EntityType
+    label: str = Field(description="Operator-facing entity identifier — never a secret.")
+    fields: list[str] = Field(
+        default_factory=list,
+        description="Credential FIELD NAMES left unset, in document order. Names only, never values.",
+    )
+    source_export_id: int | None = Field(
+        default=None,
+        description="The entity's id in the export archive, when known.",
+    )
+    destination_id: int | None = Field(
+        default=None,
+        description="Destination id assigned on create. None on a dry-run — nothing was created.",
+    )
+
+
 class EntityCategoryReport(BaseModel):
     """Per-entity-category counts for ONE category.
 
@@ -354,6 +388,28 @@ class RestoreReport(BaseModel):
         description="Per-logo detail (id + name) for each unresolved logo (…-qhui4).",
     )
 
+    # Credential-re-entry aggregate (bead …-6pilh). Counts ENTITIES restored from
+    # a redacted artifact whose credential fields were left UNSET because the
+    # archive carried only the ``***REDACTED***`` placeholder. Zero on a
+    # credential-bearing (encrypted + include_credentials) restore. ADDITIVE
+    # optional — no CONTRACT_VERSION bump.
+    #
+    # This is a POST-RESTORE ACTION ITEM, not a failure: the entity was created
+    # successfully and the outcome is unaffected. But the operator MUST be told —
+    # an XC M3U account restored without its password authenticates nowhere and
+    # materializes zero streams, and nothing in the counts reveals that.
+    credentials_needing_reentry: int = Field(
+        default=0,
+        description="Count of entities needing a credential re-entered before they will work.",
+    )
+
+    # Per-entity drill-down behind the aggregate count; tracks it exactly
+    # (``len(credential_reentry_details) == credentials_needing_reentry``).
+    credential_reentry_details: list[CredentialReentryDetail] = Field(
+        default_factory=list,
+        description="Which entities need which credential fields re-entered (…-6pilh).",
+    )
+
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)
     # Free-form, sanitized operator notes (e.g. "users category opted out",
@@ -379,6 +435,41 @@ class RestoreReport(BaseModel):
         cat = EntityCategoryReport(entity_type=entity_type)
         self.categories.append(cat)
         return cat
+
+    def record_credential_reentry(
+        self,
+        entity_type: EntityType,
+        label: str,
+        fields: list[str],
+        *,
+        source_export_id: int | None = None,
+        destination_id: int | None = None,
+    ) -> None:
+        """Record that one entity needs a credential re-entered (bead …-6pilh).
+
+        The ONE place the aggregate count and the detail list are both updated,
+        so they cannot drift. A no-op when ``fields`` is empty — an entity whose
+        credentials all came through intact is not an action item.
+
+        Args:
+            entity_type: The restored entity's category.
+            label: Operator-facing entity identifier — never a secret.
+            fields: Credential FIELD NAMES left unset. Names only, never values.
+            source_export_id: The entity's id in the export archive, when known.
+            destination_id: The destination id, or ``None`` on a dry-run.
+        """
+        if not fields:
+            return
+        self.credential_reentry_details.append(
+            CredentialReentryDetail(
+                entity_type=entity_type,
+                label=label,
+                fields=list(fields),
+                source_export_id=source_export_id,
+                destination_id=destination_id,
+            )
+        )
+        self.credentials_needing_reentry = len(self.credential_reentry_details)
 
 
 # ---------------------------------------------------------------------------

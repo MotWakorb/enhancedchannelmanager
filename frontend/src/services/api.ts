@@ -4278,6 +4278,24 @@ export interface LogoMissDetail {
   channels?: LogoMissChannel[];
 }
 
+/**
+ * One restored entity whose credential the archive could not carry (bead 6pilh).
+ *
+ * A STANDARD (redact-by-default) artifact replaces every credential with the
+ * `***REDACTED***` placeholder. The restore importers refuse to write that
+ * placeholder into the destination, so the field is left UNSET — the entity
+ * exists but will not authenticate until the operator re-enters it. `fields`
+ * carries credential field NAMES only (`["password"]`), never values.
+ * `destination_id` is null on a dry-run (nothing was created).
+ */
+export interface CredentialReentryDetail {
+  entity_type: RestoreEntityType;
+  label: string;
+  fields: string[];
+  source_export_id?: number | null;
+  destination_id?: number | null;
+}
+
 /** The one restore response schema — dry-run, apply, and summary. */
 export interface RestoreReport {
   contract_version: number;
@@ -4292,6 +4310,15 @@ export interface RestoreReport {
    * May be absent on reports produced before this field existed.
    */
   logo_miss_details?: LogoMissDetail[];
+  /**
+   * Count of entities restored WITHOUT their credential because the artifact was
+   * redacted (bead 6pilh). A post-restore action item, not a failure — the
+   * outcome can still be `success` while these accounts authenticate nowhere.
+   * May be absent on reports produced before this field existed.
+   */
+  credentials_needing_reentry?: number;
+  /** Which entities need which credential fields re-entered (bead 6pilh). */
+  credential_reentry_details?: CredentialReentryDetail[];
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];

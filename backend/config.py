@@ -11,6 +11,11 @@ import logging
 # matcher's clamp (layer 1) — both read the same constant — while keeping
 # ``config`` out of the dedup_matcher import cycle (bd-0nabr).
 from confidence_constants import CONFIDENCE_FLOOR
+# ``credential_sentinel`` is a leaf module (no ECM imports) so this stays out of
+# any cycle. It makes ``is_configured`` immune to the backup pipeline's own
+# ``***REDACTED***`` placeholder — a truthiness check reports a placeholder as a
+# configured credential (bead …-6pilh).
+from credential_sentinel import credential_is_present
 from pathlib import Path
 
 # Set up logging
@@ -539,8 +544,8 @@ class DispatcharrSettings(BaseModel):
             # always passes canonical). The fallback is kept defensively only
             # because the legacy field exists on the model until v0.19.0 per
             # bd-ewm4h; remove with that bead.
-            return bool(self.dispatcharr_api_key or self.api_key)
-        return bool(self.username and self.password)
+            return credential_is_present(self.dispatcharr_api_key) or credential_is_present(self.api_key)
+        return credential_is_present(self.username) and credential_is_present(self.password)
 
     def is_smtp_configured(self) -> bool:
         """Check if shared SMTP settings are configured."""

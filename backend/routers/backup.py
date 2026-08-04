@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
+from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
 from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
@@ -88,7 +89,13 @@ APP_VERSION = "0.18.1-0022"
 # Starts at 1 for the first v0.18.0 DBAS artifact (0i2vt.7).
 BACKUP_SCHEMA_VERSION = 1
 
-REDACTED = "***REDACTED***"
+# The redaction placeholder. Defined once in the ``credential_sentinel`` leaf
+# module so the restore side can recognize what this side wrote (bead …-6pilh):
+# the DBAS importers strip it rather than writing it into a destination
+# credential field, and ``credential_is_present`` refuses to read it as a
+# configured credential. ``REDACTED`` is kept as the local name because the
+# whole module (and the shipped artifact format) is written against it.
+REDACTED = REDACTION_SENTINEL
 
 # Credential fields in DispatcharrSettings that must never appear raw in an
 # exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
@@ -118,12 +125,23 @@ _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_ke
 # D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
 # (_redact_credentials_deep) that runs over EVERY category — including
 # Dispatcharr-sourced sections (M3U / EPG accounts), which the shipped YAML
-# export does NOT scrub on its own. Production Dispatcharr happens to never
-# return the M3U password (write-only, SHA1-hashed at fetch — see
-# docs/dispatcharr_api.md), but the artifact MUST NOT depend on that: redaction
-# is defense-in-depth and runs before any byte enters the archive. This union
-# folds in the settings + alert-method denylists so there is exactly one list
-# to maintain. Matched case-insensitively against dict keys.
+# export does NOT scrub on its own.
+#
+# CORRECTION (bead …-6pilh, verified against Dispatcharr 0.28.2 source): this
+# comment previously claimed Dispatcharr never returns the M3U password. It
+# does. ``M3UAccountSerializer`` marks ``password`` ``write_only``, but its
+# ``to_representation`` then RE-ADDS it (``data["password"] = instance.password
+# or ""``) for any caller with ``user_level >= 10`` — which ECM always is. The
+# value is stored and returned in CLEARTEXT; the SHA1-at-fetch note in
+# docs/dispatcharr_api.md is about the SCHEDULES-DIRECT (EPG) password, which
+# genuinely is write-only with no admin re-add, and does not transfer to M3U.
+# So this redactor is not merely defense-in-depth for M3U accounts — it is the
+# only thing keeping a live provider password out of the artifact. Correctness
+# on the restore side is the matching half: dbas/importers strip the sentinel
+# rather than writing it into the destination credential field.
+#
+# This union folds in the settings + alert-method denylists so there is exactly
+# one list to maintain. Matched case-insensitively against dict keys.
 _REDACT_KEYS = frozenset(
     {k.lower() for k in _SETTINGS_CREDENTIAL_FIELDS}
     | {k.lower() for k in _ALERT_METHOD_CREDENTIAL_KEYS}

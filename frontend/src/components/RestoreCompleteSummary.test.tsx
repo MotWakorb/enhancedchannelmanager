@@ -303,3 +303,93 @@ describe('RestoreCompleteSummary — logo-miss banner seam (bead .19)', () => {
     expect(screen.getByTestId('injected-banner')).toBeInTheDocument();
   });
 });
+
+/**
+ * Credential re-entry action item (bead 6pilh).
+ *
+ * A restore from a STANDARD (redact-by-default) artifact creates the M3U/EPG
+ * accounts but leaves their credentials UNSET — the archive carried only the
+ * `***REDACTED***` placeholder and the importers refuse to write it through.
+ * The counts are perfect and the outcome is `success`, so this is the ONLY
+ * place the operator learns the instance will not fetch a single stream.
+ */
+describe('RestoreCompleteSummary — credential re-entry', () => {
+  it('does NOT render when no credential needs re-entering', () => {
+    render(<RestoreCompleteSummary report={appliedReport({ credentials_needing_reentry: 0 })} />);
+
+    expect(screen.queryByTestId('credential-reentry-notice')).toBeNull();
+  });
+
+  it('does NOT render when the field is absent (report from an older build)', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+
+    expect(screen.queryByTestId('credential-reentry-notice')).toBeNull();
+  });
+
+  it('names the count and every affected entity when credentials were redacted', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 2,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+            { entity_type: 'epg_source', label: 'SD Sports', fields: ['password'], destination_id: 7 },
+          ],
+        })}
+      />,
+    );
+
+    const notice = screen.getByTestId('credential-reentry-notice');
+    expect(notice.textContent).toContain('2 accounts');
+    const rows = within(notice).getAllByTestId('credential-reentry-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Infinity');
+    expect(rows[0].textContent).toContain('password');
+    expect(rows[1].textContent).toContain('SD Sports');
+  });
+
+  it('uses singular copy for a single account', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain('1 account');
+  });
+
+  it('warns on the dry-run preview too — the operator can otherwise not tell the artifact variants apart', () => {
+    render(
+      <RestoreCompleteSummary
+        report={dryRunReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: null },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain('will need');
+  });
+
+  it('announces itself to assistive tech', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').getAttribute('role')).toBe('alert');
+  });
+});

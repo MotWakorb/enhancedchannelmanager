@@ -435,6 +435,21 @@ class DbasRestoreTask(TaskScheduler):
         )
 
     @staticmethod
+    def _credential_reentry_suffix(report) -> str:
+        """Name the credential-re-entry action item in the one-line summary.
+
+        The task-history row and the MCP tool result are the ONLY surfaces an
+        operator who did not use the restore modal ever sees. A restore from a
+        redacted artifact reports a clean SUCCESS with perfect counts while every
+        restored account is unauthenticated, so the count belongs in the message
+        itself, not only in ``details`` (bead …-6pilh).
+        """
+        count = getattr(report, "credentials_needing_reentry", 0) or 0
+        if count <= 0:
+            return ""
+        return "; %d account(s) need credentials re-entered" % count
+
+    @staticmethod
     def _summary_message(report, is_apply: bool) -> str:
         if report.is_dry_run or not is_apply:
             total_create = sum(c.would_create for c in report.categories)
@@ -453,7 +468,7 @@ class DbasRestoreTask(TaskScheduler):
                     total_create, total_update, total_skip, total_conflict,
                     len(report.categories),
                 )
-            )
+            ) + DbasRestoreTask._credential_reentry_suffix(report)
         outcome = report.outcome.value if report.outcome else "unknown"
         total_created = sum(c.created for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
@@ -461,7 +476,7 @@ class DbasRestoreTask(TaskScheduler):
             "Restore %s: created %d, failed %d across %d categories" % (
                 outcome, total_created, total_failed, len(report.categories),
             )
-        )
+        ) + DbasRestoreTask._credential_reentry_suffix(report)
 
     def _fail(self, started_at: datetime, message: str) -> TaskResult:
         """Build a failed TaskResult and mark progress failed (sanitized message)."""

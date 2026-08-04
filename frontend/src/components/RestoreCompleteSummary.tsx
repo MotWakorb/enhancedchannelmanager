@@ -36,6 +36,7 @@ import type {
   RestoreReport,
   RestoreSkipReason,
 } from '../services/api';
+import { CredentialReentryNotice } from './CredentialReentryNotice';
 import './RestoreCompleteSummary.css';
 
 /** Which framing the summary renders. `dry-run` reads would_* counts. */
@@ -246,6 +247,15 @@ export function RestoreCompleteSummary({ report, mode, bannerSlot }: RestoreComp
     >
       {/* SEAM for bead .19 — logo-miss RED banner slots here, above everything. */}
       {bannerSlot}
+
+      {/*
+        Credential re-entry action item (bead 6pilh). Rendered FIRST-CLASS rather
+        than through `bannerSlot`: it needs nothing but the report, so every
+        caller of this component gets it — a restore whose credentials were
+        redacted has perfect counts and a `success` outcome, and this is the
+        only signal the operator has that nothing will actually fetch.
+      */}
+      <CredentialReentryNotice report={report} mode={effectiveMode} />
 
       {presentation && (
         <div
