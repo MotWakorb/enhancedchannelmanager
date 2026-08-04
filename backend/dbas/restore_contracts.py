@@ -86,6 +86,13 @@ class EntityType(str, Enum):
                                            # core settings + comskip. NOT remappable,
                                            # NOT ledgered (a setting is config, not a
                                            # created entity) — see settings_agents.py.
+    # ECM's OWN settings.json (…-dfkbn item 4). DISTINCT from SETTINGS, which is
+    # Dispatcharr's core-settings namespace: the drill's restore reported
+    # ``settings updated=7`` for that category while ECM's user_timezone and
+    # stats_poll_interval silently reverted to defaults, because the artifact's
+    # ``categories/settings.yaml`` had no importer at all. Same report-only,
+    # never-ledgered shape as SETTINGS.
+    ECM_SETTINGS = "ecm_settings"
     USER = "user"                          # …-l1p4p (crown-jewel, opt-in)
     LOGO = "logo"                          # …-0i2vt.15 (streaming upload; 3-tier match)
 
@@ -291,6 +298,75 @@ class CredentialReentryDetail(BaseModel):
     )
 
 
+class StreamReattachDetail(BaseModel):
+    """One restored channel that still cannot play (bead ``…-2o0cz``).
+
+    The drill's headline: a restore reporting ``success … created 32, failed 0``
+    produced 12 channels bound to URL-less PLACEHOLDER streams — every one of
+    them unplayable — and nothing in the report said so. The rebind pass
+    (:mod:`dbas.placeholder_rebind`) re-runs the 4-tier matcher once the real
+    provider streams have materialized; whatever it still cannot resolve lands
+    here as a NAMED action item.
+
+    ``channel_id`` is the DESTINATION Dispatcharr channel id. ``name`` and
+    ``placeholder_streams`` are operator-facing names — never a stream URL
+    (which can embed a provider token).
+    """
+
+    channel_id: int | None = Field(
+        default=None,
+        description="Destination Dispatcharr channel id, when known.",
+    )
+    name: str = Field(description="Operator-facing channel name — never a secret.")
+    placeholder_streams: list[str] = Field(
+        default_factory=list,
+        description="Names of the URL-less placeholder streams still attached. Names only, never URLs.",
+    )
+
+
+class EpgLinkMissDetail(BaseModel):
+    """One restored channel whose EPG link could not be reattached (…-dfkbn item 2).
+
+    A channel's ``epg_data_id`` points at a SOURCE-instance EPG row; on the
+    destination that id is meaningless, so the link is re-derived from the
+    channel's archived ``tvg_id`` (:func:`dbas.channel_reattach.reattach_epg_links`).
+    When no destination EPG row carries that ``tvg_id`` the channel restores with
+    no guide data — counted here rather than left silent (the drill lost 10 of 12
+    links while the report showed zero failures).
+    """
+
+    channel_id: int | None = Field(default=None)
+    name: str = Field(description="Operator-facing channel name — never a secret.")
+    tvg_id: str = Field(
+        default="",
+        description="The archived tvg_id that resolved to no destination EPG row.",
+    )
+
+
+class ProfileMembershipDriftDetail(BaseModel):
+    """One channel profile whose membership had to be corrected (…-dfkbn item 3).
+
+    Dispatcharr's channel create adds each new channel to EVERY channel profile
+    with ``enabled=True`` (0.28.2 ``apps/channels/api_views.py``), so a profile
+    seeded to EXCLUDE channels silently restores containing all of them — the
+    worst possible default, because a profile built to hide channels now exposes
+    them. The reattach pass re-asserts the archived membership; the number of
+    channels it had to flip is the DRIFT, reported so the operator can see the
+    restore did not simply inherit the destination's default.
+    """
+
+    profile_id: int | None = Field(default=None, description="Destination profile id.")
+    name: str = Field(description="Operator-facing profile name — never a secret.")
+    channels_disabled: list[str] = Field(
+        default_factory=list,
+        description="Channels the archive EXCLUDED that the destination had enabled.",
+    )
+    channels_enabled: list[str] = Field(
+        default_factory=list,
+        description="Channels the archive INCLUDED that the destination had disabled.",
+    )
+
+
 class EntityCategoryReport(BaseModel):
     """Per-entity-category counts for ONE category.
 
@@ -410,6 +486,54 @@ class RestoreReport(BaseModel):
         description="Which entities need which credential fields re-entered (…-6pilh).",
     )
 
+    # --- Post-restore action items (bead …-2o0cz / …-dfkbn). -----------------
+    # Each pair below follows the ``credentials_needing_reentry`` precedent: an
+    # AGGREGATE count plus a NAMED drill-down, written through ONE recorder so
+    # they cannot drift. None of them is a failure — the entity was created and
+    # the outcome is unaffected — but every one of them is state the operator had
+    # before the backup and does not have after the restore, which is exactly
+    # what the drill proved a clean ``success, 0 failures`` can hide.
+
+    # Placeholder streams the restore synthesized (…-ahygg) that a channel is
+    # still bound to after the post-refresh rebind pass. Non-zero means those
+    # channels CANNOT PLAY.
+    channels_needing_stream_reattach: int = Field(
+        default=0,
+        description="Channels still bound to a URL-less placeholder stream — they cannot play.",
+    )
+    stream_reattach_details: list[StreamReattachDetail] = Field(
+        default_factory=list,
+        description="Which channels still need their streams reattached (…-2o0cz).",
+    )
+    # How many placeholder slots the rebind pass DID resolve onto real provider
+    # streams. Purely informational — it is the counterpart to the counter above
+    # and shows the operator the pass ran and did work.
+    streams_rebound: int = Field(
+        default=0,
+        description="Placeholder stream bindings swapped for a real provider stream.",
+    )
+
+    # Channels restored without their guide link (…-dfkbn item 2).
+    epg_links_unrestored: int = Field(
+        default=0,
+        description="Channels whose archived EPG link could not be reattached.",
+    )
+    epg_link_miss_details: list[EpgLinkMissDetail] = Field(
+        default_factory=list,
+        description="Which channels restored with no EPG link, and the tvg_id that missed.",
+    )
+
+    # Channel-profile memberships the restore had to correct away from
+    # Dispatcharr's enable-everything default (…-dfkbn item 3).
+    profile_membership_drift: int = Field(
+        default=0,
+        description="Channel/profile memberships corrected back to the archived selection.",
+    )
+    profile_membership_drift_details: list[ProfileMembershipDriftDetail] = Field(
+        default_factory=list,
+        description="Which profiles drifted, and which channels were flipped back.",
+    )
+
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)
     # Free-form, sanitized operator notes (e.g. "users category opted out",
@@ -470,6 +594,107 @@ class RestoreReport(BaseModel):
             )
         )
         self.credentials_needing_reentry = len(self.credential_reentry_details)
+
+    def record_logo_miss(
+        self,
+        *,
+        label: str,
+        source_export_id: int | None = None,
+        channels: "list[LogoMissChannel] | None" = None,
+    ) -> None:
+        """Record ONE unresolved logo reference (aggregate + drill-down together).
+
+        The single place :attr:`logo_misses` and :attr:`logo_miss_details` are
+        both updated, so ``len(logo_miss_details) == logo_misses`` holds by
+        construction.
+
+        TWO producers feed this counter, and they answer different questions:
+
+        * :mod:`dbas.importers.logos` — an archived logo the destination did not
+          already have (the D9 red-banner signal, unchanged).
+        * :func:`dbas.channel_reattach.reattach_channel_logos` — an archived
+          logo REFERENCE that could not be put back onto the channels that had
+          it. This is the one the drill needed: 12 channels lost a logo they had
+          and the report said ``logo_misses: 0`` (bead ``…-dfkbn`` item 1).
+
+        Args:
+            label: Operator-facing logo name — never a path, URL, or secret.
+            source_export_id: The logo's id in the export archive, when known.
+            channels: The affected channels (destination id where known + name).
+        """
+        self.logo_miss_details.append(
+            LogoMissDetail(
+                source_export_id=source_export_id,
+                label=label,
+                channels=list(channels or []),
+            )
+        )
+        self.logo_misses = len(self.logo_miss_details)
+
+    def record_stream_reattach_needed(
+        self,
+        *,
+        name: str,
+        channel_id: int | None = None,
+        placeholder_streams: list[str] | None = None,
+    ) -> None:
+        """Record ONE channel that still cannot play (bead ``…-2o0cz``).
+
+        Args:
+            name: Operator-facing channel name — never a secret.
+            channel_id: Destination Dispatcharr channel id, when known.
+            placeholder_streams: Names of the URL-less placeholders still bound.
+        """
+        self.stream_reattach_details.append(
+            StreamReattachDetail(
+                channel_id=channel_id,
+                name=name,
+                placeholder_streams=list(placeholder_streams or []),
+            )
+        )
+        self.channels_needing_stream_reattach = len(self.stream_reattach_details)
+
+    def record_epg_link_unrestored(
+        self,
+        *,
+        name: str,
+        channel_id: int | None = None,
+        tvg_id: str = "",
+    ) -> None:
+        """Record ONE channel restored without its guide link (…-dfkbn item 2)."""
+        self.epg_link_miss_details.append(
+            EpgLinkMissDetail(channel_id=channel_id, name=name, tvg_id=tvg_id)
+        )
+        self.epg_links_unrestored = len(self.epg_link_miss_details)
+
+    def record_profile_membership_drift(
+        self,
+        *,
+        name: str,
+        profile_id: int | None = None,
+        channels_disabled: list[str] | None = None,
+        channels_enabled: list[str] | None = None,
+    ) -> None:
+        """Record ONE profile whose membership was corrected (…-dfkbn item 3).
+
+        The AGGREGATE counts CHANNELS flipped (the operator-meaningful unit —
+        "3 channels a profile was built to exclude were exposed"), not profiles,
+        so it does NOT track ``len(profile_membership_drift_details)``. A call
+        that flips nothing is a no-op: an already-correct profile is not drift.
+        """
+        disabled = list(channels_disabled or [])
+        enabled = list(channels_enabled or [])
+        if not disabled and not enabled:
+            return
+        self.profile_membership_drift_details.append(
+            ProfileMembershipDriftDetail(
+                profile_id=profile_id,
+                name=name,
+                channels_disabled=disabled,
+                channels_enabled=enabled,
+            )
+        )
+        self.profile_membership_drift += len(disabled) + len(enabled)
 
 
 # ---------------------------------------------------------------------------

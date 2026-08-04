@@ -420,9 +420,18 @@ async def test_no_auto_sync_or_refresh_triggered_at_import():
 
 
 @pytest.mark.asyncio
-async def test_no_deferred_settings_when_account_has_no_auto_sync():
-    """An account with no auto_channel_sync-enabled groups contributes no deferred
-    entry (nothing to apply later)."""
+async def test_group_selection_is_deferred_even_without_auto_sync():
+    """An account with NO auto_channel_sync group still defers its group settings.
+
+    CORRECTED PREMISE (bead ``enhancedchannelmanager-2o0cz``). This test used to
+    assert the opposite — that an account with no ``auto_channel_sync`` group
+    contributes no deferred entry — and that assertion was the defect. The drill's
+    source account had ONE of 375 groups merely ENABLED and no auto-sync anywhere,
+    so nothing was deferred, the restored account came back at ``0 / 375`` groups
+    in PENDING SETUP, and its refresh ingested nothing while reporting ``No
+    streams returned from Xtream Codes provider``. The enabled-group SELECTION is
+    the load-bearing setting; auto-sync is an optional extra on top of it.
+    """
     async def _create(payload):
         return {"id": 901, **payload}
 
@@ -436,6 +445,35 @@ async def test_no_deferred_settings_when_account_has_no_auto_sync():
             "server_url": "http://p/a",
             "channel_groups": [{"channel_group": 10, "auto_channel_sync": False}],
         }],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    groups = result.deferred_auto_sync_settings[0]["settings"]["channel_groups"]
+    assert groups == [
+        {"channel_group": 10, "auto_channel_sync": False, "enabled": True}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_deferred_settings_when_account_has_no_groups():
+    """An account carrying no ``channel_groups`` at all defers nothing.
+
+    There is no selection to restore, so there is nothing for the deferred phase
+    to apply — the genuine "nothing to do" case the assertion above used to be
+    mistaken for.
+    """
+    async def _create(payload):
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    result = await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_url": "http://p/a"}],
         client=client,
         selected=True,
         report=_report(),
@@ -468,11 +506,18 @@ async def test_apply_deferred_auto_sync_polls_until_stream_count_stable():
     async def _sleep(seconds):
         sleeps.append(seconds)
 
+    # The deferred group settings carry SOURCE group pks; the deferred phase is
+    # where they are rewritten to DESTINATION pks (bead …-2o0cz), so the apply
+    # needs the remap that the channel-groups importer populated earlier.
+    remap = _remap()
+    remap.add(EntityType.CHANNEL_GROUP, 110, 210)
+
     final = await apply_deferred_auto_sync(
         deferred=[{"m3u_account_id": 901, "settings": {"channel_groups": [
             {"channel_group": 110, "auto_channel_sync": True, "enabled": True}
         ]}}],
         client=client,
+        remap=remap,
         stream_count_fn=_stream_count,
         sleep_fn=_sleep,
         max_polls=10,

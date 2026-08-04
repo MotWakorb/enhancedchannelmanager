@@ -417,6 +417,107 @@ def _validate_logo(archive_logo: dict) -> tuple[bytes | None, str | None, str | 
     return data, basename, None
 
 
+# Schemes a logo URL may carry for the re-create-by-URL path. Anything else (a
+# Dispatcharr-local ``/data/logos/...`` path, a ``file:`` URI, a bare basename)
+# names bytes that do not survive the source instance and must not be turned into
+# a dangling destination row.
+_REMOTE_URL_SCHEMES = ("http://", "https://")
+
+
+def hydratable_bytes(archive_logo: dict, content_provider) -> bool:
+    """True when this record can supply image BYTES for an upload.
+
+    Either the record already carries its base64 payload (the archive-restore
+    path) or a lazy ``content_provider`` is wired that can fetch it (the
+    cross-instance sync path). When neither holds, the only way to restore the
+    logo is by URL.
+    """
+    if archive_logo.get("content_b64"):
+        return True
+    return content_provider is not None
+
+
+def _remote_logo_url(archive_logo: dict) -> str | None:
+    """The archived logo's REMOTE url, or ``None`` when it has no usable one.
+
+    Only absolute ``http(s)`` URLs qualify — see the call site for why a
+    Dispatcharr-local path is deliberately excluded. Control characters are
+    rejected outright (log-forging / header-injection hygiene, mirroring
+    :func:`_safe_basename`).
+    """
+    url = archive_logo.get("url")
+    if not isinstance(url, str):
+        return None
+    trimmed = url.strip()
+    if not trimmed or any(ord(ch) in _CONTROL_BYTES for ch in trimmed):
+        return None
+    lowered = trimmed.lower()
+    if not lowered.startswith(_REMOTE_URL_SCHEMES):
+        return None
+    return trimmed
+
+
+async def _create_logo_from_url(
+    *,
+    archive_logo: dict,
+    remote_url: str,
+    label: str,
+    source_id,
+    client: DispatcharrClient,
+    cat,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    result: "LogoImportResult",
+) -> None:
+    """Re-create a byte-less, remotely-hosted logo from its archived URL.
+
+    Mirrors the upload path's bookkeeping exactly — ledger, remap, per-category
+    counts — so a URL-restored logo is indistinguishable downstream from an
+    uploaded one and the channel-logo reattach
+    (:func:`dbas.channel_reattach.reattach_channel_logos`) can resolve it.
+
+    A failure is a per-entity ``UPSTREAM_API_ERROR`` plus a COUNTED logo miss:
+    the operator must be told which logos did not come back, which is the whole
+    point of the bead.
+    """
+    try:
+        created = await client.create_logo({"name": label, "url": remote_url})
+    except Exception as exc:  # noqa: BLE001 - per-entity failure, never a crash
+        reason_enum = _upstream_reason_for(exc)
+        cat.failed += 1
+        result.rejected += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=reason_enum,
+                label=label,
+                message=_sanitize_failure(exc),
+                source_export_id=source_id,
+            )
+        )
+        report.record_logo_miss(label=label, source_export_id=source_id)
+        result.misses += 1
+        logger.warning(
+            "[DBAS-LOGOS] Failed to re-create remote logo '%s': %s",
+            label, reason_enum.value,
+        )
+        return
+
+    new_id = created.get("id") if isinstance(created, dict) else None
+    cat.created += 1
+    result.uploaded += 1
+    if new_id is not None:
+        new_id = int(new_id)
+        if source_id is not None:
+            remap.add(EntityType.LOGO, int(source_id), new_id)
+        ledger.record_created(EntityType.LOGO, new_id, label)
+    logger.info(
+        "[DBAS-LOGOS] Re-created remotely-hosted logo '%s' from its archived URL "
+        "(id=%s).",
+        label, new_id,
+    )
+
+
 def _channels_by_logo_id(archive_channels: list[dict] | None) -> dict[int, list[dict]]:
     """Index the archive channels by their ``logo_id`` FK (bead cm9bi).
 
@@ -600,6 +701,37 @@ async def import_logos(
                 dest_id,
             )
             continue
+
+        # MISS with a REMOTE URL and no bytes — re-create it BY URL rather than
+        # by upload (bead …-dfkbn item 1). The DBAS artifact's binary subtree
+        # only ever carried ECM's OWN /config/uploads/logos/, so a logo whose
+        # image lives on a CDN has an archived URL and no bytes. The drill lost
+        # 12 such logos: their URLs WERE in the archive and nothing re-resolved
+        # them. Dispatcharr's Logo model is exactly ``{name, url}`` (0.28.2
+        # apps/channels/models.py), so re-creating the row from the archived URL
+        # restores it byte-identically — the image was never ours to hold.
+        #
+        # ONLY an absolute http(s) URL qualifies. A Dispatcharr-LOCAL path
+        # (``/data/logos/x.png``) points at bytes that died with the wiped
+        # volume; re-creating that row would give the operator a channel whose
+        # logo silently 404s, which is strictly worse than an honest miss. Those
+        # fall through to the normal validate/upload path and are reported.
+        if not is_dry_run and not hydratable_bytes(archive_logo, content_provider):
+            remote_url = _remote_logo_url(archive_logo)
+            if remote_url is not None:
+                await _create_logo_from_url(
+                    archive_logo=archive_logo,
+                    remote_url=remote_url,
+                    label=label,
+                    source_id=source_id,
+                    client=client,
+                    cat=cat,
+                    report=report,
+                    ledger=ledger,
+                    remap=remap,
+                    result=result,
+                )
+                continue
 
         # MISS — this logo must be uploaded. Hydrate lazily when the record is
         # metadata-only (sync path), then validate+decode BEFORE upload. The

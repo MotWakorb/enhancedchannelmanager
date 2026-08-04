@@ -4185,6 +4185,9 @@ export type RestoreEntityType =
   // Report-only category for core_settings + comskip apply results (updated/
   // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
   | 'settings'
+  // ECM's OWN settings.json apply results (bead dfkbn) — a DIFFERENT namespace
+  // from `settings` above, which is Dispatcharr's core-settings.
+  | 'ecm_settings'
   | 'user'
   | 'logo';
 
@@ -4319,9 +4322,68 @@ export interface RestoreReport {
   credentials_needing_reentry?: number;
   /** Which entities need which credential fields re-entered (bead 6pilh). */
   credential_reentry_details?: CredentialReentryDetail[];
+  /**
+   * Channels still bound to a URL-less PLACEHOLDER stream after the restore's
+   * post-refresh rebind pass (bead 2o0cz) — they CANNOT PLAY. A post-restore
+   * action item, not a failure: the outcome can still be `success` while every
+   * one of these channels is dead, which is exactly what the round-trip drill
+   * measured. May be absent on reports produced before this field existed.
+   */
+  channels_needing_stream_reattach?: number;
+  /** Which channels still need a playable stream attached (bead 2o0cz). */
+  stream_reattach_details?: StreamReattachDetail[];
+  /** Placeholder bindings the rebind pass swapped for a real provider stream. */
+  streams_rebound?: number;
+  /** Channels whose archived EPG link could not be reattached (bead dfkbn). */
+  epg_links_unrestored?: number;
+  /** Which channels restored with no EPG link, and the tvg_id that missed. */
+  epg_link_miss_details?: EpgLinkMissDetail[];
+  /**
+   * Channel/profile memberships corrected back to the ARCHIVED selection (bead
+   * dfkbn). Dispatcharr enables every new channel in every profile, so a profile
+   * built to EXCLUDE channels silently widens to all of them; this counts the
+   * channels the restore had to flip back.
+   */
+  profile_membership_drift?: number;
+  /** Which profiles drifted, and which channels were flipped back (bead dfkbn). */
+  profile_membership_drift_details?: ProfileMembershipDriftDetail[];
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];
+}
+
+/**
+ * One restored channel that still cannot play (bead 2o0cz). `placeholder_streams`
+ * carries the names of the URL-less placeholder streams still attached — names
+ * only, never a stream URL (which can embed a provider token).
+ */
+export interface StreamReattachDetail {
+  channel_id?: number | null;
+  name: string;
+  placeholder_streams?: string[];
+}
+
+/**
+ * One restored channel whose EPG link could not be reattached (bead dfkbn).
+ * The link is re-derived from the archived `tvg_id` — an EPG row's numeric id is
+ * instance-local and cannot round-trip.
+ */
+export interface EpgLinkMissDetail {
+  channel_id?: number | null;
+  name: string;
+  tvg_id?: string;
+}
+
+/**
+ * One channel profile whose membership the restore had to correct (bead dfkbn).
+ * `channels_disabled` are the channels the archive EXCLUDED that the destination
+ * had enabled by default — the silent widening this counter exists to surface.
+ */
+export interface ProfileMembershipDriftDetail {
+  profile_id?: number | null;
+  name: string;
+  channels_disabled?: string[];
+  channels_enabled?: string[];
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {

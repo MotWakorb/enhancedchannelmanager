@@ -99,6 +99,22 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
 # import_comskip). Order here is the fixed apply order.
 _SETTINGS_BLOB_SECTIONS: tuple[str, ...] = ("core_settings", "comskip")
 
+# ECM's OWN settings blob (…-dfkbn item 4). It lives at the TOP LEVEL of
+# ``categories/settings.yaml`` — not under ``dispatcharr`` / ``database`` — and
+# decodes into its own :data:`EntityType.ECM_SETTINGS` category, distinct from
+# the Dispatcharr core-settings blobs above. The builder has emitted this member
+# since the artifact format existed; there was simply no decoder row for it, so
+# ECM's settings silently reverted to defaults on every restore.
+_ECM_SETTINGS_SECTION = "settings"
+
+# The Dispatcharr LOGO INVENTORY section (…-dfkbn item 1). Deliberately absent
+# from :data:`_SECTION_TO_ENTITY`: its rows are MERGED into the single
+# ``EntityType.LOGO`` category alongside the binary subtree's byte-bearing
+# records (see :func:`_merge_logo_records`), because two plan categories of the
+# same EntityType would leave one of them permanently shadowed by
+# ``ImportPlan.category``.
+_LOGO_INVENTORY_SECTION = "logos"
+
 # Where in the parsed category YAML each section's entity list lives. The
 # Dispatcharr-managed sections sit under ``dispatcharr``; ECM DB sections under
 # ``database``. We probe both so the decode is robust to either.
@@ -219,6 +235,92 @@ def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
         if blob:
             entities.append({"section": section_key, "values": blob})
     return PlanCategory(entity_type=EntityType.SETTINGS, entities=entities)
+
+
+def _read_category_yaml(zf: zipfile.ZipFile, section_key: str) -> object:
+    """Parse ``categories/<section>.yaml``, or ``None`` when absent/unreadable.
+
+    A malformed member is a logged empty, never a whole-restore crash — the same
+    containment :func:`_decode_categories` applies per category.
+    """
+    member = "%s/%s.yaml" % (_CATEGORY_DIR, section_key)
+    if member not in set(zf.namelist()) or not _is_safe_member(member):
+        return None
+    try:
+        return yaml.safe_load(zf.read(member).decode("utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        logger.warning(
+            "[DBAS-RESTORE] Category %s YAML unreadable; treating as empty: %s",
+            section_key, exc,
+        )
+        return None
+
+
+def _decode_ecm_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
+    """Decode ECM's own ``settings`` blob into the ECM_SETTINGS plan category.
+
+    The blob sits at the TOP LEVEL of ``categories/settings.yaml`` (it is neither
+    Dispatcharr-managed nor an ECM DB table), and becomes ONE record
+    ``{"values": {...}}`` — the contract the orchestrator's ECM-settings step
+    consumes. The category is always returned, empty when the member is absent,
+    so the operator sees "0" rather than a gap.
+    """
+    parsed = _read_category_yaml(zf, _ECM_SETTINGS_SECTION)
+    values = parsed.get(_ECM_SETTINGS_SECTION) if isinstance(parsed, dict) else None
+    entities = [{"values": values}] if isinstance(values, dict) and values else []
+    return PlanCategory(entity_type=EntityType.ECM_SETTINGS, entities=entities)
+
+
+def _decode_logo_inventory(zf: zipfile.ZipFile) -> list[dict]:
+    """Decode ``categories/logos.yaml`` into the Dispatcharr logo inventory rows.
+
+    Each row is ``{"id", "name", "url"}`` as Dispatcharr's ``LogoSerializer``
+    emits it. These carry NO bytes — the URL is the restorable identity.
+    """
+    parsed = _read_category_yaml(zf, _LOGO_INVENTORY_SECTION)
+    return _extract_section_entities(parsed, _LOGO_INVENTORY_SECTION)
+
+
+def _merge_logo_records(binary_records: list[dict], inventory: list[dict]) -> list[dict]:
+    """Merge the byte-bearing binary records with the URL-bearing inventory rows.
+
+    Both describe the SAME logos from different angles, joined on the source
+    Dispatcharr logo id (the builder correlates each archived file to its logo
+    record by URL basename and carries the id in ``binary/metadata.json``):
+
+    * a logo present in BOTH is emitted ONCE — the binary record wins (it has the
+      actual image) and gains the inventory's ``url`` so the importer's match and
+      the URL-recreate fallback both have everything they need;
+    * a logo present only in the inventory is emitted as a URL-only record — the
+      case that covers every remotely-hosted logo, which the binary subtree could
+      never carry;
+    * a byte-bearing record the builder could not correlate to an id is emitted
+      unchanged (it still matches by name/basename).
+
+    Order is deterministic: binary records first, in their decoded order, then
+    the inventory-only rows in archive order.
+    """
+    merged = list(binary_records)
+    by_source_id: dict[int, dict] = {}
+    for record in merged:
+        source_id = record.get("id")
+        if isinstance(source_id, int) and not isinstance(source_id, bool):
+            by_source_id.setdefault(source_id, record)
+
+    for row in inventory:
+        source_id = row.get("id")
+        url = row.get("url")
+        existing = (
+            by_source_id.get(source_id)
+            if isinstance(source_id, int) and not isinstance(source_id, bool)
+            else None
+        )
+        if existing is not None:
+            if isinstance(url, str) and url and "url" not in existing:
+                existing["url"] = url
+            continue
+        merged.append(dict(row))
+    return merged
 
 
 def _parse_logo_metadata_index(zf: zipfile.ZipFile) -> dict[str, dict]:
@@ -368,7 +470,18 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
     # {"section", "values"} records (the orchestrator settings-step contract).
     categories.append(_decode_settings_category(zf))
 
-    logo_records = _decode_logo_records(zf)
+    # dfkbn item 4 — ECM's OWN settings.json blob, which had no decoder row at
+    # all and so was silently dropped on every restore.
+    categories.append(_decode_ecm_settings_category(zf))
+
+    # dfkbn item 1 — ONE LOGO category built from BOTH sources: the binary
+    # subtree (bytes, ECM's own uploads dir only) and the Dispatcharr logo
+    # inventory (id + name + URL, every logo the source instance had). Merged
+    # rather than appended as two categories, because ``ImportPlan.category``
+    # returns the first match and the second would be permanently shadowed.
+    logo_records = _merge_logo_records(
+        _decode_logo_records(zf), _decode_logo_inventory(zf)
+    )
     categories.append(
         PlanCategory(entity_type=EntityType.LOGO, entities=logo_records)
     )

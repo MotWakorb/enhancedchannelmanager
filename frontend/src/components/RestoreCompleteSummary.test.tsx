@@ -128,12 +128,29 @@ describe('RestoreCompleteSummary — per-entity counts', () => {
     // Bead lc6zu: the backend report carries an EntityType.SETTINGS category
     // (updated/skipped apply counts for core_settings + comskip) — it must
     // render with a human label, not an undefined lookup.
+    // Bead dfkbn renamed the label to "Dispatcharr settings" because a SECOND
+    // settings category now exists (`ecm_settings`), and a report showing two
+    // rows both labelled "Settings" is exactly the ambiguity that let the drill
+    // read `settings updated=7` as proof ECM's own settings had been restored.
     const report = appliedReport({
       categories: [category({ entity_type: 'settings', updated: 2, skipped: 1 })],
     });
     render(<RestoreCompleteSummary report={report} />);
     const row = screen.getByTestId('rcs-category-settings');
-    expect(within(row).getByText('Settings')).toBeInTheDocument();
+    expect(within(row).getByText('Dispatcharr settings')).toBeInTheDocument();
+    expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
+  });
+
+  it('labels ECM settings distinctly from Dispatcharr settings', () => {
+    // Bead dfkbn item 4: ECM's own settings.json is a DIFFERENT namespace and
+    // must be readable as such — the drill's `settings updated=7` was
+    // Dispatcharr's, while user_timezone / stats_poll_interval silently reverted.
+    const report = appliedReport({
+      categories: [category({ entity_type: 'ecm_settings', updated: 2 })],
+    });
+    render(<RestoreCompleteSummary report={report} />);
+    const row = screen.getByTestId('rcs-category-ecm_settings');
+    expect(within(row).getByText('ECM settings')).toBeInTheDocument();
     expect(within(row).getByTestId('rcs-count-updated')).toHaveTextContent('2');
   });
 });

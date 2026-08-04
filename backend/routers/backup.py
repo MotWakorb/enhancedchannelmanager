@@ -2229,6 +2229,20 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             logger.warning("[BACKUP] Failed to fetch channels: %s", e)
             result["channels"] = _degraded_section("channels", e)
 
+    if "logos" in needed:
+        # dfkbn item 1 — the logo INVENTORY (id + name + url), not the bytes.
+        # This is what lets a remotely-hosted logo round-trip at all: the
+        # binary subtree carries only ECM's own uploads dir, which is empty on a
+        # real install because ECM's Logo Manager writes into Dispatcharr's
+        # volume. Logo records are ``{id, name, url}`` — no credential class —
+        # and the deep redactor still runs over them as defense in depth.
+        try:
+            logos = await client.get_all_logos_paginated()
+            result["logos"] = logos or []
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch logos: %s", e)
+            result["logos"] = _degraded_section("logos", e)
+
     if "dispatcharr_users" in needed:
         # Dispatcharr user accounts (Django auth). A GET never returns a
         # password/hash (see dbas/importers/users.py policy 1); the deep
@@ -2425,6 +2439,19 @@ RESTORABLE_SECTIONS = {
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
     },
+    # dfkbn item 1 — the Dispatcharr LOGO INVENTORY (id + name + url). NOT the
+    # bytes: those are the ``binary/logos`` subtree, which only ever carried
+    # ECM's OWN ``/config/uploads/logos/``. The drill proved that subtree is the
+    # wrong (and, in practice, empty) source of truth: a logo uploaded through
+    # ECM's own Logo Manager is written to DISPATCHARR's ``/data/logos/``, so
+    # ``binary/metadata.json`` was ``{"logo_count": 0, "logos": []}`` while 13
+    # logos existed, and the other 12 were remote CDN URLs with no local bytes at
+    # all. Their URLs are the only thing that CAN round-trip, and Dispatcharr's
+    # Logo model is exactly ``{name, url}`` (0.28.2 apps/channels/models.py) —
+    # so this inventory restores a CDN logo byte-identically and, for a
+    # volume-local one, at least names it so the loss is reported instead of
+    # silent. ``artifact_only`` for the same reason as its neighbours.
+    "logos": {"label": "Logos", "dispatcharr": True, "artifact_only": True},
     # lc6zu — the settings/agents producer set completing coverage of all 12
     # categories in the v0.18 scope (plugins remain excluded per ADR-012
     # D10). Same ``artifact_only`` rationale as channels /

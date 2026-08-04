@@ -470,8 +470,19 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     client.create_user.assert_awaited_once()
     client.create_channel.assert_awaited_once()
     client.upload_logo_file.assert_awaited_once()
-    # The stream layer attached the Tier-3-matched destination stream.
-    client.update_channel.assert_awaited_once_with(505, {"streams": [990]})
+    # The stream layer attached the Tier-3-matched destination stream, and the
+    # post-create reattach passes (bead …-dfkbn) put the channel's LOGO back on
+    # it. Both are PATCHes against the same restored channel; before the reattach
+    # pass the second call did not exist and every restored channel came back
+    # with ``logo_id=None`` while the report claimed ``logo_misses: 0``.
+    channel_patches = [c.args for c in client.update_channel.await_args_list]
+    assert (505, {"streams": [990]}) in channel_patches
+    assert (505, {"logo_id": 995}) in channel_patches
+    # The archived channel carries no ``epg_data_id``, so no EPG relink is
+    # attempted and none is reported missing (a channel unlinked on the source
+    # must not be invented a link here).
+    assert apply_report.epg_links_unrestored == 0
+    assert len(channel_patches) == 2
 
     # The denylisted settings key was skipped by NAME and its value never sent.
     # Settings are PATCHed at the DESTINATION row id resolved for each key.

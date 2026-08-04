@@ -61,8 +61,9 @@ Triggering an M3U account's upstream auto-sync/refresh fetches its streams from
 the provider. If that fires DURING restore, it races the Logos importer on the
 Dispatcharr side (a sync can churn channel/stream rows mid-logo-attach). So this
 importer DOES NOT trigger auto-sync/refresh at import time. Instead it EXTRACTS
-each created account's auto-sync settings and RETURNS them, in the ADR-008
-contract shape::
+each created account's PER-GROUP settings — the enabled-group SELECTION first and
+foremost, plus any auto-sync range — and RETURNS them, in the ADR-008 contract
+shape::
 
     deferred_auto_sync_settings: list[{"m3u_account_id": int, "settings": dict}]
 
@@ -79,8 +80,11 @@ DEFERRED-APPLY HELPER (:func:`apply_deferred_auto_sync`)
 Called by the orchestrator during the deferred phase (NOT at import). For each
 deferred account it:
 
-1. Applies the group-level auto-sync settings
-   (``client.update_m3u_group_settings``).
+1. Applies the per-group settings (``client.update_m3u_group_settings``) —
+   BEFORE the refresh, with each SOURCE group pk rewritten to its DESTINATION pk
+   through the shared ``IdRemapTable``. The deferred phase is the first point in
+   the run where that namespace is populated (M3U accounts import before channel
+   groups), which is exactly why this apply is deferred rather than done inline.
 2. Triggers the account refresh (``client.refresh_m3u_account``).
 3. Runs the **is_active toggle workaround**: PATCHes ``is_active`` False→True.
    Newly-imported M3U accounts on Dispatcharr do not always trigger a stream
@@ -277,33 +281,69 @@ def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
     return strip_redaction_sentinels(payload)
 
 
-def _extract_auto_sync_settings(archive_account: dict) -> dict | None:
-    """Extract the safe, non-credential auto-sync settings for deferred apply.
+def _extract_group_settings(archive_account: dict) -> dict | None:
+    """Extract the safe, non-credential per-group settings for deferred apply.
 
-    Returns a settings dict (group auto_channel_sync flags + refresh interval)
-    when the account has at least one auto_channel_sync-enabled group; otherwise
-    ``None`` (nothing to apply later). NEVER carries server_url/username/password.
+    Returns a settings dict carrying every archived group membership, or ``None``
+    when the account has no ``channel_groups`` at all (nothing to apply later).
+    NEVER carries server_url/username/password.
+
+    WHY EVERY GROUP, NOT JUST THE AUTO-SYNC ONES (bead ``…-2o0cz``): this used to
+    return ``None`` unless at least one group had ``auto_channel_sync`` set. The
+    drill's source account had ONE of 375 groups merely ENABLED and no auto-sync
+    anywhere, so nothing was deferred, nothing was applied, and the restored
+    account came back at ``0 / 375`` groups in PENDING SETUP. A refresh in that
+    state ingests nothing and Dispatcharr reports ``No streams returned from
+    Xtream Codes provider`` — blaming the provider for "you enabled no groups".
+    The enabled-group SELECTION is the load-bearing setting; ``auto_channel_sync``
+    is an optional extra on top of it.
+
+    Fields carried per group (all read straight off Dispatcharr 0.28.2's
+    ``ChannelGroupM3UAccountSerializer``, and all accepted by the
+    ``PATCH /api/m3u/accounts/<id>/group-settings/`` upsert):
+
+    * ``channel_group`` — the SOURCE instance's group pk. Rewritten to the
+      destination pk in :func:`apply_deferred_auto_sync`, which is the first
+      point in the run where the CHANNEL_GROUP remap is populated (M3U accounts
+      import BEFORE channel groups).
+    * ``enabled`` — the selection the drill lost.
+    * ``auto_channel_sync`` / ``auto_sync_channel_start`` /
+      ``auto_sync_channel_end`` — the auto-created-channel range settings.
+    * ``custom_properties`` — carries ``xc_id``, the provider category id an
+      Xtream-Codes refresh filters streams by (0.28.2 ``apps/m3u/tasks.py``
+      ``collect_xc_streams``). Dropping it would leave an enabled group that
+      still ingests nothing on an XC account.
     """
     channel_groups = archive_account.get("channel_groups")
-    if not isinstance(channel_groups, list):
+    if not isinstance(channel_groups, list) or not channel_groups:
         return None
 
-    # Keep only the safe per-group sync fields — not the whole group record.
+    # Keep only the safe per-group settings fields — not the whole group record
+    # (``is_stale`` / ``last_seen`` / ``stream_count`` are destination-owned
+    # read-only echoes and are never sent back).
     safe_groups = []
-    any_sync = False
     for cg in channel_groups:
         if not isinstance(cg, dict):
             continue
+        source_group_id = cg.get("channel_group")
+        if source_group_id is None:
+            continue
         entry = {
-            "channel_group": cg.get("channel_group"),
+            "channel_group": source_group_id,
             "auto_channel_sync": bool(cg.get("auto_channel_sync", False)),
             "enabled": bool(cg.get("enabled", True)),
         }
-        if entry["auto_channel_sync"]:
-            any_sync = True
+        for optional_key in (
+            "auto_sync_channel_start",
+            "auto_sync_channel_end",
+            "custom_properties",
+        ):
+            value = cg.get(optional_key)
+            if value is not None:
+                entry[optional_key] = value
         safe_groups.append(entry)
 
-    if not any_sync:
+    if not safe_groups:
         return None
 
     settings: dict = {"channel_groups": safe_groups}
@@ -491,8 +531,8 @@ async def import_m3u_accounts(
                 source_export_id=source_id,
                 destination_id=dest_id,
             )
-            # Deferred auto-sync — extract settings; DO NOT trigger sync here.
-            settings = _extract_auto_sync_settings(archive_account)
+            # Deferred group settings — extract; DO NOT trigger sync here.
+            settings = _extract_group_settings(archive_account)
             if settings is not None:
                 result.deferred_auto_sync_settings.append(
                     {"m3u_account_id": dest_id, "settings": settings}
@@ -531,34 +571,87 @@ async def _default_stream_count(client: DispatcharrClient, account_id: int) -> i
     return 0
 
 
+def _remap_group_settings(
+    groups: list, remap: IdRemapTable | None
+) -> tuple[list[dict], int]:
+    """Rewrite each group setting's SOURCE ``channel_group`` pk to a DEST pk.
+
+    The archived membership rows carry the source instance's group pk. Sending
+    one verbatim either 400s or — worse — binds an UNRELATED destination group
+    that happens to sit at that id. So an entry whose source id does not resolve
+    through the ``CHANNEL_GROUP`` namespace is DROPPED, never forwarded stale
+    (the same rule ``dbas.custom_stream_fallback`` applies to stream FKs).
+
+    Args:
+        groups: The deferred per-group settings (source-pk keyed).
+        remap: The shared :class:`IdRemapTable`, populated by the channel-groups
+            importer earlier in the SAME run. ``None`` drops every entry.
+
+    Returns:
+        ``(remapped_groups, unresolved_count)``.
+    """
+    remapped: list[dict] = []
+    unresolved = 0
+    for entry in groups or []:
+        if not isinstance(entry, dict):
+            continue
+        source_id = entry.get("channel_group")
+        dest_id = None
+        if remap is not None and isinstance(source_id, int) and not isinstance(source_id, bool):
+            dest_id = remap.resolve(EntityType.CHANNEL_GROUP, source_id)
+        if dest_id is None:
+            unresolved += 1
+            continue
+        remapped.append({**entry, "channel_group": dest_id})
+    return remapped, unresolved
+
+
 async def apply_deferred_auto_sync(
     *,
     deferred: list[dict],
     client: DispatcharrClient,
+    remap: IdRemapTable | None = None,
+    report: RestoreReport | None = None,
     stream_count_fn=None,
     sleep_fn=None,
     poll_interval_seconds: float = 5.0,
     max_polls: int = 60,
     stable_polls_required: int = 2,
 ) -> list[dict]:
-    """Apply deferred M3U auto-sync settings AFTER Channels + Logos finish.
+    """Apply deferred M3U group settings AFTER Channels + Logos finish.
 
     For each deferred account (``{"m3u_account_id", "settings"}``):
 
-    1. Apply the group-level auto-sync settings
-       (``client.update_m3u_group_settings``).
-    2. Trigger the account refresh (``client.refresh_m3u_account``).
-    3. is_active toggle workaround — PATCH ``is_active`` False then True, to coax
+    1. Apply the per-group settings — the enabled-group SELECTION plus any
+       auto-sync range — via ``client.update_m3u_group_settings``, after
+       rewriting each SOURCE group pk to its DESTINATION pk.
+    2. is_active toggle workaround — PATCH ``is_active`` False then True, to coax
        a newly-imported M3U into fetching its streams (Dispatcharr quirk).
+    3. Trigger the account refresh (``client.refresh_m3u_account``).
     4. 2-stage refresh poll — poll the destination stream count; terminate when
        it stabilizes across ``stable_polls_required`` consecutive polls
        (stream-count-stable heuristic), bounded by ``max_polls``.
+
+    ORDER IS LOAD-BEARING (bead ``…-2o0cz``): the group settings MUST land before
+    the refresh. Dispatcharr's ``PATCH /api/m3u/accounts/<id>/group-settings/``
+    is an UPSERT (``ChannelGroupM3UAccount.objects.bulk_create(...,
+    update_conflicts=True)`` — 0.28.2 ``apps/m3u/api_views.py``), so it works on
+    an account that has never refreshed: the memberships it creates carry the
+    archived ``enabled`` flag and ``xc_id``, and the refresh that follows then
+    ingests exactly the groups the operator had selected. Applying it after the
+    refresh would leave the first refresh with zero enabled groups — which is the
+    state the drill measured.
 
     The refresh/poll/sleep are injected so the logic is fully unit-testable:
 
     Args:
         deferred: The importer's ``deferred_auto_sync_settings`` list.
         client: The Dispatcharr API client.
+        remap: The shared :class:`IdRemapTable` for the SOURCE->DEST group-pk
+            rewrite. ``None`` (a caller that has no remap) drops every group
+            setting rather than forwarding a stale source pk.
+        report: Optional shared :class:`RestoreReport` — unresolved groups are
+            surfaced as a sanitized note rather than silently dropped.
         stream_count_fn: ``async (account_id) -> int`` probe for the current
             destination stream count. Defaults to a streams-endpoint count probe.
         sleep_fn: ``async (seconds) -> None`` sleep seam. Defaults to
@@ -569,7 +662,8 @@ async def apply_deferred_auto_sync(
 
     Returns:
         Per-account apply summaries: ``{"m3u_account_id", "stream_count",
-        "stabilized", "polls"}`` — safe fields only, no credentials.
+        "stabilized", "polls", "groups_applied"}`` — safe fields only, no
+        credentials.
 
     NOTE (deferred verification follow-up): the unit tests exercise the
     branching logic with mocks. The LIVE behaviour (does the count actually
@@ -592,12 +686,24 @@ async def apply_deferred_auto_sync(
         if account_id is None:
             continue
 
-        # 1. Apply group-level auto-sync settings.
-        groups = settings.get("channel_groups")
+        # 1. Apply per-group settings (enabled selection + auto-sync range),
+        #    with every SOURCE group pk rewritten to its DESTINATION pk.
+        groups, unresolved = _remap_group_settings(
+            settings.get("channel_groups"), remap
+        )
+        groups_applied = 0
         if groups:
             try:
                 await client.update_m3u_group_settings(
                     account_id, {"group_settings": groups}
+                )
+                groups_applied = len(groups)
+                logger.info(
+                    "[DBAS-M3U] Applied %d group setting(s) (%d enabled) to account "
+                    "id=%s before its refresh.",
+                    len(groups),
+                    sum(1 for g in groups if g.get("enabled")),
+                    account_id,
                 )
             except Exception as exc:
                 logger.warning(
@@ -605,6 +711,18 @@ async def apply_deferred_auto_sync(
                     account_id,
                     exc,
                 )
+                if report is not None:
+                    report.notes.append(
+                        "M3U account id=%s: the archived enabled-group selection could "
+                        "not be applied; re-select its groups and use Save & Refresh "
+                        "before expecting streams." % account_id
+                    )
+        if unresolved and report is not None:
+            report.notes.append(
+                "M3U account id=%s: %d archived group selection(s) referenced a "
+                "channel group that is not on this destination and were skipped."
+                % (account_id, unresolved)
+            )
 
         # 2. is_active toggle workaround — False then True.
         try:
@@ -658,6 +776,7 @@ async def apply_deferred_auto_sync(
                 "stream_count": current_count,
                 "stabilized": stabilized,
                 "polls": polls,
+                "groups_applied": groups_applied,
             }
         )
 

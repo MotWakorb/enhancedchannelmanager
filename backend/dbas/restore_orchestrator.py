@@ -30,7 +30,8 @@ Importers run in strict dependency order::
 
     M3U accounts → EPG sources (+ bounded EPG-data download wait)
       → channel groups / channel profiles → user agents → stream profiles
-      → settings → users → channels → DVR rules → logos
+      → Dispatcharr settings → ECM settings → users → channels → DVR rules
+      → logos
 
 USER AGENTS run BEFORE STREAM PROFILES (bead ``enhancedchannelmanager-lvfwd``).
 A Dispatcharr stream profile carries a ``user_agent`` FK, so the USER_AGENT
@@ -48,6 +49,14 @@ and applies them only after every category is done, via
 opposite: Dispatcharr's channel↔EPG matching needs the data BEFORE channels are
 created, so the apply registry's EPG step waits (bounded, non-fatal) for the
 download instead of deferring it — see :func:`_epg_step_with_download_wait`.
+
+AFTER the deferred phase, one final restore-completion step runs on a clean
+apply: the PLACEHOLDER REBIND (:mod:`dbas.placeholder_rebind`, bead
+``…-2o0cz``). Deferring the M3U refresh is what makes the restore safe, but it
+also means every archived stream MISSED the matcher at channel-import time and
+was synthesized as a URL-less placeholder — so the deferred refresh is the first
+moment there is anything real to match against. Without this step a restore
+reports ``success, 0 failures`` for an instance where not one channel can play.
 
 ----------------------------------------------------------------------------
 FULL WIRING + dry-run/apply parity (bead kxcjf)
@@ -748,7 +757,15 @@ async def run_restore(
     if not failure_occurred and not report.is_dry_run and ctx.deferred:
         apply_fn = deferred_apply_fn or _default_deferred_apply_fn()
         try:
-            applied = await apply_fn(deferred=ctx.deferred, client=client)
+            # ``remap`` / ``report`` are threaded in (bead …-2o0cz): the deferred
+            # group-settings apply rewrites each archived SOURCE channel-group pk
+            # to its DESTINATION pk, and the deferred phase is the first point in
+            # the run where the CHANNEL_GROUP namespace is populated. A custom
+            # apply fn that predates these kwargs still works — see
+            # ``_call_deferred_apply``.
+            applied = await _call_deferred_apply(
+                apply_fn, deferred=ctx.deferred, client=client, remap=remap, report=report
+            )
             # Count what the apply fn ACTUALLY applied (its per-account
             # summaries), not what was queued: the sync path's injected
             # suppressor (ADR-013 S9) returns [] and the report must not claim
@@ -764,6 +781,22 @@ async def run_restore(
                 "[DBAS-RESTORE] Deferred auto-sync phase hit an error; created entities are intact."
             )
             report.notes.append("deferred auto-sync phase reported an error; entities intact.")
+
+    # --- 3c. Post-refresh placeholder rebind (bead …-2o0cz, P0). ------------
+    # THE step that makes a restored lineup play. At channel-import time the
+    # destination has no provider streams yet, so every archived stream MISSes
+    # the matcher and is synthesized as a URL-less placeholder. The deferred
+    # phase above is what finally materializes the real provider streams — so
+    # this is the first (and only) moment the matcher can be re-run against
+    # something real. The drill proved that without it a restore reports
+    # "success, 0 failures" for an instance where not one channel can play, and
+    # that the documented manual recovery (an M3U refresh) does NOT rebind.
+    #
+    # Runs only on a clean, non-dry-run apply: a dry-run mutates nothing, and a
+    # failed run is about to be rolled back.
+    if not failure_occurred and not report.is_dry_run:
+        await _rebind_placeholders(plan=plan, client=client, report=report,
+                                   ledger=ledger, remap=remap)
 
     # --- 4. Outcome. ---
     # A DRY-RUN is a plan, not a realized restore — it has no outcome (kxuj2
@@ -785,6 +818,79 @@ async def run_restore(
 
     logger.info("[DBAS-RESTORE] Restore complete; outcome=%s.", report.outcome.value if report.outcome else "none")
     return report
+
+
+async def _rebind_placeholders(
+    *,
+    plan: ImportPlan,
+    client: DispatcharrClient,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: object,
+) -> None:
+    """Run the post-refresh placeholder rebind, containing any error.
+
+    Imported lazily (one-way dependency direction, mirroring
+    :func:`_default_deferred_apply_fn`). The pass is post-create cleanup on an
+    otherwise-successful restore, so an error here is logged and noted — it never
+    turns a successful restore into a rollback.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    channel_cat = plan.category(EntityType.CHANNEL)
+    archive_channels = list(channel_cat.entities) if channel_cat else []
+    if not archive_channels:
+        return
+    try:
+        await rebind_placeholder_streams(
+            client=client,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+            archive_channels=archive_channels,
+        )
+    except Exception:  # noqa: BLE001 - best-effort post-create cleanup
+        logger.warning(
+            "[DBAS-RESTORE] Placeholder rebind pass hit an error; restored "
+            "entities are intact but some channels may still be bound to "
+            "placeholder streams."
+        )
+        report.notes.append(
+            "the post-refresh stream rebind reported an error; verify that each "
+            "restored channel has a playable stream attached."
+        )
+
+
+async def _call_deferred_apply(
+    apply_fn: Callable[..., Awaitable[list[dict]]],
+    *,
+    deferred: list[dict],
+    client: DispatcharrClient,
+    remap: object,
+    report: RestoreReport,
+) -> list[dict]:
+    """Invoke a deferred-apply fn, passing only the kwargs it accepts.
+
+    The default fn (``m3u_accounts.apply_deferred_auto_sync``) takes ``remap`` and
+    ``report``; the sync engine's ADR-013 S9 suppressor and any test-injected
+    stub predate them and take only ``deferred`` / ``client``. Inspecting the
+    signature keeps this ONE call site compatible with both rather than forcing
+    every injected fn to grow a ``**kwargs`` tail it has no use for.
+    """
+    import inspect
+
+    kwargs: dict = {"deferred": deferred, "client": client}
+    try:
+        params = inspect.signature(apply_fn).parameters
+    except (TypeError, ValueError):  # pragma: no cover — builtins/C callables
+        params = {}
+    accepts_any = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    for name, value in (("remap", remap), ("report", report)):
+        if accepts_any or name in params:
+            kwargs[name] = value
+    return await apply_fn(**kwargs)
 
 
 def _default_deferred_apply_fn() -> Callable[..., Awaitable[list[dict]]]:
@@ -887,11 +993,23 @@ def default_importer_steps() -> list[ImporterStep]:
         must already be restored — the reverse order POSTed a raw source id and
         aborted the whole restore on a fresh destination.
       * settings (core settings / comskip) before channels (config in place
-        before the big entity category).
+        before the big entity category), then ECM's OWN settings.json — a
+        SEPARATE category (bead …-dfkbn item 4), because the drill's report said
+        ``settings updated=7`` while ECM's ``user_timezone`` and
+        ``stats_poll_interval`` silently reverted: that count was Dispatcharr's
+        namespace, and ECM's own blob had no importer at all.
       * users before channels (the l1p4p slot; unchanged).
       * channels, then DVR rules (a DVR rule's ``channel`` FK remaps through the
         just-populated ``EntityType.CHANNEL`` namespace), then logos LAST
         (attach to the created channels; slow streaming uploads at the tail).
+
+    Two categories also run a POST-CREATE REATTACH pass inside their own step
+    (bead ``…-dfkbn``), because the reference they restore is a SOURCE id that
+    the create payload has to drop: channels reattach their EPG link (by the
+    archived ``tvg_id``) and re-assert their archived channel-profile selection;
+    logos reattach each channel's ``logo_id``. Both run only on an apply, after
+    their importer, when the remap namespaces they resolve through are populated.
+    See :mod:`dbas.channel_reattach`.
 
     PLUGINS stay excluded per ADR-012 D10 (RCE-vs-config unresolved) — there is
     deliberately no plugins row in either registry.
@@ -907,6 +1025,10 @@ def default_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
+        # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from
+        # the Dispatcharr core settings above. Config before entities, same as
+        # its sibling.
+        ImporterStep(EntityType.ECM_SETTINGS, s["ecm_settings"]),
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
         ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
@@ -1098,8 +1220,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         return None
 
     async def _channels(ctx: ApplyContext) -> list[dict] | None:
+        archive_channels = _entities(ctx, EntityType.CHANNEL)
         await import_channels(
-            archive_channels=_entities(ctx, EntityType.CHANNEL),
+            archive_channels=archive_channels,
             client=ctx.client,
             selected=_selected(ctx, EntityType.CHANNEL),
             report=ctx.report,
@@ -1107,6 +1230,49 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
         )
+        # Post-create reattachment (bead …-dfkbn items 2-3). Both references are
+        # DROPPED from the channel create payload because they carry SOURCE ids;
+        # these passes re-derive them on the destination now that the CHANNEL
+        # remap is populated. Apply only — a dry-run mutates nothing.
+        if not ctx.is_dry_run and _selected(ctx, EntityType.CHANNEL):
+            from dbas.channel_reattach import (
+                reattach_epg_links,
+                reattach_profile_memberships,
+            )
+
+            await reattach_epg_links(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_channels=archive_channels,
+            )
+            # Dispatcharr adds every new channel to EVERY profile enabled, so a
+            # profile seeded to EXCLUDE channels silently widens to all of them
+            # unless the archived selection is re-asserted here.
+            if _selected(ctx, EntityType.CHANNEL_PROFILE):
+                await reattach_profile_memberships(
+                    client=ctx.client,
+                    report=ctx.report,
+                    remap=ctx.remap,
+                    archive_profiles=_entities(ctx, EntityType.CHANNEL_PROFILE),
+                    archive_channels=archive_channels,
+                )
+        return None
+
+    async def _ecm_settings(ctx: ApplyContext) -> list[dict] | None:
+        # ECM's OWN settings.json (bead …-dfkbn item 4) — distinct from the
+        # SETTINGS category above, which is Dispatcharr's core-settings
+        # namespace. The plan slice carries ONE record: {"values": {...}}.
+        from dbas.importers.ecm_settings import import_ecm_settings
+
+        selected = _selected(ctx, EntityType.ECM_SETTINGS)
+        for record in _entities(ctx, EntityType.ECM_SETTINGS):
+            await import_ecm_settings(
+                archive_settings=record.get("values") or {},
+                selected=selected,
+                report=ctx.report,
+                is_dry_run=ctx.is_dry_run,
+            )
         return None
 
     async def _logos(ctx: ApplyContext) -> list[dict] | None:
@@ -1128,10 +1294,26 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             # channels step populated earlier in this same run.
             archive_channels=_entities(ctx, EntityType.CHANNEL),
         )
+        # Put each restored channel's logo BACK on it (bead …-dfkbn item 1).
+        # ``logo_id`` is dropped from the channel create payload (source id), and
+        # before this pass nothing re-attached it: every restored channel came
+        # back with logo_id=None while the report said logo_misses=0. Runs here,
+        # after the logos importer, because that is what populates the LOGO
+        # remap namespace this resolves through.
+        if not ctx.is_dry_run and _selected(ctx, EntityType.LOGO):
+            from dbas.channel_reattach import reattach_channel_logos
+
+            await reattach_channel_logos(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_channels=_entities(ctx, EntityType.CHANNEL),
+            )
         return None
 
     return {
         "m3u": _m3u,
+        "ecm_settings": _ecm_settings,
         "epg": _epg,
         "channel_groups": _channel_groups,
         "channel_profiles": _channel_profiles,
@@ -1172,6 +1354,10 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
+        # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from
+        # the Dispatcharr core settings above. Config before entities, same as
+        # its sibling.
+        ImporterStep(EntityType.ECM_SETTINGS, s["ecm_settings"]),
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
         ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
