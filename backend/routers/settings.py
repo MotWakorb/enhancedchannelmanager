@@ -19,7 +19,14 @@ from auth import RequireAdminIfEnabled
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
-from dispatcharr_client import get_client, reset_client, _settings_hash
+from dispatcharr_client import (
+    DispatcharrClient,
+    clamp_dispatcharr_version,
+    dispatcharr_version_advisory,
+    get_client,
+    reset_client,
+    _settings_hash,
+)
 from emby_client import EmbyClient, EmbyClientError
 from jellyfin_client import JellyfinClient, JellyfinClientError
 from plex_client import PlexClient, PlexClientError
@@ -1307,6 +1314,93 @@ async def test_connection(request: TestConnectionRequest):
         logger.info("[SETTINGS-TEST] Dispatcharr test rejected by SSRF guard: %s", err)
         return {"success": False, "message": err}
     parsed = urlparse(base_url)
+
+    async def _version_advisory(access_token: Optional[str] = None) -> Optional[str]:
+        """Best-effort untested-Dispatcharr-version notice (ADR-014, bead ax0kf).
+
+        Runs ONLY after the connection itself has been verified, against the
+        same already-SSRF-sanitized ``base_url`` and with the credential the
+        test just proved. It is advisory in the strongest sense: any failure —
+        an older Dispatcharr with no ``/api/core/version/`` route, a timeout, an
+        unparseable body — returns ``None`` and the connection test's own
+        verdict is untouched. It must never be able to turn a working
+        connection into a reported failure.
+
+        The probe goes through :meth:`DispatcharrClient.get_version` rather than
+        a hand-written URL literal (PR #773 review, W1): a URL written out here
+        is a URL the ADR-014 contract sweep cannot see, which is precisely the
+        class of bug this bead exists to close. The client is built from the
+        CANDIDATE credentials on the request — the connection test runs before
+        anything is saved, so the ``get_client()`` singleton would be
+        authenticating as the *previous* configuration, or as nothing at all.
+
+        **Password mode reuses the access token the login just issued and
+        cannot issue a second one.** Dispatcharr rate-limits login at 3/min per
+        IP (this endpoint has a dedicated 429 branch because that budget is
+        tight), so an advisory able to re-authenticate could burn it and make
+        the operator's NEXT real test fail. Two things enforce that, because
+        pre-seeding alone did not: seeding ``access_token`` short-circuits
+        ``_ensure_authenticated`` on the way in, and ``retry_on_401=False``
+        forbids ``_request``'s 401 branch, which — with no refresh token
+        seeded — would otherwise fall through to a full ``_login()``. With no
+        token to reuse the probe is skipped entirely.
+
+        EVERYTHING the probe does, construction included, happens inside the
+        ``try``: a ``DispatcharrClient``/``DispatcharrSettings`` built in front
+        of the guard could raise and turn a verified-successful connection into
+        a reported failure (PR #773 review, N1).
+        """
+        if request.auth_method != "api_key" and not access_token:
+            return None
+
+        probe_client = None
+        try:
+            probe_client = DispatcharrClient(
+                DispatcharrSettings(
+                    url=base_url,
+                    auth_method=request.auth_method,
+                    username=request.username or "",
+                    password=request.password or "",
+                    dispatcharr_api_key=(
+                        request.dispatcharr_api_key or request.api_key or ""
+                    ),
+                )
+            )
+            if access_token:
+                probe_client.access_token = access_token
+            payload = await probe_client.get_version(timeout=5.0, retry_on_401=False)
+        except Exception as e:  # noqa: BLE001 — advisory must never propagate
+            logger.debug(
+                "[SETTINGS-TEST] Version probe skipped - %s - %s",
+                parsed.hostname,
+                type(e).__name__,
+            )
+            return None
+        finally:
+            if probe_client is not None:
+                try:
+                    await probe_client.close()
+                except Exception:  # noqa: BLE001 — teardown must not fail the test
+                    pass
+
+        version = payload.get("version") if isinstance(payload, dict) else None
+        advisory = dispatcharr_version_advisory(version)
+        if advisory:
+            # Clamped: the value is upstream-controlled and must not be able to
+            # forge a second log record or emit a multi-kilobyte line.
+            logger.warning(
+                "[SETTINGS-TEST] Untested Dispatcharr version - %s - reported: %s",
+                parsed.hostname,
+                clamp_dispatcharr_version(version),
+            )
+        return advisory
+
+    def _success(advisory: Optional[str]) -> dict:
+        result = {"success": True, "message": "Connection successful"}
+        if advisory:
+            result["warning"] = advisory
+        return result
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if request.auth_method == "api_key":
@@ -1323,7 +1417,7 @@ async def test_connection(request: TestConnectionRequest):
                 )
                 if 200 <= response.status_code < 300:
                     logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
-                    return {"success": True, "message": "Connection successful"}
+                    return _success(await _version_advisory())
                 if response.status_code == 401:
                     logger.warning("[SETTINGS-TEST] API key rejected - %s", parsed.hostname)
                     return {"success": False, "message": "Invalid API key"}
@@ -1343,7 +1437,15 @@ async def test_connection(request: TestConnectionRequest):
             )
             if response.status_code == 200:
                 logger.info("[SETTINGS-TEST] Connection test successful - %s", parsed.hostname)
-                return {"success": True, "message": "Connection successful"}
+                # Reuse the access token the login just issued rather than
+                # re-authenticating; Dispatcharr rate-limits login 3/min per IP.
+                try:
+                    access_token = response.json().get("access")
+                except Exception:  # noqa: BLE001 — token body is advisory-only here
+                    access_token = None
+                if not isinstance(access_token, str) or not access_token:
+                    access_token = None
+                return _success(await _version_advisory(access_token))
             if response.status_code == 429:
                 logger.warning("[SETTINGS-TEST] Login throttled by Dispatcharr - %s", parsed.hostname)
                 return {

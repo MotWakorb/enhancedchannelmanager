@@ -151,6 +151,99 @@ _CORE_SETTINGS_MAX_PAGES = 20
 _EPG_DATA_BYTES_PER_RESULT = 2048
 _EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
 
+# ---------------------------------------------------------------------------
+# Dispatcharr version advisory (ADR-014 option c, bead ax0kf)
+#
+# ECM's recorded contract fixtures -- the paths manifest the client contract
+# sweep checks every URL template against, and the deep response fixtures --
+# were all captured from ONE Dispatcharr version. That leaves a silent-upgrade
+# gap: the operator upgrades Dispatcharr underneath ECM, CI stays green against
+# the recorded snapshot, and nothing says a word until something breaks.
+#
+# The advisory is WARN-ONLY and must stay that way (PO decision 2026-08-03,
+# home-lab tier). ECM has no way to know a new Dispatcharr is actually
+# incompatible, and locking an operator out of their own tool over a version
+# tuple is a worse failure than the drift it would be guarding against.
+#
+# EDIT THIS CONSTANT when adopting a new Dispatcharr version -- in the same
+# change that re-records
+# ``tests/fixtures/dispatcharr_openapi_paths_manifest.json``
+# (see scripts/record_dispatcharr_openapi_manifest.py and docs/dispatcharr_api.md).
+# Entries are MAJOR.MINOR *series*, not full versions: Dispatcharr is 0.x, so
+# the MINOR is its breaking-change axis, and a patch release must never nag.
+TESTED_DISPATCHARR_SERIES = ("0.28",)
+
+_VERSION_SERIES_RE = re.compile(r"^v?(\d+)\.(\d+)")
+
+# The version string is UPSTREAM-CONTROLLED text that lands in two places a
+# blob of attacker-chosen bytes has no business reaching: an operator-facing
+# notification and a ``logger.warning`` line. ``/api/core/version/`` returns a
+# short semver on 0.28.2, but nothing in the transport guarantees that, so the
+# value is clamped to one short line before it reaches EITHER sink -- otherwise
+# a 5 kB "version" becomes a 5 kB notification, and an embedded newline forges
+# a second log record.
+_MAX_VERSION_STRING_LENGTH = 32
+_VERSION_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_VERSION_TRUNCATION_MARKER = "..."
+
+
+def clamp_dispatcharr_version(version) -> Optional[str]:
+    """Return a short, single-line, log-safe rendering of an upstream version.
+
+    Control characters (CR/LF included) collapse to spaces so the value cannot
+    forge a log record, and the result is capped at
+    :data:`_MAX_VERSION_STRING_LENGTH` characters. Returns ``None`` for a
+    non-string or a value that is empty once cleaned — callers treat that as
+    "version undeterminable", which is silence, not an advisory.
+    """
+    if not isinstance(version, str):
+        return None
+    cleaned = _VERSION_CONTROL_CHARS_RE.sub(" ", version).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _MAX_VERSION_STRING_LENGTH:
+        cleaned = cleaned[:_MAX_VERSION_STRING_LENGTH] + _VERSION_TRUNCATION_MARKER
+    return cleaned
+
+
+def dispatcharr_version_series(version) -> Optional[str]:
+    """Return the ``MAJOR.MINOR`` series of a Dispatcharr version string.
+
+    Returns ``None`` for anything that is not a parseable version string --
+    ``None``, a non-string, an empty body, or a value like ``"unknown"``.
+    """
+    clamped = clamp_dispatcharr_version(version)
+    if clamped is None:
+        return None
+    match = _VERSION_SERIES_RE.match(clamped)
+    if match is None:
+        return None
+    return f"{match.group(1)}.{match.group(2)}"
+
+
+def dispatcharr_version_advisory(version) -> Optional[str]:
+    """Return a non-blocking notice if ``version`` is outside the tested set.
+
+    Returns ``None`` -- meaning "say nothing" -- when the version is in a
+    tested series OR cannot be determined at all. An undeterminable version is
+    deliberately silent: a Dispatcharr old enough to lack ``/api/core/version/``,
+    a timeout, or an unparseable body would otherwise produce a nag the operator
+    cannot act on.
+
+    The version is embedded via :func:`clamp_dispatcharr_version`, never raw.
+    """
+    series = dispatcharr_version_series(version)
+    if series is None or series in TESTED_DISPATCHARR_SERIES:
+        return None
+    tested = ", ".join(f"{entry}.x" for entry in TESTED_DISPATCHARR_SERIES)
+    return (
+        f"Connected to Dispatcharr {clamp_dispatcharr_version(version)}. ECM's "
+        f"Dispatcharr API contract is recorded against {tested}, so this version "
+        "has not been tested. The connection works and nothing is being held "
+        "back -- but if something Dispatcharr-related misbehaves, mention this "
+        "version when you report it."
+    )
+
 
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
@@ -245,9 +338,24 @@ class DispatcharrClient:
         self,
         method: str,
         path: str,
+        *,
+        retry_on_401: bool = True,
         **kwargs,
     ) -> httpx.Response:
-        """Make an authenticated request with automatic token refresh."""
+        """Make an authenticated request with automatic token refresh.
+
+        ``retry_on_401`` (JWT mode only; a 401 is always terminal in API-key
+        mode) controls the refresh-and-retry branch below. It exists because
+        that branch can spend a LOGIN: with no refresh token,
+        :meth:`_refresh_access_token` falls through to :meth:`_login`, a fresh
+        ``POST /api/accounts/token/`` with the operator's credentials — and
+        Dispatcharr rate-limits login at 3/min per IP. A caller that is
+        best-effort (the connection test's version advisory, ADR-014 option c)
+        must not be able to burn that budget and fail the operator's next real
+        request, so it passes ``retry_on_401=False`` and takes the 401 as its
+        answer. Ordinary callers leave it on: they hold a long-lived client
+        whose access token legitimately expires mid-session.
+        """
         # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
         # sink in this method. ``path`` is attacker-influenced/credential-tainted
         # in practice -- callers interpolate caller-supplied identifiers into it,
@@ -291,8 +399,10 @@ class DispatcharrClient:
             )
 
             # If unauthorized in JWT mode, try refreshing token and retry.
-            # In api-key mode a 401 is terminal (the key is invalid or revoked).
-            if response.status_code == 401 and not self._uses_api_key:
+            # In api-key mode a 401 is terminal (the key is invalid or revoked),
+            # and callers that opted out of the retry take the 401 as terminal
+            # too rather than risk a rate-limited re-login (see the docstring).
+            if response.status_code == 401 and not self._uses_api_key and retry_on_401:
                 logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
@@ -1696,6 +1806,36 @@ class DispatcharrClient:
         Includes per-client information, buffer status, codec details, etc.
         """
         response = await self._request("GET", f"/proxy/ts/status/{channel_id}")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_version(
+        self, timeout: Optional[float] = None, retry_on_401: bool = True
+    ) -> dict:
+        """Return Dispatcharr's self-reported version.
+
+        ``GET /api/core/version/`` -> ``{"version": "0.28.2", "timestamp": null}``
+        on 0.28.2. Backs the non-blocking version advisory (ADR-014 option c);
+        see :func:`dispatcharr_version_advisory`. Raises on a non-2xx rather
+        than degrading here — the advisory's caller decides what an
+        undeterminable version means, and for the connection test that is
+        "stay silent".
+
+        ``timeout`` is forwarded to :meth:`_request` as a per-request override.
+        The connection test passes a short one (5s): the operator is watching a
+        button spin, and an advisory is never worth making them wait for. Note
+        that ``timeout=None`` means "no override supplied", and ``_request``
+        forwards that ``None`` straight to httpx — which reads it as *no
+        timeout*, not "use the client default" (pre-existing, tracked as
+        ``enhancedchannelmanager-6imr3``). Every caller today passes a value.
+
+        ``retry_on_401=False`` forbids :meth:`_request`'s refresh-and-retry
+        branch, which can otherwise spend one of Dispatcharr's 3/min logins.
+        Best-effort callers pass it; see :meth:`_request`.
+        """
+        response = await self._request(
+            "GET", "/api/core/version/", timeout=timeout, retry_on_401=retry_on_401
+        )
         response.raise_for_status()
         return response.json()
 

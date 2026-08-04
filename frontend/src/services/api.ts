@@ -1254,6 +1254,11 @@ export type StreamPreviewMode = 'passthrough' | 'transcode' | 'video_only';
 export interface TestConnectionResult {
   success: boolean;
   message: string;
+  // Non-blocking advisory returned alongside a SUCCESSFUL Dispatcharr
+  // connection test — today, "this Dispatcharr version is outside the set ECM's
+  // API contract is recorded against" (ADR-014, bead ax0kf). Never a failure:
+  // ``success`` stays true and the connection still saves.
+  warning?: string;
 }
 
 export async function getSettings(): Promise<SettingsResponse> {

@@ -10,6 +10,7 @@ Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(
 """
 import asyncio
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1126,6 +1127,306 @@ class TestTestConnection:
         body = response.json()
         assert body["success"] is False
         assert "api key" in body["message"].lower()
+
+
+class TestTestConnectionVersionAdvisory:
+    """POST /api/settings/test carries a NON-BLOCKING untested-version notice.
+
+    ADR-014 option (c) / bead ``enhancedchannelmanager-ax0kf``. ECM's recorded
+    Dispatcharr contract fixtures are pinned to one version, so an operator who
+    upgrades Dispatcharr underneath ECM gets a green CI and no signal at all.
+    The connection test now also probes ``GET /api/core/version/`` and returns a
+    ``warning`` alongside ``success: true`` when the version is outside the
+    tested set. It must NEVER turn a working connection into a failure.
+
+    The probe itself runs through ``DispatcharrClient.get_version()`` (PR #773
+    review, W1) — a hand-written URL literal in this router would be a URL the
+    contract sweep cannot see. Because ``httpx.AsyncClient`` is patched here,
+    the client the router constructs shares the same mock: the connection test's
+    own call lands on ``.get``/``.post``, and the client's ``_request`` lands on
+    ``.request``.
+    """
+
+    @staticmethod
+    def _mock_http_client(*, get=None, post=None, request=None):
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        if get is not None:
+            mock_http_client.get = AsyncMock(return_value=get)
+        if post is not None:
+            mock_http_client.post = AsyncMock(return_value=post)
+        if request is not None:
+            if isinstance(request, BaseException):
+                mock_http_client.request = AsyncMock(side_effect=request)
+            else:
+                mock_http_client.request = AsyncMock(return_value=request)
+        else:
+            mock_http_client.request = AsyncMock(side_effect=AssertionError(
+                "the version probe must not run on this path"
+            ))
+        return mock_http_client
+
+    @staticmethod
+    def _ok(status_code=200):
+        response = MagicMock()
+        response.status_code = status_code
+        return response
+
+    @staticmethod
+    def _version_response(status_code=200, payload=None):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = payload if payload is not None else {}
+        return response
+
+    @pytest.mark.asyncio
+    async def test_untested_version_returns_a_warning_but_still_succeeds(self, async_client):
+        mock_http_client = self._mock_http_client(
+            get=self._ok(),
+            request=self._version_response(payload={"version": "9.9.9"}),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True, "the advisory must never fail the connection test"
+        assert "9.9.9" in body["warning"]
+        # The probe went through the client, at the client's own URL, carrying
+        # the same key the test just verified.
+        version_call = mock_http_client.request.await_args
+        assert version_call.args[0] == "GET"
+        assert version_call.args[1] == "http://dispatcharr:8000/api/core/version/"
+        assert version_call.kwargs["headers"]["X-API-Key"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_tested_version_returns_no_warning(self, async_client):
+        from dispatcharr_client import TESTED_DISPATCHARR_SERIES
+
+        mock_http_client = self._mock_http_client(
+            get=self._ok(),
+            request=self._version_response(
+                payload={"version": f"{TESTED_DISPATCHARR_SERIES[0]}.0"}
+            ),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_failure_leaves_the_connection_test_successful(
+        self, async_client
+    ):
+        """An older Dispatcharr without /api/core/version/ produces silence, not noise."""
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=httpx.ConnectError("boom")
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_404_produces_no_warning(self, async_client):
+        """get_version() raises for status; the advisory swallows it and stays quiet."""
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=self._version_response(status_code=404)
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+
+    @pytest.mark.asyncio
+    async def test_hostile_version_string_is_clamped_before_it_reaches_the_operator(
+        self, async_client
+    ):
+        """Upstream text cannot emit a multi-kilobyte notice or forge a log line."""
+        hostile = "9.9.9" + "A" * 5000 + "\nINJECTED"
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=self._version_response(payload={"version": hostile})
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        warning = response.json()["warning"]
+        assert "\n" not in warning and "\r" not in warning
+        assert "INJECTED" not in warning
+        assert len(warning) < 400
+
+    @pytest.mark.asyncio
+    async def test_password_mode_advisory_reuses_the_issued_access_token(self, async_client):
+        """The probe carries the token the connection test's own login issued.
+
+        Scope note: this exercises the 200 path ONLY, so it proves token REUSE
+        (the probe authenticates with ``jwt-abc`` rather than logging in again
+        before its first request). It does not, on its own, prove a second login
+        is impossible — the 401 path is what could reach ``_login``, and it is
+        pinned separately by
+        ``test_a_401_on_the_version_probe_never_triggers_a_second_login``.
+        """
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"access": "jwt-abc", "refresh": "jwt-ref"}
+
+        mock_http_client = self._mock_http_client(
+            post=token_response,
+            request=self._version_response(payload={"version": "9.9.9"}),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "9.9.9" in body["warning"]
+        version_call = mock_http_client.request.await_args
+        assert version_call.args[1] == "http://dispatcharr:8000/api/core/version/"
+        assert version_call.kwargs["headers"]["Authorization"] == "Bearer jwt-abc"
+        # Exactly one login: the connection test's own. Note this only proves the
+        # HAPPY path never re-authenticates — the 401 case is what could actually
+        # reach ``_login``, and it is pinned by
+        # ``test_a_401_on_the_version_probe_never_triggers_a_second_login``.
+        assert mock_http_client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_401_on_the_version_probe_never_triggers_a_second_login(
+        self, async_client
+    ):
+        """The probe cannot re-authenticate, even when upstream rejects its token.
+
+        PR #773 review, BLOCK. ``DispatcharrClient._request`` retries a 401 by
+        refreshing the token, and the probe client has no refresh token, so the
+        refresh falls through to a full ``_login()`` — a second
+        ``POST /api/accounts/token/`` with the operator's credentials.
+        Dispatcharr rate-limits login at 3/min per IP (this endpoint already has
+        a dedicated 429 branch because that budget is tight), so a best-effort
+        advisory that can spend a login could fail the operator's NEXT real test.
+        The probe passes ``retry_on_401=False``; exactly one login may leave the
+        process no matter what the version endpoint answers.
+        """
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"access": "jwt-abc", "refresh": "jwt-ref"}
+
+        mock_http_client = self._mock_http_client(
+            post=token_response,
+            request=self._version_response(status_code=401),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+        assert mock_http_client.post.await_count == 1, (
+            "the version probe re-authenticated — POST /api/accounts/token/ was "
+            "issued twice for one connection test"
+        )
+        assert mock_http_client.request.await_count == 1, (
+            "the probe retried the version request after the 401"
+        )
+
+    @pytest.mark.asyncio
+    async def test_password_mode_without_a_usable_token_skips_the_probe(self, async_client):
+        """No token to reuse => no probe, rather than a second rate-limited login."""
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"refresh": "jwt-ref"}  # no "access"
+
+        mock_http_client = self._mock_http_client(post=token_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+        assert mock_http_client.request.await_count == 0
+        assert mock_http_client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_client_construction_failure_cannot_fail_the_test(
+        self, async_client
+    ):
+        """Building the probe client is inside the guard, not in front of it.
+
+        PR #773 review, N1. ``DispatcharrSettings(...)``/``DispatcharrClient(...)``
+        used to be evaluated *before* the ``try`` that makes the advisory
+        unfailable, so a constructor raising turned a verified-successful
+        connection into ``{'success': False, ...}`` — the exact outcome the
+        advisory's docstring promises it can never produce.
+        """
+        mock_http_client = self._mock_http_client(get=self._ok())
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client), \
+             patch("routers.settings.DispatcharrClient",
+                   side_effect=RuntimeError("probe client construction failed")):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+
+    @pytest.mark.asyncio
+    async def test_failed_connection_never_probes_the_version(self, async_client):
+        """A rejected key must not trigger an extra outbound request."""
+        mock_http_client = self._mock_http_client(get=self._ok(401))
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "bad-key",
+            })
+
+        assert response.json()["success"] is False
+        assert mock_http_client.get.await_count == 1
+        assert mock_http_client.request.await_count == 0
 
 
 class TestTestConnectionOutboundPolicy:

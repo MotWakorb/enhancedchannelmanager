@@ -118,6 +118,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       if (!result.success && result.message) {
         notifications.error(result.message, 'Connection Failed');
       }
+      // ADR-014: a successful connection can still carry a non-blocking notice
+      // (an untested Dispatcharr version). Surface it without touching the
+      // verified state — saving stays enabled.
+      if (result.success && result.warning) {
+        notifications.warning(result.warning, 'Dispatcharr Version');
+      }
     } catch (err) {
       logger.error('SettingsModal: connection test failed', err);
       setConnectionVerified(false);
