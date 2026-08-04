@@ -10,6 +10,7 @@ Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(
 """
 import asyncio
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1126,6 +1127,163 @@ class TestTestConnection:
         body = response.json()
         assert body["success"] is False
         assert "api key" in body["message"].lower()
+
+
+class TestTestConnectionVersionAdvisory:
+    """POST /api/settings/test carries a NON-BLOCKING untested-version notice.
+
+    ADR-014 option (c) / bead ``enhancedchannelmanager-ax0kf``. ECM's recorded
+    Dispatcharr contract fixtures are pinned to one version, so an operator who
+    upgrades Dispatcharr underneath ECM gets a green CI and no signal at all.
+    The connection test now also probes ``GET /api/core/version/`` and returns a
+    ``warning`` alongside ``success: true`` when the version is outside the
+    tested set. It must NEVER turn a working connection into a failure.
+    """
+
+    @staticmethod
+    def _client_with_gets(*responses):
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.get = AsyncMock(side_effect=list(responses))
+        return mock_http_client
+
+    @staticmethod
+    def _version_response(status_code=200, payload=None):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = payload if payload is not None else {}
+        return response
+
+    @pytest.mark.asyncio
+    async def test_untested_version_returns_a_warning_but_still_succeeds(self, async_client):
+        me_response = MagicMock()
+        me_response.status_code = 200
+        mock_http_client = self._client_with_gets(
+            me_response, self._version_response(payload={"version": "9.9.9"})
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True, "the advisory must never fail the connection test"
+        assert "9.9.9" in body["warning"]
+        # The probe is authenticated with the same key the test just verified.
+        version_call = mock_http_client.get.await_args_list[1]
+        assert version_call.args[0].endswith("/api/core/version/")
+        assert version_call.kwargs["headers"]["X-API-Key"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_tested_version_returns_no_warning(self, async_client):
+        from dispatcharr_client import TESTED_DISPATCHARR_SERIES
+
+        me_response = MagicMock()
+        me_response.status_code = 200
+        mock_http_client = self._client_with_gets(
+            me_response,
+            self._version_response(payload={"version": f"{TESTED_DISPATCHARR_SERIES[0]}.0"}),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_failure_leaves_the_connection_test_successful(
+        self, async_client
+    ):
+        """An older Dispatcharr without /api/core/version/ produces silence, not noise."""
+        me_response = MagicMock()
+        me_response.status_code = 200
+        mock_http_client = self._client_with_gets(
+            me_response, httpx.ConnectError("boom")
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_404_produces_no_warning(self, async_client):
+        me_response = MagicMock()
+        me_response.status_code = 200
+        mock_http_client = self._client_with_gets(
+            me_response, self._version_response(status_code=404)
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+
+    @pytest.mark.asyncio
+    async def test_password_mode_advisory_uses_the_issued_access_token(self, async_client):
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"access": "jwt-abc", "refresh": "jwt-ref"}
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.post = AsyncMock(return_value=token_response)
+        mock_http_client.get = AsyncMock(
+            return_value=self._version_response(payload={"version": "9.9.9"})
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "9.9.9" in body["warning"]
+        version_call = mock_http_client.get.await_args
+        assert version_call.args[0].endswith("/api/core/version/")
+        assert version_call.kwargs["headers"]["Authorization"] == "Bearer jwt-abc"
+
+    @pytest.mark.asyncio
+    async def test_failed_connection_never_probes_the_version(self, async_client):
+        """A rejected key must not trigger an extra outbound request."""
+        me_response = MagicMock()
+        me_response.status_code = 401
+        mock_http_client = self._client_with_gets(me_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "bad-key",
+            })
+
+        assert response.json()["success"] is False
+        assert mock_http_client.get.await_count == 1
 
 
 class TestTestConnectionOutboundPolicy:

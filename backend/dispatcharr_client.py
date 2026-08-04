@@ -151,6 +151,66 @@ _CORE_SETTINGS_MAX_PAGES = 20
 _EPG_DATA_BYTES_PER_RESULT = 2048
 _EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
 
+# ---------------------------------------------------------------------------
+# Dispatcharr version advisory (ADR-014 option c, bead ax0kf)
+#
+# ECM's recorded contract fixtures -- the paths manifest the client contract
+# sweep checks every URL template against, and the deep response fixtures --
+# were all captured from ONE Dispatcharr version. That leaves a silent-upgrade
+# gap: the operator upgrades Dispatcharr underneath ECM, CI stays green against
+# the recorded snapshot, and nothing says a word until something breaks.
+#
+# The advisory is WARN-ONLY and must stay that way (PO decision 2026-08-03,
+# home-lab tier). ECM has no way to know a new Dispatcharr is actually
+# incompatible, and locking an operator out of their own tool over a version
+# tuple is a worse failure than the drift it would be guarding against.
+#
+# EDIT THIS CONSTANT when adopting a new Dispatcharr version -- in the same
+# change that re-records
+# ``tests/fixtures/dispatcharr_openapi_paths_manifest.json``
+# (see scripts/record_dispatcharr_openapi_manifest.py and docs/dispatcharr_api.md).
+# Entries are MAJOR.MINOR *series*, not full versions: Dispatcharr is 0.x, so
+# the MINOR is its breaking-change axis, and a patch release must never nag.
+TESTED_DISPATCHARR_SERIES = ("0.28",)
+
+_VERSION_SERIES_RE = re.compile(r"^v?(\d+)\.(\d+)")
+
+
+def dispatcharr_version_series(version) -> Optional[str]:
+    """Return the ``MAJOR.MINOR`` series of a Dispatcharr version string.
+
+    Returns ``None`` for anything that is not a parseable version string --
+    ``None``, a non-string, an empty body, or a value like ``"unknown"``.
+    """
+    if not isinstance(version, str):
+        return None
+    match = _VERSION_SERIES_RE.match(version.strip())
+    if match is None:
+        return None
+    return f"{match.group(1)}.{match.group(2)}"
+
+
+def dispatcharr_version_advisory(version) -> Optional[str]:
+    """Return a non-blocking notice if ``version`` is outside the tested set.
+
+    Returns ``None`` -- meaning "say nothing" -- when the version is in a
+    tested series OR cannot be determined at all. An undeterminable version is
+    deliberately silent: a Dispatcharr old enough to lack ``/api/core/version/``,
+    a timeout, or an unparseable body would otherwise produce a nag the operator
+    cannot act on.
+    """
+    series = dispatcharr_version_series(version)
+    if series is None or series in TESTED_DISPATCHARR_SERIES:
+        return None
+    tested = ", ".join(f"{entry}.x" for entry in TESTED_DISPATCHARR_SERIES)
+    return (
+        f"Connected to Dispatcharr {version.strip()}. ECM's Dispatcharr API "
+        f"contract is recorded against {tested}, so this version has not been "
+        "tested. The connection works and nothing is being held back -- but if "
+        "something Dispatcharr-related misbehaves, mention this version when "
+        "you report it."
+    )
+
 
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
@@ -1696,6 +1756,20 @@ class DispatcharrClient:
         Includes per-client information, buffer status, codec details, etc.
         """
         response = await self._request("GET", f"/proxy/ts/status/{channel_id}")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_version(self) -> dict:
+        """Return Dispatcharr's self-reported version.
+
+        ``GET /api/core/version/`` -> ``{"version": "0.28.2", "timestamp": null}``
+        on 0.28.2. Backs the non-blocking version advisory (ADR-014 option c);
+        see :func:`dispatcharr_version_advisory`. Raises on a non-2xx rather
+        than degrading here — the advisory's caller decides what an
+        undeterminable version means, and for the connection test that is
+        "stay silent".
+        """
+        response = await self._request("GET", "/api/core/version/")
         response.raise_for_status()
         return response.json()
 

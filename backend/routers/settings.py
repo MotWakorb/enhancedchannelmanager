@@ -19,7 +19,12 @@ from auth import RequireAdminIfEnabled
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
-from dispatcharr_client import get_client, reset_client, _settings_hash
+from dispatcharr_client import (
+    dispatcharr_version_advisory,
+    get_client,
+    reset_client,
+    _settings_hash,
+)
 from emby_client import EmbyClient, EmbyClientError
 from jellyfin_client import JellyfinClient, JellyfinClientError
 from plex_client import PlexClient, PlexClientError
@@ -1307,6 +1312,48 @@ async def test_connection(request: TestConnectionRequest):
         logger.info("[SETTINGS-TEST] Dispatcharr test rejected by SSRF guard: %s", err)
         return {"success": False, "message": err}
     parsed = urlparse(base_url)
+
+    async def _version_advisory(client, headers: dict) -> Optional[str]:
+        """Best-effort untested-Dispatcharr-version notice (ADR-014, bead ax0kf).
+
+        Runs ONLY after the connection itself has been verified, against the
+        same already-SSRF-sanitized ``base_url`` and with the credential the
+        test just proved. It is advisory in the strongest sense: any failure —
+        an older Dispatcharr with no ``/api/core/version/`` route, a timeout, an
+        unparseable body — returns ``None`` and the connection test's own
+        verdict is untouched. It must never be able to turn a working
+        connection into a reported failure.
+        """
+        try:
+            version_response = await client.get(
+                f"{base_url}/api/core/version/", headers=headers, timeout=5.0
+            )
+            if version_response.status_code != 200:
+                return None
+            payload = version_response.json()
+        except Exception as e:  # noqa: BLE001 — advisory must never propagate
+            logger.debug(
+                "[SETTINGS-TEST] Version probe skipped - %s - %s",
+                parsed.hostname,
+                type(e).__name__,
+            )
+            return None
+        version = payload.get("version") if isinstance(payload, dict) else None
+        advisory = dispatcharr_version_advisory(version)
+        if advisory:
+            logger.warning(
+                "[SETTINGS-TEST] Untested Dispatcharr version - %s - reported: %s",
+                parsed.hostname,
+                version,
+            )
+        return advisory
+
+    def _success(advisory: Optional[str]) -> dict:
+        result = {"success": True, "message": "Connection successful"}
+        if advisory:
+            result["warning"] = advisory
+        return result
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if request.auth_method == "api_key":
@@ -1323,7 +1370,9 @@ async def test_connection(request: TestConnectionRequest):
                 )
                 if 200 <= response.status_code < 300:
                     logger.info("[SETTINGS-TEST] API key connection test successful - %s", parsed.hostname)
-                    return {"success": True, "message": "Connection successful"}
+                    return _success(
+                        await _version_advisory(client, {"X-API-Key": test_key})
+                    )
                 if response.status_code == 401:
                     logger.warning("[SETTINGS-TEST] API key rejected - %s", parsed.hostname)
                     return {"success": False, "message": "Invalid API key"}
@@ -1343,7 +1392,16 @@ async def test_connection(request: TestConnectionRequest):
             )
             if response.status_code == 200:
                 logger.info("[SETTINGS-TEST] Connection test successful - %s", parsed.hostname)
-                return {"success": True, "message": "Connection successful"}
+                # Reuse the access token the login just issued rather than
+                # re-authenticating; Dispatcharr rate-limits login 3/min per IP.
+                headers = {}
+                try:
+                    access_token = response.json().get("access")
+                except Exception:  # noqa: BLE001 — token body is advisory-only here
+                    access_token = None
+                if isinstance(access_token, str) and access_token:
+                    headers["Authorization"] = f"Bearer {access_token}"
+                return _success(await _version_advisory(client, headers))
             if response.status_code == 429:
                 logger.warning("[SETTINGS-TEST] Login throttled by Dispatcharr - %s", parsed.hostname)
                 return {
