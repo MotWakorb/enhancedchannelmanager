@@ -19,6 +19,7 @@ from config import DispatcharrSettings
 from dispatcharr_client import (
     TESTED_DISPATCHARR_SERIES,
     DispatcharrClient,
+    clamp_dispatcharr_version,
     dispatcharr_version_advisory,
     dispatcharr_version_series,
 )
@@ -134,6 +135,43 @@ def test_no_advisory_when_the_version_cannot_be_determined(unknown):
 
 
 # ---------------------------------------------------------------------------
+# Clamping upstream-controlled text (PR #773 review, N2)
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_truncates_a_long_version_string():
+    clamped = clamp_dispatcharr_version("9.9.9" + "A" * 5000)
+    assert len(clamped) <= 40, "an upstream blob must not become a 5 kB notification"
+    assert clamped.startswith("9.9.9")
+    assert clamped.endswith("...")
+
+
+@pytest.mark.parametrize("hostile", ["0.29.0\nINJECTED", "0.29.0\r\nINJECTED", "0.29.0\x00x"])
+def test_clamp_removes_control_characters(hostile):
+    """A newline in the version must not be able to forge a second log record."""
+    clamped = clamp_dispatcharr_version(hostile)
+    assert "\n" not in clamped and "\r" not in clamped and "\x00" not in clamped
+
+
+@pytest.mark.parametrize("empty", [None, "", "   ", "\n\n", 7, {"version": "0.1"}])
+def test_clamp_returns_none_for_unusable_values(empty):
+    assert clamp_dispatcharr_version(empty) is None
+
+
+def test_advisory_embeds_the_clamped_version_not_the_raw_one():
+    advisory = dispatcharr_version_advisory("9.9.9" + "A" * 5000 + "\nINJECTED")
+    assert advisory is not None
+    assert "INJECTED" not in advisory
+    assert "\n" not in advisory
+    assert len(advisory) < 400
+
+
+def test_series_parsing_survives_a_hostile_suffix():
+    """Clamping must not break version detection for an otherwise-valid prefix."""
+    assert dispatcharr_version_series("0.29.0\nINJECTED") == "0.29"
+
+
+# ---------------------------------------------------------------------------
 # The client method
 # ---------------------------------------------------------------------------
 
@@ -150,6 +188,20 @@ async def test_get_version_calls_the_core_version_endpoint():
 
         assert result == body
         assert request_mock.await_args.args == ("GET", "/api/core/version/")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_version_forwards_a_caller_supplied_timeout():
+    """The connection test passes a short timeout — an advisory is never worth a wait."""
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(return_value=_response(200, {"version": "0.28.2"}))
+        with patch.object(client, "_request", request_mock):
+            await client.get_version(timeout=5.0)
+
+        assert request_mock.await_args.kwargs["timeout"] == 5.0
     finally:
         await client.close()
 

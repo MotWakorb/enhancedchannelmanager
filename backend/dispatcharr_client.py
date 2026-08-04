@@ -175,6 +175,36 @@ TESTED_DISPATCHARR_SERIES = ("0.28",)
 
 _VERSION_SERIES_RE = re.compile(r"^v?(\d+)\.(\d+)")
 
+# The version string is UPSTREAM-CONTROLLED text that lands in two places a
+# blob of attacker-chosen bytes has no business reaching: an operator-facing
+# notification and a ``logger.warning`` line. ``/api/core/version/`` returns a
+# short semver on 0.28.2, but nothing in the transport guarantees that, so the
+# value is clamped to one short line before it reaches EITHER sink -- otherwise
+# a 5 kB "version" becomes a 5 kB notification, and an embedded newline forges
+# a second log record.
+_MAX_VERSION_STRING_LENGTH = 32
+_VERSION_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_VERSION_TRUNCATION_MARKER = "..."
+
+
+def clamp_dispatcharr_version(version) -> Optional[str]:
+    """Return a short, single-line, log-safe rendering of an upstream version.
+
+    Control characters (CR/LF included) collapse to spaces so the value cannot
+    forge a log record, and the result is capped at
+    :data:`_MAX_VERSION_STRING_LENGTH` characters. Returns ``None`` for a
+    non-string or a value that is empty once cleaned — callers treat that as
+    "version undeterminable", which is silence, not an advisory.
+    """
+    if not isinstance(version, str):
+        return None
+    cleaned = _VERSION_CONTROL_CHARS_RE.sub(" ", version).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _MAX_VERSION_STRING_LENGTH:
+        cleaned = cleaned[:_MAX_VERSION_STRING_LENGTH] + _VERSION_TRUNCATION_MARKER
+    return cleaned
+
 
 def dispatcharr_version_series(version) -> Optional[str]:
     """Return the ``MAJOR.MINOR`` series of a Dispatcharr version string.
@@ -182,9 +212,10 @@ def dispatcharr_version_series(version) -> Optional[str]:
     Returns ``None`` for anything that is not a parseable version string --
     ``None``, a non-string, an empty body, or a value like ``"unknown"``.
     """
-    if not isinstance(version, str):
+    clamped = clamp_dispatcharr_version(version)
+    if clamped is None:
         return None
-    match = _VERSION_SERIES_RE.match(version.strip())
+    match = _VERSION_SERIES_RE.match(clamped)
     if match is None:
         return None
     return f"{match.group(1)}.{match.group(2)}"
@@ -198,17 +229,19 @@ def dispatcharr_version_advisory(version) -> Optional[str]:
     deliberately silent: a Dispatcharr old enough to lack ``/api/core/version/``,
     a timeout, or an unparseable body would otherwise produce a nag the operator
     cannot act on.
+
+    The version is embedded via :func:`clamp_dispatcharr_version`, never raw.
     """
     series = dispatcharr_version_series(version)
     if series is None or series in TESTED_DISPATCHARR_SERIES:
         return None
     tested = ", ".join(f"{entry}.x" for entry in TESTED_DISPATCHARR_SERIES)
     return (
-        f"Connected to Dispatcharr {version.strip()}. ECM's Dispatcharr API "
-        f"contract is recorded against {tested}, so this version has not been "
-        "tested. The connection works and nothing is being held back -- but if "
-        "something Dispatcharr-related misbehaves, mention this version when "
-        "you report it."
+        f"Connected to Dispatcharr {clamp_dispatcharr_version(version)}. ECM's "
+        f"Dispatcharr API contract is recorded against {tested}, so this version "
+        "has not been tested. The connection works and nothing is being held "
+        "back -- but if something Dispatcharr-related misbehaves, mention this "
+        "version when you report it."
     )
 
 
@@ -1759,7 +1792,7 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_version(self) -> dict:
+    async def get_version(self, timeout: Optional[float] = None) -> dict:
         """Return Dispatcharr's self-reported version.
 
         ``GET /api/core/version/`` -> ``{"version": "0.28.2", "timestamp": null}``
@@ -1768,8 +1801,12 @@ class DispatcharrClient:
         than degrading here — the advisory's caller decides what an
         undeterminable version means, and for the connection test that is
         "stay silent".
+
+        ``timeout`` overrides the client's default per-request timeout. The
+        connection test passes a short one: the operator is watching a button
+        spin, and an advisory is never worth making them wait for.
         """
-        response = await self._request("GET", "/api/core/version/")
+        response = await self._request("GET", "/api/core/version/", timeout=timeout)
         response.raise_for_status()
         return response.json()
 
