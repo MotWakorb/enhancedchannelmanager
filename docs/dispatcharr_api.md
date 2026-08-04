@@ -31,7 +31,27 @@ Three of ECM's Dispatcharr integration bugs (`q6xjl`, `lsa0s`, and the settings-
    - `backend/tests/fixtures/dispatcharr_openapi_recorded.json` — a slice of the `/api/schema/?format=json` document (the `/api/core/settings/` and `/api/core/settings/{id}/` path items, plus the `User` component schema).
    - `backend/tests/fixtures/dispatcharr_core_settings_recorded.json` — the shape of `GET /api/core/settings/` (a bare list, non-contiguous integer ids).
    - `backend/tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json` — the shape of `GET /api/channels/recurring-rules/` and the dead-endpoint capture for the old `/api/dvr/rules/` guess.
+   - `backend/tests/fixtures/dispatcharr_openapi_paths_manifest.json` — **every** path and method the live 0.28.2 document exposes (all 224), with bodies stripped. Use it to answer "does this path exist, and does it allow this method?" without a live instance; use the three fixtures above when you need the *shape* of a response.
 4. A path that "sounds right" by analogy to another resource is a guess, not a fact — Dispatcharr's namespacing is not fully consistent (see the DVR rules case below), and a wrong guess here has shipped a JSON-parse failure, a 404 on every apply, and a silently-empty backup category.
+
+### The automated sweep (ADR-014)
+
+You do not have to remember step 4. `backend/tests/unit/test_dispatcharr_client_contract_sweep.py` runs in the normal pytest gate and checks **every** `(method, URL template)` in `backend/dispatcharr_client.py` — derived from the source with an `ast` walk, never a hand-maintained list — against the recorded paths manifest above. It asserts path existence, allowed method, and path-parameter count/type; request and response **body shape are out of scope** (that is what the deep fixtures in step 3 are for). See [ADR-014](adr/ADR-014-dispatcharr-api-drift-strategy.md) for why the two mechanisms are complements, not substitutes.
+
+**Re-recording the manifest.** Deliberate, not scheduled — when adopting a new Dispatcharr version, or when a PR adds client methods the manifest predates:
+
+```bash
+# Capture the raw document (read-only GET; ?format=json is required)
+curl -s 'http://<dispatcharr-host>:9191/api/schema/?format=json' \
+    -H 'X-API-Key: <key>' > /tmp/disp_schema.json
+# Read the version the same way ECM's advisory does
+curl -s 'http://<dispatcharr-host>:9191/api/core/version/' -H 'X-API-Key: <key>'
+
+python scripts/record_dispatcharr_openapi_manifest.py \
+    --schema /tmp/disp_schema.json --dispatcharr-version 0.28.2
+```
+
+The script performs no network request of its own, so CI stays hermetic. Read the resulting fixture diff — it is a readable summary of what moved upstream. If you also intend to *support* the new version, update `TESTED_DISPATCHARR_SERIES` in `backend/dispatcharr_client.py` in the same change, or the connection test will keep warning operators that it is untested.
 
 ## Core Settings (`/api/core/settings/`)
 

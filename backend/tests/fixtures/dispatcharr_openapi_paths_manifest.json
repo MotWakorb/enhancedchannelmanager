@@ -1,0 +1,3433 @@
+{
+  "capture": {
+    "source": "Live GET /api/schema/?format=json from Dispatcharr 0.28.2, stripped by scripts/record_dispatcharr_openapi_manifest.py",
+    "fixture_kind": "derived manifest (paths + methods + path-parameter types only)",
+    "literal_raw_capture": false,
+    "captured_at": "2026-08-03",
+    "dispatcharr_version": "0.28.2",
+    "openapi_info_version": "1.0.0",
+    "path_count": 224,
+    "recorded_by": "scripts/record_dispatcharr_openapi_manifest.py",
+    "stripped": "Request/response bodies, component schemas, descriptions, operationIds, tags, security and all non-path parameters are dropped. Only path existence, allowed methods and path-parameter name/type/format are retained.",
+    "why": "Breadth contract for the ADR-014 sweep: every (method, URL template) DispatcharrClient issues is checked against this manifest so a guessed or upstream-moved endpoint fails a test instead of shipping (beads enhancedchannelmanager-q6xjl, enhancedchannelmanager-lsa0s). Deliberately SEPARATE from dispatcharr_openapi_recorded.json, which pins body/semantic shape for a few high-risk paths and churns on a different clock.",
+    "keys_are_normalized": "Each key is an upstream path with every {param} replaced by {} \u2014 ECM's client interpolates its own parameter names, so only position is contractual. 'openapi_path' carries the literal upstream path for reference."
+  },
+  "paths": {
+    "/api/accounts/api-keys/": {
+      "openapi_path": "/api/accounts/api-keys/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/api-keys/generate/": {
+      "openapi_path": "/api/accounts/api-keys/generate/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/api-keys/revoke/": {
+      "openapi_path": "/api/accounts/api-keys/revoke/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/auth/login/": {
+      "openapi_path": "/api/accounts/auth/login/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/auth/logout/": {
+      "openapi_path": "/api/accounts/auth/logout/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/groups/": {
+      "openapi_path": "/api/accounts/groups/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/groups/{}/": {
+      "openapi_path": "/api/accounts/groups/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/accounts/permissions/": {
+      "openapi_path": "/api/accounts/permissions/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/token/": {
+      "openapi_path": "/api/accounts/token/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/token/refresh/": {
+      "openapi_path": "/api/accounts/token/refresh/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/users/": {
+      "openapi_path": "/api/accounts/users/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/users/me/": {
+      "openapi_path": "/api/accounts/users/me/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "PATCH": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/accounts/users/{}/": {
+      "openapi_path": "/api/accounts/users/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/backups/": {
+      "openapi_path": "/api/backups/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/backups/create/": {
+      "openapi_path": "/api/backups/create/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/backups/schedule/": {
+      "openapi_path": "/api/backups/schedule/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/backups/schedule/update/": {
+      "openapi_path": "/api/backups/schedule/update/",
+      "methods": {
+        "PUT": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/backups/status/{}/": {
+      "openapi_path": "/api/backups/status/{task_id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "task_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/backups/upload/": {
+      "openapi_path": "/api/backups/upload/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/backups/{}/delete/": {
+      "openapi_path": "/api/backups/{filename}/delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "filename",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/backups/{}/download-token/": {
+      "openapi_path": "/api/backups/{filename}/download-token/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "filename",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/backups/{}/download/": {
+      "openapi_path": "/api/backups/{filename}/download/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "filename",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/backups/{}/restore/": {
+      "openapi_path": "/api/backups/{filename}/restore/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "filename",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/catchup/sessions/": {
+      "openapi_path": "/api/catchup/sessions/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/catchup/sessions/{}/": {
+      "openapi_path": "/api/catchup/sessions/{session_id}/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "session_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/catchup/sessions/{}/position/": {
+      "openapi_path": "/api/catchup/sessions/{session_id}/position/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "session_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/": {
+      "openapi_path": "/api/channels/channels/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/assign/": {
+      "openapi_path": "/api/channels/channels/assign/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/batch-set-epg/": {
+      "openapi_path": "/api/channels/channels/batch-set-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/bulk-delete/": {
+      "openapi_path": "/api/channels/channels/bulk-delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/by-uuids/": {
+      "openapi_path": "/api/channels/channels/by-uuids/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/edit/bulk-regex/": {
+      "openapi_path": "/api/channels/channels/edit/bulk-regex/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/edit/bulk/": {
+      "openapi_path": "/api/channels/channels/edit/bulk/",
+      "methods": {
+        "PATCH": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/from-stream/": {
+      "openapi_path": "/api/channels/channels/from-stream/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/from-stream/bulk/": {
+      "openapi_path": "/api/channels/channels/from-stream/bulk/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/ids/": {
+      "openapi_path": "/api/channels/channels/ids/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/match-epg/": {
+      "openapi_path": "/api/channels/channels/match-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/numbers-in-range/": {
+      "openapi_path": "/api/channels/channels/numbers-in-range/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/set-logos-from-epg/": {
+      "openapi_path": "/api/channels/channels/set-logos-from-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/set-names-from-epg/": {
+      "openapi_path": "/api/channels/channels/set-names-from-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/set-tvg-ids-from-epg/": {
+      "openapi_path": "/api/channels/channels/set-tvg-ids-from-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/summary/": {
+      "openapi_path": "/api/channels/channels/summary/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/channels/{}/streams/": {
+      "openapi_path": "/api/channels/channels/{channel_id}/streams/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/{}/streams/stats/": {
+      "openapi_path": "/api/channels/channels/{channel_id}/streams/stats/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/{}/": {
+      "openapi_path": "/api/channels/channels/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/{}/match-epg/": {
+      "openapi_path": "/api/channels/channels/{id}/match-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/{}/reorder/": {
+      "openapi_path": "/api/channels/channels/{id}/reorder/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/channels/{}/set-epg/": {
+      "openapi_path": "/api/channels/channels/{id}/set-epg/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/dvr/comskip-config/": {
+      "openapi_path": "/api/channels/dvr/comskip-config/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/groups/": {
+      "openapi_path": "/api/channels/groups/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/groups/cleanup/": {
+      "openapi_path": "/api/channels/groups/cleanup/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/groups/{}/": {
+      "openapi_path": "/api/channels/groups/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/logos/": {
+      "openapi_path": "/api/channels/logos/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/logos/bulk-delete/": {
+      "openapi_path": "/api/channels/logos/bulk-delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/logos/cleanup/": {
+      "openapi_path": "/api/channels/logos/cleanup/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/logos/upload/": {
+      "openapi_path": "/api/channels/logos/upload/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/logos/{}/": {
+      "openapi_path": "/api/channels/logos/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/logos/{}/cache/": {
+      "openapi_path": "/api/channels/logos/{id}/cache/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/profiles/": {
+      "openapi_path": "/api/channels/profiles/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/profiles/{}/": {
+      "openapi_path": "/api/channels/profiles/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/profiles/{}/duplicate/": {
+      "openapi_path": "/api/channels/profiles/{id}/duplicate/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/profiles/{}/channels/bulk-update/": {
+      "openapi_path": "/api/channels/profiles/{profile_id}/channels/bulk-update/",
+      "methods": {
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/profiles/{}/channels/{}/": {
+      "openapi_path": "/api/channels/profiles/{profile_id}/channels/{channel_id}/",
+      "methods": {
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "integer",
+              "format": null
+            },
+            {
+              "name": "profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/": {
+      "openapi_path": "/api/channels/recordings/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/recordings/bulk-delete-upcoming/": {
+      "openapi_path": "/api/channels/recordings/bulk-delete-upcoming/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/recordings/{}/": {
+      "openapi_path": "/api/channels/recordings/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/comskip/": {
+      "openapi_path": "/api/channels/recordings/{id}/comskip/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/extend/": {
+      "openapi_path": "/api/channels/recordings/{id}/extend/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/file/": {
+      "openapi_path": "/api/channels/recordings/{id}/file/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/hls/{}": {
+      "openapi_path": "/api/channels/recordings/{id}/hls/{seg_path}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            },
+            {
+              "name": "seg_path",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/hls/{}/": {
+      "openapi_path": "/api/channels/recordings/{id}/hls/{seg_path}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            },
+            {
+              "name": "seg_path",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/refresh-artwork/": {
+      "openapi_path": "/api/channels/recordings/{id}/refresh-artwork/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/stop/": {
+      "openapi_path": "/api/channels/recordings/{id}/stop/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recordings/{}/update-metadata/": {
+      "openapi_path": "/api/channels/recordings/{id}/update-metadata/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/recurring-rules/": {
+      "openapi_path": "/api/channels/recurring-rules/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/recurring-rules/{}/": {
+      "openapi_path": "/api/channels/recurring-rules/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/channels/series-rules/": {
+      "openapi_path": "/api/channels/series-rules/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        },
+        "DELETE": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/series-rules/bulk-remove/": {
+      "openapi_path": "/api/channels/series-rules/bulk-remove/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/series-rules/evaluate/": {
+      "openapi_path": "/api/channels/series-rules/evaluate/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/series-rules/preview/": {
+      "openapi_path": "/api/channels/series-rules/preview/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/": {
+      "openapi_path": "/api/channels/streams/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/bulk-delete/": {
+      "openapi_path": "/api/channels/streams/bulk-delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/by-ids/": {
+      "openapi_path": "/api/channels/streams/by-ids/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/filter-options/": {
+      "openapi_path": "/api/channels/streams/filter-options/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/groups/": {
+      "openapi_path": "/api/channels/streams/groups/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/ids/": {
+      "openapi_path": "/api/channels/streams/ids/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/regex-preview/": {
+      "openapi_path": "/api/channels/streams/regex-preview/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/channels/streams/{}/": {
+      "openapi_path": "/api/channels/streams/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/integrations/": {
+      "openapi_path": "/api/connect/integrations/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/connect/integrations/{}/": {
+      "openapi_path": "/api/connect/integrations/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/integrations/{}/subscriptions/": {
+      "openapi_path": "/api/connect/integrations/{id}/subscriptions/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/integrations/{}/subscriptions/set/": {
+      "openapi_path": "/api/connect/integrations/{id}/subscriptions/set/",
+      "methods": {
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/integrations/{}/test/": {
+      "openapi_path": "/api/connect/integrations/{id}/test/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/logs/": {
+      "openapi_path": "/api/connect/logs/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/connect/logs/{}/": {
+      "openapi_path": "/api/connect/logs/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/connect/subscriptions/": {
+      "openapi_path": "/api/connect/subscriptions/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/connect/subscriptions/{}/": {
+      "openapi_path": "/api/connect/subscriptions/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/notifications/": {
+      "openapi_path": "/api/core/notifications/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/notifications/count/": {
+      "openapi_path": "/api/core/notifications/count/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/notifications/dismiss-all/": {
+      "openapi_path": "/api/core/notifications/dismiss-all/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/notifications/{}/": {
+      "openapi_path": "/api/core/notifications/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/notifications/{}/dismiss/": {
+      "openapi_path": "/api/core/notifications/{id}/dismiss/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/outputprofiles/": {
+      "openapi_path": "/api/core/outputprofiles/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/outputprofiles/{}/": {
+      "openapi_path": "/api/core/outputprofiles/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/rehash-streams/": {
+      "openapi_path": "/api/core/rehash-streams/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/settings/": {
+      "openapi_path": "/api/core/settings/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/settings/check/": {
+      "openapi_path": "/api/core/settings/check/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/settings/env/": {
+      "openapi_path": "/api/core/settings/env/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/settings/{}/": {
+      "openapi_path": "/api/core/settings/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/streamprofiles/": {
+      "openapi_path": "/api/core/streamprofiles/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/streamprofiles/{}/": {
+      "openapi_path": "/api/core/streamprofiles/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/system-events/": {
+      "openapi_path": "/api/core/system-events/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/timezones/": {
+      "openapi_path": "/api/core/timezones/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/useragents/": {
+      "openapi_path": "/api/core/useragents/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/core/useragents/{}/": {
+      "openapi_path": "/api/core/useragents/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/core/version/": {
+      "openapi_path": "/api/core/version/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/current-programs/": {
+      "openapi_path": "/api/epg/current-programs/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/epgdata/": {
+      "openapi_path": "/api/epg/epgdata/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/epgdata/{}/": {
+      "openapi_path": "/api/epg/epgdata/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/epg/grid/": {
+      "openapi_path": "/api/epg/grid/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/import/": {
+      "openapi_path": "/api/epg/import/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/programs/": {
+      "openapi_path": "/api/epg/programs/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/programs/search/": {
+      "openapi_path": "/api/epg/programs/search/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/programs/{}/": {
+      "openapi_path": "/api/epg/programs/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/epg/programs/{}/poster/": {
+      "openapi_path": "/api/epg/programs/{id}/poster/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/epg/sources/": {
+      "openapi_path": "/api/epg/sources/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/sources/upload/": {
+      "openapi_path": "/api/epg/sources/upload/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/epg/sources/{}/": {
+      "openapi_path": "/api/epg/sources/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/epg/sources/{}/sd-lineups/": {
+      "openapi_path": "/api/epg/sources/{id}/sd-lineups/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/epg/sources/{}/sd-lineups/search/": {
+      "openapi_path": "/api/epg/sources/{id}/sd-lineups/search/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/hdhr/device.xml": {
+      "openapi_path": "/api/hdhr/device.xml",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/hdhr/devices/": {
+      "openapi_path": "/api/hdhr/devices/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/hdhr/devices/{}/": {
+      "openapi_path": "/api/hdhr/devices/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/hdhr/discover.json": {
+      "openapi_path": "/api/hdhr/discover.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/hdhr/lineup.json": {
+      "openapi_path": "/api/hdhr/lineup.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/hdhr/lineup_status.json": {
+      "openapi_path": "/api/hdhr/lineup_status.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/m3u/accounts/": {
+      "openapi_path": "/api/m3u/accounts/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/filters/": {
+      "openapi_path": "/api/m3u/accounts/{account_id}/filters/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        },
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/filters/{}/": {
+      "openapi_path": "/api/m3u/accounts/{account_id}/filters/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/profiles/": {
+      "openapi_path": "/api/m3u/accounts/{account_id}/profiles/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        },
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/profiles/{}/": {
+      "openapi_path": "/api/m3u/accounts/{account_id}/profiles/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/": {
+      "openapi_path": "/api/m3u/accounts/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/auto-created-channels-count/": {
+      "openapi_path": "/api/m3u/accounts/{id}/auto-created-channels-count/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/group-settings/": {
+      "openapi_path": "/api/m3u/accounts/{id}/group-settings/",
+      "methods": {
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/refresh-vod/": {
+      "openapi_path": "/api/m3u/accounts/{id}/refresh-vod/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/accounts/{}/repack-group/": {
+      "openapi_path": "/api/m3u/accounts/{id}/repack-group/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/refresh-account-info/{}/": {
+      "openapi_path": "/api/m3u/refresh-account-info/{profile_id}/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/refresh/": {
+      "openapi_path": "/api/m3u/refresh/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/m3u/refresh/{}/": {
+      "openapi_path": "/api/m3u/refresh/{account_id}/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "account_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/m3u/server-groups/": {
+      "openapi_path": "/api/m3u/server-groups/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/m3u/server-groups/{}/": {
+      "openapi_path": "/api/m3u/server-groups/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/plugins/": {
+      "openapi_path": "/api/plugins/plugins/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/plugins/import/": {
+      "openapi_path": "/api/plugins/plugins/import/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/plugins/reload/": {
+      "openapi_path": "/api/plugins/plugins/reload/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/plugins/{}/delete/": {
+      "openapi_path": "/api/plugins/plugins/{key}/delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "key",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/plugins/{}/enabled/": {
+      "openapi_path": "/api/plugins/plugins/{key}/enabled/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "key",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/plugins/{}/logo/": {
+      "openapi_path": "/api/plugins/plugins/{key}/logo/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "key",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/plugins/{}/run/": {
+      "openapi_path": "/api/plugins/plugins/{key}/run/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "key",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/plugins/{}/settings/": {
+      "openapi_path": "/api/plugins/plugins/{key}/settings/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "key",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/repos/": {
+      "openapi_path": "/api/plugins/repos/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/available/": {
+      "openapi_path": "/api/plugins/repos/available/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/install/": {
+      "openapi_path": "/api/plugins/repos/install/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/plugin-detail/": {
+      "openapi_path": "/api/plugins/repos/plugin-detail/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/preview/": {
+      "openapi_path": "/api/plugins/repos/preview/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/settings/": {
+      "openapi_path": "/api/plugins/repos/settings/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "PUT": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/plugins/repos/{}/": {
+      "openapi_path": "/api/plugins/repos/{id}/",
+      "methods": {
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/plugins/repos/{}/refresh/": {
+      "openapi_path": "/api/plugins/repos/{id}/refresh/",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/all/": {
+      "openapi_path": "/api/vod/all/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/all/{}/": {
+      "openapi_path": "/api/vod/all/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/categories/": {
+      "openapi_path": "/api/vod/categories/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/categories/{}/": {
+      "openapi_path": "/api/vod/categories/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/episodes/": {
+      "openapi_path": "/api/vod/episodes/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/episodes/{}/": {
+      "openapi_path": "/api/vod/episodes/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/movies/": {
+      "openapi_path": "/api/vod/movies/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/movies/{}/": {
+      "openapi_path": "/api/vod/movies/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/movies/{}/provider-info/": {
+      "openapi_path": "/api/vod/movies/{id}/provider-info/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/movies/{}/providers/": {
+      "openapi_path": "/api/vod/movies/{id}/providers/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/series/": {
+      "openapi_path": "/api/vod/series/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/series/{}/": {
+      "openapi_path": "/api/vod/series/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/series/{}/episodes/": {
+      "openapi_path": "/api/vod/series/{id}/episodes/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/series/{}/provider-info/": {
+      "openapi_path": "/api/vod/series/{id}/provider-info/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/series/{}/providers/": {
+      "openapi_path": "/api/vod/series/{id}/providers/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/vodlogos/": {
+      "openapi_path": "/api/vod/vodlogos/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/vodlogos/bulk-delete/": {
+      "openapi_path": "/api/vod/vodlogos/bulk-delete/",
+      "methods": {
+        "DELETE": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/vodlogos/cleanup/": {
+      "openapi_path": "/api/vod/vodlogos/cleanup/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/api/vod/vodlogos/{}/": {
+      "openapi_path": "/api/vod/vodlogos/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/api/vod/vodlogos/{}/cache/": {
+      "openapi_path": "/api/vod/vodlogos/{id}/cache/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/device.xml": {
+      "openapi_path": "/hdhr/device.xml",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/hdhr/devices/": {
+      "openapi_path": "/hdhr/devices/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        },
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/hdhr/devices/{}/": {
+      "openapi_path": "/hdhr/devices/{id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PUT": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "PATCH": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/discover.json": {
+      "openapi_path": "/hdhr/discover.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/hdhr/lineup.json": {
+      "openapi_path": "/hdhr/lineup.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/hdhr/lineup_status.json": {
+      "openapi_path": "/hdhr/lineup_status.json",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/hdhr/output_profile/{}/discover.json": {
+      "openapi_path": "/hdhr/output_profile/{output_profile_id}/discover.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/output_profile/{}/lineup.json": {
+      "openapi_path": "/hdhr/output_profile/{output_profile_id}/lineup.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/output_profile/{}/lineup_status.json": {
+      "openapi_path": "/hdhr/output_profile/{output_profile_id}/lineup_status.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/discover.json": {
+      "openapi_path": "/hdhr/{channel_profile}/discover.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/lineup.json": {
+      "openapi_path": "/hdhr/{channel_profile}/lineup.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/lineup_status.json": {
+      "openapi_path": "/hdhr/{channel_profile}/lineup_status.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/output_profile/{}/discover.json": {
+      "openapi_path": "/hdhr/{channel_profile}/output_profile/{output_profile_id}/discover.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/output_profile/{}/lineup.json": {
+      "openapi_path": "/hdhr/{channel_profile}/output_profile/{output_profile_id}/lineup.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/hdhr/{}/output_profile/{}/lineup_status.json": {
+      "openapi_path": "/hdhr/{channel_profile}/output_profile/{output_profile_id}/lineup_status.json",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_profile",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "output_profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/live/{}/{}/{}": {
+      "openapi_path": "/live/{username}/{password}/{channel_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "password",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/movie/{}/{}/{}.{}": {
+      "openapi_path": "/movie/{username}/{password}/{stream_id}.{extension}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "extension",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "password",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "stream_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/catchup/programs/": {
+      "openapi_path": "/proxy/catchup/programs/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/catchup/stats/": {
+      "openapi_path": "/proxy/catchup/stats/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/catchup/stop_client/": {
+      "openapi_path": "/proxy/catchup/stop_client/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/catchup/{}": {
+      "openapi_path": "/proxy/catchup/{channel_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": "uuid"
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/stats/": {
+      "openapi_path": "/proxy/stats/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/ts/change_stream/{}": {
+      "openapi_path": "/proxy/ts/change_stream/{channel_id}",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/ts/next_stream/{}": {
+      "openapi_path": "/proxy/ts/next_stream/{channel_id}",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/ts/status": {
+      "openapi_path": "/proxy/ts/status",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/ts/status/{}": {
+      "openapi_path": "/proxy/ts/status/{channel_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/ts/stop/{}": {
+      "openapi_path": "/proxy/ts/stop/{channel_id}",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        },
+        "DELETE": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/ts/stop_client/{}": {
+      "openapi_path": "/proxy/ts/stop_client/{channel_id}",
+      "methods": {
+        "POST": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/ts/stream/{}": {
+      "openapi_path": "/proxy/ts/stream/{channel_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/vod/stats/": {
+      "openapi_path": "/proxy/vod/stats/",
+      "methods": {
+        "GET": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/vod/stop_client/": {
+      "openapi_path": "/proxy/vod/stop_client/",
+      "methods": {
+        "POST": {
+          "path_parameters": []
+        }
+      }
+    },
+    "/proxy/vod/{}/{}": {
+      "openapi_path": "/proxy/vod/{content_type}/{content_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "content_id",
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "name": "content_type",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/vod/{}/{}/{}/": {
+      "openapi_path": "/proxy/vod/{content_type}/{content_id}/{profile_id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "content_id",
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "name": "content_type",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "profile_id",
+              "type": "integer",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/vod/{}/{}/{}": {
+      "openapi_path": "/proxy/vod/{content_type}/{content_id}/{session_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "content_id",
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "name": "content_type",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "session_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/proxy/vod/{}/{}/{}/{}/": {
+      "openapi_path": "/proxy/vod/{content_type}/{content_id}/{session_id}/{profile_id}/",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "content_id",
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "name": "content_type",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "profile_id",
+              "type": "integer",
+              "format": null
+            },
+            {
+              "name": "session_id",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/series/{}/{}/{}.{}": {
+      "openapi_path": "/series/{username}/{password}/{stream_id}.{extension}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "extension",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "password",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "stream_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    },
+    "/{}/{}/{}": {
+      "openapi_path": "/{username}/{password}/{channel_id}",
+      "methods": {
+        "GET": {
+          "path_parameters": [
+            {
+              "name": "channel_id",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "password",
+              "type": "string",
+              "format": null
+            },
+            {
+              "name": "username",
+              "type": "string",
+              "format": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}
