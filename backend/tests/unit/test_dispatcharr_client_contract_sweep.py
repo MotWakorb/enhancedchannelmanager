@@ -100,6 +100,17 @@ _PATH_FORWARDING_HELPERS = {"_get_json_bounded": "GET"}
 # unnecessary — so it cannot rot into an allowlist that hides real drift.
 _SELF_DESCRIBING_EXEMPTIONS = frozenset({("GET", "/api/schema/")})
 
+# The ONE module this sweep reads. Everything about the extraction is scoped to
+# it: ``_CLIENT_SOURCE_PATH`` is its source, and a base class living anywhere
+# else takes its methods out of the sweep's view entirely (see
+# ``bases_outside_the_swept_module``).
+_SWEPT_MODULE = dispatcharr_client.__name__
+
+# Owner prefix for a module-level function, so EVERY owner is qualified. The
+# reviewed-seam registry is keyed on the owner string, and an unqualified
+# ``fetch_version`` would be ambiguous with a method of the same name.
+_MODULE_OWNER_PREFIX = "<module>."
+
 # Annotations that mean "this interpolation is an integer id". Used only to
 # catch the drift an integer->UUID primary-key migration would produce.
 _INT_ANNOTATIONS = frozenset({"int", "Optional[int]", "int | None", "Union[int, None]"})
@@ -287,12 +298,17 @@ def _httpx_client_construction(func: ast.expr) -> Optional[str]:
 
 
 def _collect_units(tree: ast.Module) -> list[tuple[str, ast.AST]]:
-    """Return ``(class-qualified name, function node)`` for every function.
+    """Return ``(qualified name, function node)`` for every function.
 
     Walks the module body recursively through EVERY ``ClassDef``, not just one
     named class: PR #773's review proved that a routine refactor — moving nine
     methods onto a mixin base, or adding a second request-issuing class —
     silently dropped those calls from the sweep while it still reported green.
+
+    Owners are always qualified: a method is ``Class.method`` (nested classes
+    accumulate, ``Outer.Inner.method``) and a module-level function is
+    ``<module>.function``. That is load-bearing for the reviewed-seam registry,
+    which is keyed on the owner string.
 
     Nested functions are NOT separate units; they are reached by ``ast.walk``
     from their enclosing function, so a call inside ``_get_json_bounded``'s
@@ -303,12 +319,66 @@ def _collect_units(tree: ast.Module) -> list[tuple[str, ast.AST]]:
     def visit(body, prefix: str) -> None:
         for node in body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                units.append((prefix + node.name, node))
+                units.append(((prefix or _MODULE_OWNER_PREFIX) + node.name, node))
             elif isinstance(node, ast.ClassDef):
                 visit(node.body, f"{prefix}{node.name}.")
 
     visit(tree.body, "")
     return units
+
+
+def classes_defined_in_the_swept_module() -> list[type]:
+    """Every class ``dispatcharr_client`` itself defines (not ones it imports)."""
+    return [
+        value
+        for value in vars(dispatcharr_client).values()
+        if isinstance(value, type) and value.__module__ == _SWEPT_MODULE
+    ]
+
+
+def bases_outside_the_swept_module(cls: type) -> list[type]:
+    """Bases of ``cls`` whose methods this sweep structurally cannot see.
+
+    The extraction reads exactly one source file. A base class defined in a
+    SIBLING module — ``from dispatcharr_client_m3u import _M3UMixin``, the
+    natural next refactor for a 2,100-line file — takes every method it carries
+    out of the sweep's view, and nothing else notices: the canary floors sit far
+    below the real counts, and each surviving call still matches the manifest.
+    Review measured the damage on the real module: one such move dropped 31 of
+    93 ``(method, template)`` pairs (98 call sites down to 67) with the whole
+    suite green.
+
+    This is the structural half of ADR-014's property 3. ``_collect_units``
+    covers the in-module case (a mixin declared alongside the client); this
+    covers the cross-module one.
+    """
+    return [
+        base
+        for base in cls.__mro__
+        if base is not object and base.__module__ != _SWEPT_MODULE
+    ]
+
+
+def format_foreign_base_failure(cls: type, offenders: Sequence[type]) -> str:
+    lines = [
+        f"{cls.__name__} inherits from {len(offenders)} class(es) defined outside "
+        f"{_SWEPT_MODULE}:",
+        "",
+        *[f"  {base.__module__}.{base.__qualname__}" for base in offenders],
+        "",
+        f"The contract sweep reads ONE module — {_CLIENT_SOURCE_PATH.name} — so every "
+        "Dispatcharr call those bases issue is now unswept, silently. Nothing else "
+        "catches this: the canary floors are far below the real counts and the calls "
+        "that remain still match the manifest.",
+        "",
+        "Fix it one of two ways, and do not weaken this assertion instead:",
+        "  (1) Move the base back into dispatcharr_client.py (the sweep already "
+        "walks every class in the module, mixins included), or",
+        "  (2) Extend the sweep to read the additional module(s): make the source "
+        "path a list, extract from each, and update _SWEPT_MODULE / this check to "
+        "match the new set.",
+    ]
+    return "\n".join(lines)
 
 
 def extract_client_calls(
@@ -741,14 +811,38 @@ def test_extractor_covers_every_call_convention(extraction: ExtractionResult):
     assert ("GET", "/api/epg/epgdata/") in templates
 
 
-def test_extraction_owners_are_class_qualified(extraction: ExtractionResult):
-    """Owners name their class, so a second class cannot inherit a review entry."""
+def test_extraction_owners_are_qualified(extraction: ExtractionResult):
+    """Every owner is qualified, so no two call sites can collide in the registry.
+
+    A method is ``Class.method`` (so a second class cannot inherit another's
+    review entry) and a module-level function is ``<module>.function``. The
+    qualification is what makes ``_REVIEWED_RAW_CALL_SITES`` safe to key on the
+    owner string; a bare ``fetch_version`` would be ambiguous with a method of
+    that name.
+    """
     owners = {call.owner for call in extraction.calls}
     assert "DispatcharrClient.get_channels" in owners
     assert all("." in owner for owner in owners), (
         f"unqualified owner(s) in {sorted(owners)[:5]} — the reviewed-seam "
-        "registry is keyed on Class.method and would mis-match"
+        "registry is keyed on the owner string and would mis-match"
     )
+
+
+def test_no_swept_class_inherits_from_outside_the_module(extraction: ExtractionResult):
+    """ADR-014 property 3, structurally: coverage cannot leave via a sibling module.
+
+    ``_collect_units`` already covers a mixin declared INSIDE
+    ``dispatcharr_client.py``. This covers the other half — a base imported from
+    a sibling module, which the single-module extraction cannot read at all.
+    """
+    classes = classes_defined_in_the_swept_module()
+    assert dispatcharr_client.DispatcharrClient in classes, (
+        "the class enumeration no longer finds DispatcharrClient, so this check "
+        "would pass vacuously — fix classes_defined_in_the_swept_module()"
+    )
+    for cls in classes:
+        offenders = bases_outside_the_swept_module(cls)
+        assert not offenders, format_foreign_base_failure(cls, offenders)
 
 
 # ---------------------------------------------------------------------------
@@ -989,13 +1083,50 @@ def test_extractor_covers_a_second_request_issuing_class():
 
 
 def test_extractor_covers_a_top_level_function():
+    """A module-level helper is swept, and its owner is qualified like a method.
+
+    PR #773 review, N2: the owner used to be a bare ``fetch_version``, which
+    contradicted ``test_extraction_owners_are_qualified`` — adding a module-level
+    helper that issued a client call would have turned the sweep red with a
+    message blaming the reviewed-seam registry for a legitimate refactor.
+    """
     source = (
         "async def fetch_version(self):\n"
         "    return await self._request('GET', '/api/core/version/')\n"
     )
     result = extract_client_calls(source)
     assert result.templates == {("GET", "/api/core/version/")}
-    assert result.calls[0].owner == "fetch_version"
+    assert result.calls[0].owner == "<module>.fetch_version"
+
+
+class _BaseFromAnotherModule:
+    """Stands in for a mixin moved to a sibling module (its ``__module__`` is this test)."""
+
+
+def test_a_base_class_outside_the_swept_module_is_detected():
+    """The cross-module refactor that silently dropped 31 of 93 pairs now fails.
+
+    Defined here rather than in ``dispatcharr_client``, so this class's
+    ``__module__`` is a different module — exactly the shape of
+    ``from dispatcharr_client_m3u import _M3UMixin``.
+    """
+
+    class _RefactoredClient(_BaseFromAnotherModule):
+        pass
+
+    offenders = bases_outside_the_swept_module(_RefactoredClient)
+    assert _BaseFromAnotherModule in offenders
+
+    message = format_foreign_base_failure(_RefactoredClient, offenders)
+    assert "_BaseFromAnotherModule" in message
+    assert __name__ in message, "the failure must name WHERE the base now lives"
+    assert "reads ONE module" in message
+    assert "Move the base back" in message and "Extend the sweep" in message
+
+
+def test_a_base_defined_in_the_swept_module_is_not_flagged():
+    """The in-module mixin case stays legal — it is already covered by extraction."""
+    assert bases_outside_the_swept_module(dispatcharr_client.DispatcharrClient) == []
 
 
 def test_extractor_flags_a_local_alias_of_the_transport():
