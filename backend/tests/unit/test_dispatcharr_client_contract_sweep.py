@@ -822,7 +822,12 @@ def path_parameter_conflict(
       would be twelve permanent false positives — noise that trains readers to
       ignore the sweep.
 
-    An unannotated interpolation yields no signal either way and is skipped.
+    An interpolation annotated as anything but ``int`` — ``str``, or nothing at
+    all — is skipped entirely. That is a KNOWN BOUNDARY, not an oversight to
+    read as coverage: a ``str`` interpolated into a parameter upstream declares
+    as ``integer`` is the ``q6xjl`` root cause B shape and would pass here.
+    Turning that direction on needs a false-positive survey of the client's
+    legitimate string interpolations first; ADR-014 records the gap.
     """
     if annotation not in _INT_ANNOTATIONS:
         return None
