@@ -702,4 +702,4 @@ All 73 calls funnel through `DispatcharrClient._request()`, which handles the JW
 
 **Drift candidates (watch these for breakage in Dispatcharr releases):** `get_all_m3u_group_settings`, `update_m3u_group_settings`, `get_epg_grid`, `trigger_epg_import`, `refresh_m3u_vod`, `find_logo_by_url`, `bulk_update_profile_channels`. These don't have direct frontend equivalents in Dispatcharr, so they may be ECM-specific uses of backend endpoints the UI doesn't exercise. They are more likely to break silently.
 
-**Upstream schema source:** `http://<dispatcharr-host>:9191/swagger.json` (YAML format despite the name). See `docs/dispatcharr_api.md` for the fetch pattern and known endpoint conventions.
+**Upstream schema source:** `GET /api/schema/?format=json` (drf-spectacular; the endpoint defaults to YAML, so `?format=json` is required). See `docs/dispatcharr_api.md` for the fetch pattern, the "how to verify a path against the live schema" note, and known endpoint conventions.
