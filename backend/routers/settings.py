@@ -1334,31 +1334,41 @@ async def test_connection(request: TestConnectionRequest):
         anything is saved, so the ``get_client()`` singleton would be
         authenticating as the *previous* configuration, or as nothing at all.
 
-        **Password mode reuses the access token the login just issued** and
-        never triggers a second one: Dispatcharr rate-limits login at 3/min per
-        IP, so an advisory that re-authenticated could burn the operator's
-        budget and make the NEXT real test fail. Pre-seeding ``access_token``
-        short-circuits ``_ensure_authenticated``; with no token we skip the
-        probe entirely rather than let the client log in again.
+        **Password mode reuses the access token the login just issued and
+        cannot issue a second one.** Dispatcharr rate-limits login at 3/min per
+        IP (this endpoint has a dedicated 429 branch because that budget is
+        tight), so an advisory able to re-authenticate could burn it and make
+        the operator's NEXT real test fail. Two things enforce that, because
+        pre-seeding alone did not: seeding ``access_token`` short-circuits
+        ``_ensure_authenticated`` on the way in, and ``retry_on_401=False``
+        forbids ``_request``'s 401 branch, which — with no refresh token
+        seeded — would otherwise fall through to a full ``_login()``. With no
+        token to reuse the probe is skipped entirely.
+
+        EVERYTHING the probe does, construction included, happens inside the
+        ``try``: a ``DispatcharrClient``/``DispatcharrSettings`` built in front
+        of the guard could raise and turn a verified-successful connection into
+        a reported failure (PR #773 review, N1).
         """
         if request.auth_method != "api_key" and not access_token:
             return None
 
-        probe_client = DispatcharrClient(
-            DispatcharrSettings(
-                url=base_url,
-                auth_method=request.auth_method,
-                username=request.username or "",
-                password=request.password or "",
-                dispatcharr_api_key=(
-                    request.dispatcharr_api_key or request.api_key or ""
-                ),
-            )
-        )
-        if access_token:
-            probe_client.access_token = access_token
+        probe_client = None
         try:
-            payload = await probe_client.get_version(timeout=5.0)
+            probe_client = DispatcharrClient(
+                DispatcharrSettings(
+                    url=base_url,
+                    auth_method=request.auth_method,
+                    username=request.username or "",
+                    password=request.password or "",
+                    dispatcharr_api_key=(
+                        request.dispatcharr_api_key or request.api_key or ""
+                    ),
+                )
+            )
+            if access_token:
+                probe_client.access_token = access_token
+            payload = await probe_client.get_version(timeout=5.0, retry_on_401=False)
         except Exception as e:  # noqa: BLE001 — advisory must never propagate
             logger.debug(
                 "[SETTINGS-TEST] Version probe skipped - %s - %s",
@@ -1367,10 +1377,11 @@ async def test_connection(request: TestConnectionRequest):
             )
             return None
         finally:
-            try:
-                await probe_client.close()
-            except Exception:  # noqa: BLE001 — teardown must not fail the test
-                pass
+            if probe_client is not None:
+                try:
+                    await probe_client.close()
+                except Exception:  # noqa: BLE001 — teardown must not fail the test
+                    pass
 
         version = payload.get("version") if isinstance(payload, dict) else None
         advisory = dispatcharr_version_advisory(version)

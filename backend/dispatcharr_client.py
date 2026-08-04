@@ -338,9 +338,24 @@ class DispatcharrClient:
         self,
         method: str,
         path: str,
+        *,
+        retry_on_401: bool = True,
         **kwargs,
     ) -> httpx.Response:
-        """Make an authenticated request with automatic token refresh."""
+        """Make an authenticated request with automatic token refresh.
+
+        ``retry_on_401`` (JWT mode only; a 401 is always terminal in API-key
+        mode) controls the refresh-and-retry branch below. It exists because
+        that branch can spend a LOGIN: with no refresh token,
+        :meth:`_refresh_access_token` falls through to :meth:`_login`, a fresh
+        ``POST /api/accounts/token/`` with the operator's credentials — and
+        Dispatcharr rate-limits login at 3/min per IP. A caller that is
+        best-effort (the connection test's version advisory, ADR-014 option c)
+        must not be able to burn that budget and fail the operator's next real
+        request, so it passes ``retry_on_401=False`` and takes the 401 as its
+        answer. Ordinary callers leave it on: they hold a long-lived client
+        whose access token legitimately expires mid-session.
+        """
         # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
         # sink in this method. ``path`` is attacker-influenced/credential-tainted
         # in practice -- callers interpolate caller-supplied identifiers into it,
@@ -384,8 +399,10 @@ class DispatcharrClient:
             )
 
             # If unauthorized in JWT mode, try refreshing token and retry.
-            # In api-key mode a 401 is terminal (the key is invalid or revoked).
-            if response.status_code == 401 and not self._uses_api_key:
+            # In api-key mode a 401 is terminal (the key is invalid or revoked),
+            # and callers that opted out of the retry take the 401 as terminal
+            # too rather than risk a rate-limited re-login (see the docstring).
+            if response.status_code == 401 and not self._uses_api_key and retry_on_401:
                 logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
@@ -1792,7 +1809,9 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def get_version(self, timeout: Optional[float] = None) -> dict:
+    async def get_version(
+        self, timeout: Optional[float] = None, retry_on_401: bool = True
+    ) -> dict:
         """Return Dispatcharr's self-reported version.
 
         ``GET /api/core/version/`` -> ``{"version": "0.28.2", "timestamp": null}``
@@ -1802,11 +1821,21 @@ class DispatcharrClient:
         undeterminable version means, and for the connection test that is
         "stay silent".
 
-        ``timeout`` overrides the client's default per-request timeout. The
-        connection test passes a short one: the operator is watching a button
-        spin, and an advisory is never worth making them wait for.
+        ``timeout`` is forwarded to :meth:`_request` as a per-request override.
+        The connection test passes a short one (5s): the operator is watching a
+        button spin, and an advisory is never worth making them wait for. Note
+        that ``timeout=None`` means "no override supplied", and ``_request``
+        forwards that ``None`` straight to httpx — which reads it as *no
+        timeout*, not "use the client default" (pre-existing, tracked as
+        ``enhancedchannelmanager-6imr3``). Every caller today passes a value.
+
+        ``retry_on_401=False`` forbids :meth:`_request`'s refresh-and-retry
+        branch, which can otherwise spend one of Dispatcharr's 3/min logins.
+        Best-effort callers pass it; see :meth:`_request`.
         """
-        response = await self._request("GET", "/api/core/version/", timeout=timeout)
+        response = await self._request(
+            "GET", "/api/core/version/", timeout=timeout, retry_on_401=retry_on_401
+        )
         response.raise_for_status()
         return response.json()
 

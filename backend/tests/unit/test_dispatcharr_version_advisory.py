@@ -217,3 +217,94 @@ async def test_get_version_raises_on_upstream_error():
                 await client.get_version()
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_version_forwards_the_retry_opt_out_to_request():
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(return_value=_response(200, {"version": "0.28.2"}))
+        with patch.object(client, "_request", request_mock):
+            await client.get_version(retry_on_401=False)
+
+        assert request_mock.await_args.kwargs["retry_on_401"] is False
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# The 401-retry opt-out (PR #773 review, BLOCK)
+# ---------------------------------------------------------------------------
+#
+# ``_request``'s 401 branch refreshes the token and, with no refresh token to
+# use, falls through to a full ``_login()`` — a fresh
+# ``POST /api/accounts/token/`` with the operator's username and password.
+# Dispatcharr rate-limits login at 3/min per IP, so a *best-effort advisory*
+# that can do that is able to burn the operator's login budget and fail their
+# NEXT real connection test. ``retry_on_401=False`` makes that structurally
+# impossible for the probe; the pair of tests below pins both directions, so
+# the opt-out is proven load-bearing rather than decorative.
+
+
+def _password_client():
+    """A password-mode client — the only mode where a 401 can reach ``_login``."""
+    settings = DispatcharrSettings(
+        url="http://dispatcharr:8000",
+        auth_method="password",
+        username="admin",
+        password="secret",
+    )
+    return DispatcharrClient(settings)
+
+
+def _mock_transport(*, request_response, post_response=None):
+    """Stand in for ``client._client`` (the raw ``httpx.AsyncClient``)."""
+    transport = AsyncMock()
+    transport.request = AsyncMock(return_value=request_response)
+    transport.post = AsyncMock(
+        return_value=post_response
+        if post_response is not None
+        else _response(200, {"access": "jwt-fresh", "refresh": "jwt-ref"})
+    )
+    return transport
+
+
+@pytest.mark.asyncio
+async def test_a_401_reaches_login_when_the_retry_is_enabled():
+    """The default path DOES re-authenticate — this is what the probe must avoid."""
+    client = _password_client()
+    try:
+        client.access_token = "jwt-abc"
+        transport = _mock_transport(request_response=_response(401))
+        client._client = transport
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_version()
+
+        assert transport.request.await_count == 2, "the 401 retry re-issues the request"
+        assert transport.post.await_count == 1, (
+            "with no refresh token, _refresh_access_token falls through to a full "
+            "_login() — the second POST /api/accounts/token/ this opt-out exists to stop"
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_401_cannot_reach_login_when_the_retry_is_disabled():
+    """``retry_on_401=False`` makes a second login unreachable, not merely unlikely."""
+    client = _password_client()
+    try:
+        client.access_token = "jwt-abc"
+        transport = _mock_transport(request_response=_response(401))
+        client._client = transport
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_version(retry_on_401=False)
+
+        assert transport.request.await_count == 1, "no retry may be issued"
+        assert transport.post.await_count == 0, (
+            "the probe must not be able to issue POST /api/accounts/token/"
+        )
+    finally:
+        await client.close()
