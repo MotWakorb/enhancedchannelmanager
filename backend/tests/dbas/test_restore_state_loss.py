@@ -16,6 +16,11 @@ Each test below pins ONE loss the drill measured, at the layer that can prove it
   stream exists (drill: 110 real streams beside 12 unplayable channels).
 * :func:`test_channels_that_still_cannot_play_are_counted_and_named` — what the
   rebind could NOT fix is a counted, named action item, never silent.
+* :func:`test_two_slots_matching_the_same_stream_never_patch_a_duplicate_id` and
+  its three siblings (bead ``…-ixdaw``, drill run 2026-08-05-run3) — two archived
+  streams whose names differ only by case resolve to the SAME destination id, so
+  the rebind must claim it once and keep the loser on its placeholder rather than
+  PATCH ``[101, 101, 98]`` into Dispatcharr's ``unique_channel_stream``.
 * :func:`test_unreinstatable_channel_logo_is_counted_as_a_logo_miss` — the test
   that would have caught ``logo_misses: 0`` while 12 channels lost their logo.
 * :func:`test_epg_links_reattach_by_tvg_id` — a channel's ``epg_data_id`` comes
@@ -381,6 +386,218 @@ async def test_channels_that_still_cannot_play_are_counted_and_named():
     assert detail.channel_id == 201
     assert detail.placeholder_streams == ["Obscure Channel"]
     # A still-referenced placeholder is NEVER deleted.
+    client.delete_stream.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FIX 1c — two slots may never claim the SAME destination id (bead ixdaw)
+# ---------------------------------------------------------------------------
+
+
+def _kera_drill_fixture():
+    """The exact channel shape drill run 2026-08-05-run3 measured.
+
+    One channel with three archived streams, the first two differing ONLY in the
+    case of ``Dallas``/``DALLAS``. The normalizer folds case, so Tier 2 (exact
+    normalized name + same provider) hands BOTH of them destination stream 101 —
+    verified against the live destination during the drill:
+
+    ``'TX | Dallas | PBS KERA' -> tier=2 match_id=101``
+    ``'TX | DALLAS | PBS KERA' -> tier=2 match_id=101``
+    ``'TX | Austin | PBS KLRU' -> tier=2 match_id=98``
+
+    Returns:
+        ``(client, report, ledger, remap, archive_channels)`` ready to pass to
+        :func:`rebind_placeholder_streams`.
+    """
+    client = _client()
+    # The destination after the deferred refresh: three URL-less placeholders
+    # under the synthetic account (3), plus the two REAL provider streams.
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 98, "name": "TX | Austin | PBS KLRU",
+             "url": "http://p/live/klru", "m3u_account": 1},
+            {"id": 101, "name": "TX | Dallas | PBS KERA",
+             "url": "http://p/live/kera", "m3u_account": 1},
+            {"id": 500, "name": "TX | Dallas | PBS KERA", "url": None, "m3u_account": 3},
+            {"id": 501, "name": "TX | DALLAS | PBS KERA", "url": None, "m3u_account": 3},
+            {"id": 502, "name": "TX | Austin | PBS KLRU", "url": None, "m3u_account": 3},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 12, "name": "Drill KERA Dallas", "streams": [500, 501, 502]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    ledger.record_created(EntityType.STREAM, 500, "TX | Dallas | PBS KERA")
+    ledger.record_created(EntityType.STREAM, 501, "TX | DALLAS | PBS KERA")
+    ledger.record_created(EntityType.STREAM, 502, "TX | Austin | PBS KLRU")
+    ledger.record_created(EntityType.M3U_ACCOUNT, 3, "ECM Custom Streams (DBAS restore)")
+
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 12)
+    remap.add(EntityType.STREAM, 7, 500)
+    remap.add(EntityType.STREAM, 8, 501)
+    remap.add(EntityType.STREAM, 9, 502)
+
+    # The archived streams carry no ``url`` (the provider rotated them), so the
+    # ladder falls to Tier 2 exactly as the drill measured.
+    archive_channels = [
+        {
+            "id": 101,
+            "name": "Drill KERA Dallas",
+            "streams": [
+                {"id": 7, "name": "TX | Dallas | PBS KERA", "m3u_account": 1},
+                {"id": 8, "name": "TX | DALLAS | PBS KERA", "m3u_account": 1},
+                {"id": 9, "name": "TX | Austin | PBS KLRU", "m3u_account": 1},
+            ],
+        }
+    ]
+    return client, report, ledger, remap, archive_channels
+
+
+@pytest.mark.asyncio
+async def test_two_slots_matching_the_same_stream_never_patch_a_duplicate_id():
+    """Two archived slots resolving to one destination id claim it ONCE.
+
+    Drill evidence (bead ``…-ixdaw``): the rebind PATCHed ``streams=[101, 101,
+    98]``, Dispatcharr answered 500 with
+    ``duplicate key value violates unique constraint "unique_channel_stream"
+    DETAIL: Key (channel_id, stream_id)=(12, 101) already exists``, and this
+    module's own handler then reverted the WHOLE channel to placeholders. The
+    PATCH body must never carry a repeated id.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client, report, ledger, remap, archive_channels = _kera_drill_fixture()
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=archive_channels,
+    )
+
+    client.update_channel.assert_awaited_once()
+    patched = client.update_channel.await_args.args[1]["streams"]
+    assert len(patched) == len(set(patched)), f"duplicate stream id in PATCH: {patched}"
+
+    # The FIRST slot wins the contested id; the second keeps its placeholder and
+    # becomes a named action item instead of taking the channel down with it.
+    assert patched[0] == 101
+    assert patched[1] == 501
+    assert report.channels_needing_stream_reattach == 1
+    detail = report.stream_reattach_details[0]
+    assert detail.name == "Drill KERA Dallas"
+    assert detail.channel_id == 12
+    assert detail.placeholder_streams == ["TX | DALLAS | PBS KERA"]
+    # The held placeholder survives; only the two now-orphaned ones are dropped.
+    deleted = {call.args[0] for call in client.delete_stream.await_args_list}
+    assert deleted == {500, 502}
+
+
+@pytest.mark.asyncio
+async def test_a_colliding_sibling_never_costs_the_uniquely_matched_slot():
+    """The unique third slot still rebinds — the regression that did the damage.
+
+    The PATCH is all-or-nothing, so the duplicate id cost the channel its
+    perfectly good ``PBS KLRU`` match too: the 500 handler reverted every slot to
+    a placeholder. One bad slot may cost only itself.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client, report, ledger, remap, archive_channels = _kera_drill_fixture()
+
+    result = await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=archive_channels,
+    )
+
+    patched = client.update_channel.await_args.args[1]["streams"]
+    assert patched[2] == 98, "the uniquely-matching slot must still rebind"
+    assert result.rebound == 2
+    assert result.channels_updated == 1
+    assert report.streams_rebound == 2
+
+
+@pytest.mark.asyncio
+async def test_archived_order_survives_a_skipped_duplicate():
+    """Skipping a duplicate rewrites that slot in place — it never reorders.
+
+    The drill confirmed archived ordering is correct today; the de-dup guard must
+    not disturb it. Slot 1 keeps placeholder 501 exactly where it sat.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client, report, ledger, remap, archive_channels = _kera_drill_fixture()
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=archive_channels,
+    )
+
+    client.update_channel.assert_awaited_once_with(12, {"streams": [101, 501, 98]})
+
+
+@pytest.mark.asyncio
+async def test_a_slot_never_claims_an_id_a_real_stream_already_holds():
+    """A match colliding with a REAL slot on the same channel is a miss.
+
+    The importer can already have bound a real stream to the channel — those ids
+    are just as unique-constrained as the ones this pass claims. With the only
+    match taken, nothing is left to rebind, so no pointless PATCH is issued.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 800, "name": "FOX News HD", "url": "http://p/hd", "m3u_account": 1},
+            {"id": 500, "name": "FOX NEWS HD", "url": None, "m3u_account": 3},
+        ]
+    }
+    # Slot order on the destination: the real stream the importer matched, then
+    # the placeholder whose archived record resolves to that SAME real stream.
+    client.get_channels.return_value = {
+        "results": [{"id": 201, "name": "FOX", "streams": [800, 500]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    ledger.record_created(EntityType.STREAM, 500, "FOX NEWS HD")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.STREAM, 7, 500)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 101,
+                "name": "FOX",
+                "streams": [
+                    {"id": 6, "name": "FOX News HD", "m3u_account": 1},
+                    {"id": 7, "name": "FOX NEWS HD", "m3u_account": 1},
+                ],
+            }
+        ],
+    )
+
+    client.update_channel.assert_not_awaited()
+    assert report.streams_rebound == 0
+    assert report.channels_needing_stream_reattach == 1
+    assert report.stream_reattach_details[0].placeholder_streams == ["FOX NEWS HD"]
     client.delete_stream.assert_not_awaited()
 
 
