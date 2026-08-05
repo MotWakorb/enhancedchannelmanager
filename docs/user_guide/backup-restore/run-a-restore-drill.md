@@ -295,7 +295,29 @@ its service name from inside ECM's connection form
 host-mapped address (`http://192.168.1.50:9391`, or a stable DNS name such
 as `dispatcharr.example.local:9191` if the two are *not* on a shared
 Docker network) only when ECM cannot reach Dispatcharr by container name.
-Confirm **Test Connection** reports **Connected**, then **Save**.
+Confirm **Test Connection** reports **Connected**, then **Save**. Both of
+Dispatcharr's documented auth paths work here: a later drill run tested
+username/password and API key side by side, and both returned
+`{"success":true,"message":"Connection successful"}`.
+
+!!! note "Opening the ECM web UI turns authentication on"
+    Measured on a fresh install: after completing setup over the API
+    (`POST /api/auth/setup`), ECM's API stayed reachable **anonymously**;
+    a scripted drill run drove its restores with no credentials at all.
+    The first time the ECM **web UI** was opened, an auth-settings write
+    occurred (log: `[AUTH-SETTINGS] Auth settings saved` at
+    23:11:29.320, immediately after `GET /?cb=…` at 23:11:29.258), and
+    every subsequent API call returned `401 Not authenticated`;
+    `/config/auth_settings.json` then showed `"require_auth": true`. No
+    restore wrote auth settings in that run, and `require_auth` does not
+    appear anywhere in the backup artifact.
+
+    If you script a restore against a brand-new install and it works,
+    then stops working with `401` after someone opens the web UI, this
+    is why. This is observed and strongly indicated, not proven with a
+    dedicated isolation experiment. Authenticate your API calls
+    (cookie-based: `POST /api/auth/login`, then keep the cookie jar)
+    rather than relying on the anonymous window.
 
 ---
 
@@ -364,7 +386,8 @@ Confirm **Test Connection** reports **Connected**, then **Save**.
 scheduling decision in the whole drill. A whole-catalogue M3U refresh can
 take on the order of 25 minutes with no progress indication. Restricting
 sync to one small group brings convergence down dramatically: run 2
-measured **~1.4 seconds** for a single group of 110 streams.
+measured **~1.4 seconds** for a single group of 110 streams, and a later
+drill run measured **2 seconds** for a single group of 96 streams.
 
 1. Add an XtreamCodes M3U account pointed at your real provider (for
    example `https://provider.example.com`), with your real credentials.
@@ -386,7 +409,9 @@ measured **~1.4 seconds** for a single group of 110 streams.
    takes.
 
 **Add an EPG source.** Any small XMLTV or Schedules Direct source is
-sufficient; refresh it and confirm entries populate.
+sufficient; refresh it and confirm entries populate. A large XMLTV
+source is still workable: a later drill run measured `UnitedStates.xml.gz`
+(14,668 entries) refreshing in 35 seconds.
 
 **Create a handful of channels through ECM**, in Edit Mode: select
 streams from the group you enabled, use "Create in…" to place them into
@@ -423,6 +448,22 @@ and most of the logo-restore path goes untested.
 ---
 
 ## Step 3: Take both backup artifacts
+
+On a brand-new install, `/config/backups` does not exist yet. You do not
+need to create it by hand: the DBAS Backup task creates the directory
+itself, as the container's own user, the first time it runs. Hand-staging
+a `/config/backups` directory is only needed if you want to restore an
+artifact this instance did not produce itself (for example, copying in a
+`.zip` from another host to test the Saved Backups path against it).
+
+If you are scripting the backup via the API rather than clicking through
+Scheduled Tasks, `GET /api/tasks/dbas_backup/parameter-schema` reports
+"No configurable parameters." That is misleading: the nested
+`{"parameters": {"passphrase": …, "include_credentials": true,
+"acknowledge_unrecoverable": true}}` body on the run-task request is what
+actually produces an encrypted, credential-bearing artifact. The schema
+endpoint does not describe these ad-hoc parameters; do not take its "no
+parameters" answer as proof the encrypted-backup options don't exist.
 
 Take them **in this order**: standard first, encrypted second. Creating
 an encrypted backup leaves the `DBAS Backup` task producing encrypted,
@@ -584,6 +625,17 @@ Tip: if you ever want a quick sanity check that the preview logic itself
 is behaving, restore an artifact onto the same instance it came from. It
 should preview as entirely `already_exists_identical` across every
 category.
+
+**Relink mode default.** A restore onto a target that already has the
+channels (a second restore, or a restore onto a populated instance)
+accepts a relink mode governing whether an existing channel's own EPG
+link and logo are preserved, or overwritten by the archive's values. A
+later drill run proved the default resolution on an **apply**, not just
+the echoed request value, across all four degenerate configurations a
+scripted caller might send: the field absent, `null`, an empty string,
+and an unrecognised string. All four resolved to `preserve`, and the
+operator's own EPG links and logo on the destination survived the
+restore in every case.
 
 If a restore fails and rolls back, the instance is **not necessarily
 back to its exact pre-restore state**. Settings changes are not

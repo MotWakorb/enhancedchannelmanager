@@ -27,7 +27,7 @@ A backup covers the following configuration categories. All are included by defa
 | **Comskip config** | Comskip commercial-detection configuration. |
 | **Users** | Dispatcharr user accounts (opt-in: see [User restore semantics](#user-restore-semantics)). |
 | **Channels (with embedded streams)** | The full channel list, with their embedded stream assignments. |
-| **Logos** | Logo image files from `/config/uploads/logos/`, plus their URL-mapping inventory. |
+| **Logos** | Logo files uploaded through ECM's own Logo Manager, plus their URL-mapping inventory. See [where an uploaded logo's bytes actually live](#where-an-uploaded-logos-bytes-actually-live) below; they are not stored under ECM's own `/config/uploads/logos/`. |
 
 > **Plugins are not backed up.** Plugin state is excluded from v0.18.0 backups. This is a deliberate safety decision. Plugin restore semantics are not yet defined. If you rely on plugins, document your plugin configuration separately.
 
@@ -54,6 +54,12 @@ Each backup is a `.zip` file containing:
 - `binary/url-mappings.json`: logo filename to source-URL map.
 
 A `.sha256` sidecar file is written alongside the ZIP, containing the SHA-256 of the whole artifact. ECM verifies this hash before any restore begins.
+
+### Where an uploaded logo's bytes actually live
+
+A logo uploaded through ECM's Logo Manager (`POST /api/channels/logos/upload`) is written to **Dispatcharr's** `/data/logos/<filename>` inside the Dispatcharr container, not to ECM's own `/config/uploads/logos/`. ECM's own upload directory stays empty even when uploaded logos exist. Only uploaded logos get their bytes into the artifact's `binary/` subtree: for a source with one uploaded logo alongside ten remote-URL logos, `binary/metadata.json` records `logo_count: 1`. Remote CDN logos referenced by a URL are restored from that URL at restore time and are never fetched into the artifact.
+
+This matters for operators: a logo uploaded through ECM will not be found anywhere under ECM's own config volume. Look in Dispatcharr's `/data/logos/` instead, or restore the backup to get it back.
 
 ### Schema version and forward compatibility
 

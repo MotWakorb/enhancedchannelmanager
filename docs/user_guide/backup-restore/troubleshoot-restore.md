@@ -199,17 +199,127 @@ per-channel repair:
 
 Re-running the restore is worth trying **only** for a channel that will
 not play, and only once the real streams are actually present on the
-destination — the rebind runs again with more to match against. It does
-not clear a leftover placeholder caused by a name collision: that run
-hits the same collision and leaves the same slot behind. Either way the
-channel is a named action item, never a `failed` row, and every other
-channel is unaffected — there is no need to redo the whole restore.
+destination. Be aware of what a second run actually does to a
+name-collision placeholder, though: it does clear the leftover slot, but
+by dropping it rather than repairing it. Measured directly: a channel
+holding `TX | Dallas | PBS KERA (real)`, `TX | Austin | PBS KLRU (real)`,
+and `TX | Dallas | PBS KERA (placeholder, no url)` went, after a second
+run of the same artifact, to `TX | Austin | PBS KLRU (real)`, `TX |
+Dallas | PBS KERA (real)`. The channel now has two streams where the
+archive has three, and the surviving streams' order silently changed
+(Austin moved from slot 2 to slot 1). The uppercase stream `TX | DALLAS
+| PBS KERA` still exists on the destination with a working URL; the
+second run never bound it, it simply dropped the empty placeholder slot.
+Worse, the second run reported this as entirely clean:
+`outcome: success`, `channels_needing_stream_reattach: 0`,
+`streams_rebound: 0`, `stream_reattach_details: []`, and an empty
+`notes[]`. Nothing in the report flags the missing slot or the order
+change. Hand-reattaching (above) is still the reliable repair for a
+name-collision channel; do not use a second restore run as a substitute
+for it. Either way the channel is a named action item, never a `failed`
+row, and every other channel is unaffected; there is no need to redo the
+whole restore.
 
 Prevention: on the source instance, give near-identical streams on the
 same channel distinguishable names before taking the backup. This
 prevents the leftover placeholder, which is an annoyance rather than an
 outage — a channel that will not play at all has a different cause and
 is not prevented by renaming.
+
+---
+
+## A second restore's clean report is not proof of playback
+
+**Symptom:** You worked through the standard (redacted) restore recovery
+sequence: restore, re-enter the M3U credential, refresh, then run the
+restore again. The report says the run finished cleanly. Most channels
+play. One does not.
+
+**Measured**, on the standard redacted path, at that third step (restore
+→ credential re-entry + refresh → re-run restore):
+
+- 11 of 12 channels rebound to real streams and played: HTTP 200,
+  `video/mp2t`, 262144 bytes fetched.
+- The 12th channel (`KERA Dallas PBS`, the multi-stream one) failed
+  playback with HTTP 500 and remained bound to three placeholders.
+- The report for that run said `channels_needing_stream_reattach: 0` and
+  `channels_with_no_playable_stream: 0`, with `notes: []`. Nothing in
+  the summary counters pointed at the failing channel.
+- The only trace was one row: the `stream` category showed `failed: 1`
+  with `{"reason":"upstream_api_error","label":"KERA Dallas PBS",
+  "message":"Server error '500 Internal Server Error' for url
+  '.../api/channels/channels/12/'"}`.
+- Dispatcharr's own log gave the real cause:
+  `psycopg.errors.UniqueViolation: duplicate key value violates unique
+  constraint "unique_channel_stream"`.
+
+**The operator-facing point:** on a second or later restore, the
+"channels needing attention" counters (`channels_needing_stream_reattach`,
+`channels_with_no_playable_stream`) can read `0` while a channel
+genuinely cannot play. Do not trust the summary counters alone on a
+repeat run. Check the per-category `failed` rows, and actually play a
+channel, rather than reading the report at face value.
+
+**Confirming check:** if a channel fails playback after a repeat restore
+and the summary counters look clean, check Dispatcharr's own log for the
+matching cause:
+
+```bash
+docker logs <dispatcharr-container> 2>&1 | grep -i "unique_channel_stream"
+```
+
+A hit confirms the same failure mode measured here: the rebind pass
+tried to attach a stream that was already bound to the channel from an
+earlier run, and Dispatcharr's own unique constraint rejected it.
+
+---
+
+## Preview's health counters are not a promise on a fresh target
+
+**Symptom:** The dry-run preview reports zero channels needing
+attention, but the apply of the same artifact leaves every channel
+needing a stream reattach.
+
+**Cause:** The preview's per-category `would_create` / `would_update` /
+`would_skip` counts are accurate: measured against a matching apply,
+they matched exactly, category by category. But the preview's *health*
+counters, the ones meant to warn you before you commit, are simulated
+differently from what actually happens on apply, and can under-report
+badly on a fresh target.
+
+Measured, dry-run preview vs. apply of the same standard artifact
+against the same freshly-rolled-out target:
+
+| counter | preview | apply |
+|-|-|-|
+| `epg_link_reattach.created_channels` | 12 | 12 |
+| `logo_reattach.created_channels` | 0 | 11 |
+| `channels_needing_stream_reattach` | 0 | 12 |
+| `channels_with_no_playable_stream` | 0 | 12 |
+| `profile_membership_drift` | 0 | 6 |
+
+Per-category `would_create` matched the apply's `created` exactly for
+every category: `m3u_account` 1, `epg_source` 1, `channel_group` 377,
+`channel_profile` 1, `user_agent` 1, `stream_profile` 1, `user` 1,
+`channel` 12, `logo` 11.
+
+**The point:** the category counts are trustworthy. The health/split
+counters are not, at least on a fresh target. A preview can show "0
+channels needing attention" for a restore that will leave every channel
+unplayable.
+
+**Contrast, so you don't over-correct:** on a **populated** target (one
+that already has the channels from a prior restore), the split counts
+were exact in both relink modes: preserve mode (keeps a channel's own
+existing EPG link and logo) measured preview 12/11 preserved matching
+apply 12/11 preserved; overwrite mode (replaces them with the archive's
+values) measured preview 12/11 existing matching apply 12/11 existing.
+The under-prediction above is specific to the fresh-target
+`logo_reattach.created_channels` case and the health counters that
+depend on it.
+
+**Fix:** Preview to confirm scope (the category counts). Verify health,
+and actual playback, only after the apply completes.
 
 ---
 
