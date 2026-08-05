@@ -151,28 +151,43 @@ works on the first restore.
 
 ---
 
-## One channel still won't play, and it is a channel with several streams
+## A restored channel is still on the ECM Custom Streams provider
 
-**Symptom:** The restore reports success and every other channel plays,
-but one channel errors on playback. The restore-complete report names
-it under "channel(s) have NO playable stream" (field
-`channels_needing_stream_reattach`, with the channel named in
-`stream_reattach_details`). That channel's streams show the provider
-**ECM Custom Streams (DBAS restore)** instead of the real provider. The
-channel has more than one stream assigned.
+**Symptom:** One channel's stream list shows the provider **ECM Custom
+Streams (DBAS restore)** instead of your real provider. There are two
+shapes of this, and only one of them is an outage:
 
-**Cause:** When ECM reattaches a restored channel to real streams, it
-matches each archived stream by name. If two streams on the same
-channel have names that differ only in ways the name matcher normalizes
-away (capitalization, spacing, punctuation), both archived streams
-resolve to the **same** real stream. ECM then asks Dispatcharr to save
-the channel with that stream listed twice; Dispatcharr rejects the
-entire update because a channel cannot hold the same stream twice, and
-ECM safely reverts the channel to its placeholder streams. Because the
-save is all-or-nothing, that channel's other streams lose their correct
-matches too, even though they had matched fine. Real measured example:
-two streams named `TX | Dallas | PBS KERA` and `TX | DALLAS | PBS KERA`
-on one channel are enough to trigger it.
+- **The channel plays.** It kept its real streams and is holding one
+  leftover placeholder in one slot. The report counts it under
+  `channels_needing_stream_reattach` and names it in
+  `stream_reattach_details` with `has_playable_stream: true`. The
+  restore still reports success. This is untidy, not broken.
+- **The channel errors on playback.** Nothing on it is a real stream.
+  The report counts it under "channel(s) have NO playable stream"
+  (`channels_with_no_playable_stream`), names it in
+  `stream_reattach_details` with `has_playable_stream: false`, and the
+  restore reports `completed_with_failures` rather than success.
+
+**Cause of the leftover placeholder (the channel plays):** When ECM
+reattaches a restored channel to real streams, it matches each archived
+stream by name. If two streams on the same channel have names that
+differ only in ways the name matcher normalizes away (capitalization,
+spacing, punctuation), both archived streams resolve to the **same**
+real stream — and a channel cannot hold the same stream twice. ECM
+gives the contested stream to the first slot that claimed it and leaves
+the second slot on its placeholder, so the collision costs one slot
+rather than the whole channel. Real measured example: two streams named
+`TX | Dallas | PBS KERA` and `TX | DALLAS | PBS KERA` on one channel are
+enough to trigger it.
+
+**Cause of a channel that will not play:** every one of its slots is a
+placeholder, so there is nothing to stream. That happens when nothing on
+the destination matched any of the channel's archived streams — most
+often because the provider's streams had not materialized yet, or the
+names moved too far from the archive to match — or when the update that
+would have reattached the channel failed upstream and left every slot as
+it was. The report names these channels specifically; they are the ones
+worth acting on first.
 
 **Fix:** Reattach that channel's streams by hand. This is a one-time
 per-channel repair:
@@ -182,12 +197,19 @@ per-channel repair:
 3. Add the real streams back from your provider, in the order you want.
 4. Play the channel to confirm.
 
-Re-running the restore does not clear this: it hits the same collision
-and reports the channel under `failed` again. Every other channel is
-unaffected, so there is no need to redo the whole restore.
+Re-running the restore is worth trying **only** for a channel that will
+not play, and only once the real streams are actually present on the
+destination — the rebind runs again with more to match against. It does
+not clear a leftover placeholder caused by a name collision: that run
+hits the same collision and leaves the same slot behind. Either way the
+channel is a named action item, never a `failed` row, and every other
+channel is unaffected — there is no need to redo the whole restore.
 
 Prevention: on the source instance, give near-identical streams on the
-same channel distinguishable names before taking the backup.
+same channel distinguishable names before taking the backup. This
+prevents the leftover placeholder, which is an annoyance rather than an
+outage — a channel that will not play at all has a different cause and
+is not prevented by renaming.
 
 ---
 

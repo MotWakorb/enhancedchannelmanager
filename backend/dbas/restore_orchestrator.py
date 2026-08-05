@@ -499,6 +499,24 @@ def _report_has_failures(report: RestoreReport) -> bool:
     return any(cat.failed > 0 for cat in report.categories)
 
 
+def _report_has_unplayable_channels(report: RestoreReport) -> bool:
+    """True when an APPLY left a channel with no URL-bearing stream (…-daziw).
+
+    Keyed on ``channels_with_no_playable_stream``, NEVER on
+    ``channels_needing_stream_reattach``. The latter counts channels holding at
+    least one placeholder SLOT, and the ``…-ixdaw`` fix (v0.18.1-0026)
+    deliberately produces exactly that on a channel that keeps its real streams
+    and plays fine — downgrading on it would false-fail an instance where every
+    channel works.
+
+    A DRY RUN can never trigger this: a preview that predicts a shortfall is a
+    prediction, not a failure, and nothing was applied to be unplayable.
+    """
+    if report.is_dry_run:
+        return False
+    return (report.channels_with_no_playable_stream or 0) > 0
+
+
 def compute_outcome(
     *,
     report: RestoreReport,
@@ -510,11 +528,17 @@ def compute_outcome(
     The single guard that the whole bead exists to enforce:
 
     * ``SUCCESS`` — only when NO failure occurred AND no category reported a
-      failure AND no rollback was needed. Any whiff of failure forbids SUCCESS.
-    * ``COMPLETED_WITH_FAILURES`` — the apply never decided to abort (every
-      failure was in a :data:`NON_FATAL_FAILURE_CATEGORIES` category), so nothing
-      was rolled back and the applied state stands — but rows DID fail, so this
-      is not a success (bead ``…-y65si``).
+      failure AND no rollback was needed AND every restored channel can play.
+      Any whiff of failure forbids SUCCESS.
+    * ``COMPLETED_WITH_FAILURES`` — the apply never decided to abort, so nothing
+      was rolled back and the applied state stands, but the result is not clean.
+      Either rows DID fail in a :data:`NON_FATAL_FAILURE_CATEGORIES` category
+      (bead ``…-y65si``), or the apply finished with at least one channel left
+      holding NOT ONE URL-bearing stream (bead ``…-daziw``). The second case has
+      clean per-category counts and is still not a success: a channel that
+      cannot play is mixed state, and the drill measured exactly that behind a
+      reported ``success … created 32, failed 0``. Nothing is rolled back — the
+      applied state is real and worth keeping.
     * ``PARTIAL_FAILED_ROLLED_BACK`` — a fatal failure occurred, a rollback ran,
       and it was COMPLETE (every created entity deleted or confirmed 404-gone).
     * ``FAILED_ROLLBACK_INCOMPLETE`` — a fatal failure occurred and the rollback
@@ -522,8 +546,9 @@ def compute_outcome(
       compensator). The worst state; reported loudly.
 
     Args:
-        report: The shared restore report (its per-category failure counts are an
-            independent signal that something failed).
+        report: The shared restore report (its per-category failure counts and
+            its unplayable-channel aggregate are independent signals that the
+            result is not clean).
         failure_occurred: Whether the apply phase raised / decided to roll back.
         rollback: The rollback result, or ``None`` if no rollback ran.
 
@@ -532,6 +557,10 @@ def compute_outcome(
     """
     mixed = failure_occurred or _report_has_failures(report)
     if not mixed:
+        # Nothing FAILED, but a restored channel that cannot play is still mixed
+        # state — the applied lineup does not do the one thing it exists to do.
+        if _report_has_unplayable_channels(report):
+            return RestoreOutcome.COMPLETED_WITH_FAILURES
         return RestoreOutcome.SUCCESS
 
     # A failure happened — SUCCESS is now impossible.
@@ -592,7 +621,10 @@ async def run_restore(
     3. **Deferred phase** (only when no failure): apply the collected deferred
        settings LAST via ``deferred_apply_fn``.
     4. **Outcome**: computed via ``compute_outcome`` — never SUCCESS on mixed
-       state. On clean success the durable ledger file is removed.
+       state, which since bead ``…-daziw`` includes an apply that finished with
+       a channel left holding no URL-bearing stream (``COMPLETED_WITH_FAILURES``:
+       ran to completion, nothing rolled back, but something the operator had is
+       not working). On clean success the durable ledger file is removed.
 
     Args:
         plan: The restore plan (categories + manifest + any pre-known remap).

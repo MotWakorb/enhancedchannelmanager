@@ -155,11 +155,25 @@ class RestoreOutcome(str, Enum):
     - ``SUCCESS`` — every selected entity was created/updated/skipped cleanly;
       nothing failed; no compensation was needed.
     - ``COMPLETED_WITH_FAILURES`` — the restore ran to completion and NOTHING was
-      rolled back, but at least one entity in a NON-FATAL category failed (bead
-      ``…-y65si``: only ``dispatcharr_users`` is non-fatal — losing one archived
-      user must not cost the operator their channels, groups, profiles and
-      settings). The applied state is real and kept; the failed rows are counted
-      in their category and listed in ``failure_details``.
+      rolled back, but the result is not clean. TWO independent triggers:
+
+      * at least one entity in a NON-FATAL category failed (bead ``…-y65si``:
+        only ``dispatcharr_users`` is non-fatal — losing one archived user must
+        not cost the operator their channels, groups, profiles and settings).
+        The applied state is real and kept; the failed rows are counted in their
+        category and listed in ``failure_details``.
+      * an APPLY finished with :attr:`RestoreReport.channels_with_no_playable_stream`
+        greater than zero (bead ``…-daziw``): a channel was restored holding NOT
+        ONE URL-bearing stream, so it cannot play. Every row "succeeded" and the
+        counts are clean, which is exactly how the drill's
+        ``success … created 32, failed 0`` described an instance whose channels
+        returned HTTP 500 with 0 bytes. A restored channel that cannot play is
+        mixed state, so SUCCESS is forbidden. Nothing is rolled back — the
+        applied state is real, kept, and one attached stream away from working.
+        NOTE the trigger is the unplayable aggregate, NEVER
+        :attr:`RestoreReport.channels_needing_stream_reattach`: a channel that
+        keeps its real streams and merely holds a leftover placeholder PLAYS,
+        and is not a failure.
     - ``PARTIAL_FAILED_ROLLED_BACK`` — at least one entity in a FATAL category
       failed, the compensating-delete rollback ran, and every created entity was
       successfully removed (or confirmed already-gone — 404 counts as success).
@@ -382,6 +396,21 @@ class StreamReattachDetail(BaseModel):
     ``channel_id`` is the DESTINATION Dispatcharr channel id. ``name`` and
     ``placeholder_streams`` are operator-facing names — never a stream URL
     (which can embed a provider token).
+
+    :attr:`has_playable_stream` splits the rows into the two populations that
+    were previously indistinguishable (bead ``…-daziw``):
+
+    * ``True`` — the channel kept at least one REAL, URL-bearing stream and is
+      merely holding a leftover placeholder in one slot. IT PLAYS. This is the
+      designed output of the ``…-ixdaw`` fix ("costs one slot instead of the
+      entire channel"), and it is an action item, not a failure.
+    * ``False`` — NOT ONE slot carries a URL. The channel cannot play, and this
+      is what downgrades the restore outcome (see :class:`RestoreOutcome`).
+
+    Additive optional field — no ``CONTRACT_VERSION`` bump. It defaults to
+    ``True`` so a row deserialized from a report written before this field
+    existed is never retroactively counted as unplayable; every producer sets it
+    explicitly.
     """
 
     channel_id: int | None = Field(
@@ -392,6 +421,13 @@ class StreamReattachDetail(BaseModel):
     placeholder_streams: list[str] = Field(
         default_factory=list,
         description="Names of the URL-less placeholder streams still attached. Names only, never URLs.",
+    )
+    has_playable_stream: bool = Field(
+        default=True,
+        description=(
+            "True when the channel still holds a real URL-bearing stream and "
+            "plays; False when every slot is a URL-less placeholder."
+        ),
     )
 
 
@@ -642,14 +678,27 @@ class RestoreReport(BaseModel):
 
     # Placeholder streams the restore synthesized (…-ahygg) that a channel is
     # still bound to after the post-refresh rebind pass. Non-zero means those
-    # channels CANNOT PLAY.
+    # channels hold a slot that streams nothing — it does NOT mean they cannot
+    # play, and it never has: a channel that kept its real streams and holds one
+    # leftover placeholder is counted here and plays perfectly (…-daziw). Use
+    # :attr:`channels_with_no_playable_stream` for the unplayability signal.
     channels_needing_stream_reattach: int = Field(
         default=0,
-        description="Channels still bound to a URL-less placeholder stream — they cannot play.",
+        description="Channels still holding at least one URL-less placeholder stream slot.",
     )
     stream_reattach_details: list[StreamReattachDetail] = Field(
         default_factory=list,
         description="Which channels still need their streams reattached (…-2o0cz).",
+    )
+    # The SUBSET of the above that cannot play at all: not one URL-bearing stream
+    # is left on the channel (bead …-daziw). This is the aggregate the restore
+    # outcome is downgraded on — see :class:`RestoreOutcome`. Tracks
+    # ``len([d for d in stream_reattach_details if not d.has_playable_stream])``
+    # by construction; both are written by ``record_stream_reattach_needed``.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    channels_with_no_playable_stream: int = Field(
+        default=0,
+        description="Channels left with NO URL-bearing stream at all — they cannot play.",
     )
     # How many placeholder slots the rebind pass DID resolve onto real provider
     # streams. Purely informational — it is the counterpart to the counter above
@@ -826,22 +875,35 @@ class RestoreReport(BaseModel):
         name: str,
         channel_id: int | None = None,
         placeholder_streams: list[str] | None = None,
+        has_playable_stream: bool = True,
     ) -> None:
-        """Record ONE channel that still cannot play (bead ``…-2o0cz``).
+        """Record ONE channel still holding a placeholder (beads ``…-2o0cz`` / ``…-daziw``).
+
+        The ONE place BOTH aggregates and the detail list are updated, so they
+        cannot drift: :attr:`channels_needing_stream_reattach` counts every row,
+        :attr:`channels_with_no_playable_stream` counts only the rows that
+        cannot play. Call this method; never increment either field directly.
 
         Args:
             name: Operator-facing channel name — never a secret.
             channel_id: Destination Dispatcharr channel id, when known.
             placeholder_streams: Names of the URL-less placeholders still bound.
+            has_playable_stream: Whether ANY real, URL-bearing stream is left on
+                the channel. ``False`` is what makes the restore's outcome
+                ``COMPLETED_WITH_FAILURES`` — the channel cannot play.
         """
         self.stream_reattach_details.append(
             StreamReattachDetail(
                 channel_id=channel_id,
                 name=name,
                 placeholder_streams=list(placeholder_streams or []),
+                has_playable_stream=has_playable_stream,
             )
         )
         self.channels_needing_stream_reattach = len(self.stream_reattach_details)
+        self.channels_with_no_playable_stream = sum(
+            1 for detail in self.stream_reattach_details if not detail.has_playable_stream
+        )
 
     def record_epg_link_unrestored(
         self,

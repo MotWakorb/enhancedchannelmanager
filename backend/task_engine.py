@@ -1128,7 +1128,20 @@ class TaskEngine:
                         alert_category=alert_category,
                     )
             else:
-                logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
+                # daziw (PO decision 2): an unsuccessful run that nonetheless ran
+                # to completion and left real, kept state (a DBAS restore whose
+                # only shortfall is a channel with no playable stream) is a
+                # WARNING, not a red "Task Failed" — the task says so with
+                # completed_degraded. Everything else about this branch is
+                # unchanged, and no task that leaves the flag at its default can
+                # reach the warning wording.
+                degraded = getattr(result, "completed_degraded", False)
+                if degraded:
+                    logger.warning(
+                        "[%s] Task completed in a degraded state: %s", task_id, result.message
+                    )
+                else:
+                    logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
                 log_entry(
                     category="task",
                     action_type="fail",
@@ -1144,16 +1157,29 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
-                # Send error notification
-                await self._notify_task_result(
-                    task_name=instance.task_name,
-                    task_id=task_id,
-                    notification_type="error",
-                    title=f"Task Failed: {instance.task_name}",
-                    message=result.error or result.message or "Unknown error",
-                    result=result,
-                    alert_category=alert_category,
-                )
+                # Send the completion notification: a warning for a degraded run
+                # (the applied state stands and is named in the message), the
+                # unchanged red error for every real failure.
+                if degraded:
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type="warning",
+                        title=f"Task Completed with Warnings: {instance.task_name}",
+                        message=result.message or result.error or "Completed with warnings",
+                        result=result,
+                        alert_category=alert_category,
+                    )
+                else:
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type="error",
+                        title=f"Task Failed: {instance.task_name}",
+                        message=result.error or result.message or "Unknown error",
+                        result=result,
+                        alert_category=alert_category,
+                    )
 
             return result
 

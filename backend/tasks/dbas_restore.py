@@ -408,6 +408,7 @@ class DbasRestoreTask(TaskScheduler):
         counts = self._counts_from_report(report, is_apply)
         return TaskResult(
             success=self._report_succeeded(report, is_apply),
+            completed_degraded=self._degraded_not_failed(report, is_apply),
             message=self._summary_message(report, is_apply),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
@@ -470,6 +471,29 @@ class DbasRestoreTask(TaskScheduler):
         return report.outcome == RestoreOutcome.SUCCESS
 
     @staticmethod
+    def _degraded_not_failed(report, is_apply: bool) -> bool:
+        """True when unplayable channels are the ONLY reason this is not a success.
+
+        Bead ``…-daziw``, PO decision 2. Such a run is a WARNING, not a red
+        "Task Failed": every row applied, nothing was rolled back, and the
+        applied state is real and kept — it is one attached stream away from
+        working. The task declares that state here; ``task_engine`` maps it to
+        the alert severity (:attr:`task_scheduler.TaskResult.completed_degraded`).
+
+        Deliberately narrow. Any category failure, any rollback outcome, and any
+        dry run answer ``False`` and keep the error branch they have today.
+        """
+        from dbas.restore_contracts import RestoreOutcome
+
+        if not is_apply or report.is_dry_run:
+            return False
+        if report.outcome != RestoreOutcome.COMPLETED_WITH_FAILURES:
+            return False
+        if any(cat.failed for cat in report.categories):
+            return False
+        return (getattr(report, "channels_with_no_playable_stream", 0) or 0) > 0
+
+    @staticmethod
     def _counts_from_report(report, is_apply: bool) -> RestoreCounts:
         """Sum the REAL per-category item counts across ``report.categories``.
 
@@ -495,6 +519,36 @@ class DbasRestoreTask(TaskScheduler):
         )
 
     @staticmethod
+    def _stream_reattach_phrases(report) -> list[str]:
+        """Name the placeholder populations WITHOUT overstating either (…-daziw).
+
+        Two different facts, previously reported as one:
+
+        * ``channels_with_no_playable_stream`` — not one URL-bearing stream is
+          left on the channel. It CANNOT PLAY. This is the claim the old wording
+          made on behalf of the other counter, which could not support it.
+        * ``channels_needing_stream_reattach`` — the channel holds at least one
+          placeholder slot. It is a SUPERSET of the above, and most of its
+          members play fine (the ``…-ixdaw`` fix produces exactly that shape).
+
+        Rendered as one clause when the two counts agree (every holder is dead)
+        and as one combined clause when they differ, so the summary never reads
+        as two unrelated problems or double-counts the same channels.
+        """
+        unplayable = getattr(report, "channels_with_no_playable_stream", 0) or 0
+        holding = getattr(report, "channels_needing_stream_reattach", 0) or 0
+        if unplayable and holding > unplayable:
+            return [
+                "%d channel(s) have NO playable stream (of %d still holding a "
+                "placeholder stream)" % (unplayable, holding)
+            ]
+        if unplayable:
+            return ["%d channel(s) have NO playable stream" % unplayable]
+        if holding:
+            return ["%d channel(s) still hold a placeholder stream" % holding]
+        return []
+
+    @staticmethod
     def _credential_reentry_suffix(report) -> str:
         """Name every post-restore ACTION ITEM in the one-line summary.
 
@@ -509,9 +563,14 @@ class DbasRestoreTask(TaskScheduler):
         not only in ``details``.
         """
         parts: list[str] = []
+        credentials = getattr(report, "credentials_needing_reentry", 0) or 0
+        if credentials > 0:
+            parts.append("%d account(s) need credentials re-entered" % credentials)
+        # The two placeholder populations need each other's counts to read
+        # correctly, so they are rendered together rather than as two rows of the
+        # generic table below.
+        parts.extend(DbasRestoreTask._stream_reattach_phrases(report))
         for attribute, template in (
-            ("credentials_needing_reentry", "%d account(s) need credentials re-entered"),
-            ("channels_needing_stream_reattach", "%d channel(s) have NO playable stream"),
             ("logo_misses", "%d logo(s) could not be reinstated"),
             ("epg_links_unrestored", "%d channel(s) restored without an EPG link"),
             ("profile_membership_drift", "%d profile membership(s) corrected"),

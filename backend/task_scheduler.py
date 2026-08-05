@@ -92,6 +92,19 @@ class TaskResult:
     # channel-pipeline post-refresh path when a run is BOTH capped AND has
     # failed actions, to avoid emitting two separate warnings.
     suppress_completion_notification: bool = False
+    # daziw (PO decision 2): the run did NOT succeed, but it ran to completion
+    # and left real, kept state — it is DEGRADED, not failed. Set by the task,
+    # read ONLY by the task engine's unsuccessful-result branch, where it selects
+    # the "Task Completed with Warnings" / notification_type="warning" alert
+    # instead of the red "Task Failed" / notification_type="error" one. Default
+    # False, so every task that does not set it — and every other failure mode of
+    # the tasks that do — keeps the error branch unchanged.
+    #
+    # Distinct from failed_count > 0, which describes a SUCCESSFUL run with some
+    # failed items. This describes an UNSUCCESSFUL run with no failed items:
+    # a DBAS restore that applied everything cleanly and still left a channel
+    # with no playable stream.
+    completed_degraded: bool = False
 
     @property
     def duration_seconds(self) -> Optional[float]:
