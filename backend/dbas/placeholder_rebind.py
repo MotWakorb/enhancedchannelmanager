@@ -28,6 +28,43 @@ variants). The defect is that nothing re-runs it once there is something to matc
 against.
 
 ----------------------------------------------------------------------------
+WHAT WENT WRONG NEXT (drill run 2026-08-05-run3, ECM 0.18.1-0024, bead
+``enhancedchannelmanager-ixdaw``)
+----------------------------------------------------------------------------
+
+The rebind above works — and then broke a channel a different way. A channel
+seeded with ``TX | Dallas | PBS KERA``, ``TX | DALLAS | PBS KERA`` and
+``TX | Austin | PBS KLRU`` came back holding three placeholders and returning
+HTTP 500 with 0 bytes, while the restore still reported ``success, failed 0``.
+
+The first two names differ ONLY in case. The matcher's normalizer folds case, so
+Tier 2 (exact normalized name + same provider) is the correct answer for BOTH —
+and it is the SAME answer, verified against the live destination:
+
+    'TX | Dallas | PBS KERA' -> tier=2 match_id=101
+    'TX | DALLAS | PBS KERA' -> tier=2 match_id=101   <-- same id
+    'TX | Austin | PBS KLRU' -> tier=2 match_id=98
+
+This pass wrote both slots and PATCHed ``streams=[101, 101, 98]``. Dispatcharr
+rejected the whole update::
+
+    psycopg.errors.UniqueViolation: duplicate key value violates unique
+    constraint "unique_channel_stream"
+    DETAIL:  Key (channel_id, stream_id)=(12, 101) already exists.
+
+Because the PATCH is all-or-nothing, the handler below reverted the ENTIRE
+channel to placeholders — including the KLRU slot that had a perfectly good
+unique match. One colliding slot cost every slot.
+
+The matcher is NOT wrong here: it is a PURE function returning the best match for
+ONE archived stream, and it has no view of what its siblings claimed. Uniqueness
+is a property of the LIST, so the de-dup belongs to the caller that assembles it.
+Hence ``claimed_ids`` below: a match landing on an id the channel already holds
+is demoted to a MISS, keeping that one slot on its placeholder (counted and named
+like any other miss) so the PATCH can never carry a duplicate. Archived ORDER is
+untouched — the demoted slot stays exactly where it sat.
+
+----------------------------------------------------------------------------
 WHERE THIS RUNS AND WHY
 ----------------------------------------------------------------------------
 
@@ -56,7 +93,9 @@ WHAT IT DOES
 3. For each restored channel, re-run the SAME 4-tier matcher over the real
    candidates, one slot per archived stream in archived order. A hit takes the
    real id; a miss keeps the placeholder so the channel is never left with fewer
-   streams than it had. The channel is PATCHed only when the ordered list changed.
+   streams than it had. A hit landing on an id the channel ALREADY holds is
+   treated as a miss (see the run-3 section above). The channel is PATCHed only
+   when the ordered list changed.
 4. Delete every placeholder that is no longer referenced by any channel, then the
    synthetic account if this run created it and nothing is left under it.
 5. Report what is left: a channel still holding a placeholder is counted in
@@ -286,6 +325,13 @@ async def rebind_placeholder_streams(
         rebound_here = 0
         held_placeholders: list[str] = []
 
+        # Destination ids this channel already holds. Dispatcharr enforces a
+        # UNIQUE (channel_id, stream_id), so a second slot claiming an id
+        # another slot already carries makes the PATCH 500 and costs the WHOLE
+        # channel. Seeded with the real streams the importer bound for real —
+        # they are just as unique-constrained as the ids this pass claims.
+        claimed_ids = {sid for sid in current_ids if sid not in placeholder_ids}
+
         for index, bound_id in enumerate(current_ids):
             if bound_id not in placeholder_ids:
                 # A real stream the importer already matched — never touched.
@@ -296,15 +342,30 @@ async def rebind_placeholder_streams(
                 if archived_stream is not None
                 else (MatchTier.MISS, None)
             )
+            if tier != MatchTier.MISS and match_id is not None and match_id in claimed_ids:
+                # Two archived streams normalized to the same name, so the
+                # matcher handed both slots the same destination id. Demote this
+                # one to a MISS: the slot keeps its placeholder and is reported,
+                # which costs one slot instead of the entire channel.
+                logger.info(
+                    "[DBAS-REBIND] Channel '%s' (id=%s): archived stream '%s' matched "
+                    "destination stream id=%s, which another slot already holds; "
+                    "keeping its placeholder so the update carries no duplicate.",
+                    label, dest_channel_id, _stream_name(archived_stream), match_id,
+                )
+                tier, match_id = MatchTier.MISS, None
             if tier != MatchTier.MISS and match_id is not None:
                 # Rewrite this slot IN PLACE — the drill confirmed the matcher's
                 # ordering behaviour is correct, so the archived order the
                 # importer established must survive the rebind untouched.
                 ordered_ids[index] = match_id
+                claimed_ids.add(match_id)
                 rebound_here += 1
             else:
                 held_placeholders.append(placeholder_names.get(bound_id, "<unknown>"))
                 still_referenced.add(bound_id)
+                # The placeholder stays in the list, so its id is claimed too.
+                claimed_ids.add(bound_id)
 
         if rebound_here:
             try:
