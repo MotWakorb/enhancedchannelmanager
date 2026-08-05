@@ -41,6 +41,20 @@ If you need credentials (M3U passwords, EPG passwords, SMTP config) to travel wi
 
 Encrypted backups are always manual. A passphrase cannot be persisted in the task scheduler.
 
+> **Note:** An encrypted artifact is written with the same
+> `ecm-backup-<date>_<time>.zip` filename convention as a standard
+> backup. Nothing in the filename, the `.sha256` sidecar, or the Saved
+> Backups list distinguishes an encrypted artifact from a standard one.
+> Record which artifacts are encrypted alongside the passphrase you
+> stored for them. The restore flow needs to be told which is which:
+> the upload path (**Restore from artifact…**) detects encryption
+> automatically and prompts for the passphrase, but the Saved Backups
+> path requires you to tick **This backup is encrypted** yourself
+> before running the preview. (If you need to check a file by hand,
+> `file(1)` reports a standard artifact as `Zip archive data` and an
+> encrypted one as plain `data`; the encrypted container starts with
+> the magic bytes `ECMBKENC`.)
+
 ---
 
 ## Option B: Scheduled backup (recurring)
