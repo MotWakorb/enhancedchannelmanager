@@ -785,8 +785,11 @@ The report carries:
   `Infinity` needing
   `profiles[0].custom_properties.user_info.password`, `password`).
 - `channels_needing_stream_reattach` with `stream_reattach_details`
-  naming every channel still bound to a placeholder, plus a note that
-  they will not play until reattached.
+  naming every channel still holding a placeholder stream, and
+  `channels_with_no_playable_stream` counting the ones that have no real
+  stream left at all. Only the second group cannot play; a restore that
+  reports any of them finishes as `completed_with_failures` and raises a
+  warning alert, never a plain success.
 - `epg_links_unrestored` with `epg_link_miss_details` per channel.
 - `logo_misses` with `logo_miss_details` naming the affected channel.
 - `profile_membership_drift` listing which channels were enabled or

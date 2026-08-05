@@ -4323,13 +4323,19 @@ export interface RestoreReport {
   /** Which entities need which credential fields re-entered (bead 6pilh). */
   credential_reentry_details?: CredentialReentryDetail[];
   /**
-   * Channels still bound to a URL-less PLACEHOLDER stream after the restore's
-   * post-refresh rebind pass (bead 2o0cz) — they CANNOT PLAY. A post-restore
-   * action item, not a failure: the outcome can still be `success` while every
-   * one of these channels is dead, which is exactly what the round-trip drill
-   * measured. May be absent on reports produced before this field existed.
+   * Channels still holding at least one URL-less PLACEHOLDER stream slot after
+   * the restore's post-refresh rebind pass (bead 2o0cz). NOT an unplayability
+   * signal: a channel that kept its real streams and holds one leftover
+   * placeholder is counted here and plays fine (bead daziw). May be absent on
+   * reports produced before this field existed.
    */
   channels_needing_stream_reattach?: number;
+  /**
+   * The SUBSET of the above left with NO URL-bearing stream at all (bead daziw)
+   * — those channels CANNOT PLAY, and an apply that reports any of them
+   * resolves to `completed_with_failures`, never `success`.
+   */
+  channels_with_no_playable_stream?: number;
   /** Which channels still need a playable stream attached (bead 2o0cz). */
   stream_reattach_details?: StreamReattachDetail[];
   /** Placeholder bindings the rebind pass swapped for a real provider stream. */
@@ -4393,6 +4399,12 @@ export interface StreamReattachDetail {
   channel_id?: number | null;
   name: string;
   placeholder_streams?: string[];
+  /**
+   * True (the default when absent) when the channel still holds a real,
+   * URL-bearing stream and PLAYS despite the leftover placeholder; false when
+   * every slot is a placeholder and the channel is dead (bead daziw).
+   */
+  has_playable_stream?: boolean;
 }
 
 /**

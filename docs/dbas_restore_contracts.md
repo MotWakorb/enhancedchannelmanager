@@ -104,7 +104,8 @@ ECM settings had reverted. All are additive optional: no `CONTRACT_VERSION` bump
 | Aggregate | Drill-down | Recorder | Means |
 |---|---|---|---|
 | `credentials_needing_reentry` | `credential_reentry_details` | `record_credential_reentry` | restored from a redacted artifact; the entity authenticates nowhere until the operator re-enters the named FIELDS |
-| `channels_needing_stream_reattach` | `stream_reattach_details` | `record_stream_reattach_needed` | still bound to a URL-less placeholder after the post-refresh rebind — **the channel cannot play** |
+| `channels_needing_stream_reattach` | `stream_reattach_details` | `record_stream_reattach_needed` | still holding at least one URL-less placeholder SLOT after the post-refresh rebind. Most of these channels still play — the `…-ixdaw` fix deliberately leaves one contested slot on its placeholder |
+| `channels_with_no_playable_stream` | `stream_reattach_details` (rows with `has_playable_stream: false`) | `record_stream_reattach_needed` | the SUBSET above left with NO URL-bearing stream at all — **the channel cannot play**. Non-zero on an apply forces `outcome: completed_with_failures` (bead `…-daziw`) |
 | `epg_links_unrestored` | `epg_link_miss_details` | `record_epg_link_unrestored` | no destination EPG row carried the channel's archived `tvg_id` |
 | `profile_membership_drift` | `profile_membership_drift_details` | `record_profile_membership_drift` | channels the restore had to flip back to the archived selection (Dispatcharr enables every new channel in every profile) |
 
