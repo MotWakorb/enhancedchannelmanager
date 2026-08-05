@@ -982,7 +982,10 @@ async def test_run_sync_logos_dry_run_counts_misses_zero_uploads(tmp_path):
     dest.upload_logo_file.assert_not_called()
     dest.bulk_delete_logos.assert_not_called()
     assert report.category(EntityType.LOGO).would_create == 2
-    assert report.logo_misses == 2
+    # would_create, not a loss: both logos WILL be created on the destination,
+    # so neither belongs in the operator-facing logo-miss report (the D9 red
+    # banner). See RestoreReport.record_logo_miss for the invariant.
+    assert report.logo_misses == 0
 
 
 @pytest.mark.asyncio

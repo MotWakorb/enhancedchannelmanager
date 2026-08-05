@@ -92,7 +92,13 @@ def _make_target(session, **overrides) -> CloudStorageTarget:
     return target
 
 
-def _fake_artifact(dest_dir: Path, *, degraded_categories=None) -> BackupArtifact:
+def _fake_artifact(
+    dest_dir: Path,
+    *,
+    degraded_categories=None,
+    unresolved_epg_links=0,
+    epg_index_truncated=False,
+) -> BackupArtifact:
     """Materialize a fake sealed artifact + sidecar in dest_dir so the
     happy-path assertions can confirm files actually land there."""
     dest_dir = Path(dest_dir)
@@ -108,6 +114,8 @@ def _fake_artifact(dest_dir: Path, *, degraded_categories=None) -> BackupArtifac
         sha256="deadbeef",
         file_count=7,
         degraded_categories=degraded_categories,
+        unresolved_epg_links=unresolved_epg_links,
+        epg_index_truncated=epg_index_truncated,
     )
 
 
@@ -811,3 +819,84 @@ async def test_get_config_never_carries_the_encryption_transients(
         assert "include_credentials" not in cfg
         assert "acknowledge_unrecoverable" not in cfg
     assert "never-persist-me" not in repr(before) + repr(after)
+
+
+# ---------------------------------------------------------------------------
+# Unresolved channel EPG links (bead dfkbn, PR review W2)
+#
+# A channel whose epg_data_id points at a guide row that no longer exists cannot
+# have its link restored. The operator should be able to SEE that on the backup
+# rather than discover it in a restore report. It is deliberately NOT a WARNING:
+# a dangling FK is common and largely unactionable, and spending the
+# "Completed with Warnings" badge on it would train the operator to ignore the
+# badge that a failed category fetch depends on.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unresolved_epg_links_are_surfaced_without_crying_wolf(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(dest_dir, unresolved_epg_links=3)
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", tmp_path / "backups"), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        result = await DbasBackupTask().execute()
+
+    assert result.details["unresolved_epg_links"] == 3
+    assert "3 channel EPG link(s)" in result.message
+    assert "no longer exists" in result.message
+    # Visible, but NOT a warning: no failed_count, no degraded category.
+    assert result.success is True
+    assert result.failed_count == 0
+    assert "degraded_categories" not in result.details
+    assert "epg_index_truncated" not in result.details
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_guide_read_is_named_as_such_not_as_dangling(
+    _wire_db, _reset_metrics, tmp_path
+):
+    """Truncation and a dangling reference are different diagnoses (W2)."""
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(
+            dest_dir, unresolved_epg_links=5, epg_index_truncated=True
+        )
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", tmp_path / "backups"), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        result = await DbasBackupTask().execute()
+
+    assert result.details["unresolved_epg_links"] == 5
+    assert result.details["epg_index_truncated"] is True
+    assert "row ceiling" in result.message
+    # It must NOT assert those links are dangling — it does not know that.
+    assert "no longer exists" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_a_clean_backup_says_nothing_about_epg_links(
+    _wire_db, _reset_metrics, tmp_path
+):
+    from tasks import dbas_backup
+    from tasks.dbas_backup import DbasBackupTask
+
+    async def _fake_build(dest_dir=None, **_kwargs):
+        return _fake_artifact(dest_dir)
+
+    with patch.object(dbas_backup, "BACKUPS_DIR", tmp_path / "backups"), patch.object(
+        dbas_backup, "build_backup_artifact", side_effect=_fake_build
+    ):
+        result = await DbasBackupTask().execute()
+
+    assert "unresolved_epg_links" not in result.details
+    assert "EPG link" not in result.message

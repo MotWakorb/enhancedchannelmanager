@@ -57,6 +57,100 @@ Common pre-flight failures:
 
 ---
 
+## Restore aborted and rolled back at the logo category
+
+**Symptom:** The restore-complete report shows `outcome:
+partial_failed_rolled_back`, with a logo entry like:
+
+```
+logo   created=10 updated=0 skipped=0 failed=1
+  reason=validation_error label='Drill Uploaded Logo'
+  message=unsafe or empty logo filename
+logo_misses: 1
+notes:
+  - restore failed at category logo; compensating rollback ran.
+  - rollback completed: 44 entity/entities removed.
+```
+
+**Cause:** A logo uploaded through ECM's own Logo Manager (as opposed to
+one auto-assigned from an M3U or EPG feed) is written to **Dispatcharr's**
+storage, not ECM's own upload directory. Those bytes are retrievable at
+backup time over Dispatcharr's own logo cache endpoint, using the same
+API key ECM already holds for every other backup category, but the
+backup does not currently request them (`enhancedchannelmanager-xb58a`).
+Because the backup never captured the bytes, the restore correctly
+detects the miss, but a logo failure is currently classified as
+**fatal**, so it aborts and rolls back the entire restore, not just the
+logo category. Every other category that had already succeeded
+(channels, streams, accounts, profile, users, other logos) is deleted
+again by the compensating rollback (`enhancedchannelmanager-d0agi`).
+Logos referenced by a remote http(s) URL are unaffected; this only
+happens for logos uploaded through ECM's own Logo Manager.
+
+**Fix:** Removing the ECM-uploaded logo record from the source before
+taking the backup you intend to restore, then re-adding the logo
+manually on the destination afterward, is still the only way to get the
+restore to complete today. Those logos are then not in the backup at
+all. Neither the backup gap (`enhancedchannelmanager-xb58a`, archiving
+the bytes at backup time) nor the fatal classification
+(`enhancedchannelmanager-d0agi`, treating a logo miss as non-fatal) is
+shipped; re-check both beads' status before relying on this section.
+
+---
+
+## Preview reports logo failures that don't happen on apply
+
+**Symptom:** The dry-run preview reports some or all logos as
+`validation_error: unsafe or empty logo filename`, but the apply of the
+same artifact restores most or all of them successfully.
+
+**Cause:** The preview never simulates the URL re-create path for logos
+(it's gated behind an `if not is_dry_run` check), so every URL-only logo
+falls through to a byte-validation path that expects a `filename` key
+the preview's records don't have. This makes the logo category's preview
+numbers unreliable in both directions: it can report failures that won't
+happen, and it can hide the one that will
+(`enhancedchannelmanager-dgnms`).
+
+**Fix:** Still preview first; every other category's preview numbers
+are accurate. But do not abort a restore solely because of logo failures
+shown in the preview. Compare the preview's logo count against what you
+expect qualitatively, then verify actual logo outcomes after the apply
+completes (see [Logo misses: red banner after restore](#logo-misses-red-banner-after-restore)
+below), not before.
+
+---
+
+## Playback still fails after a redacted restore, even after a refresh
+
+**Symptom:** You restored a standard (redacted) backup. Streams populate
+after you re-enter the M3U credential and refresh, but restored channels
+still won't play; they remain bound to placeholder streams.
+
+**Cause:** ECM's placeholder-rebind pass (the step that reattaches
+restored channels to real provider streams) runs exactly once,
+immediately after the restore's own deferred M3U refresh. On a redacted
+artifact, the M3U account has no credential yet at that instant, so
+there is nothing to match against, and the rebind pass does not re-run on
+its own. A later manual refresh adds the real streams *beside* the
+placeholders without rebinding anything to them.
+
+**Fix:** Re-entering the credential and refreshing is necessary but not
+sufficient. After the refresh confirms real streams are present, **run
+the same restore again, from the same artifact.** This re-triggers the
+rebind pass, now with real streams to match against. See
+[Step 6a of Run a restore drill](run-a-restore-drill.md#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
+for the full measured sequence. If playback still fails after a full
+credential re-entry → refresh → re-restore cycle, that is the residual
+`enhancedchannelmanager-2o0cz` defect, not a step you missed. File it as
+a fresh occurrence with the restore report attached.
+
+An encrypted artifact with **Include credentials** does not need this
+sequence at all; the credential round-trips automatically and playback
+works on the first restore.
+
+---
+
 ## The restore ran but channels look wrong
 
 **Symptom:** The restore reported success, but channel numbers are wrong, channels are missing, or streams are not playing.

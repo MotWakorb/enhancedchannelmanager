@@ -19,6 +19,7 @@ These tests exercise the builder directly (block-level) rather than through an
 HTTP route, mirroring the unit-test style in test_backup.py while targeting the
 new sealed-artifact seam that Phase-1 .6/.8 and Phase-2 restore will consume.
 """
+import base64
 import io
 import json
 import zipfile
@@ -46,6 +47,13 @@ SECRET_TELEGRAM_TOKEN = "TELEGRAM_SECRET_tok_ZZZ555"
 # markers (``api_key``). The core_settings producer (lc6zu) must redact its
 # VALUE before any byte enters the archive.
 SECRET_CORE_SETTING = "CORESETTING_SECRET_val_ZZZ777"
+
+# A real 1x1 PNG. The logo-byte tests archive it and the restore-side validator
+# checks magic bytes, so the fixture has to be a genuine image, not a marker.
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 # All secret sentinels a produced artifact must never carry, in one tuple so the
 # redaction byte-scans cannot silently miss a newly seeded secret.
@@ -104,7 +112,7 @@ def _seed_journal_db(path):
 
 def _patched_build(
     tmp_path, *, with_logos=False, dest_dir=None, client_overrides=None,
-    get_client_override=None,
+    get_client_override=None, source_logos=None, logo_images=None, capture=None,
 ):
     """Run build_backup_artifact with CONFIG_DIR/JOURNAL_DB_FILE pointed at
     tmp_path, settings carrying secrets, and Dispatcharr returning M3U accounts
@@ -122,6 +130,15 @@ def _patched_build(
     raising BEFORE any per-key fetch is attempted — which is a DIFFERENT
     failure shape than a single method on an otherwise-working client
     raising (``client_overrides`` above).
+
+    ``source_logos`` replaces the SOURCE Dispatcharr logo listing (bead xb58a),
+    and ``logo_images`` maps a source logo id to what ``fetch_logo_image``
+    should do for it: ``bytes`` to return, an ``Exception`` instance to raise,
+    or ``None`` for an upstream that returned an error status. A logo id absent
+    from the map fetches as ``None``.
+
+    ``capture`` is an optional dict the helper fills with ``{"client": ...}`` so
+    a test can assert on the calls the builder did (or did NOT) make.
     """
     config_dir = tmp_path
     journal = config_dir / "journal.db"
@@ -179,12 +196,28 @@ def _patched_build(
     # importer's affected-channel lookup keys on. abc.png matches source logo
     # id 21; def.jpg deliberately has no source record (no id in metadata).
     mock_client.get_all_logos_paginated = AsyncMock(
-        return_value=[
+        return_value=source_logos if source_logos is not None else [
             {"id": 21, "name": "ABC Logo", "url": "http://dispatcharr/media/logos/abc.png"},
         ]
     )
+
+    # xb58a: the logo BYTE fetch. Dispatcharr is the source of truth for logo
+    # images, so the builder asks it for the bytes of every Dispatcharr-hosted
+    # logo. Default: every fetch comes back empty, which is the pre-fix shape.
+    images = logo_images or {}
+
+    async def _fetch_logo_image(logo_id):
+        outcome = images.get(logo_id)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    mock_client.fetch_logo_image = AsyncMock(side_effect=_fetch_logo_image)
+
     for method_name, exc in (client_overrides or {}).items():
         getattr(mock_client, method_name).side_effect = exc
+    if capture is not None:
+        capture["client"] = mock_client
 
     session = MagicMock()
     session.query.return_value.all.return_value = []
@@ -375,6 +408,180 @@ class TestBinarySubtree:
         assert "binary/metadata.json" in names
         assert "binary/url-mappings.json" in names
         assert meta["logo_count"] == 0
+
+
+class TestDispatcharrHostedLogoBytes:
+    """bead enhancedchannelmanager-xb58a: the backup archives the BYTES of every
+    Dispatcharr-hosted logo, fetched from Dispatcharr at gather time.
+
+    Dispatcharr is ECM's source of truth for logos, so a logo uploaded through
+    ECM's own Logo Manager lands in DISPATCHARR's ``/data/logos/`` and never in
+    the ``/config/uploads/logos/`` the builder used to be the only thing the
+    builder collected. Drill run 2026-08-04-run2 produced
+    ``{"logo_count": 0, "logos": []}`` for an instance that had an uploaded logo
+    assigned to a channel, and that logo could not be restored on ANY artifact
+    variant. The same drill proved the bytes were reachable the whole time: a
+    plain authenticated GET returned a byte-identical copy.
+    """
+
+    HOSTED = {"id": 13, "name": "Drill Uploaded Logo", "url": "/data/logos/drill-logo.png"}
+    REMOTE = {"id": 21, "name": "ABC Logo", "url": "https://cdn.example.com/abc.png"}
+
+    def test_dispatcharr_hosted_logo_is_archived_with_its_bytes(self, tmp_path):
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: PNG_1X1},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            assert "binary/logos/drill-logo.png" in zf.namelist()
+            assert zf.read("binary/logos/drill-logo.png") == PNG_1X1
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert meta["logo_count"] == 1
+        entry = meta["logos"][0]
+        # The FILENAME key is what makes the record restorable: the restore-side
+        # validator rejects a logo record that has none, which is exactly how
+        # the drill's uploaded logo failed.
+        assert entry["filename"] == "drill-logo.png"
+        assert entry["size_bytes"] == len(PNG_1X1)
+        assert entry["id"] == 13
+        assert entry["name"] == "Drill Uploaded Logo"
+
+    def test_remote_cdn_logo_is_not_archived_as_bytes(self, tmp_path):
+        """A CDN logo round-trips from its archived URL; archiving bytes for it
+        would be waste (10 of 10 verified byte-identical through the URL path)."""
+        capture = {}
+        art = _patched_build(
+            tmp_path,
+            source_logos=[self.REMOTE],
+            logo_images={21: PNG_1X1},
+            capture=capture,
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            logo_members = [n for n in zf.namelist() if n.startswith("binary/logos/")]
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert logo_members == []
+        assert meta["logo_count"] == 0
+        # Not merely unarchived: never even fetched.
+        capture["client"].fetch_logo_image.assert_not_awaited()
+
+    def test_mixed_set_archives_only_the_hosted_logo(self, tmp_path):
+        art = _patched_build(
+            tmp_path,
+            source_logos=[self.REMOTE, self.HOSTED],
+            logo_images={13: PNG_1X1, 21: PNG_1X1},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            logo_members = [n for n in zf.namelist() if n.startswith("binary/logos/")]
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert logo_members == ["binary/logos/drill-logo.png"]
+        assert [e["id"] for e in meta["logos"]] == [13]
+
+    def test_fetch_failure_degrades_to_a_counted_miss_not_a_failed_backup(self, tmp_path, caplog):
+        """The whole backup must survive one unfetchable logo.
+
+        The residual failure modes (an upstream 5xx, a logo whose source is
+        genuinely gone) degrade to the pre-fix behaviour: the logo's bytes are
+        not archived, the restore reports it as a miss, and the artifact is
+        otherwise complete and verifiable.
+        """
+        import httpx
+
+        with caplog.at_level("WARNING"):
+            art = _patched_build(
+                tmp_path,
+                source_logos=[self.HOSTED],
+                logo_images={13: httpx.ConnectError("upstream down")},
+            )
+        assert art.zip_path.exists()
+        assert verify_artifact_sha256(art.zip_path, art.sidecar_path) is True
+        with zipfile.ZipFile(art.zip_path) as zf:
+            logo_members = [n for n in zf.namelist() if n.startswith("binary/logos/")]
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert logo_members == []
+        assert meta["logo_count"] == 0
+        # The miss is REPORTED, and no path or url leaked into the log.
+        assert "logo id=13" in caplog.text
+        assert "/data/logos/" not in caplog.text
+
+    def test_upstream_error_status_degrades_to_a_counted_miss(self, tmp_path):
+        """A fetch that returns no bytes (upstream 404/5xx) is the same miss."""
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: None},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert meta["logo_count"] == 0
+
+    def test_stale_local_file_never_shadows_the_fetched_dispatcharr_bytes(self, tmp_path):
+        """ONE source logo id must produce exactly ONE archived file, the real one.
+
+        ``_build_source_logo_index`` correlates an ECM-local
+        ``/config/uploads/logos/abc.png`` to a Dispatcharr logo BY BASENAME and
+        stamps that logo's id on it. If the byte fetch then archived the same id
+        under a second filename, the artifact would carry two entries claiming
+        one source id, and the restore cannot tell them apart: the local file
+        uploads first (on-disk members are written before fetched ones),
+        registers the LOGO remap, and the authoritative bytes are then tier-1
+        matched through it and SKIPPED as ALREADY_EXISTS_IDENTICAL. The channel
+        silently keeps the stale image, with no failure and no miss.
+
+        Dispatcharr is the source of truth, so the fetched bytes win outright.
+        """
+        art = _patched_build(
+            tmp_path,
+            with_logos=True,  # writes uploads/logos/abc.png (GIF) + def.jpg
+            source_logos=[{"id": 44, "name": "Hosted ABC", "url": "/data/logos/abc.png"}],
+            logo_images={44: PNG_1X1},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            names = set(zf.namelist())
+            meta = json.loads(zf.read("binary/metadata.json"))
+            archived = zf.read("binary/logos/abc.png")
+
+        # Exactly one member for source id 44, carrying DISPATCHARR's bytes.
+        claiming_44 = [e for e in meta["logos"] if e.get("id") == 44]
+        assert len(claiming_44) == 1
+        assert claiming_44[0]["filename"] == "abc.png"
+        assert archived == PNG_1X1
+        # The superseded local copy is gone, not renamed alongside.
+        assert "binary/logos/abc-44.png" not in names
+        # An UNCORRELATED local file is untouched: it is not a stale copy of
+        # anything, so dropping it would lose an image.
+        assert "binary/logos/def.jpg" in names
+
+    def test_uncorrelated_local_logo_still_gets_a_collision_free_name(self, tmp_path):
+        """A local file that is NOT a copy of the fetched logo keeps its own slot.
+
+        Same basename, different source logo: both images are genuine and both
+        must survive, so the fetched one takes the id-suffixed name.
+        """
+        art = _patched_build(
+            tmp_path,
+            with_logos=True,
+            source_logos=[
+                # id 44 correlates to the local abc.png by basename, so it is
+                # NOT hosted (remote URL) and never fetched. id 45 is hosted and
+                # happens to share the basename.
+                {"id": 44, "name": "Remote ABC", "url": "https://cdn.example.com/abc.png"},
+                {"id": 45, "name": "Hosted ABC", "url": "/data/logos/abc.png"},
+            ],
+            logo_images={45: PNG_1X1},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            names = set(zf.namelist())
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert "binary/logos/abc.png" in names
+        assert "binary/logos/abc-45.png" in names
+        by_filename = {e["filename"]: e for e in meta["logos"]}
+        assert by_filename["abc-45.png"]["id"] == 45
+        assert by_filename["abc.png"]["id"] == 44
+
+    def test_no_spool_files_survive_the_build(self, tmp_path):
+        """The fetched bytes live only until they are inside the ZIP."""
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: PNG_1X1},
+        )
+        leftovers = [p.name for p in art.zip_path.parent.glob("ecm-logo-bytes-*")]
+        assert leftovers == []
 
 
 class TestCategories:
@@ -696,3 +903,225 @@ class TestCanonicalArtifactName:
         art = _patched_build(tmp_path)
         assert art.sidecar_path.name == art.zip_path.name + ".sha256"
         assert art.zip_path.name in art.sidecar_path.read_text()
+
+
+class TestLogoByteBudgets:
+    """The fetched logo subtree stays inside the caps the RESTORE side enforces.
+
+    A builder that quietly produced an artifact whose member count or
+    uncompressed size exceeded the restore-time decompression-bomb guard would
+    be writing a silently unrestorable backup, which is the same class of defect
+    as the missing bytes themselves.
+    """
+
+    def test_file_budget_stays_under_the_restore_side_entry_cap(self):
+        assert backup_mod._MAX_FETCHED_LOGO_COUNT < backup_mod._ARTIFACT_MAX_ENTRIES
+
+    def test_budget_is_what_is_LEFT_of_the_cumulative_cap_not_a_flat_constant(self, tmp_path):
+        """The restore-side uncompressed cap is CUMULATIVE over every member.
+
+        Comparing the flat ceiling against the cap proves nothing: a journal.db
+        and an on-disk logo subtree spend the same budget, so a builder that
+        always spent the flat ceiling on logos could still exceed the cap and
+        write an artifact ECM's own validator refuses. The budget must shrink by
+        whatever the other members already committed.
+        """
+        committed = backup_mod._ARTIFACT_MAX_TOTAL_UNCOMPRESSED - 1024
+        budget = backup_mod._logo_byte_budget(tmp_path, committed)
+        assert budget <= 1024
+
+    def test_budget_is_zero_when_the_artifact_has_no_headroom_left(self, tmp_path):
+        assert backup_mod._logo_byte_budget(
+            tmp_path, backup_mod._ARTIFACT_MAX_TOTAL_UNCOMPRESSED
+        ) == 0
+
+    def test_budget_is_bounded_by_free_disk_measured_at_fetch_time(self, tmp_path, monkeypatch):
+        """The pre-build free-disk check sized journal.db + BACKUP_DIRS, which by
+        this bead's premise carry no logo bytes at all. Fetched payloads land on
+        that partition TWICE (spooled, then compressed into the ZIP)."""
+        free = 200 * 1024 * 1024
+
+        class _Usage:
+            total = free
+            used = 0
+
+        _Usage.free = free
+        monkeypatch.setattr(backup_mod.shutil, "disk_usage", lambda _p: _Usage)
+        budget = backup_mod._logo_byte_budget(tmp_path, 0)
+        assert budget == (free - backup_mod._DISK_HEADROOM_BYTES) // 2
+        assert budget < backup_mod._MAX_FETCHED_LOGO_TOTAL_BYTES
+
+    def test_budget_never_goes_negative_on_a_nearly_full_disk(self, tmp_path, monkeypatch):
+        class _Usage:
+            total = 1
+            used = 1
+            free = 0
+
+        monkeypatch.setattr(backup_mod.shutil, "disk_usage", lambda _p: _Usage)
+        assert backup_mod._logo_byte_budget(tmp_path, 0) == 0
+
+    def test_an_artifact_built_at_budget_passes_the_restore_side_guard(self, tmp_path):
+        """The claim these budgets exist to make, tested end to end.
+
+        Builds a real artifact whose logo subtree is filled right up against a
+        (shrunk) budget and runs the finished ZIP through the SAME guard the
+        restore path calls. If the budget arithmetic were wrong, this is where a
+        silently unrestorable artifact would show up.
+        """
+        big = PNG_1X1 + b"\x00" * 4096
+        art = _patched_build(
+            tmp_path,
+            source_logos=[
+                {"id": i, "name": "L%d" % i, "url": "/data/logos/l%d.png" % i}
+                for i in range(1, 21)
+            ],
+            logo_images={i: big for i in range(1, 21)},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            # Does not raise: the artifact this builder produced is one this
+            # build of ECM will accept back.
+            backup_mod.guard_artifact_against_zip_bomb(zf)
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert meta["logo_count"] == 20
+
+    def test_file_budget_stops_the_fetch_and_counts_the_rest(self, tmp_path, monkeypatch):
+        """Past the cap the builder stops fetching and reports the shortfall."""
+        monkeypatch.setattr(backup_mod, "_MAX_FETCHED_LOGO_COUNT", 1)
+        art = _patched_build(
+            tmp_path,
+            source_logos=[
+                {"id": 1, "name": "One", "url": "/data/logos/one.png"},
+                {"id": 2, "name": "Two", "url": "/data/logos/two.png"},
+            ],
+            logo_images={1: PNG_1X1, 2: PNG_1X1},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            logo_members = [n for n in zf.namelist() if n.startswith("binary/logos/")]
+        assert logo_members == ["binary/logos/one.png"]
+
+    def test_a_logo_over_the_per_logo_cap_is_not_archived(self, tmp_path):
+        """The per-logo cap mirrors the restore-side validator's own cap, so the
+        builder never archives a payload the importer would reject."""
+        oversized = PNG_1X1 + b"\x00" * (backup_mod.MAX_LOGO_BYTES + 1)
+        art = _patched_build(
+            tmp_path,
+            source_logos=[{"id": 9, "name": "Huge", "url": "/data/logos/huge.png"}],
+            logo_images={9: oversized},
+        )
+        with zipfile.ZipFile(art.zip_path) as zf:
+            meta = json.loads(zf.read("binary/metadata.json"))
+        assert meta["logo_count"] == 0
+
+
+class TestLogoGatherFailsSoft:
+    """No logo problem may fail the operator's backup.
+
+    Every logo path in the builder is best-effort by contract. These pin the
+    paths that could otherwise propagate into build_backup_artifact's
+    ``except Exception:`` and destroy the artifact over a picture.
+    """
+
+    HOSTED = {"id": 13, "name": "Hosted", "url": "/data/logos/hosted.png"}
+
+    def test_get_client_raising_does_not_fail_the_backup(self, tmp_path):
+        """``get_client`` reads settings and can throw.
+
+        It is called for the logo listing AND the byte fetch, outside any
+        per-category isolation, so an unguarded call turns a settings problem
+        into a failed backup.
+        """
+        art = _patched_build(
+            tmp_path,
+            get_client_override={"side_effect": RuntimeError("settings exploded")},
+        )
+        assert art.zip_path.exists()
+        assert verify_artifact_sha256(art.zip_path, art.sidecar_path) is True
+
+    def test_spool_dir_creation_failure_does_not_fail_the_backup(self, tmp_path, monkeypatch):
+        """A read-only or full /config must degrade the logo bytes, not the run."""
+        def _boom(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(backup_mod.tempfile, "mkdtemp", _boom)
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: PNG_1X1},
+        )
+        assert art.zip_path.exists()
+        assert verify_artifact_sha256(art.zip_path, art.sidecar_path) is True
+        with zipfile.ZipFile(art.zip_path) as zf:
+            assert [n for n in zf.namelist() if n.startswith("binary/logos/")] == []
+        # Degraded, and reported as such.
+        assert "logos" in art.degraded_categories
+        assert art.unarchived_logo_bytes == 1
+
+
+class TestLogoDegradedReporting:
+    """A backup that could not archive logo bytes is a WARNING, never silent.
+
+    zt3kf's ratified shape for a partial gather. Before this, the ONLY signal was
+    a container log line: the task returned ``success=True, failed_count=0`` for
+    an artifact whose logo payload was entirely missing.
+    """
+
+    HOSTED = {"id": 13, "name": "Hosted", "url": "/data/logos/hosted.png"}
+
+    def test_unfetchable_logo_marks_the_logos_category_degraded(self, tmp_path):
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: None},
+        )
+        assert "logos" in art.degraded_categories
+        assert art.unarchived_logo_bytes == 1
+
+    def test_fully_archived_logos_leave_the_backup_clean(self, tmp_path):
+        art = _patched_build(
+            tmp_path, source_logos=[self.HOSTED], logo_images={13: PNG_1X1},
+        )
+        assert art.degraded_categories == []
+        assert art.unarchived_logo_bytes == 0
+
+    def test_logos_is_a_real_restorable_section_key(self):
+        """It threads through tasks.dbas_backup's existing degraded plumbing only
+        because it is a genuine category key, not a synthetic marker."""
+        assert "logos" in backup_mod.RESTORABLE_SECTIONS
+
+    def test_degraded_logos_does_not_mask_a_degraded_dispatcharr_category(self, tmp_path):
+        """Both signals coexist; neither overwrites the other."""
+        art = _patched_build(
+            tmp_path,
+            source_logos=[self.HOSTED],
+            logo_images={13: None},
+            client_overrides={"get_dvr_rules": RuntimeError("upstream 500")},
+        )
+        assert "logos" in art.degraded_categories
+        assert "dvr_rules" in art.degraded_categories
+        assert art.degraded_categories == sorted(art.degraded_categories)
+
+
+class TestOrphanedLogoSpoolSweep:
+    """A container kill mid-backup must not leave hundreds of MB in /config.
+
+    Retention's allowlist matches only ``ecm-backup-*.zip``, so nothing else
+    would ever reclaim these.
+    """
+
+    def test_stale_spool_dir_is_removed_on_the_next_build(self, tmp_path):
+        import os
+        import time as _time
+
+        stale = tmp_path / (backup_mod._LOGO_SPOOL_PREFIX + "orphan")
+        stale.mkdir()
+        (stale / "13").write_bytes(b"leftover")
+        old = _time.time() - backup_mod._LOGO_SPOOL_ORPHAN_AGE_SECONDS - 60
+        os.utime(stale, (old, old))
+
+        _patched_build(tmp_path, dest_dir=tmp_path)
+        assert not stale.exists()
+
+    def test_a_concurrent_builds_fresh_spool_is_left_alone(self, tmp_path):
+        """The age floor is what makes the sweep safe to run unconditionally."""
+        live = tmp_path / (backup_mod._LOGO_SPOOL_PREFIX + "live")
+        live.mkdir()
+        (live / "13").write_bytes(b"in-flight")
+
+        _patched_build(tmp_path, dest_dir=tmp_path)
+        assert live.exists()

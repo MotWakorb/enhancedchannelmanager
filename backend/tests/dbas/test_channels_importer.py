@@ -293,6 +293,49 @@ async def test_non_remappable_fk_fields_dropped_not_sent_stale():
 
 
 @pytest.mark.asyncio
+async def test_resolved_epg_natural_key_is_archive_metadata_not_a_create_field():
+    """``epg_data_tvg_id`` is stripped from the create payload but SURVIVES.
+
+    Bead …-dfkbn: the backup producer resolves the EPG link's natural key off
+    the source's guide row and stamps it on the archived channel. It is ARCHIVE
+    metadata for the post-create reattach pass, not a Dispatcharr channel field.
+    Sending it upstream would push an unknown key into the channel create. The
+    archive record itself must not be mutated: the reattach pass reads the same
+    list AFTER this importer runs.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY
+
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    archive_channel = {
+        "id": 5,
+        "name": "FOX News",
+        "tvg_id": None,
+        "epg_data_id": 2078,
+        ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us",
+    }
+
+    await import_channels(
+        archive_channels=[archive_channel],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    payload = client.create_channel.await_args.args[0]
+    assert ARCHIVE_EPG_TVG_ID_KEY not in payload
+    assert "epg_data_id" not in payload
+    # Still on the archive record for dbas.channel_reattach.reattach_epg_links.
+    assert archive_channel[ARCHIVE_EPG_TVG_ID_KEY] == "fox.news.us"
+    assert report.category(EntityType.CHANNEL).created == 1
+
+
+@pytest.mark.asyncio
 async def test_create_payload_strips_live_gather_provenance_and_derived_keys():
     """LIVE-GATHER shape (bead 7ipq2.2, live two-instance validation): a channel
     row read from Dispatcharr's live GET /api/channels/channels/ carries fields

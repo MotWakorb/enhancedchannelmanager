@@ -282,8 +282,13 @@ async def _gather_live_logos() -> list[dict]:
     Reuses the backup builder's enumeration + correlation seam
     (:func:`routers.backup._fetch_source_logo_index` +
     :func:`routers.backup._gather_logo_binary_subtree`) so the sync slice reads
-    the EXACT set of files a backup artifact would archive, correlated to the
-    source Dispatcharr logo ``id``/``name`` by URL basename. The records mirror
+    the files under ECM's OWN ``/config/uploads/logos/``, correlated to the
+    source Dispatcharr logo ``id``/``name`` by URL basename. NOTE: this is no
+    longer the same set a backup artifact archives. Since bead …-xb58a the
+    artifact ALSO carries the bytes of every Dispatcharr-hosted logo, fetched
+    from Dispatcharr at gather time
+    (:func:`routers.backup._gather_dispatcharr_logo_payloads`), and this gather
+    does not. Closing that gap for cross-instance sync is its own bead. The records mirror
     the archive decoder's shape (``name``/``filename``/``size``/``id``) with
     ONE deliberate difference: **no** ``content_b64``. Bytes are hydrated
     lazily, one MISSED logo at a time, by :func:`_load_logo_content_b64` inside

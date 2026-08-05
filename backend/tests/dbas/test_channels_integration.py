@@ -568,3 +568,60 @@ async def test_sync_fuzzy_opt_in_attaches_and_reports_low_confidence():
     assert report.category(EntityType.STREAM).updated == 1
     # NOT silent: a low-confidence note was surfaced for the fuzzy attach.
     assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_resolved_epg_key_survives_the_import_for_the_reattach_pass():
+    """The channel import and the EPG reattach agree on one archive record.
+
+    Bead …-dfkbn: the backup producer stamps ``epg_data_tvg_id`` on an archived
+    channel. This importer must strip it from the create payload (it is not a
+    Dispatcharr channel field) WITHOUT consuming it: the post-create reattach
+    pass reads the SAME list afterwards and is the thing that puts the link
+    back. Both halves in one flow, against the real importer.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+
+    client = _client()
+    client.get_epg_data = AsyncMock(return_value=[{"id": 9001, "tvg_id": "fox.news.us"}])
+    report, ledger, remap = _report(), _ledger(), _remap()
+
+    archive_channels = [
+        {
+            "id": 5,
+            "name": "FOX News",
+            "channel_number": 201,
+            "tvg_id": None,
+            "epg_data_id": 2078,
+            ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us",
+            "streams": [],
+        }
+    ]
+
+    await import_channels(
+        archive_channels=archive_channels,
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    payload = client.create_channel.await_args.args[0]
+    assert ARCHIVE_EPG_TVG_ID_KEY not in payload
+    assert "epg_data_id" not in payload
+
+    dest_channel_id = remap.resolve(EntityType.CHANNEL, 5)
+    relinked = await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
+        client=client, report=report, remap=remap,
+        archive_channels=archive_channels,
+    )
+
+    assert relinked == 1
+    assert report.epg_links_unrestored == 0
+    client.update_channel.assert_awaited_once_with(
+        dest_channel_id, {"epg_data_id": 9001}
+    )

@@ -75,6 +75,23 @@ categories in both the task message and the completion notification
 (below) takes precedence when both are unhealthy — an upload failure is the
 more severe, already-notified condition.
 
+The SAME rule covers a partial LOGO-BYTE gather (bead …-xb58a). Logo images live
+in Dispatcharr, so the builder fetches them at gather time; when some of those
+fetches fail the artifact is built and useful but carries fewer logo bytes than
+the operator expects, and a restore will report those as logo misses. The
+builder therefore adds ``"logos"`` to ``degraded_categories`` and reports the
+COUNT in ``artifact.unarchived_logo_bytes``, which lands in
+``details["unarchived_logo_bytes"]`` and the task message. Shipping that as a
+clean success would be the same defect the logo-bytes bead exists to fix.
+
+A channel whose ``epg_data_id`` points at a guide row that no longer exists is
+DIFFERENT in kind (bead …-dfkbn, PR review W2). Its link cannot be restored, and
+the count reaches ``details["unresolved_epg_links"]`` and the task message so the
+operator can see it, but it does NOT set ``failed_count`` and does NOT add a
+degraded category: a dangling FK is common, largely unactionable, and is not ECM
+failing to gather something it could have. Making it a WARNING would erode the
+badge that the two conditions above depend on.
+
 Metrics: ``ecm_backup_runs_total{result="success"|"partial"|"skipped"|"failed"}``
 and ``ecm_backup_upload_total{provider,result}`` (per-upload outcome). Gather
 degradation does not get its own metric label — it is a data-completeness
@@ -378,6 +395,29 @@ class DbasBackupTask(TaskScheduler):
             }
             if degraded_categories:
                 details["degraded_categories"] = degraded_categories
+            # bead …-xb58a: a backup that could not fetch some Dispatcharr-hosted
+            # logo bytes already sets the "logos" degraded flag above; this
+            # carries the COUNT so the operator sees how much is missing, not
+            # just that something is.
+            unarchived_logos = getattr(artifact, "unarchived_logo_bytes", 0) or 0
+            if unarchived_logos:
+                details["unarchived_logo_bytes"] = unarchived_logos
+            # bead …-dfkbn (PR review W2): channels whose EPG link could not be
+            # resolved to its guide natural key. Those links cannot come back on
+            # restore, so the operator should be able to SEE the number here
+            # rather than discover it in a restore report. Deliberately does NOT
+            # set failed_count: a dangling epg_data_id is common and largely
+            # unactionable, and turning every one of them into a "Completed with
+            # Warnings" run would train the operator to ignore that badge.
+            unresolved_epg_links = getattr(artifact, "unresolved_epg_links", 0) or 0
+            epg_index_truncated = bool(getattr(artifact, "epg_index_truncated", False))
+            if unresolved_epg_links:
+                details["unresolved_epg_links"] = unresolved_epg_links
+                if epg_index_truncated:
+                    # A different diagnosis with a different remedy: the guide
+                    # read hit its ceiling, so some of those may be good links
+                    # the read never saw. Never conflate the two.
+                    details["epg_index_truncated"] = True
             if upload_summary["attempted"]:
                 details["upload"] = {
                     "run_result": run_result,
@@ -395,6 +435,23 @@ class DbasBackupTask(TaskScheduler):
                     "y" if len(degraded_categories) == 1 else "ies",
                     ", ".join(degraded_categories),
                 )
+            if unarchived_logos:
+                message += "; %d logo(s) archived without their image bytes" % (
+                    unarchived_logos,
+                )
+            if unresolved_epg_links:
+                if epg_index_truncated:
+                    message += (
+                        "; %d channel EPG link(s) unresolved, but the guide read "
+                        "hit its row ceiling so the index may be incomplete"
+                        % unresolved_epg_links
+                    )
+                else:
+                    message += (
+                        "; %d channel EPG link(s) point at a guide entry that no "
+                        "longer exists and will not be restored"
+                        % unresolved_epg_links
+                    )
             if upload_summary["attempted"]:
                 message += "; cloud upload: %s (%d ok, %d failed)" % (
                     run_result, upload_summary["succeeded"], upload_summary["failed"],

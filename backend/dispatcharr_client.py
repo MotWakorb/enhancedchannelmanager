@@ -1159,6 +1159,41 @@ class DispatcharrClient:
             raise Exception(f"Logo upload failed: {response.status_code} - {error_body}")
         return response.json()
 
+    async def fetch_logo_image(self, logo_id: int) -> Optional[bytes]:
+        """Fetch ONE logo's image BYTES from Dispatcharr's cache endpoint.
+
+        Dispatcharr is the source of truth for logo images, including the ones
+        ECM's own Logo Manager uploads (those land in Dispatcharr's
+        ``/data/logos/``, not in ECM's config volume). This is the read side of
+        that: ``GET /api/channels/logos/{id}/cache/`` returns the image for BOTH
+        a Dispatcharr-hosted file and a remote original it has cached, using the
+        API key the client already holds.
+
+        Used by the DBAS backup builder to archive the bytes of a
+        Dispatcharr-hosted logo (bead ``enhancedchannelmanager-xb58a``) and by
+        ECM's same-origin logo image proxy (``routers.channels``), which calls
+        the same upstream path directly because it also needs the response
+        headers.
+
+        Args:
+            logo_id: The Dispatcharr logo id.
+
+        Returns:
+            The image bytes, or ``None`` when the upstream returned any error
+            status (a deleted logo, a cache miss Dispatcharr could not fill).
+            A TRANSPORT failure raises, so a caller that must not fail hard
+            wraps the call.
+        """
+        response = await self._request("GET", f"/api/channels/logos/{logo_id}/cache/")
+        if response.status_code >= 400:
+            # Never log the url or the body: both can carry a path or a token.
+            logger.warning(
+                "[DISPATCHARR] Logo image fetch failed for id=%s: status %s",
+                logo_id, response.status_code,
+            )
+            return None
+        return response.content
+
     async def find_logo_by_url(self, url: str) -> Optional[dict]:
         """Find an existing logo by its URL.
 

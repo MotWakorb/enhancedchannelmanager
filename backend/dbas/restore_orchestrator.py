@@ -109,28 +109,40 @@ PO-confirmed policy, not an accident of the current importer wiring:
   again."
 
 ----------------------------------------------------------------------------
-THE ONE NON-FATAL CATEGORY (bead enhancedchannelmanager-y65si)
+THE NON-FATAL CATEGORIES (beads enhancedchannelmanager-y65si + …-d0agi)
 ----------------------------------------------------------------------------
 
-``dispatcharr_users`` is the sole member of :data:`NON_FATAL_FAILURE_CATEGORIES`.
-A user row upstream refuses is COUNTED as a failure in its category (visible in
-the report, listed in ``failure_details``, and it forbids a ``SUCCESS`` outcome)
-but does NOT abort the run or trigger a compensating rollback. The restore
-continues and the outcome is
+``dispatcharr_users`` and ``logos`` are the members of
+:data:`NON_FATAL_FAILURE_CATEGORIES`. A row upstream refuses in either category
+is COUNTED as a failure in that category (visible in the report, listed in
+``failure_details``, and it forbids a ``SUCCESS`` outcome) but does NOT abort the
+run or trigger a compensating rollback. The restore continues and the outcome is
 :attr:`~dbas.restore_contracts.RestoreOutcome.COMPLETED_WITH_FAILURES`.
 
-Why users and ONLY users: they are the least load-bearing category in an artifact
-— nothing else in the restore holds an FK into them, so a missing user degrades
-nothing downstream — and the drill (bead ``…-a429n``) showed the alternative is
-catastrophic. One archived user Dispatcharr would not create cost the operator
-their M3U account, EPG source, channel groups and channel profile, PLUS an ECM
-settings mutation the rollback cannot compensate at all. Every other category IS
-load-bearing, so the abort-on-any-failed-key rule above still governs it; do not
-widen this set without the same reasoning.
+The admission test is the same for both, and it is narrow: NOTHING ELSE IN THE
+RESTORE HOLDS A HARD FK INTO THE CATEGORY, so a row that does not come back
+degrades only itself. Do not widen this set without demonstrating that.
+
+* **users** (y65si): nothing else in the restore references a user, and the
+  drill (bead ``…-a429n``) showed the alternative is catastrophic. One archived
+  user Dispatcharr would not create cost the operator their M3U account, EPG
+  source, channel groups and channel profile, PLUS an ECM settings mutation the
+  rollback cannot compensate at all.
+* **logos** (d0agi): a channel's ``logo_id`` is a SOFT reference. The logos
+  importer already treats an unrestorable logo as a counted, reported miss
+  (:attr:`~dbas.restore_contracts.RestoreReport.logo_misses`, the D9 red banner,
+  and the affected-channel drill-down), and
+  :func:`dbas.channel_reattach.reattach_channel_logos` simply leaves the channel
+  without artwork. Logos also run LAST in the hard ordering, so a logo failure
+  can only ever destroy work that already succeeded. The drill (run
+  ``2026-08-04-run2``) saw exactly that: ONE image that could not be written
+  rolled back 44 successfully-restored entities. A channel with no artwork is a
+  cosmetic defect; a rolled-back restore is a data-loss event.
 
 Scope: this covers a REPORTED per-row failure. An importer that RAISES stays
-fatal even for users — ``UsersCapabilityError`` (the fail-closed User-schema
-guard) means "this destination cannot be reasoned about", not "one bad row".
+fatal even for these categories. ``UsersCapabilityError`` (the fail-closed
+User-schema guard) means "this destination cannot be reasoned about", not "one
+bad row".
 
 ----------------------------------------------------------------------------
 404-AS-SUCCESS + the credential-hygiene rule (the bead .8 lesson)
@@ -165,6 +177,7 @@ import httpx
 from config import CONFIG_DIR
 from dbas.preflight import ImportPlan, PreflightResult, run_preflight
 from dbas.restore_contracts import (
+    ChannelReattachMode,
     EntityType,
     FailureReason,
     LedgerEntry,
@@ -181,11 +194,13 @@ logger = logging.getLogger(__name__)
 _LEDGER_DIR = CONFIG_DIR / "dbas"
 
 # Categories whose REPORTED per-row failures are counted but never abort the
-# restore or trigger a compensating rollback (bead …-y65si; see the module
-# docstring's "THE ONE NON-FATAL CATEGORY" section for why this is exactly one
-# entry and what it would take to add another). A raising importer is still fatal
-# regardless of category.
-NON_FATAL_FAILURE_CATEGORIES: frozenset[EntityType] = frozenset({EntityType.USER})
+# restore or trigger a compensating rollback (beads …-y65si and …-d0agi; see the
+# module docstring's "THE NON-FATAL CATEGORIES" section for the admission test
+# each member had to pass and what it would take to add another). A raising
+# importer is still fatal regardless of category.
+NON_FATAL_FAILURE_CATEGORIES: frozenset[EntityType] = frozenset(
+    {EntityType.USER, EntityType.LOGO}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +256,18 @@ class ApplyContext:
     # this is a no-op (no entity is created, nothing to persist). Defaults to a
     # no-op so a test that builds an ApplyContext directly need not wire it.
     persist_ledger: "Callable[[], None]" = field(default=lambda: None)
+    # What the post-create reattach passes do to channels this restore did NOT
+    # create (bead …-dfkbn, PR review W1). PRESERVE by default: in the
+    # disaster-recovery case every channel is created and the modes are
+    # identical, so the safe default costs DR nothing, while a merge into a live
+    # instance keeps the EPG links and logos the operator set themselves.
+    channel_reattach_mode: "ChannelReattachMode" = field(
+        default_factory=lambda: ChannelReattachMode.PRESERVE
+    )
+    # ARCHIVE (source) ids of the channels the CHANNEL step created, or on a dry
+    # run would create. Filled by the channels step, read by BOTH reattach passes
+    # (the logo pass runs in the LOGO step, later in the same context).
+    created_channel_source_ids: set[int] = field(default_factory=set)
 
     def flush_ledger(self) -> None:
         """Durably persist the shared ledger (per-create flush; no-op on dry-run).
@@ -538,6 +565,7 @@ async def run_restore(
     deferred_apply_fn: Callable[..., Awaitable[list[dict]]] | None = None,
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
+    channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
 ) -> RestoreReport:
     """Run a full restore: pre-flight → ordered apply → rollback-on-failure.
 
@@ -581,6 +609,12 @@ async def run_restore(
             ``apply_deferred_auto_sync``); applied LAST on a clean run.
         ledger_dir: Override the durable ledger directory (tests).
         max_entities_per_category: Pre-flight count bound override (tests).
+        channel_reattach_mode: What the post-create reattach passes do to
+            channels this restore did NOT create (bead …-dfkbn, PR review W1).
+            ``PRESERVE`` (default) leaves a matched-existing channel's EPG link
+            and logo exactly as the operator has them; ``OVERWRITE`` applies the
+            archive's. On an empty destination every channel is created and the
+            two are indistinguishable.
 
     Returns:
         The :class:`RestoreReport` with its tri-state ``outcome`` set.
@@ -643,6 +677,7 @@ async def run_restore(
         remap=remap,
         is_dry_run=report.is_dry_run,
         persist_ledger=per_create_persist,
+        channel_reattach_mode=channel_reattach_mode,
     )
 
     # --- 2. Ordered apply (the hard Phase-2 sequence). ---
@@ -681,10 +716,11 @@ async def run_restore(
         cat = report.category(step.entity_type)
         if cat.failed > 0:
             if step.entity_type in NON_FATAL_FAILURE_CATEGORIES:
-                # y65si — counted, surfaced, and NOT fatal. Nothing downstream
-                # depends on this category, so the operator keeps everything the
-                # run has applied and will apply. The failure still forbids a
-                # SUCCESS outcome (compute_outcome reads report.categories).
+                # y65si / d0agi: counted, surfaced, and NOT fatal. Nothing
+                # downstream depends on this category, so the operator keeps
+                # everything the run has applied and will apply. The failure
+                # still forbids a SUCCESS outcome (compute_outcome reads
+                # report.categories).
                 logger.warning(
                     "[DBAS-RESTORE] Importer step %s reported %d failure(s); "
                     "category is NON-FATAL — continuing without rollback.",
@@ -1229,12 +1265,33 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             ledger=ctx.ledger,
             remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
+            # Populated on BOTH a dry run and an apply, so the reattach passes
+            # split the two channel populations identically in either mode.
+            created_source_ids=ctx.created_channel_source_ids,
         )
         # Post-create reattachment (bead …-dfkbn items 2-3). Both references are
         # DROPPED from the channel create payload because they carry SOURCE ids;
         # these passes re-derive them on the destination now that the CHANNEL
-        # remap is populated. Apply only — a dry-run mutates nothing.
-        if not ctx.is_dry_run and _selected(ctx, EntityType.CHANNEL):
+        # remap is populated.
+        #
+        # The EPG pass ALSO runs on a dry run, because "how many links would
+        # land on channels I ALREADY have" is the number that decides whether the
+        # operator wants ``overwrite`` at all, and it is useless after the fact.
+        # It never PATCHes and it never records a miss.
+        #
+        # It does NOT read the destination's guide on a dry run. That guide is
+        # state the restore ITSELF creates (the EPG step above downloads it, and
+        # on a dry run that wrapper is a pass-through), so a preview reading it
+        # reads the pre-restore guide and reports a working restore as a total
+        # failure. It DOES read the CHANNEL remap, which this same run's channels
+        # importer has just populated. The distinction is "state that already
+        # exists" versus "state this restore creates", and it is the same line
+        # the logo pass draws. See dbas/channel_reattach.py for the full
+        # reasoning and the measurements behind it.
+        #
+        # The profile pass stays apply-only: it has no read-only prediction to
+        # offer beyond what the archive already says.
+        if _selected(ctx, EntityType.CHANNEL):
             from dbas.channel_reattach import (
                 reattach_epg_links,
                 reattach_profile_memberships,
@@ -1245,11 +1302,14 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                 report=ctx.report,
                 remap=ctx.remap,
                 archive_channels=archive_channels,
+                mode=ctx.channel_reattach_mode,
+                created_source_ids=ctx.created_channel_source_ids,
+                is_dry_run=ctx.is_dry_run,
             )
             # Dispatcharr adds every new channel to EVERY profile enabled, so a
             # profile seeded to EXCLUDE channels silently widens to all of them
             # unless the archived selection is re-asserted here.
-            if _selected(ctx, EntityType.CHANNEL_PROFILE):
+            if not ctx.is_dry_run and _selected(ctx, EntityType.CHANNEL_PROFILE):
                 await reattach_profile_memberships(
                     client=ctx.client,
                     report=ctx.report,
@@ -1300,7 +1360,15 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         # back with logo_id=None while the report said logo_misses=0. Runs here,
         # after the logos importer, because that is what populates the LOGO
         # remap namespace this resolves through.
-        if not ctx.is_dry_run and _selected(ctx, EntityType.LOGO):
+        #
+        # Runs on a dry run TOO, reporting the same split and no miss. It DOES
+        # resolve the LOGO remap there: the logos importer registers a
+        # destination id for every archived logo it MATCHES, on a dry run as much
+        # as on an apply, and for a merge into a live install that matched
+        # population IS the population. What a preview cannot see is a logo the
+        # restore would UPLOAD, which has no destination id yet, so the dry-run
+        # split is a lower bound. See reattach_channel_logos.
+        if _selected(ctx, EntityType.LOGO):
             from dbas.channel_reattach import reattach_channel_logos
 
             await reattach_channel_logos(
@@ -1308,6 +1376,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                 report=ctx.report,
                 remap=ctx.remap,
                 archive_channels=_entities(ctx, EntityType.CHANNEL),
+                mode=ctx.channel_reattach_mode,
+                created_source_ids=ctx.created_channel_source_ids,
+                is_dry_run=ctx.is_dry_run,
             )
         return None
 
@@ -1372,6 +1443,7 @@ async def run_dry_run(
     steps: list[ImporterStep] | None = None,
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
+    channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
 ) -> RestoreReport:
     """Produce the counts-only restore PLAN for an archive — never mutates.
 
@@ -1396,10 +1468,14 @@ async def run_dry_run(
             never writes ledger entries, but pre-flight refusal paths share the
             signature.
         max_entities_per_category: Pre-flight count bound override (tests).
+        channel_reattach_mode: The mode the operator has selected. The preview
+            MUST be produced under the same mode the apply will run under, or it
+            mispredicts exactly the number the mode exists to control.
 
     Returns:
         A :class:`RestoreReport` with ``is_dry_run=True`` carrying the per-category
-        ``would_*`` counts and the ``logo_misses`` aggregate.
+        ``would_*`` counts, the ``logo_misses`` aggregate, and the
+        ``epg_link_reattach`` / ``logo_reattach`` population splits.
     """
     report = RestoreReport(is_dry_run=True)
     ledger = RollbackLedger(restore_id=new_restore_id())
@@ -1415,4 +1491,5 @@ async def run_dry_run(
         confirm_apply=False,
         ledger_dir=ledger_dir,
         max_entities_per_category=max_entities_per_category,
+        channel_reattach_mode=channel_reattach_mode,
     )

@@ -4,10 +4,11 @@ import { RestoreProgress } from './RestoreProgress';
 import { RestoreCompleteSummary } from './RestoreCompleteSummary';
 import { LogoMissBanner } from './LogoMissBanner';
 import { TypeToConfirmDialog } from './TypeToConfirmDialog';
+import { ChannelReattachModeField } from './ChannelReattachModeField';
 import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
-import type { RestoreReport } from '../services/api';
+import type { ChannelReattachMode, RestoreReport } from '../services/api';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
 import './DbasRestoreModal.css';
@@ -55,6 +56,10 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
   const [isEncrypted, setIsEncrypted] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [applyMode, setApplyMode] = useState(false); // false = dry-run (default)
+  // What happens to channels this restore does NOT create (bead dfkbn).
+  // 'preserve' by default: on an empty target the modes are identical, so the
+  // safe one costs disaster recovery nothing.
+  const [reattachMode, setReattachMode] = useState<ChannelReattachMode>('preserve');
   const [runningApply, setRunningApply] = useState(false);
   const [restoreTaskId, setRestoreTaskId] = useState<string | null>(null);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
@@ -62,6 +67,12 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
   const [isDragging, setIsDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+  // One token per started run. Every DBAS restore run shares the constant task
+  // id "dbas_restore", so without this the progress hook's poll effect never
+  // restarts and the previous run's terminal state stays live — the finalize
+  // effect below would then fire instantly and render the PREVIOUS run's
+  // report for THIS run (bead dfkbn, review round 4).
+  const [runKey, setRunKey] = useState(0);
   const finalizedRef = useRef(false);
 
   // Dispatcharr base URL drives the logo-miss banner's "Fix in Dispatcharr"
@@ -73,7 +84,11 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     return () => { active = false; };
   }, []);
 
-  const progress = useRestoreProgress({ taskId: restoreTaskId });
+  const progress = useRestoreProgress({ taskId: restoreTaskId, runKey });
+  // True when the progress hook synthesised a terminal ERROR because no new run
+  // ever appeared, as opposed to the backend genuinely reporting one. Only the
+  // synthesised view has a null payload.
+  const runDidNotStart = progress.isError && progress.progress === null;
   const isRestoring = step === 'restoring';
   // Guard against navigating away mid-apply — Dispatcharr has no DB transaction,
   // the compensating rollback depends on the op completing (ADR-012).
@@ -89,6 +104,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     setIsEncrypted(await detectEncrypted(selected));
     setPassphrase('');
     setApplyMode(false);
+    setReattachMode('preserve');
     setStep('configure');
   }, []);
 
@@ -122,7 +138,25 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     setRestoreReport(null);
     setRunningApply(apply);
     try {
-      const res = await api.startDbasRestore(file, apply, isEncrypted ? passphrase : undefined);
+      const res = await api.startDbasRestore(
+        file,
+        apply,
+        isEncrypted ? passphrase : undefined,
+        reattachMode,
+      );
+      // Advance the run token HERE, in the same batch as the step flip, not in
+      // the handler's synchronous prologue. Bumping it before the await
+      // restarted the progress poll while the trigger request was still in
+      // flight, so the budget that exists to cover the scheduler's
+      // fire-and-forget lag was instead spent on the upload itself: a slow
+      // multipart POST (this release archives Dispatcharr-hosted logo bytes,
+      // which it never used to) exhausted it before the run had been asked for.
+      //
+      // In this batch the derived view is EMPTY_VIEW, so isComplete/isError are
+      // false and the finalize effect below does not fire; and the previous
+      // run's view is never rendered, because `step` only becomes 'restoring'
+      // in this same batch.
+      setRunKey((n) => n + 1);
       setRestoreTaskId(res.task_id);
       setStep('restoring');
     } catch (err) {
@@ -130,7 +164,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false);
     }
-  }, [file, isEncrypted, passphrase]);
+  }, [file, isEncrypted, passphrase, reattachMode]);
 
   // On terminal, read the RestoreReport (or sanitized failure) from task
   // history. The task sets progress='completed' BEFORE the engine writes the
@@ -140,6 +174,23 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     if (!progress.isComplete && !progress.isError) return;
     if (finalizedRef.current) return;
     finalizedRef.current = true;
+
+    // The hook gave up waiting for the run to start (it never saw a new
+    // `started_at`). There is NO result for this run, and task history is
+    // unversioned — `?limit=1` still holds the PREVIOUS run's row, so reading it
+    // here would render that run's report as this one's, which is the whole
+    // defect this machinery exists to prevent. `progress.progress === null` is
+    // what tells the two apart: a real backend terminal state always arrives
+    // through viewFromProgress and carries its payload, while the hook's
+    // give-up view is synthesised from the empty one.
+    if (runDidNotStart) {
+      setError(
+        progress.error ||
+          'The restore did not start. It may already be running — check Task History.',
+      );
+      setStep('configure');
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -172,7 +223,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [step, restoreTaskId, progress.isComplete, progress.isError]);
+  }, [step, restoreTaskId, progress.isComplete, progress.isError, runDidNotStart, progress.error]);
 
   const canClose = step !== 'restoring';
   const canStart = !!file && (!isEncrypted || passphrase.length > 0) && !busy;
@@ -256,6 +307,13 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
                 </label>
               </div>
 
+              <ChannelReattachModeField
+                value={reattachMode}
+                onChange={setReattachMode}
+                disabled={busy}
+                idPrefix="dbr"
+              />
+
               {applyMode && (
                 <div className="restore-warning">
                   <span className="material-icons">warning</span>
@@ -297,13 +355,30 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
           {step === 'results' && restoreReport && (
             <>
               {restoreReport.is_dry_run && (
-                <button
-                  className="modal-btn modal-btn-primary"
-                  disabled={busy}
-                  onClick={() => setShowApplyConfirm(true)}
-                >
-                  Apply these changes
-                </button>
+                <>
+                  {/*
+                    A preview is a decision point, so the operator must be able
+                    to act on what it told them. The summary can report that the
+                    restore would replace guide data and logos on channels they
+                    already have and advise picking the other option — advice
+                    that pointed at a control this step had unmounted, with no
+                    way back to it (bead dfkbn, review round 3).
+                  */}
+                  <button
+                    className="modal-btn modal-btn-secondary"
+                    disabled={busy}
+                    onClick={() => { setRestoreReport(null); setStep('configure'); }}
+                  >
+                    Back to options
+                  </button>
+                  <button
+                    className="modal-btn modal-btn-primary"
+                    disabled={busy}
+                    onClick={() => setShowApplyConfirm(true)}
+                  >
+                    Apply these changes
+                  </button>
+                </>
               )}
               <button className="modal-btn modal-btn-secondary" onClick={onClose}>Done</button>
             </>

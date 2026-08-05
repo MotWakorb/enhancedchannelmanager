@@ -4347,9 +4347,41 @@ export interface RestoreReport {
   profile_membership_drift?: number;
   /** Which profiles drifted, and which channels were flipped back (bead dfkbn). */
   profile_membership_drift_details?: ProfileMembershipDriftDetail[];
+  /**
+   * How the EPG-link reattach split across channels this restore created and
+   * channels that already existed (bead dfkbn). Reported on the dry run AND the
+   * apply, so the preview predicts the split rather than describing it after.
+   */
+  epg_link_reattach?: ReattachPopulation;
+  /** The same split for the channel-logo reattach (bead dfkbn). */
+  logo_reattach?: ReattachPopulation;
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];
+}
+
+/**
+ * What a restore does to channels it did NOT create (bead dfkbn).
+ *
+ * `preserve` leaves a channel that already existed on the destination with the
+ * EPG link and logo it already has; `overwrite` replaces both with the
+ * archive's. On an empty destination every channel is created, so the two are
+ * indistinguishable: the choice only matters when merging into a live install.
+ */
+export type ChannelReattachMode = 'preserve' | 'overwrite';
+
+/**
+ * How one post-create reattach pass split across the two channel populations
+ * (bead dfkbn). `existing_channels` is the destructive half: those are channels
+ * the operator already had, whose live reference was replaced by the archive's.
+ */
+export interface ReattachPopulation {
+  mode: ChannelReattachMode;
+  created_channels: number;
+  existing_channels: number;
+  preserved_channels: number;
+  existing_channels_named: string[];
+  preserved_channels_named: string[];
 }
 
 /**
@@ -4499,13 +4531,17 @@ export interface DbasRestoreStartResult {
 export async function startDbasRestore(
   file: File,
   confirmApply = false,
-  passphrase?: string
+  passphrase?: string,
+  channelReattachMode: ChannelReattachMode = 'preserve'
 ): Promise<DbasRestoreStartResult> {
   const formData = new FormData();
   formData.append('file', file);
   if (passphrase) formData.append('passphrase', passphrase);
 
-  const query = buildQuery({ confirm_apply: confirmApply });
+  const query = buildQuery({
+    confirm_apply: confirmApply,
+    channel_reattach_mode: channelReattachMode,
+  });
   const response = await fetch(`${API_BASE}/backup/restore-dbas${query}`, {
     method: 'POST',
     body: formData,
@@ -4549,12 +4585,14 @@ export async function restoreDbasBackupSaved(
   filename: string,
   confirmApply = false,
   passphrase?: string,
+  channelReattachMode: ChannelReattachMode = 'preserve',
 ): Promise<DbasRestoreStartResult> {
   return fetchJson(`${API_BASE}/backup/restore-dbas-saved`, {
     method: 'POST',
     body: JSON.stringify({
       filename,
       confirm_apply: confirmApply,
+      channel_reattach_mode: channelReattachMode,
       ...(passphrase ? { passphrase } : {}),
     }),
   });
