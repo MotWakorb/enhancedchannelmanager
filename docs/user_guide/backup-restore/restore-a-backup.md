@@ -130,6 +130,8 @@ If you want to restore a backup that is already stored locally (not re-uploading
 
 This is the same restore flow as uploading. It runs through the same validation, dry-run, and apply pipeline. The saved file is not deleted by a restore.
 
+On a brand-new install, the server-side backups directory (`/config/backups`) does not exist until ECM has written its first backup, so a freshly rebuilt instance shows an empty Saved Backups list. Restoring an artifact you are holding on your own machine doesn't depend on that directory — use **Restore from artifact…** (upload) instead.
+
 ---
 
 ## Logo misses after restore

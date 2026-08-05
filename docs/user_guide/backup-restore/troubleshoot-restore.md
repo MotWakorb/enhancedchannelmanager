@@ -151,6 +151,46 @@ works on the first restore.
 
 ---
 
+## One channel still won't play, and it is a channel with several streams
+
+**Symptom:** The restore reports success and every other channel plays,
+but one channel errors on playback. The restore-complete report names
+it under "channel(s) have NO playable stream" (field
+`channels_needing_stream_reattach`, with the channel named in
+`stream_reattach_details`). That channel's streams show the provider
+**ECM Custom Streams (DBAS restore)** instead of the real provider. The
+channel has more than one stream assigned.
+
+**Cause:** When ECM reattaches a restored channel to real streams, it
+matches each archived stream by name. If two streams on the same
+channel have names that differ only in ways the name matcher normalizes
+away (capitalization, spacing, punctuation), both archived streams
+resolve to the **same** real stream. ECM then asks Dispatcharr to save
+the channel with that stream listed twice; Dispatcharr rejects the
+entire update because a channel cannot hold the same stream twice, and
+ECM safely reverts the channel to its placeholder streams. Because the
+save is all-or-nothing, that channel's other streams lose their correct
+matches too, even though they had matched fine. Real measured example:
+two streams named `TX | Dallas | PBS KERA` and `TX | DALLAS | PBS KERA`
+on one channel are enough to trigger it.
+
+**Fix:** Reattach that channel's streams by hand. This is a one-time
+per-channel repair:
+
+1. Open Channel Manager and find the channel the report named.
+2. Remove the streams showing the **ECM Custom Streams (DBAS restore)** provider.
+3. Add the real streams back from your provider, in the order you want.
+4. Play the channel to confirm.
+
+Re-running the restore does not clear this: it hits the same collision
+and reports the channel under `failed` again. Every other channel is
+unaffected, so there is no need to redo the whole restore.
+
+Prevention: on the source instance, give near-identical streams on the
+same channel distinguishable names before taking the backup.
+
+---
+
 ## The restore ran but channels look wrong
 
 **Symptom:** The restore reported success, but channel numbers are wrong, channels are missing, or streams are not playing.
