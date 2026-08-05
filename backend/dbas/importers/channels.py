@@ -51,6 +51,16 @@ The channel FK fields and how each is handled:
   through the IdRemapTable; unresolved => channel skipped DEPENDENCY_UNRESOLVED.
 * ``stream_profile_id`` -> :data:`EntityType.STREAM_PROFILE` — REMAPPED. Same
   treatment.
+SOURCE-ID COERCION. Every archive id this importer puts in the remap (and in
+``created_source_ids``) goes through :func:`dbas.archive_keys.as_int`, the SAME
+rule ``dbas/channel_reattach.py`` reads them back with. It used to be ``int()``
+here and strict ``as_int`` there, and the two disagreeing was not cosmetic: a
+channel whose id one side accepted and the other did not looked, to the reattach
+pass, like a channel this restore had NOT created, so a PRESERVE run reported
+"we left your existing channel alone" about a channel it had just made (PR review
+round 2, finding 4). One rule, both sides — the same consolidation W3 applied to
+the producer/consumer seam, applied to the importer/reattach seam.
+
 * ``logo_id`` / ``epg_data_id`` -> NO EntityType in the restore contract. Logos
   and EPG data are owned by separate beads (logos: ``.15`` / ``.19``, surfaced
   via :attr:`RestoreReport.logo_misses`); there is no id namespace in the remap
@@ -107,6 +117,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, as_int
 from dbas.custom_stream_fallback import _FallbackState, synthesize_custom_streams
 from dbas.restore_contracts import (
     EntityType,
@@ -174,8 +185,12 @@ _DERIVED_ECHO_PREFIX = "effective_"
 # Embedded/derived keys that are NOT part of a channel create payload. ``streams``
 # is the stream-attachment SEAM owned by bead 0i2vt.14 — this importer strips it
 # and never attaches a stream. ``profile_memberships`` is consumed separately by
-# the profile-reattach step (post-create), not sent in the create body. Other
-# read-only/derived fields a GET echoes back are dropped defensively.
+# the profile-reattach step (post-create), not sent in the create body.
+# ARCHIVE_EPG_TVG_ID_KEY is the EPG link's natural key that the backup producer
+# resolves off the source's guide row (bead …-dfkbn); it is ARCHIVE metadata
+# consumed by the post-create reattach pass (dbas/channel_reattach.py), not a
+# Dispatcharr channel field, so it is stripped here rather than sent upstream.
+# Other read-only/derived fields a GET echoes back are dropped defensively.
 _NON_CREATE_KEYS = frozenset(
     {
         "streams",
@@ -183,6 +198,7 @@ _NON_CREATE_KEYS = frozenset(
         "channelprofilemembership_set",
         "stream_count",
         "stats",
+        ARCHIVE_EPG_TVG_ID_KEY,
     }
 )
 
@@ -285,6 +301,7 @@ async def import_channels(
     remap: IdRemapTable,
     is_dry_run: bool = False,
     allow_fuzzy_stream_match: bool = True,
+    created_source_ids: set[int] | None = None,
 ) -> None:
     """Restore the CHANNEL category: create channel rows + reattach profiles.
 
@@ -318,6 +335,15 @@ async def import_channels(
             When fuzzy IS allowed and a Tier-4 hit wins, the attach is flagged
             LOW-CONFIDENCE in ``report.notes`` rather than counted as a silent
             ``updated``.
+        created_source_ids: OPTIONAL out-parameter. When given, every ARCHIVE
+            (source) id this importer CREATED is added to it — and on a dry run,
+            every id it WOULD create. It is the "did this restore make this
+            channel?" set the post-create reattach passes need to honour
+            :class:`~dbas.restore_contracts.ChannelReattachMode` (bead …-dfkbn,
+            PR review W1); a channel matched ``ALREADY_EXISTS_IDENTICAL`` is
+            deliberately absent from it. SOURCE ids, not destination ids: a dry
+            run's provisional destination id is not the id an apply would mint,
+            and the population split has to read identically in both modes.
     """
     cat = report.category(EntityType.CHANNEL)
 
@@ -408,8 +434,9 @@ async def import_channels(
             # Still remap source -> existing dest id so a later profile reattach
             # (and the stream-attachment bead) can resolve this channel.
             existing_id = existing.get("id")
-            if source_id is not None and existing_id is not None:
-                remap.add(EntityType.CHANNEL, int(source_id), int(existing_id))
+            source_key = as_int(source_id)
+            if source_key is not None and existing_id is not None:
+                remap.add(EntityType.CHANNEL, source_key, int(existing_id))
                 if not is_dry_run:
                     reattach_queue.append((archive_channel, int(existing_id)))
                     _plan_streams(
@@ -439,8 +466,11 @@ async def import_channels(
             # channel resolves on the dry-run as it would on apply (anti-drift).
             # Source id used as a stable provisional destination id — never sent
             # upstream.
-            if source_id is not None:
-                remap.add(EntityType.CHANNEL, int(source_id), int(source_id))
+            source_key = as_int(source_id)
+            if source_key is not None:
+                remap.add(EntityType.CHANNEL, source_key, source_key)
+                if created_source_ids is not None:
+                    created_source_ids.add(source_key)
             continue
 
         try:
@@ -465,8 +495,11 @@ async def import_channels(
         cat.created += 1
         if dest_id is not None:
             dest_id = int(dest_id)
-            if source_id is not None:
-                remap.add(EntityType.CHANNEL, int(source_id), dest_id)
+            source_key = as_int(source_id)
+            if source_key is not None:
+                remap.add(EntityType.CHANNEL, source_key, dest_id)
+                if created_source_ids is not None:
+                    created_source_ids.add(source_key)
             ledger.record_created(EntityType.CHANNEL, dest_id, label)
             reattach_queue.append((archive_channel, dest_id))
             _plan_streams(

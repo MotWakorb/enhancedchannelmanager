@@ -37,6 +37,7 @@ import type {
   RestoreSkipReason,
 } from '../services/api';
 import { CredentialReentryNotice } from './CredentialReentryNotice';
+import { ExistingChannelReattachNotice } from './ExistingChannelReattachNotice';
 import './RestoreCompleteSummary.css';
 
 /** Which framing the summary renders. `dry-run` reads would_* counts. */
@@ -257,6 +258,16 @@ export function RestoreCompleteSummary({ report, mode, bannerSlot }: RestoreComp
         only signal the operator has that nothing will actually fetch.
       */}
       <CredentialReentryNotice report={report} mode={effectiveMode} />
+
+      {/*
+        What this restore does to channels it did NOT create (bead dfkbn). Also
+        first-class rather than a slot, and rendered on the DRY RUN too: the
+        count of live guide links and logos a restore would overwrite is the
+        number that decides whether the operator wants that at all, and it is
+        useless after the fact: the rollback ledger compensates creates, so
+        nothing undoes a PATCH onto a channel the restore did not make.
+      */}
+      <ExistingChannelReattachNotice report={report} mode={effectiveMode} />
 
       {presentation && (
         <div

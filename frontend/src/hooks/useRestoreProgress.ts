@@ -40,6 +40,18 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 /** Safety cap so a stuck task never polls forever (matches channel pipeline hook). */
 const MAX_POLL_DURATION_MS = 30 * 60 * 1000;
 
+/**
+ * How many polls to wait for a NEW run to appear before giving up on it.
+ *
+ * The restore trigger endpoint is fire-and-forget (`asyncio.create_task`), so
+ * for a short window after it returns 200 the task still reports the PREVIOUS
+ * run's progress. Publishing that would be publishing a stale terminal state.
+ * If no new run shows up within this many polls, something stopped it from
+ * starting at all (an ALREADY_RUNNING rejection, say), and saying so is far
+ * better than rendering the last run's report as if it were this one's.
+ */
+const MAX_RUN_START_POLLS = 20;
+
 export interface UseRestoreProgressOptions {
   /**
    * Task id to poll. `null` disables polling (no task running yet) — the seam
@@ -48,6 +60,21 @@ export interface UseRestoreProgressOptions {
   taskId: string | null;
   /** Poll cadence in ms (default 1000). */
   pollIntervalMs?: number;
+  /**
+   * Monotonic token identifying WHICH run is being watched. Bump it once per
+   * started run.
+   *
+   * Required because `taskId` cannot do this job: every DBAS restore run uses
+   * the same constant task id (`"dbas_restore"`), so a second run in one modal
+   * session left the poll effect's deps unchanged, the loop never restarted,
+   * and the previous run's terminal view stayed live. A consumer that finalizes
+   * on `isComplete` then finalized instantly against the OLD run's result — in
+   * the field that rendered a `preserve` preview while the operator had just
+   * selected `overwrite`, immediately above an enabled Apply button.
+   *
+   * Leave it at its default when a surface only ever watches one run.
+   */
+  runKey?: number;
 }
 
 /** Normalized view state the progress component renders. */
@@ -127,12 +154,28 @@ export interface UseRestoreProgressResult extends RestoreProgressView {
 export function useRestoreProgress(
   options: UseRestoreProgressOptions
 ): UseRestoreProgressResult {
-  const { taskId, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = options;
+  const { taskId, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, runKey = 0 } = options;
 
-  const [view, setView] = useState<RestoreProgressView>(EMPTY_VIEW);
+  // The view is stored WITH the run it belongs to, so a view can never outlive
+  // its run.
+  const [tracked, setTracked] = useState<{ runKey: number; view: RestoreProgressView }>({
+    runKey,
+    view: EMPTY_VIEW,
+  });
+
+  // Invalidation happens HERE, during render, not in an effect. Effects run
+  // after the commit, so a consumer whose own effect reads `isComplete` in the
+  // same pass would still see the previous run's `true` and act on it — which
+  // is exactly the bug this exists to close. Deriving it makes the new run's
+  // empty view visible in the very render where `runKey` changed.
+  const view = tracked.runKey === runKey ? tracked.view : EMPTY_VIEW;
 
   // Holds the live abort controller so stopPolling() can tear down the loop.
   const abortRef = useRef<AbortController | null>(null);
+  // `started_at` of the last progress payload this hook PUBLISHED. It is the
+  // discriminator between "this run" and "the run before it": the scheduler
+  // stamps a fresh one in its synchronous prologue, before the task body runs.
+  const publishedStartedAtRef = useRef<string | null>(null);
 
   const stopPolling = useCallback(() => {
     abortRef.current?.abort();
@@ -141,7 +184,7 @@ export function useRestoreProgress(
 
   useEffect(() => {
     if (!taskId) {
-      setView(EMPTY_VIEW);
+      setTracked({ runKey, view: EMPTY_VIEW });
       return;
     }
 
@@ -150,6 +193,14 @@ export function useRestoreProgress(
     const { signal } = controller;
     const startedAt = Date.now();
 
+    // The run this loop is watching must be a DIFFERENT run from the last one
+    // published. Until that is established, every payload belongs to the
+    // previous run and must not be shown. With nothing published yet there is
+    // no previous run to confuse this one with.
+    const previousRunStartedAt = publishedStartedAtRef.current;
+    let confirmedNewRun = previousRunStartedAt === null;
+    let pollsAwaitingRun = 0;
+
     // Async setState fires inside this poll loop (not synchronously in the
     // effect body), so the set-state-in-effect lint rule does not apply.
     const poll = async (): Promise<void> => {
@@ -157,20 +208,46 @@ export function useRestoreProgress(
         try {
           const taskStatus = await api.getTask(taskId);
           if (signal.aborted) return;
-          const nextView = viewFromProgress(taskStatus.progress);
-          setView(nextView);
-          if (!nextView.isRunning) {
-            // Terminal — stop polling, leave the final view in place.
-            return;
+          const progress = taskStatus.progress;
+
+          if (!confirmedNewRun) {
+            if (progress.started_at && progress.started_at !== previousRunStartedAt) {
+              confirmedNewRun = true;
+            } else if (++pollsAwaitingRun >= MAX_RUN_START_POLLS) {
+              // Say nothing started rather than replay the last run's result.
+              setTracked({
+                runKey,
+                view: {
+                  ...EMPTY_VIEW,
+                  status: 'failed',
+                  isError: true,
+                  error: 'The restore did not start. It may already be running — check Task History.',
+                },
+              });
+              return;
+            }
+          }
+
+          if (confirmedNewRun) {
+            publishedStartedAtRef.current = progress.started_at;
+            const nextView = viewFromProgress(progress);
+            setTracked({ runKey, view: nextView });
+            if (!nextView.isRunning) {
+              // Terminal — stop polling, leave the final view in place.
+              return;
+            }
           }
         } catch (err) {
           if (signal.aborted) return;
           // Transient fetch failure — surface the message but keep polling
           // until the safety cap, mirroring the channel pipeline hook's retry.
-          setView((prev) => ({
-            ...prev,
-            error: err instanceof Error ? err.message : 'Failed to fetch restore progress',
-          }));
+          const message =
+            err instanceof Error ? err.message : 'Failed to fetch restore progress';
+          setTracked((prev) =>
+            prev.runKey === runKey
+              ? { runKey, view: { ...prev.view, error: message } }
+              : prev
+          );
         }
 
         if (Date.now() - startedAt > MAX_POLL_DURATION_MS) return;
@@ -197,7 +274,7 @@ export function useRestoreProgress(
         abortRef.current = null;
       }
     };
-  }, [taskId, pollIntervalMs]);
+  }, [taskId, pollIntervalMs, runKey]);
 
   return { ...view, stopPolling };
 }

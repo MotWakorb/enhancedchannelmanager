@@ -102,3 +102,44 @@
   flex-shrink: 0;
   margin-top: 0.0625rem;
 }
+
+/* Channel-reattach mode picker (bead dfkbn). Reuses .dbr-mode / .dbr-mode-option
+   above; only the fieldset chrome is new, because this control needs a group
+   label and the apply/dry-run picker does not. */
+/* Block, NOT flex: a <legend> is not a normal flex item in Chromium, so the
+   option column lives on .crm-options inside instead of on the fieldset. */
+.crm-fieldset {
+  display: block;
+  border: none;
+  padding: 0;
+  margin: 0.875rem 0;
+  min-width: 0;
+}
+
+/* The flex column that .dbr-mode provides, on an element with no <legend>. */
+.crm-options {
+  margin: 0;
+}
+
+/* Label role. */
+.crm-legend {
+  padding: 0;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
+  color: var(--text-secondary, #888);
+}
+
+/* Meta role. */
+.crm-help {
+  margin: 0.25rem 0 0.5rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
+  color: var(--text-muted, #666);
+}
+
+.crm-fieldset:disabled .dbr-mode-option {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

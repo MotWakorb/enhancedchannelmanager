@@ -178,6 +178,77 @@ class RestoreOutcome(str, Enum):
     FAILED_ROLLBACK_INCOMPLETE = "failed_rollback_incomplete"
 
 
+class ChannelReattachMode(str, Enum):
+    """What the post-create reattach passes do to channels this restore did NOT create.
+
+    Bead ``…-dfkbn``, PR review W1. The reattach passes
+    (:mod:`dbas.channel_reattach`) put a channel's archived EPG link and logo
+    back after the create, because both are SOURCE ids the create payload has to
+    drop. A channel that already existed on the destination is matched
+    ``ALREADY_EXISTS_IDENTICAL`` and is deliberately never overwritten for its
+    name, number or group, but it IS entered in the CHANNEL remap so a reattach
+    pass can resolve it. That makes the pre-existing channel reachable by these
+    two PATCHes even though nothing else about it is touched.
+
+    The two cases the operator is actually in:
+
+    * **Disaster recovery** (the primary use case, and what the round-trip drill
+      exercises): the target is empty, every channel is created, and the two
+      modes are IDENTICAL. The safe default costs DR nothing.
+    * **Merging into a live, populated instance** (for example restoring to
+      recover channel-profile membership): hundreds of channels match as
+      identical, and their current EPG links and logos are state the operator
+      set themselves. Resetting all of it to the archive's view is not
+      recoverable by the rollback ledger, which compensates CREATES only.
+
+    So the default is :attr:`PRESERVE`, and :attr:`OVERWRITE` is the explicit
+    opt-in. The mode covers BOTH passes: "what happens to channels this restore
+    did not create" is one question, and answering it differently for EPG links
+    and logos would be an inconsistency the operator has no way to predict.
+    """
+
+    PRESERVE = "preserve"
+    OVERWRITE = "overwrite"
+
+    @classmethod
+    def coerce(cls, value) -> "ChannelReattachMode":
+        """Resolve a request value to a mode, defaulting to the SAFE one.
+
+        ONE parsing rule for every entry point (the two restore endpoints and
+        the restore task), for the same reason bead ``…-dfkbn`` exists at all: a
+        second copy of a rule is a disagreement waiting to happen.
+
+        Anything the enum does not recognise resolves to :attr:`PRESERVE`:
+        absent, ``None``, empty, a typo, a value from a future client. The
+        unsafe direction is never the fallback: a restore must not start
+        overwriting an operator's live EPG links and logos because a field
+        failed to parse, and an OLD client that does not send the field at all
+        must keep the behaviour it was written against.
+
+        Args:
+            value: The raw request value.
+
+        Returns:
+            The parsed mode, or :attr:`PRESERVE`.
+        """
+        # A member of this enum parses as itself. ``str(ChannelReattachMode.
+        # OVERWRITE)`` is ``"ChannelReattachMode.OVERWRITE"``, which the value
+        # lookup below rejects — so without this the one parsing rule could not
+        # parse its own type, and would answer PRESERVE with a misleading
+        # warning (PR review round 2, finding 3).
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(str(value).strip().lower())
+        except (ValueError, AttributeError, TypeError):
+            if value not in (None, ""):
+                logger.warning(
+                    "[DBAS-RESTORE] Unrecognised channel reattach mode; "
+                    "falling back to 'preserve'."
+                )
+            return cls.PRESERVE
+
+
 # ---------------------------------------------------------------------------
 # Contract 1 — RESTORE RESPONSE SCHEMA (dry-run / apply / summary)
 # ---------------------------------------------------------------------------
@@ -341,6 +412,81 @@ class EpgLinkMissDetail(BaseModel):
         default="",
         description="The archived tvg_id that resolved to no destination EPG row.",
     )
+
+
+# Upper bound on how many channel NAMES a ReattachPopulation carries per list.
+# The counts are exact; the name lists are illustrative and must not turn a
+# routine merge report into a five-thousand-entry payload.
+REATTACH_NAMED_CHANNEL_CAP = 50
+
+
+class ReattachPopulation(BaseModel):
+    """How ONE post-create reattach pass split across the two channel populations.
+
+    Bead ``…-dfkbn``, PR review W1. A single ``relinked=N`` is too coarse once
+    the pass can reach channels the restore did not create: "linked a channel we
+    made" and "overwrote a link on a channel the operator already had" are
+    different events and only one of them is destructive.
+
+    Reported by BOTH the dry run and the apply, from the same code path, so the
+    preview cannot mispredict the split the way the ``dgnms`` preview
+    mispredicted the logo category. On a dry run these are the WOULD-BE numbers;
+    on an apply they are what happened.
+
+    Names, never ids or urls: ``existing_channels_named`` /
+    ``preserved_channels_named`` are operator-facing channel names, modelled on
+    :class:`ProfileMembershipDriftDetail`'s ``channels_disabled``.
+
+    Both lists are CAPPED at :data:`REATTACH_NAMED_CHANNEL_CAP`; the counts
+    beside them are never capped. Under the DEFAULT mode a merge into a
+    5,000-channel install preserves all 5,000, and an uncapped list would write
+    ten thousand channel names into ``TaskExecution.details`` on a run where
+    nothing happened. The count is the decision input; the names are there to
+    make it concrete, and a few dozen does that.
+    """
+
+    mode: ChannelReattachMode = Field(
+        default=ChannelReattachMode.PRESERVE,
+        description="The mode this pass ran under.",
+    )
+    created_channels: int = Field(
+        default=0,
+        description="Channels THIS restore created that got their archived reference.",
+    )
+    existing_channels: int = Field(
+        default=0,
+        description="Pre-existing channels whose reference was OVERWRITTEN with the archive's.",
+    )
+    preserved_channels: int = Field(
+        default=0,
+        description="Pre-existing channels left untouched because the mode is preserve.",
+    )
+    existing_channels_named: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of the pre-existing channels that were overwritten, capped at "
+            "REATTACH_NAMED_CHANNEL_CAP. The count above is not capped."
+        ),
+    )
+    preserved_channels_named: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of the pre-existing channels that were left alone, capped at "
+            "REATTACH_NAMED_CHANNEL_CAP. The count above is not capped."
+        ),
+    )
+
+    def name_existing(self, label: str) -> None:
+        """Count one overwritten pre-existing channel, naming it up to the cap."""
+        self.existing_channels += 1
+        if len(self.existing_channels_named) < REATTACH_NAMED_CHANNEL_CAP:
+            self.existing_channels_named.append(label)
+
+    def name_preserved(self, label: str) -> None:
+        """Count one left-alone pre-existing channel, naming it up to the cap."""
+        self.preserved_channels += 1
+        if len(self.preserved_channels_named) < REATTACH_NAMED_CHANNEL_CAP:
+            self.preserved_channels_named.append(label)
 
 
 class ProfileMembershipDriftDetail(BaseModel):
@@ -523,6 +669,18 @@ class RestoreReport(BaseModel):
         description="Which channels restored with no EPG link, and the tvg_id that missed.",
     )
 
+    # How each reattach pass split across "channels this restore created" and
+    # "channels that already existed" (…-dfkbn, PR review W1). Populated on the
+    # dry run AND the apply by the same code, so the preview is the prediction.
+    epg_link_reattach: ReattachPopulation = Field(
+        default_factory=ReattachPopulation,
+        description="EPG-link reattach split by channel population, and the mode used.",
+    )
+    logo_reattach: ReattachPopulation = Field(
+        default_factory=ReattachPopulation,
+        description="Channel-logo reattach split by channel population, and the mode used.",
+    )
+
     # Channel-profile memberships the restore had to correct away from
     # Dispatcharr's enable-everything default (…-dfkbn item 3).
     profile_membership_drift: int = Field(
@@ -602,20 +760,51 @@ class RestoreReport(BaseModel):
         source_export_id: int | None = None,
         channels: "list[LogoMissChannel] | None" = None,
     ) -> None:
-        """Record ONE unresolved logo reference (aggregate + drill-down together).
+        """Record ONE logo the operator has LOST (aggregate + drill-down together).
+
+        THE LOGO-MISS INVARIANT (the canonical definition; every producer below
+        is written against THIS paragraph, and any new one must be too)
+        ------------------------------------------------------------------
+
+        A logo miss is a logo the operator HAD on the source and does NOT have
+        after the restore. Nothing else. It is an OPERATOR-FACING loss report,
+        not an internal bookkeeping counter, because it is rendered as loss:
+        ``logo_misses > 0`` gates the D9 red ``LogoMissBanner``
+        (``role="alert"``, "N logos are missing after this restore") and
+        :mod:`tasks.dbas_restore` appends "N logo(s) could not be reinstated" to
+        the one-line summary an operator who never opens the modal will see.
+
+        Therefore the rule is symmetric and has no exceptions:
+
+        * **Record a miss ONLY on a path where a logo failed to come back.**
+        * **Never record a miss on a path that restored the logo**, by upload,
+          by URL re-create, or by matching one the destination already had.
+        * A DRY RUN records a miss only where the apply would record one, so the
+          preview's loss count is the apply's loss count.
+
+        The THREE producers, each recording only its own failure:
+
+        1. :func:`dbas.importers.logos.import_logos` upload path: the logo's
+           bytes could not be read, validated, or uploaded. NOT on a successful
+           upload, and NOT merely because the destination lacked the logo.
+        2. :func:`dbas.importers.logos._create_logo_from_url`: the archived URL
+           could not be re-created upstream. NOT on a successful create.
+        3. :func:`dbas.channel_reattach.reattach_channel_logos`: an archived
+           logo REFERENCE could not be put back onto the channels that had it.
+           This is the one the drill needed: 12 channels lost a logo they had
+           and the report said ``logo_misses: 0`` (bead ``…-dfkbn`` item 1).
+
+        The question "did the destination already have this logo?" is a
+        DIFFERENT question and is answered by
+        :attr:`dbas.importers.logos.LogoImportResult.misses`, an internal
+        counter that is never rendered to an operator. Do not conflate them: the
+        two directions of that conflation are the whole history of this surface.
+        ``…-dfkbn`` under-reported (every logo lost, ``logo_misses: 0``) and
+        ``…-xb58a`` over-reported (a logo that restored fine counted as lost).
 
         The single place :attr:`logo_misses` and :attr:`logo_miss_details` are
         both updated, so ``len(logo_miss_details) == logo_misses`` holds by
-        construction.
-
-        TWO producers feed this counter, and they answer different questions:
-
-        * :mod:`dbas.importers.logos` — an archived logo the destination did not
-          already have (the D9 red-banner signal, unchanged).
-        * :func:`dbas.channel_reattach.reattach_channel_logos` — an archived
-          logo REFERENCE that could not be put back onto the channels that had
-          it. This is the one the drill needed: 12 channels lost a logo they had
-          and the report said ``logo_misses: 0`` (bead ``…-dfkbn`` item 1).
+        construction. Call THIS method; never increment the field directly.
 
         Args:
             label: Operator-facing logo name — never a path, URL, or secret.

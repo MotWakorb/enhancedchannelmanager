@@ -39,12 +39,24 @@ HOW EACH REFERENCE IS RE-DERIVED
   affected channels NAMED. This is the counter the drill needed — it read ``0``
   while 12 channels lost a logo they had.
 
-* **EPG links** — by the channel's archived ``tvg_id``, NOT by ``epg_data_id``.
-  A Dispatcharr EPG row's pk is instance-local and is re-minted when the source
+* **EPG links** — by the archived ``tvg_id``, NOT by ``epg_data_id``. A
+  Dispatcharr EPG row's pk is instance-local and is re-minted when the source
   re-downloads its guide, so it cannot round-trip; ``tvg_id`` is the stable
   cross-instance identity (it is the id the XMLTV feed itself carries, and
   Dispatcharr's own channel↔EPG matching keys on it). Unresolvable => counted in
   ``epg_links_unrestored`` and named.
+
+  WHICH ``tvg_id`` (drill run 2026-08-04-run2, bead ``…-dfkbn``). A channel row
+  carries its OWN ``tvg_id`` field, and that field is NOT the link: ECM's own
+  channel PATCH sets ``epg_data_id`` and leaves ``tvg_id`` null, which the drill
+  measured directly (``epg_data_id=1``, ``tvg_id=None`` after the PATCH). Every
+  one of the drill's 7 linked channels therefore reached this pass with an empty
+  ``tvg_id`` and every link was dropped. The link's natural key lives on the EPG
+  ROW the channel points at, so the backup producer now resolves it there and
+  stamps it on the archived channel as :data:`ARCHIVE_EPG_TVG_ID_KEY`
+  (``routers/backup.py``, ``_resolve_epg_link_natural_keys``). This pass PREFERS
+  that resolved value and FALLS BACK to the channel's own ``tvg_id``. An OLD
+  artifact carries no resolved key, so it behaves exactly as it did before.
 
 * **Profile membership** — from the archived CHANNEL PROFILE rows, whose
   ``channels`` field is Dispatcharr's list of ENABLED channel ids
@@ -55,6 +67,58 @@ HOW EACH REFERENCE IS RE-DERIVED
   Every restored channel is re-asserted ENABLED or DISABLED against that list,
   and each flip away from the destination's enable-everything default is counted
   as DRIFT.
+
+----------------------------------------------------------------------------
+WHAT A DRY RUN CAN HONESTLY PREDICT
+----------------------------------------------------------------------------
+
+Both passes also run on a DRY RUN, because the number that decides whether an
+operator wants :attr:`~dbas.restore_contracts.ChannelReattachMode.OVERWRITE` at
+all is "how many channels I ALREADY have would this replace", and that number is
+useless after the fact. Neither pass mutates anything on a dry run.
+
+Neither pass records a MISS on a dry run either. A miss is a claim that
+something the operator had is GONE, and the dgnms defect was exactly a preview
+making that claim about a restore that was going to work. On a dry run these
+passes report the population SPLIT and nothing else.
+
+What each pass may resolve at preview time is NOT symmetric, and the asymmetry
+is about one question: does the destination state this pass matches against
+already exist, or does THIS RESTORE create it?
+
+* **EPG links — resolve the CHANNEL remap, never the GUIDE.** The two are
+  different kinds of state and the rule above sorts them cleanly.
+
+  The GUIDE rows this pass matches ``tvg_id`` against are rows the restore ITSELF
+  puts there: the EPG-source step runs before channels and waits for Dispatcharr
+  to download the guide (``_epg_step_with_download_wait``), and on a dry run that
+  wrapper is a pass-through. Reading the destination's guide during a preview
+  therefore reads the PRE-restore guide, which on a disaster-recovery target is
+  EMPTY. An earlier cut of this module did resolve it, and a 200-channel DR
+  preview reported "200 channels restored without an EPG link", named all 200,
+  and then the apply restored every one.
+
+  The CHANNEL REMAP is the opposite: this same run's channels importer populates
+  it, on a dry run as much as on an apply, so it is state that already exists by
+  the time this pass runs. A later cut over-corrected and stopped reading it too,
+  and a channel the importer SKIPPED — ``DEPENDENCY_UNRESOLVED``, or the
+  ambiguous null-``channel_number`` CONFLICT — has no entry in it, so it was
+  classified as a pre-existing channel whose live guide link would be REPLACED.
+  An operator previewing a merge with "replace" selected and channel groups
+  deselected got a red alert naming their channels for a restore that touches
+  none of them. A channel that does not resolve is in NEITHER half of the split
+  and is not a miss: it is simply not visible from a preview.
+
+* **Logos — resolve what already exists.** The ``LOGO`` remap this pass reads is
+  populated during the SAME run by the logos importer, which registers a
+  destination id for every archived logo it MATCHES against the destination
+  (``importers/logos.py``) on a dry run as much as on an apply. For a merge into
+  a live install — the only case where the split is non-zero — that matched
+  population IS the population, so the preview is faithful. The residual gap is
+  a logo the restore would UPLOAD: it has no destination id until the upload
+  happens, so a pre-existing channel pointing at one is not counted. The
+  dry-run logo split is therefore a LOWER BOUND, and the direction is stated
+  here rather than papered over.
 
 ----------------------------------------------------------------------------
 BEST-EFFORT, NEVER FATAL
@@ -76,35 +140,76 @@ from __future__ import annotations
 
 import logging
 
+from dbas.archive_keys import (
+    ARCHIVE_EPG_TVG_ID_KEY,
+    EPG_INDEX_MAX_ROWS,
+    as_int as _as_int,
+)
 from dbas.restore_contracts import (
+    ChannelReattachMode,
     EntityType,
     IdRemapTable,
     LogoMissChannel,
+    ReattachPopulation,
     RestoreReport,
 )
 from dispatcharr_client import DispatcharrClient
 
 logger = logging.getLogger(__name__)
 
-# Upper bound on EPG rows pulled for the tvg_id index. A real guide is tens of
-# thousands of rows (the drill's source carried 14,668); this bounds the fetch
-# so a pathological destination cannot make the reattach pass unbounded.
-_EPG_INDEX_MAX_ROWS = 200_000
-
-
-def _as_int(value) -> int | None:
-    """Coerce to ``int`` when cleanly one, else ``None`` (``bool`` rejected)."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    return None
+# Re-exported for callers that already import the archive contract from here.
+__all__ = [
+    "ARCHIVE_EPG_TVG_ID_KEY",
+    "EPG_INDEX_MAX_ROWS",
+    "reattach_channel_logos",
+    "reattach_epg_links",
+    "reattach_profile_memberships",
+]
 
 
 def _channel_label(archive_channel: dict) -> str:
     """Operator-facing identifier for a channel — its name, never a secret."""
     name = archive_channel.get("name")
     return str(name) if name else "<unknown>"
+
+
+def _is_preserved(
+    source_channel_id: int | None,
+    *,
+    mode: ChannelReattachMode,
+    created_source_ids: set[int] | None,
+) -> bool:
+    """Whether this archived channel must be left alone by a reattach pass.
+
+    True only in :attr:`ChannelReattachMode.PRESERVE` for a channel this restore
+    did NOT create. ``created_source_ids`` is the set of ARCHIVE (source) ids the
+    channels importer created or, on a dry run, would create; source ids are used
+    rather than destination ids because a dry run's provisional destination id is
+    not the id an apply would mint, and the split has to read identically in both
+    modes.
+
+    Two deliberate FALSE cases, both "we cannot prove we did not create it, so we
+    must not claim we preserved it" (PR review round 2, findings 4 and 6):
+
+    * ``source_channel_id`` is ``None`` — the archived row carried no id this
+      module's coercion accepts, so it is not IN ``created_source_ids`` for a
+      reason that has nothing to do with who created the channel. Preserving on
+      that would put "we left your existing channel alone" in the report about a
+      channel THIS RESTORE MADE. Returning False sends it down the normal path,
+      where its unresolvable destination id becomes a counted, named miss — the
+      behaviour before any of this existed.
+    * ``created_source_ids`` is ``None`` — the caller has no population
+      information at all. This is now only reachable from a test that passes it
+      explicitly; the parameter is required on both passes precisely so a
+      forgotten argument cannot silently disable a safety default.
+    """
+    if mode is not ChannelReattachMode.PRESERVE:
+        return False
+    if created_source_ids is None:
+        return False
+    if source_channel_id is None:
+        return False
+    return source_channel_id not in created_source_ids
 
 
 # ---------------------------------------------------------------------------
@@ -118,28 +223,56 @@ async def reattach_channel_logos(
     report: RestoreReport,
     remap: IdRemapTable,
     archive_channels: list[dict],
+    created_source_ids: set[int] | None,
+    mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    is_dry_run: bool = False,
 ) -> int:
     """Put each restored channel's archived logo back on it.
 
     Resolves the archived ``logo_id`` through the ``LOGO`` remap namespace and
-    PATCHes it onto the destination channel. A reference that does not resolve —
-    the logo's bytes were only ever on the Dispatcharr volume, or its upload was
-    rejected — is recorded as a logo MISS naming the affected channel, so the
+    PATCHes it onto the destination channel. A reference that does not resolve
+    (the logo's bytes were only ever on the Dispatcharr volume, or its upload was
+    rejected) is recorded as a logo MISS naming the affected channel, so the
     aggregate the operator reads is the number of channels left without the logo
     they had rather than a flat ``0``.
+
+    MODE (PR review W1). In :attr:`ChannelReattachMode.PRESERVE` (the default) a
+    channel this restore did NOT create keeps whatever logo the operator gave it.
+    In :attr:`ChannelReattachMode.OVERWRITE` the archive's logo is applied to it
+    too. Either way the split lands in ``report.logo_reattach``.
+
+    DRY RUN. Resolves exactly what the apply resolves, PATCHes nothing, and
+    records NO miss. A channel is counted into the split only when BOTH its
+    destination id and its logo's destination id resolve, which is the same
+    condition the apply requires before it touches anything: counting before
+    resolution told the operator two channels would be replaced when the apply
+    replaced none. The one thing a preview cannot see is a logo the restore would
+    UPLOAD, which has no destination id until the upload happens, so the dry-run
+    split is a LOWER BOUND. See the module docstring for why the EPG pass makes
+    the opposite call.
 
     Args:
         client: The Dispatcharr API client.
         report: The shared :class:`RestoreReport`.
         remap: The shared :class:`IdRemapTable` (``CHANNEL`` + ``LOGO``).
         archive_channels: The CHANNEL records from the export archive.
+        created_source_ids: ARCHIVE ids of the channels this restore created (or,
+            on a dry run, would create). REQUIRED, and deliberately not
+            defaulted: ``None`` disables preserving entirely, so a forgotten
+            argument would silently turn a safety default off (PR review round 2,
+            finding 6). Pass ``None`` explicitly to mean "no population
+            information".
+        mode: What to do about channels this restore did not create.
+        is_dry_run: Report the split without mutating anything.
 
     Returns:
-        The number of channels whose logo was successfully reattached.
+        The number of channels whose logo was reattached (0 on a dry run).
     """
+    population = ReattachPopulation(mode=mode)
+    report.logo_reattach = population
     reattached = 0
     # One miss ROW per archived logo, listing every channel it left without a
-    # logo — the LogoMissDetail contract counts logos and names channels.
+    # logo. The LogoMissDetail contract counts logos and names channels.
     missed: dict[int, list[LogoMissChannel]] = {}
 
     for archive_channel in archive_channels or []:
@@ -147,33 +280,63 @@ async def reattach_channel_logos(
         if source_logo_id is None:
             continue
         source_channel_id = _as_int(archive_channel.get("id"))
+        label = _channel_label(archive_channel)
+        was_created = (
+            created_source_ids is not None and source_channel_id in created_source_ids
+        )
+
+        if _is_preserved(
+            source_channel_id, mode=mode, created_source_ids=created_source_ids
+        ):
+            population.name_preserved(label)
+            continue
+
         dest_channel_id = (
             remap.resolve(EntityType.CHANNEL, source_channel_id)
             if source_channel_id is not None
             else None
         )
-        label = _channel_label(archive_channel)
-
         dest_logo_id = remap.resolve(EntityType.LOGO, source_logo_id)
         if dest_logo_id is None or dest_channel_id is None:
-            missed.setdefault(source_logo_id, []).append(
-                LogoMissChannel(channel_id=dest_channel_id, name=label)
-            )
+            # A dry run records NO miss: the logos importer has not uploaded yet,
+            # so an unresolved reference here is "not visible from a preview",
+            # not "the operator lost this". Claiming otherwise is the dgnms
+            # defect. The channel simply stays out of the split.
+            if not is_dry_run:
+                missed.setdefault(source_logo_id, []).append(
+                    LogoMissChannel(channel_id=dest_channel_id, name=label)
+                )
+            continue
+
+        if is_dry_run:
+            # Resolvable, so the apply WOULD reattach it. Count the split and
+            # stop: a preview mutates nothing.
+            if was_created:
+                population.created_channels += 1
+            else:
+                population.name_existing(label)
             continue
 
         try:
             await client.update_channel(dest_channel_id, {"logo_id": dest_logo_id})
         except Exception as exc:  # noqa: BLE001 - per-channel containment
+            # TYPE only (PR review W4): an httpx error's str() embeds the full
+            # request URL, and a Dispatcharr URL is not a thing this log may
+            # carry. The channel is already named; the type is the diagnosis.
             logger.warning(
                 "[DBAS-REATTACH] Could not reattach the logo for channel '%s' "
                 "(id=%s): %s",
-                label, dest_channel_id, exc,
+                label, dest_channel_id, type(exc).__name__,
             )
             missed.setdefault(source_logo_id, []).append(
                 LogoMissChannel(channel_id=dest_channel_id, name=label)
             )
             continue
         reattached += 1
+        if was_created:
+            population.created_channels += 1
+        else:
+            population.name_existing(label)
 
     for source_logo_id, channels in missed.items():
         report.record_logo_miss(
@@ -189,7 +352,18 @@ async def reattach_channel_logos(
             len(missed),
             sum(len(v) for v in missed.values()),
         )
-    logger.info("[DBAS-REATTACH] Reattached %d channel logo(s).", reattached)
+    if population.preserved_channels:
+        logger.info(
+            "[DBAS-REATTACH] Left the logo of %d pre-existing channel(s) alone "
+            "(mode=%s).",
+            population.preserved_channels, mode.value,
+        )
+    logger.info(
+        "[DBAS-REATTACH] Reattached %d channel logo(s) (dry_run=%s; %d created, "
+        "%d pre-existing).",
+        reattached, is_dry_run, population.created_channels,
+        population.existing_channels,
+    )
     return reattached
 
 
@@ -210,9 +384,13 @@ async def _tvg_id_index(client: DispatcharrClient) -> dict[str, int]:
     pass into "every link is an honest, counted miss" rather than a crash.
     """
     try:
-        rows = await client.get_epg_data(max_results=_EPG_INDEX_MAX_ROWS)
+        rows = await client.get_epg_data(max_results=EPG_INDEX_MAX_ROWS)
     except Exception as exc:  # noqa: BLE001 - best-effort post-create pass
-        logger.warning("[DBAS-REATTACH] Could not list destination EPG data: %s", exc)
+        # TYPE only (PR review W4): an httpx error's str() embeds the request URL.
+        logger.warning(
+            "[DBAS-REATTACH] Could not list destination EPG data: %s",
+            type(exc).__name__,
+        )
         return {}
     index: dict[str, int] = {}
     for row in rows or []:
@@ -231,12 +409,37 @@ async def _tvg_id_index(client: DispatcharrClient) -> dict[str, int]:
     return index
 
 
+def _link_tvg_id(archive_channel: dict) -> str:
+    """The natural key to relink this archived channel by, trimmed (may be "").
+
+    PREFERS :data:`ARCHIVE_EPG_TVG_ID_KEY`, the tvg_id the backup producer read
+    off the EPG-DATA ROW the channel pointed at, which is the identity of the
+    LINK. Falls back to the channel's own ``tvg_id`` field, which is the only
+    thing an OLD artifact carries and is what this pass always used before.
+
+    The preference order matters and is not arbitrary: the two can legitimately
+    DISAGREE (an operator can link a channel to a guide row whose tvg_id differs
+    from the one the channel's own field advertises), and in that case the row
+    the operator actually linked is the one to restore. The channel's own
+    ``tvg_id`` remains its own field and is restored to the channel untouched by
+    the channel create. This pass only reads it, never writes it.
+    """
+    for key in (ARCHIVE_EPG_TVG_ID_KEY, "tvg_id"):
+        raw = archive_channel.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
 async def reattach_epg_links(
     *,
     client: DispatcharrClient,
     report: RestoreReport,
     remap: IdRemapTable,
     archive_channels: list[dict],
+    created_source_ids: set[int] | None,
+    mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    is_dry_run: bool = False,
 ) -> int:
     """Reconnect each restored channel to its EPG row via the archived tvg_id.
 
@@ -244,15 +447,44 @@ async def reattach_epg_links(
     no archived ``epg_data_id`` was unlinked on the source too, and linking it
     now would be inventing state the operator never had.
 
+    MODE (PR review W1). In :attr:`ChannelReattachMode.PRESERVE` (the default) a
+    channel this restore did NOT create keeps the EPG link the operator gave it;
+    in :attr:`ChannelReattachMode.OVERWRITE` the archived link is applied to it
+    too. The split lands in ``report.epg_link_reattach`` either way.
+
+    DRY RUN — SPLIT ONLY, and this pass resolves NOTHING (PR review round 2, the
+    blocking finding). The guide rows it matches ``tvg_id`` against are rows the
+    RESTORE ITSELF creates: EPG sources are restored and downloaded before
+    channels, and on a dry run that download wrapper is a pass-through. Reading
+    the destination guide during a preview therefore reads the PRE-restore guide,
+    which on a disaster-recovery target is empty. An earlier cut of this function
+    did resolve here, and a measured 2-channel DR preview reported
+    ``epg_links_unrestored=2`` naming both channels while the apply relinked both
+    — the dgnms class, on the very pass this changeset added to the dry run. So a
+    preview partitions preserved-vs-actionable, which needs no destination state,
+    and reports that. It never fetches the index, never records a miss, and the
+    ``created`` / ``existing`` counts it reports are what the apply will act on.
+
     Args:
         client: The Dispatcharr API client.
         report: The shared :class:`RestoreReport`.
         remap: The shared :class:`IdRemapTable` (``CHANNEL``).
         archive_channels: The CHANNEL records from the export archive.
+        created_source_ids: ARCHIVE ids of the channels this restore created (or,
+            on a dry run, would create). REQUIRED, and deliberately not
+            defaulted: ``None`` disables preserving entirely, so a forgotten
+            argument would silently turn a safety default off (PR review round 2,
+            finding 6). Pass ``None`` explicitly to mean "no population
+            information".
+        mode: What to do about channels this restore did not create.
+        is_dry_run: Report the split without reading or writing anything.
 
     Returns:
-        The number of channels relinked.
+        The number of channels relinked (the WOULD-BE number on a dry run).
     """
+    population = ReattachPopulation(mode=mode)
+    report.epg_link_reattach = population
+
     wanted = [
         ch
         for ch in archive_channels or []
@@ -261,20 +493,82 @@ async def reattach_epg_links(
     if not wanted:
         return 0
 
+    # Partition BEFORE the fetch: when every linked channel is preserved there is
+    # nothing left to resolve, and the guide fetch would be pure cost.
+    actionable = []
+    for archive_channel in wanted:
+        source_channel_id = _as_int(archive_channel.get("id"))
+        if _is_preserved(
+            source_channel_id, mode=mode, created_source_ids=created_source_ids
+        ):
+            population.name_preserved(_channel_label(archive_channel))
+            continue
+        actionable.append((archive_channel, source_channel_id))
+
+    if not actionable:
+        logger.info(
+            "[DBAS-REATTACH] Left the EPG link of %d pre-existing channel(s) "
+            "alone (mode=%s); nothing to relink.",
+            population.preserved_channels, mode.value,
+        )
+        return 0
+
+    if is_dry_run:
+        # The destination GUIDE is not readable as a prediction here (see the
+        # docstring): the restore is what puts those rows there. The CHANNEL
+        # REMAP is a different kind of state and IS readable — this same run's
+        # channels importer populates it, on a dry run as much as on an apply,
+        # which is the identical justification the logo pass resolves under.
+        #
+        # A channel the importer SKIPPED has no entry in it, and skipping the
+        # resolve here classified every such channel as a pre-existing channel
+        # whose live guide link would be REPLACED. Two reachable producers, both
+        # ordinary: ``DEPENDENCY_UNRESOLVED`` (the operator deselected
+        # ``channel_groups``, or a group create failed) and the ambiguous
+        # null-``channel_number`` CONFLICT. An operator previewing a merge with
+        # "replace" selected and groups deselected got a red alert naming their
+        # channels for a restore that touches none of them.
+        for archive_channel, source_channel_id in actionable:
+            dest_channel_id = (
+                remap.resolve(EntityType.CHANNEL, source_channel_id)
+                if source_channel_id is not None
+                else None
+            )
+            if dest_channel_id is None:
+                # Not visible from a preview, so it is neither a split entry nor
+                # a miss. The apply reaches the same verdict by a different road:
+                # an unresolvable destination id there is a counted, NAMED miss,
+                # and a miss is never in the split.
+                continue
+            if created_source_ids is not None and source_channel_id in created_source_ids:
+                population.created_channels += 1
+            else:
+                population.name_existing(_channel_label(archive_channel))
+        would_relink = population.created_channels + population.existing_channels
+        logger.info(
+            "[DBAS-REATTACH] Dry run: %d channel EPG link(s) would be applied "
+            "(%d created, %d pre-existing), %d left alone (mode=%s).",
+            would_relink, population.created_channels,
+            population.existing_channels, population.preserved_channels,
+            mode.value,
+        )
+        return would_relink
+
     index = await _tvg_id_index(client)
     relinked = 0
 
-    for archive_channel in wanted:
+    for archive_channel, source_channel_id in actionable:
         label = _channel_label(archive_channel)
-        source_channel_id = _as_int(archive_channel.get("id"))
         dest_channel_id = (
             remap.resolve(EntityType.CHANNEL, source_channel_id)
             if source_channel_id is not None
             else None
         )
-        raw_tvg = archive_channel.get("tvg_id")
-        tvg_id = raw_tvg.strip() if isinstance(raw_tvg, str) else ""
+        tvg_id = _link_tvg_id(archive_channel)
         dest_epg_id = index.get(tvg_id.lower()) if tvg_id else None
+        was_created = (
+            created_source_ids is not None and source_channel_id in created_source_ids
+        )
 
         if dest_channel_id is None or dest_epg_id is None:
             report.record_epg_link_unrestored(
@@ -285,23 +579,39 @@ async def reattach_epg_links(
         try:
             await client.update_channel(dest_channel_id, {"epg_data_id": dest_epg_id})
         except Exception as exc:  # noqa: BLE001 - per-channel containment
+            # TYPE only (PR review W4): an httpx error's str() embeds the
+            # request URL. The channel is already named in this line.
             logger.warning(
-                "[DBAS-REATTACH] Could not relink channel '%s' (id=%s) to its EPG "
-                "row: %s",
-                label, dest_channel_id, exc,
+                "[DBAS-REATTACH] Could not relink channel '%s' (id=%s) to its "
+                "EPG row: %s",
+                label, dest_channel_id, type(exc).__name__,
             )
             report.record_epg_link_unrestored(
                 name=label, channel_id=dest_channel_id, tvg_id=tvg_id
             )
             continue
         relinked += 1
+        if was_created:
+            population.created_channels += 1
+        else:
+            population.name_existing(label)
 
     if report.epg_links_unrestored:
         logger.warning(
             "[DBAS-REATTACH] %d channel(s) restored WITHOUT their EPG link.",
             report.epg_links_unrestored,
         )
-    logger.info("[DBAS-REATTACH] Relinked %d channel(s) to EPG data.", relinked)
+    if population.preserved_channels:
+        logger.info(
+            "[DBAS-REATTACH] Left the EPG link of %d pre-existing channel(s) "
+            "alone (mode=%s).",
+            population.preserved_channels, mode.value,
+        )
+    logger.info(
+        "[DBAS-REATTACH] Relinked %d channel(s) to EPG data (%d created, "
+        "%d pre-existing).",
+        relinked, population.created_channels, population.existing_channels,
+    )
     return relinked
 
 
@@ -404,12 +714,15 @@ async def reattach_profile_memberships(
                     dest_profile_id, dest_channel_id, {"enabled": should_be_enabled}
                 )
             except Exception as exc:  # noqa: BLE001 - per-membership containment
+                # TYPE only (PR review W4): an httpx error's str() embeds the
+                # request URL. Both the channel and the profile are already
+                # named in this line, so the type is the only thing missing.
                 logger.warning(
                     "[DBAS-REATTACH] Could not set channel '%s' %s in profile '%s': %s",
                     label,
                     "enabled" if should_be_enabled else "disabled",
                     profile_label,
-                    exc,
+                    type(exc).__name__,
                 )
                 continue
             asserted += 1

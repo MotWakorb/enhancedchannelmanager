@@ -53,6 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+from dbas.restore_contracts import ChannelReattachMode
 from task_registry import register_task
 from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
 
@@ -124,6 +125,12 @@ class DbasRestoreTask(TaskScheduler):
       ``True`` against an unsupported plan still degrades safely to a dry-run.
     - ``cleanup_artifact``: bool — delete the temp artifact on completion
       (default ``True``).
+    - ``channel_reattach_mode``: ``"preserve"`` or ``"overwrite"``, what the
+      post-create reattach passes do to channels this restore did NOT create
+      (bead …-dfkbn, PR review W1). ``"preserve"`` is the default and is what an
+      absent or unrecognised value resolves to, so an OLD client that does not
+      send the field can never silently start overwriting an operator's live EPG
+      links and logos.
     """
 
     task_id = "dbas_restore"
@@ -147,6 +154,10 @@ class DbasRestoreTask(TaskScheduler):
         self.artifact_path: Optional[str] = None
         self.confirm_apply: bool = False
         self.cleanup_artifact: bool = True
+        # PRESERVE unless the operator explicitly chose otherwise (…-dfkbn W1).
+        # A PER-RUN transient on a SINGLETON task instance, and therefore reset
+        # in execute()'s finally — see _reset_run_transients.
+        self.channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE
         # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh).
         # None for a plain artifact. NEVER logged or echoed in any TaskResult.
         self.passphrase: Optional[str] = None
@@ -158,6 +169,7 @@ class DbasRestoreTask(TaskScheduler):
             "artifact_path": self.artifact_path,
             "confirm_apply": self.confirm_apply,
             "cleanup_artifact": self.cleanup_artifact,
+            "channel_reattach_mode": self.channel_reattach_mode.value,
         }
 
     def update_config(self, config: dict) -> None:
@@ -171,6 +183,10 @@ class DbasRestoreTask(TaskScheduler):
         if "passphrase" in config:
             val = config["passphrase"]
             self.passphrase = str(val) if val else None
+        if "channel_reattach_mode" in config:
+            self.channel_reattach_mode = ChannelReattachMode.coerce(
+                config["channel_reattach_mode"]
+            )
 
     # -- progress helpers ----------------------------------------------------
 
@@ -187,7 +203,44 @@ class DbasRestoreTask(TaskScheduler):
             skipped_count=skipped,
         )
 
+    def _reset_run_transients(self) -> None:
+        """Return the per-run restore transients to their SAFE defaults.
+
+        The ``cytzj`` shape, one bead old and re-created here (PR review round 2,
+        finding 5). ``get_task_instance()`` hands back a SINGLETON, and
+        :meth:`update_config` only assigns a field when its key is PRESENT, so a
+        bare ``POST /api/tasks/dbas_restore/run`` with no parameters re-runs with
+        whatever the PREVIOUS run left behind. For ``channel_reattach_mode`` that
+        means a run where the option is absent would silently inherit
+        ``overwrite`` — precisely the "absent resolves to preserve" guarantee the
+        rest of this changeset is built on, defeated by process state.
+
+        ``confirm_apply`` gets the same treatment for the same reason, and it is
+        the more dangerous of the two: a stale ``True`` arms a DESTRUCTIVE apply
+        on a run the operator asked nothing of.
+
+        ``cleanup_artifact`` is the fifth, and it defaults back to ``True``
+        rather than to its last value: ``/restore-dbas-saved`` sets it ``False``
+        DELIBERATELY, because the artifact there is the operator's own saved
+        backup and must survive the restore. Left sticky on the singleton, that
+        ``False`` governs whether a LATER run deletes the file it was handed.
+
+        Called from execute()'s ``finally`` so it runs on EVERY exit path.
+        """
+        self.channel_reattach_mode = ChannelReattachMode.PRESERVE
+        self.confirm_apply = False
+        self.artifact_path = None
+        self.passphrase = None
+        self.cleanup_artifact = True
+
     async def execute(self) -> TaskResult:
+        """Run one restore, then unconditionally disarm the per-run transients."""
+        try:
+            return await self._execute_run()
+        finally:
+            self._reset_run_transients()
+
+    async def _execute_run(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
         self._set_progress(
             total=_TOTAL_STAGES, current=0, status="starting",
@@ -324,9 +377,16 @@ class DbasRestoreTask(TaskScheduler):
                     ledger=RollbackLedger(restore_id=new_restore_id()),
                     remap=plan.existing_remap or IdRemapTable(),
                     confirm_apply=True,
+                    channel_reattach_mode=self.channel_reattach_mode,
                 )
             else:
-                report = await run_dry_run(plan=plan, client=client)
+                # The preview MUST run under the SAME mode the apply will, or it
+                # mispredicts the one number the mode exists to control.
+                report = await run_dry_run(
+                    plan=plan,
+                    client=client,
+                    channel_reattach_mode=self.channel_reattach_mode,
+                )
         except Exception as exc:  # noqa: BLE001 - any orchestration error is a sanitized failure
             logger.exception("[DBAS-RESTORE] Restore orchestration failed: %s", exc)
             return self._fail(started_at, "Restore failed during orchestration")

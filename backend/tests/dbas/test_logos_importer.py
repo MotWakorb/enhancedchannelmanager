@@ -234,15 +234,57 @@ async def test_unmatched_logo_uploaded_ledgered_remapped():
     assert ledger.entries and ledger.entries[0].entity_type == EntityType.LOGO
 
 
+async def _failing_upload(name, filename, content, content_type):
+    """An upload the destination refuses: the logo does NOT come back."""
+    raise Exception("Logo upload failed: 500 - Server Error")
+
+
 @pytest.mark.asyncio
-async def test_miss_increments_logo_misses_aggregate():
-    """An upload-eligible miss feeds RestoreReport.logo_misses (D9 banner)."""
+async def test_uploaded_logo_records_no_miss():
+    """THE invariant, upload path: a logo that comes back is not a loss.
+
+    ``logo_misses`` gates the D9 red banner and the restore summary line, so a
+    successful upload counted here tells the operator a logo is missing when it
+    is sitting on the destination. Before bead …-xb58a the binary subtree was
+    empty on this route and the bug was unreachable; archiving Dispatcharr-hosted
+    bytes made this the NORMAL path for every uploaded logo.
+    """
     report, ledger, remap = _ctx()
     client = _client(dest_logos=[])
     await import_logos(
         archive_logos=[_logo(src_id=1, name="A")],
         client=client, selected=True, report=report, ledger=ledger, remap=remap,
     )
+    client.upload_logo_file.assert_awaited_once()
+    assert report.category(EntityType.LOGO).created == 1
+    assert report.logo_misses == 0
+    assert report.logo_miss_details == []
+
+
+@pytest.mark.asyncio
+async def test_failed_upload_increments_logo_misses_aggregate():
+    """A logo whose upload the destination refuses IS a loss (D9 banner)."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
+    await import_logos(
+        archive_logos=[_logo(src_id=1, name="A")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    assert report.category(EntityType.LOGO).failed == 1
+    assert report.logo_misses == 1
+
+
+@pytest.mark.asyncio
+async def test_rejected_logo_increments_logo_misses_aggregate():
+    """A logo the validator refuses is equally lost, and equally reported."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=1, name="A", content=_ELF)],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    client.upload_logo_file.assert_not_awaited()
+    assert report.category(EntityType.LOGO).failed == 1
     assert report.logo_misses == 1
 
 
@@ -252,7 +294,7 @@ async def test_miss_records_per_channel_detail():
     aggregate count, so the banner can drill down into the affected logos.
     """
     report, ledger, remap = _ctx()
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="ESPN HD")],
         client=client, selected=True, report=report, ledger=ledger, remap=remap,
@@ -268,7 +310,7 @@ async def test_miss_records_per_channel_detail():
 async def test_miss_detail_count_matches_aggregate_for_multiple():
     """The per-logo detail list stays consistent with the aggregate count."""
     report, ledger, remap = _ctx()
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[
             _logo(src_id=1, name="A"),
@@ -280,6 +322,33 @@ async def test_miss_detail_count_matches_aggregate_for_multiple():
     assert report.logo_misses == 3
     assert len(report.logo_miss_details) == 3
     assert [d.label for d in report.logo_miss_details] == ["A", "B", "C"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_run_reports_only_the_lost_logo():
+    """Two logos restore, one fails: the operator is told about exactly one."""
+    report, ledger, remap = _ctx()
+    uploads = {"n": 0}
+
+    async def _third_upload_fails(name, filename, content, content_type):
+        uploads["n"] += 1
+        if name == "B":
+            raise Exception("Logo upload failed: 500 - Server Error")
+        return {"id": 9000 + uploads["n"]}
+
+    client = _client(dest_logos=[], upload_side_effect=_third_upload_fails)
+    await import_logos(
+        archive_logos=[
+            _logo(src_id=1, name="A"),
+            _logo(src_id=2, name="B"),
+            _logo(src_id=3, name="C"),
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+    cat = report.category(EntityType.LOGO)
+    assert (cat.created, cat.failed) == (2, 1)
+    assert report.logo_misses == 1
+    assert [d.label for d in report.logo_miss_details] == ["B"]
 
 
 @pytest.mark.asyncio
@@ -834,7 +903,7 @@ async def test_miss_detail_carries_affected_channel_with_dest_id():
     Dispatcharr id (resolved through the CHANNEL remap namespace) + name."""
     report, ledger, remap = _ctx()
     remap.add(EntityType.CHANNEL, 5, 505)
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="ESPN HD")],
         archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
@@ -854,7 +923,7 @@ async def test_one_miss_lists_every_affected_channel():
     report, ledger, remap = _ctx()
     remap.add(EntityType.CHANNEL, 5, 505)
     remap.add(EntityType.CHANNEL, 6, 606)
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="League Logo")],
         archive_channels=[
@@ -874,7 +943,7 @@ async def test_miss_detail_channel_without_remap_resolution_has_none_id():
     """cm9bi: an affected channel whose destination id is unknown (not in the
     remap — e.g. its create failed) still lists NAME, with channel_id None."""
     report, ledger, remap = _ctx()
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="ESPN HD")],
         archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
@@ -896,7 +965,9 @@ async def test_dry_run_miss_detail_never_emits_provisional_channel_ids():
     remap.add(EntityType.CHANNEL, 5, 5)  # provisional dry-run mapping
     client = _client(dest_logos=[])
     await import_logos(
-        archive_logos=[_logo(src_id=42, name="ESPN HD")],
+        # A logo the validator refuses is a loss the preview must predict; a
+        # dry run performs no upload, so this is the reachable failure there.
+        archive_logos=[_logo(src_id=42, name="ESPN HD", content=_ELF)],
         archive_channels=[_channel(src_id=5, name="ESPN", logo_id=42)],
         client=client, selected=True, report=report, ledger=ledger, remap=remap,
         is_dry_run=True,
@@ -912,7 +983,7 @@ async def test_miss_detail_channels_empty_without_archive_channels():
     """cm9bi back-compat: callers that pass no archive channels still get a
     detail row — with an empty channels list, never a crash."""
     report, ledger, remap = _ctx()
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="ESPN HD")],
         client=client, selected=True, report=report, ledger=ledger, remap=remap,
@@ -928,7 +999,7 @@ async def test_miss_detail_ignores_channels_referencing_other_logos():
     report, ledger, remap = _ctx()
     remap.add(EntityType.CHANNEL, 5, 505)
     remap.add(EntityType.CHANNEL, 6, 606)
-    client = _client(dest_logos=[])
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
     await import_logos(
         archive_logos=[_logo(src_id=42, name="ESPN HD")],
         archive_channels=[
@@ -1179,7 +1250,9 @@ async def test_provider_dry_run_validates_but_never_uploads():
     client.upload_logo_file.assert_not_awaited()
     cat = report.category(EntityType.LOGO)
     assert cat.would_create == 1
-    assert report.logo_misses == 1
+    # A logo the preview says WOULD be created is not a logo the operator has
+    # lost, so it must not reach the D9 banner (see record_logo_miss).
+    assert report.logo_misses == 0
 
 
 # ===========================================================================
@@ -1224,3 +1297,179 @@ async def test_declared_image_content_type_still_wins_over_magic():
 
     sent_content_type = client.upload_logo_file.await_args.args[3]
     assert sent_content_type == "image/x-png"
+
+
+# ===========================================================================
+# C. DRY-RUN / APPLY PARITY on the URL re-create path
+#    (bead enhancedchannelmanager-dgnms)
+#
+# The URL re-create branch used to be gated on ``not is_dry_run``, so a preview
+# never simulated it. Every byte-less record fell through to _validate_logo(),
+# which needs a ``filename`` a URL-only record does not carry, and the drill's
+# preview reported 11 of 11 logos as ``validation_error: unsafe or empty logo
+# filename`` for an artifact whose apply then restored 10 of them. Worse, the
+# ONE genuinely unrestorable logo was indistinguishable from the 10 that were
+# fine: identical reason, identical message.
+# ===========================================================================
+
+
+def _url_logo(*, src_id, name, url):
+    """A URL-only archive record: the shape categories/logos.yaml produces."""
+    return {"id": src_id, "name": name, "url": url}
+
+
+async def test_dry_run_counts_a_remote_url_logo_as_a_would_create():
+    """The preview simulates the same decision the apply makes."""
+    report = RestoreReport(is_dry_run=True)
+    ledger, remap = RollbackLedger(restore_id="t"), IdRemapTable()
+    client = _client(dest_logos=[])
+
+    await import_logos(
+        archive_logos=[_url_logo(src_id=55, name="FOX", url="https://cdn.example/fox.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        is_dry_run=True,
+    )
+
+    cat = report.category(EntityType.LOGO)
+    assert cat.would_create == 1
+    assert cat.failed == 0
+    assert cat.failure_details == []
+    # Nothing was written, and no fabricated remap id was registered.
+    client.create_logo.assert_not_awaited()
+    client.upload_logo_file.assert_not_awaited()
+    assert ledger.entries == []
+    assert remap.resolve(EntityType.LOGO, 55) is None
+
+
+async def test_dry_run_still_reports_a_genuinely_unrestorable_logo():
+    """A record with neither bytes nor a remote URL is still a failure.
+
+    This is the signal the operator actually needs, and the old preview buried
+    it in ten invented failures that read identically.
+    """
+    report = RestoreReport(is_dry_run=True)
+    ledger, remap = RollbackLedger(restore_id="t"), IdRemapTable()
+    client = _client(dest_logos=[])
+
+    await import_logos(
+        archive_logos=[_url_logo(src_id=13, name="Drill Uploaded Logo",
+                                 url="/data/logos/drill-logo.png")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        is_dry_run=True,
+    )
+
+    cat = report.category(EntityType.LOGO)
+    assert cat.would_create == 0
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.VALIDATION_ERROR
+    assert cat.failure_details[0].label == "Drill Uploaded Logo"
+
+
+async def test_dry_run_logo_counts_match_the_apply_for_a_mixed_set():
+    """Preview and apply agree, category by category, on the drill's own mix.
+
+    The set is deliberately the drill's shape: remote-CDN logos that restore by
+    URL, a byte-bearing logo (what the backup now archives for a
+    Dispatcharr-hosted one), a logo the destination already has, and one
+    genuinely unrestorable record.
+    """
+    archive = [
+        _url_logo(src_id=51, name="CNN", url="https://cdn.example/cnn.png"),
+        _url_logo(src_id=52, name="FOX", url="https://cdn.example/fox.png"),
+        _logo(src_id=53, name="Uploaded", filename="drill-logo.png"),
+        _url_logo(src_id=54, name="Already There", url="https://cdn.example/there.png"),
+        _url_logo(src_id=55, name="Unrestorable", url="/data/logos/gone.png"),
+    ]
+    dest = [{"id": 900, "name": "Already There", "url": "https://cdn.example/there.png"}]
+
+    dry_report = RestoreReport(is_dry_run=True)
+    await import_logos(
+        archive_logos=archive, client=_client(dest_logos=dest), selected=True,
+        report=dry_report, ledger=RollbackLedger(restore_id="d"),
+        remap=IdRemapTable(), is_dry_run=True,
+    )
+
+    apply_client = _client(dest_logos=dest)
+    apply_client.create_logo = AsyncMock(return_value={"id": 970})
+    apply_report = RestoreReport(is_dry_run=False)
+    await import_logos(
+        archive_logos=archive, client=apply_client, selected=True,
+        report=apply_report, ledger=RollbackLedger(restore_id="a"),
+        remap=IdRemapTable(), is_dry_run=False,
+    )
+
+    dry = dry_report.category(EntityType.LOGO)
+    applied = apply_report.category(EntityType.LOGO)
+    assert (dry.would_create, dry.would_skip, dry.failed) == (3, 1, 1)
+    assert (applied.created, applied.skipped, applied.failed) == (3, 1, 1)
+    assert dry.would_create == applied.created
+    assert dry.would_skip == applied.skipped
+    assert dry.failed == applied.failed
+    # The failure the operator must act on is the SAME one in both runs.
+    assert [f.label for f in dry.failure_details] == [f.label for f in applied.failure_details]
+
+
+async def test_dry_run_does_not_count_a_url_recreate_as_a_logo_miss():
+    """A logo that comes back by URL is not a miss, in either run.
+
+    logo_misses drives the D9 red banner, so counting a restorable logo there
+    would put a "logos were lost" warning on a restore that lost none.
+    """
+    archive = [_url_logo(src_id=51, name="CNN", url="https://cdn.example/cnn.png")]
+
+    dry_report = RestoreReport(is_dry_run=True)
+    await import_logos(
+        archive_logos=archive, client=_client(dest_logos=[]), selected=True,
+        report=dry_report, ledger=RollbackLedger(restore_id="d"),
+        remap=IdRemapTable(), is_dry_run=True,
+    )
+
+    apply_client = _client(dest_logos=[])
+    apply_client.create_logo = AsyncMock(return_value={"id": 970})
+    apply_report = RestoreReport(is_dry_run=False)
+    await import_logos(
+        archive_logos=archive, client=apply_client, selected=True,
+        report=apply_report, ledger=RollbackLedger(restore_id="a"),
+        remap=IdRemapTable(), is_dry_run=False,
+    )
+
+    assert dry_report.logo_misses == 0
+    assert apply_report.logo_misses == 0
+
+
+@pytest.mark.asyncio
+async def test_restored_logo_never_reaches_the_operator_loss_summary():
+    """End of the chain: a successful upload produces an EMPTY loss suffix.
+
+    ``logo_misses`` is not an internal number. ``DbasRestoreTask`` turns it into
+    "N logo(s) could not be reinstated" on the task-history row, which is the
+    ONLY surface an operator who never opens the restore modal sees, and the
+    D9 red banner keys off the same field. Asserting the count alone would not
+    have shown that the drill's headline defect appeared UNFIXED to the operator.
+    """
+    from tasks.dbas_restore import DbasRestoreTask
+
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    await import_logos(
+        archive_logos=[_logo(src_id=13, name="Drill Uploaded Logo")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+
+    assert report.category(EntityType.LOGO).created == 1
+    assert DbasRestoreTask._credential_reentry_suffix(report) == ""
+
+
+@pytest.mark.asyncio
+async def test_lost_logo_does_reach_the_operator_loss_summary():
+    """The converse: a logo that did NOT come back is named in that same line."""
+    from tasks.dbas_restore import DbasRestoreTask
+
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[], upload_side_effect=_failing_upload)
+    await import_logos(
+        archive_logos=[_logo(src_id=13, name="Drill Uploaded Logo")],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+    )
+
+    assert "1 logo(s) could not be reinstated" in DbasRestoreTask._credential_reentry_suffix(report)

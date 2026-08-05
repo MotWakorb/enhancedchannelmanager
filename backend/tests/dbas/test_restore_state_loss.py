@@ -20,6 +20,13 @@ Each test below pins ONE loss the drill measured, at the layer that can prove it
   that would have caught ``logo_misses: 0`` while 12 channels lost their logo.
 * :func:`test_epg_links_reattach_by_tvg_id` — a channel's ``epg_data_id`` comes
   back via its archived ``tvg_id`` (drill: 10 of 12 linked -> 0).
+* :func:`test_epg_link_reattaches_when_only_the_resolved_natural_key_exists`:
+  run 2's remaining half. A channel linked ONLY through ``epg_data_id``, with its
+  OWN ``tvg_id`` null, still relinks (drill run-2: 7 of 7 linked -> 0).
+* :func:`test_resolved_natural_key_wins_over_the_channels_own_tvg_id`: the
+  preference order when the two disagree.
+* :func:`test_old_artifact_without_a_resolved_key_still_uses_the_channels_own`:
+  backward compatibility with an artifact produced before the fix.
 * :func:`test_non_default_profile_membership_does_not_widen_to_all_channels` —
   a profile seeded to EXCLUDE channels does not restore containing all of them
   (drill: 9 of 12 -> 12 of 12).
@@ -398,6 +405,9 @@ async def test_unreinstatable_channel_logo_is_counted_as_a_logo_miss():
     # No LOGO mapping — the archived logo could not be reinstated.
 
     await reattach_channel_logos(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
         client=client,
         report=report,
         remap=remap,
@@ -425,6 +435,9 @@ async def test_reinstatable_channel_logo_is_reattached_and_not_a_miss():
     remap.add(EntityType.LOGO, 55, 955)
 
     await reattach_channel_logos(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
         client=client,
         report=report,
         remap=remap,
@@ -492,6 +505,9 @@ async def test_epg_links_reattach_by_tvg_id():
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
         client=client,
         report=report,
         remap=remap,
@@ -517,6 +533,9 @@ async def test_unresolvable_epg_link_is_counted_and_named():
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
         client=client,
         report=report,
         remap=remap,
@@ -530,6 +549,134 @@ async def test_unresolvable_epg_link_is_counted_and_named():
     assert detail.name == "FOX News"
     assert detail.tvg_id == "fox.news.us"
     client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_epg_link_reattaches_when_only_the_resolved_natural_key_exists():
+    """A channel linked ONLY via ``epg_data_id`` still relinks (dfkbn run-2).
+
+    Drill run 2026-08-04-run2 measured all 7 EPG-linked channels coming back
+    with ``epg_data_id=None`` on BOTH artifact variants. Their archived rows
+    looked exactly like this one: ``epg_data_id=2078``, ``tvg_id=None``. ECM's
+    own channel PATCH produces that shape: setting ``epg_data_id`` does not
+    populate ``tvg_id``. The reattach therefore had nothing to match on and
+    dropped every link. The natural key now arrives resolved from the producer.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+
+    client = _client()
+    client.get_epg_data.return_value = [
+        {"id": 4001, "tvg_id": "fox.news.us", "name": "FOX News"},
+    ]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    relinked = await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 101,
+                "name": "FOX News",
+                "tvg_id": None,
+                "epg_data_id": 2078,
+                ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us",
+            },
+        ],
+    )
+
+    assert relinked == 1
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    assert report.epg_links_unrestored == 0
+
+
+@pytest.mark.asyncio
+async def test_resolved_natural_key_wins_over_the_channels_own_tvg_id():
+    """When the two disagree, the row the operator LINKED is the one restored.
+
+    A channel's own ``tvg_id`` is its own field; the link's identity belongs to
+    the EPG row it points at. An operator can link a channel to a guide row
+    whose tvg_id differs from the one the channel advertises, and that choice is
+    the state to restore.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+
+    client = _client()
+    client.get_epg_data.return_value = [
+        {"id": 4001, "tvg_id": "fox.news.us"},
+        {"id": 4002, "tvg_id": "fox.business.us"},
+    ]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 101,
+                "name": "FOX Business",
+                "tvg_id": "fox.news.us",
+                "epg_data_id": 2078,
+                ARCHIVE_EPG_TVG_ID_KEY: "fox.business.us",
+            },
+        ],
+    )
+
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4002})
+
+
+@pytest.mark.asyncio
+async def test_old_artifact_without_a_resolved_key_still_uses_the_channels_own():
+    """BACKWARD COMPATIBILITY: a pre-fix artifact restores exactly as before.
+
+    An artifact built before the producer resolved the natural key carries no
+    ``epg_data_tvg_id`` at all. The channel's own ``tvg_id``, the only key such
+    an artifact has, must still drive the relink, and a channel whose own
+    ``tvg_id`` is blank must still degrade to a counted, named miss.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.CHANNEL, 102, 202)
+
+    old_shape_channels = [
+        {"id": 101, "name": "FOX News", "tvg_id": "fox.news.us", "epg_data_id": 88},
+        {"id": 102, "name": "CNN", "tvg_id": "", "epg_data_id": 89},
+    ]
+    assert not any(ARCHIVE_EPG_TVG_ID_KEY in ch for ch in old_shape_channels)
+
+    relinked = await reattach_epg_links(
+        # Predates the mode: no population information, so nothing
+        # is preserved and the pass behaves as it always did.
+        created_source_ids=None,
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=old_shape_channels,
+    )
+
+    assert relinked == 1
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    assert report.epg_links_unrestored == 1
+    assert report.epg_link_miss_details[0].name == "CNN"
 
 
 # ---------------------------------------------------------------------------
@@ -770,3 +917,685 @@ async def test_ecm_settings_never_writes_the_redaction_sentinel(monkeypatch):
     assert saved["user_timezone"] == "UTC"
     assert report.credentials_needing_reentry == 1
     assert report.credential_reentry_details[0].fields == ["smtp_password"]
+
+
+# ---------------------------------------------------------------------------
+# ChannelReattachMode — what happens to channels this restore did NOT create
+# (bead dfkbn, PR review W1)
+#
+# The fix that made EPG links round-trip also made a previously-unreachable
+# behaviour fire at archive scale: a channel matched ALREADY_EXISTS_IDENTICAL is
+# never overwritten for name/number/group, but it IS in the CHANNEL remap, so
+# both reattach passes can PATCH it. Restoring into a live instance to recover
+# profile membership would silently reset every matched channel's guide link and
+# logo to the archive's view, and the rollback ledger compensates CREATES, so
+# nothing undoes it.
+# ---------------------------------------------------------------------------
+
+
+def _archive_channel(source_id, name, **over):
+    ch = {"id": source_id, "name": name, "channel_number": source_id}
+    ch.update(over)
+    return ch
+
+
+@pytest.mark.asyncio
+async def test_preserve_leaves_a_pre_existing_channels_epg_link_alone():
+    """PRESERVE: a channel the restore did not create keeps the operator's link."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    relinked = await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "FOX News", epg_data_id=2078,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+        ],
+        mode=ChannelReattachMode.PRESERVE,
+        created_source_ids=set(),  # this restore created nothing
+    )
+
+    assert relinked == 0
+    client.update_channel.assert_not_awaited()
+    # Not a MISS: the link resolved fine, it was deliberately left alone.
+    assert report.epg_links_unrestored == 0
+    assert report.epg_link_reattach.preserved_channels == 1
+    assert report.epg_link_reattach.preserved_channels_named == ["FOX News"]
+    assert report.epg_link_reattach.existing_channels == 0
+    # And it never even fetched the guide: nothing was actionable.
+    client.get_epg_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_overwrite_replaces_a_pre_existing_channels_epg_link():
+    """OVERWRITE: the operator explicitly asked for the archive's view to win."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    relinked = await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "FOX News", epg_data_id=2078,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+        ],
+        mode=ChannelReattachMode.OVERWRITE,
+        created_source_ids=set(),
+    )
+
+    assert relinked == 1
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    assert report.epg_link_reattach.existing_channels == 1
+    assert report.epg_link_reattach.existing_channels_named == ["FOX News"]
+    assert report.epg_link_reattach.preserved_channels == 0
+
+
+@pytest.mark.asyncio
+async def test_preserve_still_links_channels_this_restore_created():
+    """The DR case: PRESERVE and OVERWRITE are identical on a fresh target."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    archive_channels = [
+        _archive_channel(101, "FOX News", epg_data_id=2078,
+                         **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+        _archive_channel(102, "CNN", epg_data_id=857,
+                         **{ARCHIVE_EPG_TVG_ID_KEY: "cnn.us"}),
+    ]
+    rows = [{"id": 4001, "tvg_id": "fox.news.us"}, {"id": 4002, "tvg_id": "cnn.us"}]
+
+    results = {}
+    for mode in (ChannelReattachMode.PRESERVE, ChannelReattachMode.OVERWRITE):
+        client = _client()
+        client.get_epg_data.return_value = rows
+        report = RestoreReport(is_dry_run=False)
+        remap = IdRemapTable()
+        remap.add(EntityType.CHANNEL, 101, 201)
+        remap.add(EntityType.CHANNEL, 102, 202)
+
+        relinked = await reattach_epg_links(
+            client=client, report=report, remap=remap,
+            archive_channels=archive_channels,
+            mode=mode,
+            created_source_ids={101, 102},  # every channel was created here
+        )
+        results[mode] = (
+            relinked,
+            report.epg_link_reattach.created_channels,
+            report.epg_link_reattach.existing_channels,
+            report.epg_link_reattach.preserved_channels,
+            sorted(c.args for c in client.update_channel.await_args_list),
+        )
+
+    assert results[ChannelReattachMode.PRESERVE] == results[ChannelReattachMode.OVERWRITE]
+    assert results[ChannelReattachMode.PRESERVE][0] == 2
+    assert results[ChannelReattachMode.PRESERVE][1] == 2  # both counted as created
+
+
+@pytest.mark.asyncio
+async def test_preserve_leaves_a_pre_existing_channels_logo_alone():
+    """The SAME question, answered the SAME way for logos (one option, both passes)."""
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.LOGO, 55, 955)
+
+    reattached = await reattach_channel_logos(
+        client=client, report=report, remap=remap,
+        archive_channels=[_archive_channel(101, "FOX News", logo_id=55)],
+        mode=ChannelReattachMode.PRESERVE,
+        created_source_ids=set(),
+    )
+
+    assert reattached == 0
+    client.update_channel.assert_not_awaited()
+    # A preserved logo is NOT a miss — the operator has one, it is just theirs.
+    assert report.logo_misses == 0
+    assert report.logo_reattach.preserved_channels == 1
+    assert report.logo_reattach.preserved_channels_named == ["FOX News"]
+
+
+@pytest.mark.asyncio
+async def test_overwrite_replaces_a_pre_existing_channels_logo():
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.LOGO, 55, 955)
+
+    reattached = await reattach_channel_logos(
+        client=client, report=report, remap=remap,
+        archive_channels=[_archive_channel(101, "FOX News", logo_id=55)],
+        mode=ChannelReattachMode.OVERWRITE,
+        created_source_ids=set(),
+    )
+
+    assert reattached == 1
+    client.update_channel.assert_awaited_once_with(201, {"logo_id": 955})
+    assert report.logo_reattach.existing_channels == 1
+    assert report.logo_reattach.existing_channels_named == ["FOX News"]
+
+
+@pytest.mark.asyncio
+async def test_split_counters_separate_the_two_populations():
+    """`relinked=N` is too coarse; the two populations are different events."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [
+        {"id": 4001, "tvg_id": "a.us"},
+        {"id": 4002, "tvg_id": "b.us"},
+        {"id": 4003, "tvg_id": "c.us"},
+    ]
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    for source, dest in ((101, 201), (102, 202), (103, 203)):
+        remap.add(EntityType.CHANNEL, source, dest)
+
+    await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "Made By Restore", epg_data_id=1,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "a.us"}),
+            _archive_channel(102, "Already Here", epg_data_id=2,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "b.us"}),
+            _archive_channel(103, "Also Already Here", epg_data_id=3,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "c.us"}),
+        ],
+        mode=ChannelReattachMode.OVERWRITE,
+        created_source_ids={101},
+    )
+
+    pop = report.epg_link_reattach
+    assert pop.mode == ChannelReattachMode.OVERWRITE
+    assert pop.created_channels == 1
+    assert pop.existing_channels == 2
+    assert pop.existing_channels_named == ["Already Here", "Also Already Here"]
+    assert "Made By Restore" not in pop.existing_channels_named
+
+
+@pytest.mark.asyncio
+async def test_no_population_information_keeps_the_pre_w1_behaviour():
+    """A direct call with no created-id set preserves nothing and links everything.
+
+    ``created_source_ids=None`` means "this caller has no population
+    information", which is the shape every pre-W1 call site had. Silently
+    preserving everything there would turn the fix off for them.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    relinked = await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "FOX News", epg_data_id=2078,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+        ],
+        mode=ChannelReattachMode.PRESERVE,
+        created_source_ids=None,
+    )
+
+    assert relinked == 1
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+
+
+@pytest.mark.asyncio
+async def test_dry_run_resolves_and_reports_but_never_patches():
+    """The EPG preview is faithful: same split, same misses, zero mutation."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+    report = RestoreReport(is_dry_run=True)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    relinked = await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "FOX News", epg_data_id=2078,
+                             **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+        ],
+        mode=ChannelReattachMode.OVERWRITE,
+        created_source_ids=set(),
+        is_dry_run=True,
+    )
+
+    assert relinked == 1  # the WOULD-BE number
+    assert report.epg_link_reattach.existing_channels == 1
+    client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_logo_dry_run_reports_no_split_for_an_unresolved_logo():
+    """A logo the preview cannot resolve is neither a miss NOR a would-replace.
+
+    The apply resolves the LOGO remap and, when it cannot, records a miss and
+    touches nothing — so the channel is NOT in the apply's split. A dry run that
+    counted the split BEFORE resolution told the operator two of their channels
+    would be replaced while the apply replaced none (PR review round 2,
+    finding 2). And it must still not record a miss: a preview claiming the
+    operator has LOST something is the dgnms defect.
+    """
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    report = RestoreReport(is_dry_run=True)
+    remap = IdRemapTable()  # nothing resolves
+
+    reattached = await reattach_channel_logos(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "Made By Restore", logo_id=55),
+            _archive_channel(102, "Already Here", logo_id=56),
+        ],
+        created_source_ids={101},
+        mode=ChannelReattachMode.OVERWRITE,
+        is_dry_run=True,
+    )
+
+    assert reattached == 0
+    assert report.logo_misses == 0          # nothing invented
+    assert report.logo_reattach.created_channels == 0
+    assert report.logo_reattach.existing_channels == 0
+    assert report.logo_reattach.existing_channels_named == []
+    client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_logo_dry_run_predicts_the_split_for_a_MATCHED_logo():
+    """The matched subset IS faithful, which is the merge case that matters.
+
+    ``import_logos`` registers a LOGO remap entry for every archived logo it
+    matches on the destination, on a dry run as much as on an apply. Restoring
+    into a live install is exactly the case where the archive's logos already
+    exist there, so the population the split is about is the population the
+    preview CAN see.
+    """
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    report = RestoreReport(is_dry_run=True)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.CHANNEL, 102, 202)
+    remap.add(EntityType.LOGO, 55, 955)   # matched on the destination
+    remap.add(EntityType.LOGO, 56, 956)
+
+    await reattach_channel_logos(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            _archive_channel(101, "Made By Restore", logo_id=55),
+            _archive_channel(102, "Already Here", logo_id=56),
+        ],
+        created_source_ids={101},
+        mode=ChannelReattachMode.OVERWRITE,
+        is_dry_run=True,
+    )
+
+    assert report.logo_reattach.created_channels == 1
+    assert report.logo_reattach.existing_channels == 1
+    assert report.logo_reattach.existing_channels_named == ["Already Here"]
+    assert report.logo_misses == 0
+    client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_logo_dry_run_and_apply_agree_on_the_split():
+    """Direct parity check on ``logo_reattach``, the assertion that was missing."""
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    # The third channel's logo does NOT resolve, which is exactly where the two
+    # paths used to diverge: the dry run counted it as a would-replace, the apply
+    # recorded a miss and touched nothing.
+    archive_channels = [
+        _archive_channel(101, "Made By Restore", logo_id=55),
+        _archive_channel(102, "Already Here", logo_id=56),
+        _archive_channel(103, "Also Already Here", logo_id=57),
+    ]
+
+    def _remap():
+        r = IdRemapTable()
+        r.add(EntityType.CHANNEL, 101, 201)
+        r.add(EntityType.CHANNEL, 102, 202)
+        r.add(EntityType.CHANNEL, 103, 203)
+        r.add(EntityType.LOGO, 55, 955)
+        r.add(EntityType.LOGO, 56, 956)
+        # logo 57 deliberately absent from the remap.
+        return r
+
+    splits, misses = [], []
+    for dry in (True, False):
+        report = RestoreReport(is_dry_run=dry)
+        await reattach_channel_logos(
+            client=_client(), report=report, remap=_remap(),
+            archive_channels=archive_channels,
+            created_source_ids={101},
+            mode=ChannelReattachMode.OVERWRITE,
+            is_dry_run=dry,
+        )
+        pop = report.logo_reattach
+        splits.append(
+            (pop.created_channels, pop.existing_channels,
+             pop.preserved_channels, pop.existing_channels_named)
+        )
+        misses.append(report.logo_misses)
+
+    # The SPLIT is the operator's decision input, and it agrees exactly.
+    assert splits[0] == splits[1]
+    # Concretely: only the resolvable pre-existing channel is named.
+    assert splits[0] == (1, 1, 0, ["Already Here"])
+
+    # MISSES deliberately do NOT agree, and that asymmetry is the dgnms guard:
+    # a preview never claims the operator has lost something, so the unresolved
+    # logo is a miss on the apply and silence on the preview.
+    assert misses == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# Log hygiene in the reattach passes (PR review W4)
+#
+# This is the backup path's standard applied to the restore path: an httpx
+# error's str() embeds the full request URL, and a Dispatcharr URL is not
+# something a log line here may carry. The channel is already named, so the
+# exception TYPE is the only thing the type-only form gives up.
+# ---------------------------------------------------------------------------
+
+
+class _UrlBearingError(Exception):
+    """Stands in for an httpx error, whose str() embeds the request URL."""
+
+    def __str__(self) -> str:
+        return "Server error '500' for url 'http://dispatcharr:9191/api/channels/1/'"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_relink_logs_the_exception_type_not_its_url(caplog):
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+    client.update_channel.side_effect = _UrlBearingError()
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    with caplog.at_level("WARNING"):
+        await reattach_epg_links(
+            client=client, report=report, remap=remap,
+            archive_channels=[
+                _archive_channel(101, "FOX News", epg_data_id=2078,
+                                 **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+            ],
+            mode=ChannelReattachMode.OVERWRITE,
+            created_source_ids={101},
+        )
+
+    text = caplog.text
+    assert "dispatcharr:9191" not in text
+    assert "http://" not in text
+    assert "_UrlBearingError" in text
+    assert "FOX News" in text  # still diagnosable
+    assert report.epg_links_unrestored == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_logo_reattach_logs_the_exception_type_not_its_url(caplog):
+    from dbas.channel_reattach import reattach_channel_logos
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.update_channel.side_effect = _UrlBearingError()
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.LOGO, 55, 955)
+
+    with caplog.at_level("WARNING"):
+        await reattach_channel_logos(
+            client=client, report=report, remap=remap,
+            archive_channels=[_archive_channel(101, "FOX News", logo_id=55)],
+            mode=ChannelReattachMode.OVERWRITE,
+            created_source_ids={101},
+        )
+
+    assert "http://" not in caplog.text
+    assert "_UrlBearingError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_failed_membership_patch_logs_the_exception_type_not_its_url(caplog):
+    from dbas.channel_reattach import reattach_profile_memberships
+
+    client = _client()
+    client.update_profile_channel.side_effect = _UrlBearingError()
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.CHANNEL_PROFILE, 9, 99)
+
+    with caplog.at_level("WARNING"):
+        await reattach_profile_memberships(
+            client=client, report=report, remap=remap,
+            archive_profiles=[{"id": 9, "name": "Drill Subset", "channels": []}],
+            archive_channels=[_archive_channel(101, "FOX News")],
+        )
+
+    assert "http://" not in caplog.text
+    assert "_UrlBearingError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_destination_guide_logs_the_type_not_its_url(caplog):
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.side_effect = _UrlBearingError()
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    with caplog.at_level("WARNING"):
+        await reattach_epg_links(
+            client=client, report=report, remap=remap,
+            archive_channels=[
+                _archive_channel(101, "FOX News", epg_data_id=2078,
+                                 **{ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"}),
+            ],
+            mode=ChannelReattachMode.OVERWRITE,
+            created_source_ids={101},
+        )
+
+    assert "http://" not in caplog.text
+    assert "_UrlBearingError" in caplog.text
+    # A failed index turns every link into an honest, counted miss.
+    assert report.epg_links_unrestored == 1
+
+
+# ---------------------------------------------------------------------------
+# One rule, both sides of every seam (PR review round 2, findings 3 and 4)
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_parses_its_own_enum():
+    """The single parsing rule must accept the type it produces.
+
+    ``str(ChannelReattachMode.OVERWRITE)`` is ``"ChannelReattachMode.OVERWRITE"``,
+    which the value lookup rejects — so before this, ``coerce`` handed back
+    PRESERVE plus a warning when given a member of its own enum. Not reachable
+    from today's call sites (they all pass ``.value``), but a rule that cannot
+    parse its own type is not one rule.
+    """
+    from dbas.restore_contracts import ChannelReattachMode
+
+    for member in ChannelReattachMode:
+        assert ChannelReattachMode.coerce(member) is member
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("preserve", "preserve"),
+        ("overwrite", "overwrite"),
+        ("  OverWrite  ", "overwrite"),
+        (None, "preserve"),
+        ("", "preserve"),
+        ("obliterate", "preserve"),
+        (object(), "preserve"),
+        (17, "preserve"),
+    ],
+)
+def test_coerce_never_falls_back_to_the_destructive_mode(raw, expected):
+    from dbas.restore_contracts import ChannelReattachMode
+
+    assert ChannelReattachMode.coerce(raw).value == expected
+
+
+@pytest.mark.asyncio
+async def test_a_channel_with_an_unusable_id_is_never_reported_as_preserved():
+    """PRESERVE must not claim credit for a channel this restore CREATED.
+
+    The importer and the reattach pass now share one id-coercion rule, but the
+    residual case is an archived row whose id neither accepts. Such a channel is
+    absent from ``created_source_ids`` for a reason that has nothing to do with
+    who created it, and preserving on that would put "we left your existing
+    channel alone" in the report about a brand-new channel. It must fall through
+    to the ordinary path and become a counted, NAMED miss instead.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+
+    await reattach_epg_links(
+        client=client, report=report, remap=remap,
+        archive_channels=[
+            {"id": None, "name": "No Usable Id", "epg_data_id": 2078,
+             ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"},
+        ],
+        created_source_ids=set(),  # this restore created nothing it could key
+        mode=ChannelReattachMode.PRESERVE,
+    )
+
+    assert report.epg_link_reattach.preserved_channels == 0
+    assert report.epg_link_reattach.preserved_channels_named == []
+    assert report.epg_links_unrestored == 1
+    assert report.epg_link_miss_details[0].name == "No Usable Id"
+
+
+@pytest.mark.asyncio
+async def test_an_unusable_id_is_not_a_would_replace_on_a_dry_run_either():
+    """The DRY-RUN half of the same claim, which was unpinned.
+
+    Under PRESERVE, a channel whose id this module cannot key fell straight into
+    the "pre-existing channel whose guide link would be REPLACED" bucket — a
+    destructive claim under the mode whose entire contract is that it replaces
+    nothing. It has no destination id from a preview's point of view, so it
+    belongs in neither half of the split.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    report = RestoreReport(is_dry_run=True)
+    remap = IdRemapTable()
+
+    for mode in (ChannelReattachMode.PRESERVE, ChannelReattachMode.OVERWRITE):
+        report = RestoreReport(is_dry_run=True)
+        await reattach_epg_links(
+            client=client, report=report, remap=remap,
+            archive_channels=[
+                {"id": None, "name": "No Usable Id", "epg_data_id": 2078,
+                 ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us"},
+            ],
+            created_source_ids=set(),
+            mode=mode,
+            is_dry_run=True,
+        )
+        pop = report.epg_link_reattach
+        assert pop.existing_channels == 0, mode
+        assert pop.existing_channels_named == [], mode
+        assert pop.created_channels == 0, mode
+        assert report.epg_links_unrestored == 0, mode
+
+    client.get_epg_data.assert_not_awaited()
+    client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_importer_and_the_reattach_agree_on_which_ids_count():
+    """A string source id is refused by BOTH sides, never by only one.
+
+    The importer used ``int()`` and the reattach ``as_int``. On a row carrying
+    ``"101"`` the importer would remap and mark it created while the reattach
+    could not key it — so PRESERVE would report a channel the restore had just
+    made as one it had left alone. Now neither side accepts it, and the outcome
+    is the counted, named miss it was before any of this existed.
+    """
+    from dbas.importers.channels import import_channels
+    from dbas.restore_contracts import EntityType as ET
+
+    client = AsyncMock()
+    client.get_channels = AsyncMock(return_value={"results": [], "count": 0})
+    client.get_streams = AsyncMock(return_value={"results": [], "count": 0})
+    client.get_channel_profiles = AsyncMock(return_value=[])
+    client.create_channel = AsyncMock(return_value={"id": 505})
+    client.update_channel = AsyncMock(return_value={})
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    created: set[int] = set()
+
+    await import_channels(
+        archive_channels=[{"id": "101", "name": "Stringy", "channel_number": 1}],
+        client=client, selected=True, report=report,
+        ledger=RollbackLedger(restore_id="r"), remap=remap,
+        created_source_ids=created,
+    )
+
+    # The channel WAS created upstream...
+    client.create_channel.assert_awaited_once()
+    assert report.category(ET.CHANNEL).created == 1
+    # ...but neither side keys it, so neither claims it.
+    assert created == set()
+    assert remap.resolve(ET.CHANNEL, 101) is None

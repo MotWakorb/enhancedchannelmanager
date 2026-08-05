@@ -162,4 +162,104 @@ describe('useRestoreProgress', () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(mockedGetTask.mock.calls.length).toBe(callsAfterStop);
   });
+
+  // --- The run-start budget (bead dfkbn, review round 5, finding F3) ---------
+  //
+  // This branch was the riskiest new logic in the change and the only new logic
+  // with no test, which is how a defect in it survived a whole review round. It
+  // fires when a run is triggered but never begins: the trigger endpoint is
+  // fire-and-forget, so the task keeps reporting the PREVIOUS run's finished
+  // progress, and publishing that would show the last run's result as this
+  // one's. Note every payload in the suite above carries `started_at: null`,
+  // which makes the hook accept the first poll immediately — so none of those
+  // tests can reach this code at all.
+
+  it('does not publish a terminal state that still carries the previous run started_at', async () => {
+    const RUN_1 = '2026-08-05T10:00:00Z';
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'completed', started_at: RUN_1 })
+    );
+
+    // Run 1 publishes normally and establishes the baseline.
+    const { result, rerender } = renderHook(
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey }),
+      { initialProps: { runKey: 1 } }
+    );
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    // Run 2 starts, but the task keeps reporting run 1's finished progress.
+    rerender({ runKey: 2 });
+    // The new run's view is empty IMMEDIATELY, in this very render.
+    expect(result.current.isComplete).toBe(false);
+    expect(result.current.progress).toBeNull();
+
+    // ...and it stays that way while the stale payload keeps coming back.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(result.current.isComplete).toBe(false);
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('gives up after the budget and says the run did not start', async () => {
+    const RUN_1 = '2026-08-05T10:00:00Z';
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'completed', started_at: RUN_1 })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 1, runKey }),
+      { initialProps: { runKey: 1 } }
+    );
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    rerender({ runKey: 2 });
+
+    // The budget expires and the hook says so, rather than replaying run 1.
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 3000 });
+    expect(result.current.error).toMatch(/did not start/i);
+    // THE discriminator a consumer keys on: a synthesised give-up view carries
+    // no payload, while a genuine backend terminal state always does.
+    expect(result.current.progress).toBeNull();
+    expect(result.current.isComplete).toBe(false);
+    // It stopped, rather than burning the 30-minute cap.
+    const calls = mockedGetTask.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockedGetTask.mock.calls.length).toBe(calls);
+  });
+
+  it('a GENUINE backend failure keeps its payload, so it is not mistaken for a give-up', async () => {
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'failed', started_at: '2026-08-05T10:00:00Z' })
+    );
+
+    const { result } = renderHook(() =>
+      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey: 1 })
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.progress).not.toBeNull();
+    expect(result.current.progress?.status).toBe('failed');
+  });
+
+  it('a new run publishes as soon as its own started_at appears', async () => {
+    const RUN_1 = '2026-08-05T10:00:00Z';
+    const RUN_2 = '2026-08-05T11:00:00Z';
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'completed', started_at: RUN_1 })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey }),
+      { initialProps: { runKey: 1 } }
+    );
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    rerender({ runKey: 2 });
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'completed', started_at: RUN_2 })
+    );
+
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+    expect(result.current.isError).toBe(false);
+    expect(result.current.progress?.started_at).toBe(RUN_2);
+  });
 });

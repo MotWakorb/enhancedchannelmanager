@@ -452,3 +452,178 @@ class TestSummaryMessageCredentialReentry:
             result = await task.execute()
 
         assert "credentials re-entered" not in result.message
+
+
+# ---------------------------------------------------------------------------
+# channel_reattach_mode threading (bead dfkbn, PR review W1)
+#
+# The mode has to reach BOTH orchestrator entry points. A preview run under a
+# different mode from the apply that follows it mispredicts exactly the number
+# the mode exists to control, which is the dgnms failure shape.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestChannelReattachMode:
+    async def test_default_is_preserve_when_the_config_omits_it(self, tmp_path):
+        from dbas.restore_contracts import ChannelReattachMode
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+
+        apply = AsyncMock(return_value=_apply_report())
+        with patch("dbas.restore_orchestrator.run_dry_run", AsyncMock()), \
+             patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        assert (
+            apply.await_args.kwargs["channel_reattach_mode"]
+            is ChannelReattachMode.PRESERVE
+        )
+
+    async def test_the_dry_run_gets_the_SAME_mode_the_apply_would(self, tmp_path):
+        from dbas.restore_contracts import ChannelReattachMode
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        task.update_config({"channel_reattach_mode": "overwrite"})
+
+        dry = AsyncMock(return_value=_dry_run_report())
+        with patch("dbas.restore_orchestrator.run_dry_run", dry), \
+             patch("dbas.restore_orchestrator.run_restore", AsyncMock()), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        assert (
+            dry.await_args.kwargs["channel_reattach_mode"]
+            is ChannelReattachMode.OVERWRITE
+        )
+
+    async def test_an_unrecognised_mode_falls_back_to_preserve(self, tmp_path):
+        from dbas.restore_contracts import ChannelReattachMode
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+        task.update_config({"channel_reattach_mode": "obliterate"})
+
+        apply = AsyncMock(return_value=_apply_report())
+        with patch("dbas.restore_orchestrator.run_dry_run", AsyncMock()), \
+             patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        assert (
+            apply.await_args.kwargs["channel_reattach_mode"]
+            is ChannelReattachMode.PRESERVE
+        )
+
+    async def test_the_mode_is_visible_in_get_config(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        task.update_config({"channel_reattach_mode": "overwrite"})
+        assert task.get_config()["channel_reattach_mode"] == "overwrite"
+        # ...and the passphrase still is NOT (it must never be persisted).
+        assert "passphrase" not in task.get_config()
+
+
+# ---------------------------------------------------------------------------
+# Per-run transients on a SINGLETON task (PR review round 2, finding 5)
+#
+# The cytzj shape, one bead old. get_task_instance() returns a singleton and
+# update_config only assigns when a key is PRESENT, so without a reset a bare
+# re-run inherits the previous run's mode — a path where the option is absent
+# and does NOT resolve to preserve.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestPerRunTransientsAreReset:
+    async def test_a_bare_rerun_does_not_inherit_the_previous_mode(self, tmp_path):
+        from dbas.restore_contracts import ChannelReattachMode
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+        task.update_config({"channel_reattach_mode": "overwrite"})
+
+        apply = AsyncMock(return_value=_apply_report())
+        with patch("dbas.restore_orchestrator.run_dry_run", AsyncMock()), \
+             patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+        assert (
+            apply.await_args.kwargs["channel_reattach_mode"]
+            is ChannelReattachMode.OVERWRITE
+        )
+
+        # A SECOND run configured with only an artifact path — the shape a bare
+        # POST /api/tasks/dbas_restore/run produces against the same singleton.
+        art2 = _write_artifact(tmp_path)
+        task.update_config({"artifact_path": str(art2)})
+        apply2 = AsyncMock(return_value=_apply_report())
+        dry2 = AsyncMock(return_value=_dry_run_report())
+        with patch("dbas.restore_orchestrator.run_dry_run", dry2), \
+             patch("dbas.restore_orchestrator.run_restore", apply2), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        # It must NOT still be overwriting, and it must not still be applying.
+        assert apply2.await_count == 0
+        assert (
+            dry2.await_args.kwargs["channel_reattach_mode"]
+            is ChannelReattachMode.PRESERVE
+        )
+        assert task.channel_reattach_mode is ChannelReattachMode.PRESERVE
+        assert task.confirm_apply is False
+
+    async def test_the_transients_reset_even_when_the_run_fails(self, tmp_path):
+        from dbas.restore_contracts import ChannelReattachMode
+
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+        task.update_config({"channel_reattach_mode": "overwrite"})
+
+        boom = AsyncMock(side_effect=RuntimeError("upstream exploded"))
+        with patch("dbas.restore_orchestrator.run_dry_run", AsyncMock()), \
+             patch("dbas.restore_orchestrator.run_restore", boom), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is False
+        # The finally ran: a failed destructive run does not leave itself armed.
+        assert task.channel_reattach_mode is ChannelReattachMode.PRESERVE
+        assert task.confirm_apply is False
+        assert task.passphrase is None
+
+    async def test_the_transients_reset_when_the_run_returns_early(self, tmp_path):
+        """The no-artifact early return is an exit path like any other."""
+        from dbas.restore_contracts import ChannelReattachMode
+
+        task = DbasRestoreTask(ScheduleConfig(schedule_type=ScheduleType.MANUAL))
+        task.update_config(
+            {"artifact_path": "", "confirm_apply": True,
+             "channel_reattach_mode": "overwrite"}
+        )
+        result = await task.execute()
+
+        assert result.success is False
+        assert task.channel_reattach_mode is ChannelReattachMode.PRESERVE
+        assert task.confirm_apply is False
+
+    async def test_cleanup_artifact_does_not_stay_disarmed(self, tmp_path):
+        """The fifth transient. /restore-dbas-saved sets it False DELIBERATELY,
+        because the artifact there is the operator's own saved backup and must
+        survive the restore. Left sticky on the singleton, that False governs
+        whether a LATER run deletes the file it was handed."""
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        task.update_config({"cleanup_artifact": False})
+        assert task.cleanup_artifact is False
+
+        with patch("dbas.restore_orchestrator.run_dry_run",
+                   AsyncMock(return_value=_dry_run_report())), \
+             patch("dbas.restore_orchestrator.run_restore", AsyncMock()), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        assert task.cleanup_artifact is True

@@ -158,6 +158,7 @@ nav:
       - Configure Cloud Destinations: user_guide/backup-restore/configure-cloud-destinations.md
       - Cross-Instance Sync: user_guide/backup-restore/cross-instance-sync.md
       - Migrate to a New Install: user_guide/backup-restore/migrate-to-a-new-install.md
+      - Run a Restore Drill: user_guide/backup-restore/run-a-restore-drill.md
       - Troubleshoot a Restore: user_guide/backup-restore/troubleshoot-restore.md
   - Settings:
       - user_guide/settings/index.md

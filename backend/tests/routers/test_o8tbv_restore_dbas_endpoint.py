@@ -148,6 +148,39 @@ class TestRestoreDbasEndpoint:
         assert resp.status_code == 200
         assert resp.json()["is_dry_run"] is False
 
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("", "preserve"),                                    # OLD client
+            ("&channel_reattach_mode=preserve", "preserve"),
+            ("&channel_reattach_mode=overwrite", "overwrite"),
+            ("&channel_reattach_mode=bogus", "preserve"),        # SAFE fallback
+        ],
+    )
+    async def test_reattach_mode_defaults_safe_and_is_forwarded(
+        self, async_client, tmp_path, monkeypatch, query, expected
+    ):
+        """bead dfkbn W1: an absent or unparseable mode never means overwrite."""
+        monkeypatch.setattr(backup_mod, "_DBAS_RESTORE_TMP_DIR", tmp_path)
+        engine = MagicMock()
+        engine.run_task = AsyncMock(return_value=None)
+
+        def _fake_create_task(coro):
+            coro.close()
+            return MagicMock()
+
+        with patch("task_engine.get_engine", return_value=engine), \
+             patch("asyncio.create_task", side_effect=_fake_create_task):
+            files = {"file": ("artifact.zip", await self._valid_artifact_bytes(), "application/zip")}
+            resp = await async_client.post(
+                "/api/backup/restore-dbas?confirm_apply=false" + query, files=files
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["channel_reattach_mode"] == expected
+        _args, kwargs = engine.run_task.call_args
+        assert kwargs["parameters"]["channel_reattach_mode"] == expected
+
     async def test_empty_upload_rejected(self, async_client, tmp_path, monkeypatch):
         monkeypatch.setattr(backup_mod, "_DBAS_RESTORE_TMP_DIR", tmp_path)
         files = {"file": ("artifact.zip", b"", "application/zip")}

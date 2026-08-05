@@ -5,6 +5,7 @@ Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
 import asyncio
+import contextvars
 import hashlib
 import io
 import json
@@ -31,6 +32,9 @@ from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
+from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, EPG_INDEX_MAX_ROWS, as_int
+from dbas.importers.logos import MAX_LOGO_BYTES, remote_logo_url, safe_logo_basename
+from dbas.restore_contracts import ChannelReattachMode
 from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
@@ -78,7 +82,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0023"
+APP_VERSION = "0.18.1-0024"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -484,16 +488,40 @@ class BackupArtifact:
             (enhancedchannelmanager-zt3kf). Empty when every category gathered
             cleanly. The caller (:class:`tasks.dbas_backup.DbasBackupTask`)
             uses this to report a degraded-but-built backup as a WARNING
-            rather than a silent clean success.
+            rather than a silent clean success. ``"logos"`` also appears here
+            when the builder could not archive the image bytes of one or more
+            Dispatcharr-hosted logos (bead …-xb58a): the category's YAML is
+            intact, but the artifact is missing payload the operator expects it
+            to carry, which is the same "gathered less than it should" shape.
+        unarchived_logo_bytes: How many Dispatcharr-hosted logos went into the
+            artifact WITHOUT their image bytes. Non-zero means a restore will
+            report that many logo misses. Reported alongside
+            ``degraded_categories`` so the count is visible, not just the fact.
+        unresolved_epg_links: How many archived channels carry an ``epg_data_id``
+            whose guide row the producer could not resolve to a ``tvg_id`` (bead
+            …-dfkbn, PR review W2). Those links cannot be reattached on restore
+            and will be named in ``epg_link_miss_details``. Deliberately
+            INFORMATIONAL: a dangling FK is common and largely unactionable, so a
+            non-zero value does NOT make the run a WARNING and does NOT join
+            ``degraded_categories``, unlike a failed category fetch or missing
+            logo bytes, which are ECM failing to gather what it could have.
+        epg_index_truncated: True when the source guide read came back at the
+            :data:`dbas.archive_keys.EPG_INDEX_MAX_ROWS` ceiling, so the tvg_id
+            index may be incomplete. Reported DISTINCTLY from the count above
+            because it is a different diagnosis with a different remedy: some of
+            those links may be perfectly good references the read never saw.
     """
 
     __slots__ = (
         "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
-        "encrypted", "degraded_categories",
+        "encrypted", "degraded_categories", "unarchived_logo_bytes",
+        "unresolved_epg_links", "epg_index_truncated",
     )
 
     def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
-                 encrypted=False, degraded_categories=None):
+                 encrypted=False, degraded_categories=None,
+                 unarchived_logo_bytes=0, unresolved_epg_links=0,
+                 epg_index_truncated=False):
         self.zip_path = zip_path
         self.sidecar_path = sidecar_path
         self.schema_version = schema_version
@@ -501,6 +529,9 @@ class BackupArtifact:
         self.file_count = file_count
         self.encrypted = encrypted
         self.degraded_categories = list(degraded_categories or [])
+        self.unarchived_logo_bytes = int(unarchived_logo_bytes or 0)
+        self.unresolved_epg_links = int(unresolved_epg_links or 0)
+        self.epg_index_truncated = bool(epg_index_truncated)
 
 
 def _compute_sha256_streaming(path: Path) -> str:
@@ -590,9 +621,33 @@ def _build_artifact_manifest(
     }
 
 
+def _count_unresolved_epg_links(channels) -> int:
+    """Archived channels that HAVE an EPG link but no resolvable natural key.
+
+    Bead ``…-dfkbn``, PR review W2. Read off the artifact's OWN channel records
+    rather than reported up from the producer, so the number is a statement about
+    what the artifact actually carries: exactly the channels whose links the
+    restore will report in ``epg_link_miss_details``. Zero is the normal case.
+
+    A dangling ``epg_data_id`` (the guide row was deleted after the link was
+    made) is common and largely unactionable, so this count is INFORMATIONAL: it
+    does not make the run a WARNING and does not join ``degraded_categories``.
+    The operator can see it; it does not cry wolf.
+    """
+    if not isinstance(channels, list):
+        return 0
+    return sum(
+        1
+        for ch in channels
+        if isinstance(ch, dict)
+        and as_int(ch.get("epg_data_id")) is not None
+        and not ch.get(ARCHIVE_EPG_TVG_ID_KEY)
+    )
+
+
 async def _gather_redacted_categories(
     include_credentials: bool = False,
-) -> tuple[dict[str, str], list[str]]:
+) -> tuple[dict[str, str], list[str], int]:
     """Produce the per-category redacted YAML payloads for the artifact.
 
     REUSES build_yaml_export / _gather_settings / _gather_db_tables /
@@ -601,7 +656,7 @@ async def _gather_redacted_categories(
     redaction list: settings credentials are masked by _gather_settings via the
     shared _SETTINGS_CREDENTIAL_FIELDS denylist before any byte is emitted.
 
-    Returns a ``(categories, degraded)`` pair:
+    Returns a ``(categories, degraded, unresolved_epg_links)`` triple:
 
     * ``categories`` — a mapping of ``<category-name>.yaml`` -> YAML text. Each
       restorable section is emitted as its own file so a future selective
@@ -633,6 +688,13 @@ async def _gather_redacted_categories(
       the restore-side decoder already tolerates —
       ``tests/dbas/test_restore_artifact_decode.py`` — so this is a
       DETECTION-side fix, not a producer-side format change).
+
+    * ``unresolved_epg_links``: how many archived channels carry an
+      ``epg_data_id`` whose guide row the producer could not resolve to a
+      ``tvg_id`` (bead …-dfkbn, PR review W2). Counted HERE because this is the
+      one place that holds the redacted channel records the artifact is about to
+      be built from, so the number describes the artifact rather than an
+      intermediate. Informational only: it never adds a degraded category.
     """
     # include_credentials (D12) preserves the approved migration-cred allowlist
     # (== _REDACT_KEYS; password_hash is never in that set and so is never
@@ -643,6 +705,7 @@ async def _gather_redacted_categories(
     preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
     out: dict[str, str] = {}
     degraded: list[str] = []
+    unresolved_epg_links = 0
     for key in RESTORABLE_SECTIONS:
         # build_yaml_export routes settings/db/dispatcharr correctly and applies
         # the settings-field redaction. That is NOT sufficient on its own:
@@ -673,10 +736,12 @@ async def _gather_redacted_categories(
                 # this function always requests exactly ONE key per call,
                 # this shape unambiguously means "key" is degraded.
                 degraded.append(key)
+            if key == "channels":
+                unresolved_epg_links = _count_unresolved_epg_links(section_value)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
-    return out, sorted(degraded)
+    return out, sorted(degraded), unresolved_epg_links
 
 
 def _logo_basename_key(value) -> str | None:
@@ -693,28 +758,57 @@ def _logo_basename_key(value) -> str | None:
     return last or None
 
 
+async def _fetch_source_logos(client=None) -> list[dict]:
+    """The SOURCE Dispatcharr logo rows (``id`` / ``name`` / ``url``).
+
+    One listing serves both logo concerns of the artifact builder: the id
+    correlation carried in ``binary/metadata.json``
+    (:func:`_build_source_logo_index`) and the byte fetch for
+    Dispatcharr-hosted logos (:func:`_gather_dispatcharr_logo_payloads`).
+    Best-effort: an unavailable client or a listing failure degrades to an empty
+    list, never a build failure.
+
+    Args:
+        client: An already-resolved Dispatcharr client. The builder resolves one
+            for the whole logo pass and passes it here so the listing and the
+            byte fetch share a lifetime. ``None`` resolves one internally.
+    """
+    client = client or _safe_get_client()
+    if not client:
+        return []
+    try:
+        logos = await client.get_all_logos_paginated()
+    except Exception as e:  # noqa: BLE001 - the logo listing is best-effort
+        # Type only: an httpx error's text embeds the full request URL, the same
+        # hygiene rule the neighbouring logo helpers follow.
+        logger.warning(
+            "[BACKUP] Could not list source logos: %s", type(e).__name__
+        )
+        return []
+    return [logo for logo in (logos or []) if isinstance(logo, dict)]
+
+
 async def _fetch_source_logo_index() -> dict[str, dict]:
     """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
+
+    Thin wrapper over :func:`_fetch_source_logos` +
+    :func:`_build_source_logo_index` for callers that need only the index and do
+    their own listing lifetime (the sync engine's metadata-only logo gather).
+    """
+    return _build_source_logo_index(await _fetch_source_logos())
+
+
+def _build_source_logo_index(logos: list[dict]) -> dict[str, dict]:
+    """Index SOURCE Dispatcharr logo rows by URL basename.
 
     PR #743 review item 1 (cm9bi): the restore importer's affected-channel
     drill-down keys on the SOURCE logo id (archive channels reference logos via
     ``logo_id``), but an on-disk logo file carries no id. This index joins each
     archived file to its Dispatcharr logo record by URL basename so the builder
-    can preserve the id in ``binary/metadata.json``. Best-effort: an unavailable
-    client or listing failure degrades to an empty index (the artifact still
-    carries the files; misses then simply list no affected channels), never a
-    build failure. On a basename collision the lowest id wins — the same
-    tie-break the importer's file match uses.
+    can preserve the id in ``binary/metadata.json``. A logo the index cannot
+    resolve carries no ``id`` (never fabricated). On a basename collision the
+    lowest id wins, the same tie-break the importer's file match uses.
     """
-    try:
-        client = get_client()
-        if not client:
-            return {}
-        logos = await client.get_all_logos_paginated()
-    except Exception as e:  # noqa: BLE001 - correlation is best-effort
-        logger.warning("[BACKUP] Could not list source logos for id correlation: %s", e)
-        return {}
-
     index: dict[str, dict] = {}
     for logo in logos or []:
         if not isinstance(logo, dict):
@@ -792,6 +886,419 @@ def _gather_logo_binary_subtree(
     return entries, metadata, url_mappings
 
 
+# ---------------------------------------------------------------------------
+# Dispatcharr-hosted logo bytes (bead enhancedchannelmanager-xb58a)
+# ---------------------------------------------------------------------------
+#
+# Dispatcharr is ECM's source of truth for logos (PO decision, 2026-08-04): a
+# logo uploaded through ECM's own Logo Manager is written to DISPATCHARR's
+# ``/data/logos/``, and ECM's ``/config/uploads/logos/`` (what
+# :func:`_gather_logo_binary_subtree` collects) is empty on a normal install.
+# The backup therefore FETCHES those bytes from Dispatcharr at gather time, over
+# the same API with the same key it already uses for every other category. Logos
+# were the one category where ECM read the metadata and not the payload.
+#
+# Only Dispatcharr-HOSTED logos are fetched. A logo whose ``url`` is an absolute
+# http(s) CDN address restores byte-identically from the archived URL alone
+# (verified 10 of 10 in run 2026-08-04-run2), so archiving its bytes would be
+# waste, and the restore keeps its URL re-create path for exactly those.
+#
+# Everything here FAILS SOFT. A logo whose bytes cannot be fetched, spooled, or
+# safely named degrades to the pre-fix behaviour: it is a counted miss the
+# restore reports honestly, never a failed backup.
+
+# FLAT ceiling on the logo bytes ONE artifact may fetch. This is only the LAST
+# of the three limits :func:`_logo_byte_budget` applies; the binding ones are
+# usually the artifact's remaining uncompressed headroom and the free disk
+# measured at fetch time. It exists to bound a pathological logo set on a large,
+# empty disk.
+_MAX_FETCHED_LOGO_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB
+
+# Cap on how many fetched logo files the binary subtree may carry. The
+# restore-side guard refuses an artifact with more than _ARTIFACT_MAX_ENTRIES
+# members, and the categories, journal.db, manifest and on-disk logo subtree
+# draw on that same budget. Half the entry cap leaves ample room for all of
+# them, and a builder that quietly produced an artifact ECM itself would refuse
+# would be writing a silently unrestorable backup.
+_MAX_FETCHED_LOGO_COUNT = _ARTIFACT_MAX_ENTRIES // 2
+
+# Spool dirs older than this are orphans from a build that was killed before its
+# cleanup ran (the normal path removes the dir in build_backup_artifact's
+# finally). Nothing else owns them: retention's _BACKUP_ZIP_FILENAME_RE
+# allowlist matches only ``ecm-backup-*.zip``, so without this sweep a container
+# kill mid-backup would leave hundreds of MB in /config forever. The age floor
+# keeps a CONCURRENT build's live spool safe.
+_LOGO_SPOOL_PREFIX = "ecm-logo-bytes-"
+_LOGO_SPOOL_ORPHAN_AGE_SECONDS = 6 * 60 * 60  # 6 hours
+
+
+def _safe_get_client():
+    """``get_client()`` that returns ``None`` instead of raising.
+
+    ``get_client`` reads settings and can throw. Every logo path in the builder
+    is best-effort by contract: a Dispatcharr problem degrades the logo bytes,
+    it does not fail the operator's backup. Resolving the client through this
+    helper is what makes that contract true rather than merely documented.
+    """
+    try:
+        return get_client()
+    except Exception as e:  # noqa: BLE001 - client resolution is best-effort
+        # Type only: a settings/transport error's text can carry a URL or token.
+        logger.warning(
+            "[BACKUP] Dispatcharr client unavailable: %s", type(e).__name__
+        )
+        return None
+
+
+def _sweep_orphaned_logo_spools(dest_dir: Path) -> None:
+    """Remove logo spool dirs left behind by a build that never finished.
+
+    Best-effort and never fatal: a backup must not fail because a stale temp dir
+    could not be removed.
+    """
+    cutoff = time.time() - _LOGO_SPOOL_ORPHAN_AGE_SECONDS
+    try:
+        candidates = list(dest_dir.glob(_LOGO_SPOOL_PREFIX + "*"))
+    except OSError:
+        return
+    for path in candidates:
+        try:
+            if not path.is_dir() or path.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        logger.info("[BACKUP] Swept orphaned logo spool dir %s", path.name)
+
+
+def _archived_logo_filename(url: str) -> Optional[str]:
+    """The binary-subtree filename for a Dispatcharr-hosted logo's ``url``.
+
+    Takes the last path segment of the logo's local path (``/data/logos/x.png``
+    becomes ``x.png``) and validates it with the RESTORE-side validator itself,
+    so a name this builder archives is a name the importer will accept. Query
+    and fragment are stripped first; the segment is deliberately NOT
+    percent-decoded, because decoding could reintroduce a path separator into
+    something that had already been reduced to a basename.
+
+    Returns the validated basename, or ``None`` when the url yields nothing
+    usable (the caller then leaves the logo's bytes unarchived and counts it).
+    """
+    if not isinstance(url, str):
+        return None
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    last = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return safe_logo_basename(last)
+
+
+def _unique_logo_filename(basename: str, logo_id: int, taken: set[str]) -> Optional[str]:
+    """A binary-subtree filename for this logo that no other member has claimed.
+
+    ``binary/metadata.json`` is keyed by filename, so two logos that resolve to
+    the same basename would collide and the restore would see only one of them.
+    The tie-break appends the SOURCE logo id.
+
+    Returns ``None`` when the id-suffixed name is ALSO taken (reachable: an
+    on-disk logo literally named ``abc-44.png`` alongside a hosted ``abc.png``
+    with id 44). The caller then counts a miss rather than silently overwriting
+    an archived logo, which is the safe direction: an unarchived logo is
+    reported, an overwritten one is not.
+    """
+    if basename not in taken:
+        return basename
+    stem, dot, ext = basename.rpartition(".")
+    candidate = "%s-%d.%s" % (stem, logo_id, ext) if dot else "%s-%d" % (basename, logo_id)
+    return candidate if candidate not in taken else None
+
+
+def _dispatcharr_hosted_logos(source_logos: list[dict]) -> list[dict]:
+    """The SOURCE logos whose image bytes only Dispatcharr can supply.
+
+    A logo qualifies when it carries a usable integer id and its ``url`` is NOT
+    an absolute ``http(s)`` address, i.e. it names a path inside Dispatcharr's
+    own volume (``/data/logos/x.png``, what ECM's Logo Manager writes) rather
+    than a CDN a restore can point at again.
+    """
+    return [
+        logo for logo in source_logos
+        if isinstance(logo.get("id"), int) and not isinstance(logo.get("id"), bool)
+        and remote_logo_url(logo) is None
+    ]
+
+
+def _drop_superseded_local_logos(
+    entries: list[tuple[Path, str]],
+    metadata: dict,
+    url_mappings: dict[str, str],
+    fetched_source_ids: set[int],
+) -> int:
+    """Remove on-disk logo files that a fetched Dispatcharr payload supersedes.
+
+    ``_build_source_logo_index`` correlates a file in ECM's
+    ``/config/uploads/logos/`` to a Dispatcharr logo BY BASENAME and stamps that
+    logo's ``id`` onto its metadata entry. When the byte fetch then archives the
+    same source id, the artifact would carry TWO entries claiming ONE source id
+    and the restore has no way to tell them apart:
+
+    * ``_merge_logo_records`` joins the URL inventory on source id and keeps the
+      FIRST record it saw, and
+    * the importer's tier-1 match resolves the second record through the remap
+      the first one registered, so it is skipped as
+      ``ALREADY_EXISTS_IDENTICAL``, a claim of sameness about bytes that are
+      not the same.
+
+    On-disk members are written to the ZIP before fetched ones, so the loser is
+    always the authoritative copy: the operator's channel silently ends up on a
+    stale ECM-local image with no failure, no miss, and nothing in the report.
+
+    Dispatcharr is ECM's source of truth for logos (PO decision, 2026-08-04), so
+    the fetched bytes win and the local copy is dropped. This runs only for ids
+    a fetch ACTUALLY returned, so a failed fetch still falls back to whatever
+    local copy exists.
+
+    Mutates ``entries``, ``metadata["logos"]`` and ``url_mappings`` in place.
+    Returns how many local files were dropped.
+    """
+    if not fetched_source_ids:
+        return 0
+    superseded = {
+        entry["filename"] for entry in metadata["logos"]
+        if isinstance(entry.get("id"), int) and entry["id"] in fetched_source_ids
+    }
+    if not superseded:
+        return 0
+    dropped_arcnames = {"%s/%s" % (ARTIFACT_LOGO_DIR, name) for name in superseded}
+    entries[:] = [e for e in entries if e[1] not in dropped_arcnames]
+    metadata["logos"] = [
+        entry for entry in metadata["logos"] if entry["filename"] not in superseded
+    ]
+    for name in superseded:
+        url_mappings.pop(name, None)
+    logger.info(
+        "[BACKUP] Dropped %d ECM-local logo file(s) superseded by the "
+        "authoritative Dispatcharr bytes.", len(superseded),
+    )
+    return len(superseded)
+
+
+def _committed_artifact_bytes(
+    categories: dict[str, str], local_logo_entries: list[tuple[Path, str]]
+) -> int:
+    """Uncompressed bytes the artifact's NON-fetched members already spend.
+
+    Feeds :func:`_logo_byte_budget`, which subtracts this from the restore-side
+    cumulative cap. Counts the per-category YAML, the journal.db, and the
+    on-disk logo files. Best-effort on sizes: an unstattable file contributes
+    zero, which only ever makes the budget more generous by that file's size,
+    and the flat ceiling plus the free-disk limit still bound the total.
+    """
+    total = sum(len(text.encode("utf-8")) for text in categories.values())
+    try:
+        if JOURNAL_DB_FILE.exists():
+            total += JOURNAL_DB_FILE.stat().st_size
+    except OSError:
+        pass
+    for src_path, _arcname in local_logo_entries:
+        try:
+            total += src_path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _logo_byte_budget(spool_dir: Path, committed_bytes: int) -> int:
+    """How many bytes of fetched logo payload this artifact may actually take.
+
+    The lowest of three real limits, not a flat constant. A budget that ignores
+    any of them produces a backup that LOOKS clean and is not:
+
+    1. **Remaining artifact headroom.** ``_ARTIFACT_MAX_TOTAL_UNCOMPRESSED`` is
+       CUMULATIVE over every member, so the journal.db, the category YAML and
+       the on-disk logo subtree already spend part of it. Exceeding what is left
+       builds an artifact :func:`guard_artifact_against_zip_bomb` refuses on the
+       way back in: a silently unrestorable backup.
+    2. **Free disk, measured NOW.** The pre-build ``_check_free_disk`` estimate
+       is computed from journal.db + ``BACKUP_DIRS``, which by this bead's whole
+       premise hold no logo bytes at all. The fetched payloads land on the same
+       partition TWICE (spooled, then compressed into the ZIP), so only half the
+       free space minus the standing headroom is spendable.
+    3. **The flat ceiling** :data:`_MAX_FETCHED_LOGO_TOTAL_BYTES`, which bounds
+       a pathological logo set on a large disk.
+
+    Returns a non-negative byte budget; ``0`` means archive no bytes at all,
+    which the caller reports as unarchived logos rather than as a failure.
+    """
+    headroom = _ARTIFACT_MAX_TOTAL_UNCOMPRESSED - committed_bytes
+    try:
+        free = shutil.disk_usage(str(spool_dir)).free
+    except OSError as e:
+        logger.warning(
+            "[BACKUP] Could not measure free disk for the logo spool: %s",
+            type(e).__name__,
+        )
+        free = 0
+    spendable_disk = (free - _DISK_HEADROOM_BYTES) // 2
+    return max(0, min(_MAX_FETCHED_LOGO_TOTAL_BYTES, headroom, spendable_disk))
+
+
+async def _gather_dispatcharr_logo_payloads(
+    source_logos: list[dict],
+    *,
+    client,
+    spool_dir: Path,
+    taken_filenames: set[str],
+    committed_bytes: int = 0,
+) -> tuple[list[tuple[Path, str]], list[dict], dict[str, str], int]:
+    """Fetch the bytes of every DISPATCHARR-HOSTED logo into the binary subtree.
+
+    Each fetched payload is spooled to its own file under ``spool_dir`` and
+    handed back as a ``(path, arcname)`` entry, so the builder streams it into
+    the ZIP exactly the way it streams an on-disk logo. Only one payload is ever
+    live in memory at a time, which is the same D8 streaming guarantee the rest
+    of the artifact pipeline keeps.
+
+    Args:
+        source_logos: The SOURCE Dispatcharr logo rows from
+            :func:`_fetch_source_logos`.
+        client: The Dispatcharr client, resolved ONCE by the caller. Passed in
+            rather than resolved here so this function cannot raise: the caller
+            already owns the listing's client lifetime, and ``get_client()``
+            reads settings and can throw. ``None`` means every hosted logo is
+            reported unarchived.
+        spool_dir: A caller-owned temp dir for the fetched payloads. The caller
+            removes it after the ZIP is sealed.
+        taken_filenames: Binary-subtree filenames already claimed (the on-disk
+            logos :func:`_gather_logo_binary_subtree` collected). Mutated: each
+            filename this function claims is added.
+        committed_bytes: Uncompressed bytes the artifact's other members already
+            spend, so the byte budget can be derived from what is LEFT of the
+            restore-side cumulative cap (see :func:`_logo_byte_budget`).
+
+    Returns:
+        ``(entries, metadata_entries, url_mappings, unarchived_count)``.
+        ``entries`` and ``metadata_entries`` extend the on-disk gather's;
+        ``unarchived_count`` is how many Dispatcharr-hosted logos could not be
+        archived and will therefore restore only as far as the pre-fix behaviour
+        allows. The caller MUST surface a non-zero count: a backup missing logo
+        bytes is not a clean success.
+    """
+    entries: list[tuple[Path, str]] = []
+    files_meta: list[dict] = []
+    url_mappings: dict[str, str] = {}
+    misses = 0
+
+    hosted = _dispatcharr_hosted_logos(source_logos)
+    if not hosted:
+        return entries, files_meta, url_mappings, misses
+
+    if not client:
+        logger.warning(
+            "[BACKUP] No Dispatcharr client; %d Dispatcharr-hosted logo(s) "
+            "were archived without their image bytes.",
+            len(hosted),
+        )
+        return entries, files_meta, url_mappings, len(hosted)
+
+    budget = _logo_byte_budget(spool_dir, committed_bytes)
+    if budget <= 0:
+        logger.warning(
+            "[BACKUP] No headroom for logo image bytes; %d Dispatcharr-hosted "
+            "logo(s) were archived without them.", len(hosted),
+        )
+        return entries, files_meta, url_mappings, len(hosted)
+
+    for index, logo in enumerate(hosted):
+        if len(entries) >= _MAX_FETCHED_LOGO_COUNT:
+            # Every logo from here on is unarchived, so count them all.
+            misses += len(hosted) - index
+            logger.warning(
+                "[BACKUP] Logo file budget (%d files) reached; the remaining "
+                "Dispatcharr-hosted logos were archived without their image "
+                "bytes.", _MAX_FETCHED_LOGO_COUNT,
+            )
+            break
+        logo_id = logo["id"]
+        basename = _archived_logo_filename(logo.get("url"))
+        filename = (
+            _unique_logo_filename(basename, logo_id, taken_filenames)
+            if basename is not None
+            else None
+        )
+        if filename is None:
+            misses += 1
+            # Never log the url: it is a path, and paths are a leak class here.
+            logger.warning(
+                "[BACKUP] Logo id=%s has no usable archive filename; its image "
+                "bytes were not archived.", logo_id,
+            )
+            continue
+
+        try:
+            data = await client.fetch_logo_image(logo_id)
+        except Exception as e:  # noqa: BLE001 - one logo must never fail a backup
+            # Only the exception TYPE: an httpx error's text embeds the full URL.
+            logger.warning(
+                "[BACKUP] Could not fetch image bytes for logo id=%s: %s",
+                logo_id, type(e).__name__,
+            )
+            data = None
+        if not data:
+            misses += 1
+            continue
+
+        size = len(data)
+        if size > MAX_LOGO_BYTES:
+            misses += 1
+            logger.warning(
+                "[BACKUP] Logo id=%s is %d bytes, over the per-logo cap; its "
+                "image bytes were not archived.", logo_id, size,
+            )
+            continue
+        if size > budget:
+            # This logo and every one after it stays unarchived.
+            misses += len(hosted) - index
+            logger.warning(
+                "[BACKUP] Logo byte budget exhausted after %d logo(s) "
+                "(%d bytes remaining); the rest were archived without their "
+                "image bytes.", len(entries), budget,
+            )
+            break
+
+        spool_path = spool_dir / str(logo_id)
+        try:
+            await asyncio.to_thread(spool_path.write_bytes, data)
+        except OSError as e:
+            misses += 1
+            logger.warning(
+                "[BACKUP] Could not spool image bytes for logo id=%s: %s",
+                logo_id, type(e).__name__,
+            )
+            continue
+        finally:
+            # Release the payload before the next logo is fetched (D8).
+            data = None
+
+        budget -= size
+        taken_filenames.add(filename)
+        entries.append((spool_path, "%s/%s" % (ARTIFACT_LOGO_DIR, filename)))
+        meta: dict = {"filename": filename, "size_bytes": size, "id": logo_id}
+        name = logo.get("name")
+        if isinstance(name, str) and name.strip():
+            meta["name"] = name
+        files_meta.append(meta)
+        # The source reference for this archived file is the logo's own
+        # Dispatcharr url, the same role the local gather's relative path plays.
+        source_url = logo.get("url")
+        if isinstance(source_url, str) and source_url:
+            url_mappings[filename] = source_url
+
+    logger.info(
+        "[BACKUP] Archived image bytes for %d of %d Dispatcharr-hosted logo(s).",
+        len(entries), len(hosted),
+    )
+    return entries, files_meta, url_mappings, misses
+
+
 async def build_backup_artifact(
     dest_dir: Optional[Path] = None,
     *,
@@ -859,18 +1366,30 @@ async def build_backup_artifact(
         dest_dir = CONFIG_DIR
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    # Reclaim any logo spool a previously killed build left behind BEFORE the
+    # free-disk check, so an orphan cannot fail the run it did not belong to.
+    _sweep_orphaned_logo_spools(dest_dir)
     _check_free_disk(dest_dir, _estimate_artifact_source_bytes())
+
+    # Re-arm the per-run EPG truncation flag so this build can never inherit a
+    # previous one's value (see _EPG_INDEX_TRUNCATED).
+    _EPG_INDEX_TRUNCATED.set(False)
 
     # Gather redacted payloads BEFORE opening the archive so a gather failure
     # never leaves a half-written ZIP on disk. include_credentials only ever
     # re-injects the approved migration creds (and only with a passphrase set,
     # validated above); redaction still runs over everything else.
-    categories, degraded_categories = await _gather_redacted_categories(
-        include_credentials=include_credentials
-    )
+    (
+        categories,
+        degraded_categories,
+        unresolved_epg_links,
+    ) = await _gather_redacted_categories(include_credentials=include_credentials)
     # Source-logo id correlation (PR #743 item 1) — best-effort join of each
     # on-disk logo file to its Dispatcharr logo record, carried in metadata.json.
-    source_logo_index = await _fetch_source_logo_index()
+    # ONE client resolution serves the listing and the byte fetch below.
+    logo_client = _safe_get_client()
+    source_logos = await _fetch_source_logos(logo_client)
+    source_logo_index = _build_source_logo_index(source_logos)
     logo_entries, logo_metadata, url_mappings = _gather_logo_binary_subtree(
         source_logo_index=source_logo_index
     )
@@ -893,6 +1412,7 @@ async def build_backup_artifact(
         zip_path = Path(tmp_zip_name)
     sidecar_path = Path(str(zip_path) + ".sha256")
     scrubbed_db_path: Optional[Path] = None
+    logo_spool_dir: Optional[Path] = None
     file_hashes: dict[str, str] = {}
 
     def _writestr_hashed(zf: zipfile.ZipFile, arcname: str, data: bytes) -> None:
@@ -912,6 +1432,75 @@ async def build_backup_artifact(
         file_hashes[arcname] = h.hexdigest()
 
     try:
+        # Dispatcharr-hosted logo bytes (bead …-xb58a). Fetched into a spool dir
+        # BEFORE the ZIP is opened, so a fetch problem never leaves a
+        # half-written artifact, and streamed into the ZIP by the same
+        # _write_hashed path an on-disk logo takes. The spool dir is removed in
+        # the finally below.
+        try:
+            logo_spool_dir = Path(
+                tempfile.mkdtemp(prefix=_LOGO_SPOOL_PREFIX, dir=str(dest_dir))
+            )
+        except OSError as e:
+            # Best-effort like every other logo path: no spool means no archived
+            # bytes, reported as such, NOT a failed backup.
+            logo_spool_dir = None
+            logger.warning(
+                "[BACKUP] Could not create the logo spool dir: %s",
+                type(e).__name__,
+            )
+
+        # An on-disk logo file whose basename correlates to a Dispatcharr logo is
+        # a candidate for supersession, so its filename is NOT reserved: if the
+        # fetch succeeds the local copy is dropped and the authoritative bytes
+        # take the clean name; if the fetch fails the local copy stays and the
+        # name was never contested.
+        hosted_ids = {logo["id"] for logo in _dispatcharr_hosted_logos(source_logos)}
+        reserved = {
+            m["filename"] for m in logo_metadata["logos"]
+            if not (isinstance(m.get("id"), int) and m["id"] in hosted_ids)
+        }
+        if logo_spool_dir is not None:
+            (
+                fetched_entries,
+                fetched_meta,
+                fetched_mappings,
+                unarchived_logos,
+            ) = await _gather_dispatcharr_logo_payloads(
+                source_logos,
+                client=logo_client,
+                spool_dir=logo_spool_dir,
+                taken_filenames=reserved,
+                committed_bytes=_committed_artifact_bytes(categories, logo_entries),
+            )
+        else:
+            fetched_entries, fetched_meta, fetched_mappings = [], [], {}
+            unarchived_logos = len(hosted_ids)
+
+        # Dispatcharr is the source of truth: where both a fetched payload and an
+        # ECM-local file claim the SAME source logo id, the local copy goes.
+        _drop_superseded_local_logos(
+            logo_entries, logo_metadata, url_mappings,
+            {m["id"] for m in fetched_meta},
+        )
+        logo_entries.extend(fetched_entries)
+        logo_metadata["logos"].extend(fetched_meta)
+        logo_metadata["logo_count"] = len(logo_metadata["logos"])
+        url_mappings.update(fetched_mappings)
+        if unarchived_logos:
+            # zt3kf rule: a backup that gathered less than it should is a
+            # WARNING-level run, never a silent clean success. "logos" is a real
+            # RESTORABLE_SECTIONS key, so it threads straight through
+            # tasks.dbas_backup into details, the task message, and the
+            # completion notification.
+            if "logos" not in degraded_categories:
+                degraded_categories = sorted(degraded_categories + ["logos"])
+            logger.warning(
+                "[BACKUP] %d Dispatcharr-hosted logo(s) were archived without "
+                "their image bytes; a restore will report them as logo misses.",
+                unarchived_logos,
+            )
+
         # Open the ZIP on a writable FILE HANDLE (NamedTemporaryFile-class temp
         # path), NOT io.BytesIO — the artifact is streamed to disk (D8).
         with open(zip_path, "wb") as zfh:
@@ -1002,6 +1591,9 @@ async def build_backup_artifact(
             file_count=len(file_hashes),
             encrypted=encrypt,
             degraded_categories=degraded_categories,
+            unarchived_logo_bytes=unarchived_logos,
+            unresolved_epg_links=unresolved_epg_links,
+            epg_index_truncated=_EPG_INDEX_TRUNCATED.get(),
         )
     except Exception:
         # Clean up partial temp artifacts on ANY failure.
@@ -1021,6 +1613,9 @@ async def build_backup_artifact(
                     "[BACKUP] Failed to unlink scrubbed journal temp %s: %s",
                     scrubbed_db_path, e,
                 )
+        if logo_spool_dir is not None:
+            # The fetched bytes live only until they are inside the ZIP.
+            shutil.rmtree(logo_spool_dir, ignore_errors=True)
 
 
 def verify_artifact_sha256(zip_path: Path, sidecar_path: Path) -> bool:
@@ -1771,6 +2366,15 @@ async def restore_dbas_artifact(
             "so it does not land in access logs."
         ),
     ),
+    channel_reattach_mode: str = Query(
+        default=ChannelReattachMode.PRESERVE.value,
+        description=(
+            "What to do about channels this restore did not create. 'preserve' "
+            "(default) leaves their EPG link and logo exactly as they are; "
+            "'overwrite' applies the archive's. Anything unrecognised, including "
+            "an absent value from an older client, resolves to 'preserve'."
+        ),
+    ),
     _admin=RequireAdminIfEnabled,
 ):
     """Trigger an async DBAS artifact restore. Admin only.
@@ -1785,9 +2389,11 @@ async def restore_dbas_artifact(
     even if this flag were bypassed). Validation (.17 version + integrity) runs
     inside the task BEFORE any decode or importer.
     """
+    reattach_mode = ChannelReattachMode.coerce(channel_reattach_mode)
     logger.info(
-        "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s)",
-        file.filename, confirm_apply,
+        "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s, "
+        "channel_reattach_mode=%s)",
+        file.filename, confirm_apply, reattach_mode.value,
     )
 
     # Sweep any temp orphaned by a previous fire-and-forget run that returned
@@ -1802,6 +2408,7 @@ async def restore_dbas_artifact(
         "artifact_path": str(tmp_path),
         "confirm_apply": bool(confirm_apply),
         "cleanup_artifact": True,
+        "channel_reattach_mode": reattach_mode.value,
     }
     # Forward the passphrase only when present (encrypted artifact). The task
     # excludes it from get_config so it is never persisted or logged.
@@ -1833,6 +2440,7 @@ async def restore_dbas_artifact(
         "status": "started",
         "task_id": DBAS_RESTORE_TASK_ID,
         "is_dry_run": not confirm_apply,
+        "channel_reattach_mode": reattach_mode.value,
     }
 
 
@@ -1980,6 +2588,125 @@ def _safe_embedded_stream(stream: dict) -> dict:
     return out
 
 
+# Whether the last EPG-data read inside THIS backup run came back at the row
+# ceiling (PR review W2). A ContextVar rather than a threaded return value
+# because the producer that learns it sits four call frames below
+# :func:`build_backup_artifact` (gather -> sections -> yaml export -> categories),
+# and widening four signatures to carry one bit is worse than an explicitly
+# per-run ambient flag. asyncio gives each Task its own context, so two
+# concurrent backups cannot read each other's value; ``build_backup_artifact``
+# re-arms it to False on entry so a value never survives into a later run.
+_EPG_INDEX_TRUNCATED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "ecm_backup_epg_index_truncated", default=False
+)
+
+
+def _epg_link_id(channel: dict) -> int | None:
+    """The channel's ``epg_data_id`` as an int, or ``None`` when it has no link.
+
+    Coercion is :func:`dbas.archive_keys.as_int`, the SAME rule the restore side
+    matches with (PR review W3). It used to be a second, character-for-character
+    copy of that rule living here; two implementations of one rule is exactly the
+    producer/consumer disagreement this bead exists to fix, because hardening one
+    copy would make the consumer count a miss the producer refused to stamp.
+    """
+    return as_int(channel.get("epg_data_id"))
+
+
+async def _resolve_epg_link_natural_keys(client, channels: list[dict]) -> int:
+    """Stamp each EPG-linked channel with the tvg_id of the row it points at.
+
+    Bead ``enhancedchannelmanager-dfkbn``, drill run 2026-08-04-run2. ``epg_data_id``
+    is a SOURCE row id that cannot round-trip (the destination re-downloads its
+    own guide and mints new ids), so ``dbas/channel_reattach.py`` correctly
+    relinks by ``tvg_id`` instead. But the channel's OWN ``tvg_id`` field is not
+    the link, and it is routinely null on a linked channel: ECM's own channel
+    PATCH sets ``epg_data_id`` and leaves ``tvg_id`` alone. All 7 of the drill's
+    linked channels therefore reached the restore with nothing to match on, and
+    every link was dropped. The link's natural key lives on the EPG ROW, and this is where
+    it is still readable: at backup time, against the source instance.
+
+    ONE bounded fetch for the whole export builds an ``epg_data_id -> tvg_id``
+    index (a real guide is tens of thousands of rows; the drill's was 14,668), so
+    the cost does not scale with the channel count. Mutates ``channels`` in place,
+    adding :data:`ARCHIVE_EPG_TVG_ID_KEY` ONLY where the lookup resolved. The
+    channel's own ``tvg_id`` is its own field and is never overwritten.
+
+    Fails soft in every direction: an unreachable EPG endpoint, an unindexed row,
+    or a blank tvg_id leaves the channel exactly as it was, which degrades to the
+    pre-fix behaviour (an unrestored link that the restore report COUNTS and
+    NAMES in ``epg_link_miss_details``). A backup must never fail over this.
+
+    Args:
+        client: The Dispatcharr API client.
+        channels: The gathered channel records. Mutated in place.
+
+    Returns:
+        The number of channels whose link natural key was resolved.
+    """
+    linked = [ch for ch in channels if _epg_link_id(ch) is not None]
+    if not linked:
+        return 0
+
+    try:
+        rows = await client.get_epg_data(max_results=EPG_INDEX_MAX_ROWS)
+    except Exception as e:  # noqa: BLE001 - one fetch must never fail a backup
+        # Type only: an httpx error's text embeds the full upstream URL.
+        logger.warning(
+            "[BACKUP] Could not list EPG data to resolve %d channel EPG link(s); "
+            "they are archived without their guide natural key: %s",
+            len(linked), type(e).__name__,
+        )
+        return 0
+
+    # A fetch that came back at EXACTLY the ceiling was almost certainly cut
+    # short: this is a bounded read, and a guide that happens to hold precisely
+    # 200,000 rows is far less likely than one that holds more. The two causes of
+    # an unresolved link look identical in the artifact, so name TRUNCATION here
+    # rather than let the operator read a truncated index as 200,000 dangling
+    # references (PR review W2).
+    truncated = len(rows or []) >= EPG_INDEX_MAX_ROWS
+    if truncated:
+        _EPG_INDEX_TRUNCATED.set(True)
+        logger.warning(
+            "[BACKUP] The source guide hit the %d-row read ceiling, so its "
+            "tvg_id index may be INCOMPLETE. Any EPG link reported unresolved "
+            "below may be a truncation artifact, not a dangling reference.",
+            EPG_INDEX_MAX_ROWS,
+        )
+
+    index: dict[int, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        row_id = as_int(row.get("id"))
+        tvg_id = row.get("tvg_id")
+        if row_id is None:
+            continue
+        if not isinstance(tvg_id, str) or not tvg_id.strip():
+            continue
+        index[row_id] = tvg_id.strip()
+
+    resolved = 0
+    for channel in linked:
+        tvg_id = index.get(_epg_link_id(channel))
+        if tvg_id is None:
+            continue
+        channel[ARCHIVE_EPG_TVG_ID_KEY] = tvg_id
+        resolved += 1
+
+    if resolved < len(linked):
+        logger.warning(
+            "[BACKUP] %d of %d EPG-linked channel(s) had no resolvable guide row; "
+            "their links will be reported unrestored on restore.",
+            len(linked) - resolved, len(linked),
+        )
+    logger.info(
+        "[BACKUP] Resolved the EPG natural key for %d channel(s).", resolved
+    )
+    return resolved
+
+
 async def _gather_channels_with_streams(client) -> list[dict]:
     """Fetch every channel with its embedded streams reduced to SAFE fields.
 
@@ -1989,6 +2716,10 @@ async def _gather_channels_with_streams(client) -> list[dict]:
     URL — see :func:`_safe_embedded_stream`) by joining against the stream records
     fetched once for the whole export. A channel whose streams cannot be enriched
     still carries its ordered ``[{id}, ...]`` so ordering and count survive.
+
+    Each EPG-LINKED channel is additionally stamped with the natural key of the
+    guide row it points at (:func:`_resolve_epg_link_natural_keys`, bead
+    ``…-dfkbn``), which is the only form of the link that survives a restore.
     """
     # 1) Walk all channel pages.
     channels: list[dict] = []
@@ -2045,6 +2776,17 @@ async def _gather_channels_with_streams(client) -> list[dict]:
                     embedded.append(stream_index.get(sid, {"id": sid}))
             out["streams"] = embedded
         enriched.append(out)
+
+    # 4) Resolve each EPG link to its natural key. Best-effort by contract: a
+    #    failure here must not cost the operator the CHANNELS section, which is
+    #    what raising into the caller's per-section try/except would do.
+    try:
+        await _resolve_epg_link_natural_keys(client, enriched)
+    except Exception as e:  # noqa: BLE001 - never fail the channels gather
+        logger.warning(
+            "[BACKUP] Could not resolve channel EPG natural keys: %s",
+            type(e).__name__,
+        )
     return enriched
 
 
@@ -2439,18 +3181,17 @@ RESTORABLE_SECTIONS = {
     "dispatcharr_users": {
         "label": "Dispatcharr Users", "dispatcharr": True, "artifact_only": True,
     },
-    # dfkbn item 1 — the Dispatcharr LOGO INVENTORY (id + name + url). NOT the
-    # bytes: those are the ``binary/logos`` subtree, which only ever carried
-    # ECM's OWN ``/config/uploads/logos/``. The drill proved that subtree is the
-    # wrong (and, in practice, empty) source of truth: a logo uploaded through
-    # ECM's own Logo Manager is written to DISPATCHARR's ``/data/logos/``, so
-    # ``binary/metadata.json`` was ``{"logo_count": 0, "logos": []}`` while 13
-    # logos existed, and the other 12 were remote CDN URLs with no local bytes at
-    # all. Their URLs are the only thing that CAN round-trip, and Dispatcharr's
-    # Logo model is exactly ``{name, url}`` (0.28.2 apps/channels/models.py) —
-    # so this inventory restores a CDN logo byte-identically and, for a
-    # volume-local one, at least names it so the loss is reported instead of
-    # silent. ``artifact_only`` for the same reason as its neighbours.
+    # dfkbn item 1: the Dispatcharr LOGO INVENTORY (id + name + url). This is the
+    # METADATA half of the logo round-trip; the BYTES half is the
+    # ``binary/logos`` subtree (see :func:`_gather_dispatcharr_logo_payloads`).
+    # A logo whose ``url`` is an absolute http(s) CDN address restores from this
+    # inventory alone: Dispatcharr's Logo model is exactly ``{name, url}``
+    # (0.28.2 apps/channels/models.py), so re-creating the row restores the image
+    # byte-identically and archiving the bytes would be waste. A logo whose
+    # ``url`` is a Dispatcharr-LOCAL path (``/data/logos/x.png``, which is what
+    # ECM's own Logo Manager writes) needs its bytes archived too, and the
+    # builder fetches them from Dispatcharr at gather time (bead …-xb58a).
+    # ``artifact_only`` for the same reason as its neighbours.
     "logos": {"label": "Logos", "dispatcharr": True, "artifact_only": True},
     # lc6zu — the settings/agents producer set completing coverage of all 12
     # categories in the v0.18 scope (plugins remain excluded per ADR-012
@@ -3417,6 +4158,13 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
 class RestoreDbasSavedRequest(BaseModel):
     filename: str
     confirm_apply: bool = False
+    # What the post-create reattach passes do to channels this restore did NOT
+    # create (bead …-dfkbn, PR review W1). Typed as an OPTIONAL plain str rather
+    # than the enum so neither an unrecognised value nor an explicit JSON ``null``
+    # 422s the whole restore: both are coerced to the SAFE default. A client that
+    # serializes an unset field as ``null`` is asking for the default, not for a
+    # validation error.
+    channel_reattach_mode: Optional[str] = ChannelReattachMode.PRESERVE.value
     # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh). Omit
     # for a plain artifact. Travels in the JSON body of this admin-only endpoint,
     # never a query string, so it does not land in access logs. It is forwarded
@@ -3447,9 +4195,11 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
     it MUST survive the restore.
     """
     filename = req.filename
+    reattach_mode = ChannelReattachMode.coerce(req.channel_reattach_mode)
     logger.info(
-        "[BACKUP] DBAS restore-from-saved requested (filename=%s, confirm_apply=%s)",
-        filename, req.confirm_apply,
+        "[BACKUP] DBAS restore-from-saved requested (filename=%s, "
+        "confirm_apply=%s, channel_reattach_mode=%s)",
+        filename, req.confirm_apply, reattach_mode.value,
     )
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
@@ -3485,6 +4235,7 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
         "artifact_path": str(path),
         "confirm_apply": bool(req.confirm_apply),
         "cleanup_artifact": False,
+        "channel_reattach_mode": reattach_mode.value,
     }
     # Forward the passphrase only when present (encrypted artifact). The task
     # excludes it from get_config so it is never persisted or logged.
@@ -3508,6 +4259,7 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
         "status": "started",
         "task_id": DBAS_RESTORE_TASK_ID,
         "is_dry_run": not req.confirm_apply,
+        "channel_reattach_mode": reattach_mode.value,
     }
 
 

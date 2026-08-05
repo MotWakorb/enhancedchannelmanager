@@ -1004,11 +1004,18 @@ async def test_user_category_failure_does_not_roll_back_the_restore(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_non_fatal_set_is_exactly_the_user_category(tmp_path):
-    """Guard: users are the ONLY non-fatal category — the rest still roll back."""
+async def test_non_fatal_set_is_exactly_users_and_logos(tmp_path):
+    """Guard: only users and logos are non-fatal; the rest still roll back.
+
+    Both members pass the same admission test (nothing else in the restore holds
+    a hard FK into them). Widening this set silently is the failure this guard
+    exists to catch, so it is an equality assertion, not a membership one.
+    """
     from dbas.restore_orchestrator import NON_FATAL_FAILURE_CATEGORIES
 
-    assert NON_FATAL_FAILURE_CATEGORIES == frozenset({EntityType.USER})
+    assert NON_FATAL_FAILURE_CATEGORIES == frozenset(
+        {EntityType.USER, EntityType.LOGO}
+    )
 
 
 @pytest.mark.asyncio
@@ -1074,6 +1081,77 @@ def test_compute_outcome_never_reports_success_on_a_non_fatal_failure():
         compute_outcome(report=report, failure_occurred=False, rollback=None)
         == RestoreOutcome.COMPLETED_WITH_FAILURES
     )
+
+
+def _logo_failure_step():
+    """A LOGO step that reports one per-row failure and a counted logo miss.
+
+    This is the exact shape the logos importer produces for a logo it cannot
+    restore: a VALIDATION_ERROR row plus a logo_misses increment, which is what
+    the importer's own comments describe as "an honest miss ... reported instead
+    of silent".
+    """
+
+    async def _importer(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.LOGO)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.VALIDATION_ERROR,
+                label="Drill Uploaded Logo",
+                message="unsafe or empty logo filename",
+            )
+        )
+        ctx.report.logo_misses += 1
+        return None
+
+    return ImporterStep(EntityType.LOGO, _importer)
+
+
+@pytest.mark.asyncio
+async def test_logo_category_failure_does_not_roll_back_the_restore(tmp_path):
+    """d0agi: one image that cannot be written must not destroy the restore.
+
+    Drill run 2026-08-04-run2: a restore that had already created 44 entities
+    reported ``partial_failed_rolled_back`` and compensated all 44 away because
+    ONE logo failed. Logos run LAST in the hard ordering, so everything the
+    rollback destroyed had already succeeded.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _creating_step(EntityType.CHANNEL, 501),
+        _logo_failure_step(),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    # The failure is VISIBLE, COUNTED, and named.
+    assert out.category(EntityType.LOGO).failed == 1
+    assert out.category(EntityType.LOGO).failure_details[0].label == "Drill Uploaded Logo"
+    assert out.logo_misses == 1
+    # Every other category survives; nothing was compensated.
+    assert out.category(EntityType.M3U_ACCOUNT).created == 1
+    assert out.category(EntityType.CHANNEL).created == 1
+    client.delete_m3u_account.assert_not_called()
+    client.delete_channel.assert_not_called()
+    assert [e.destination_id for e in ledger.entries] == [901, 501]
+    assert all(not e.compensated for e in ledger.entries)
+    # Honest outcome: completed, but NOT a clean success, and no rollback note.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert not any("rollback" in note.lower() for note in out.notes)
+    assert any("logo" in note.lower() for note in out.notes)
 
 
 # ---------------------------------------------------------------------------
