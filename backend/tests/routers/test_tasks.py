@@ -350,6 +350,89 @@ class TestGetParameterSchema:
         assert data["parameters"] == []
 
 
+class TestGetRunParameterSchema:
+    """Ad-hoc run parameters are discoverable (bead ``enhancedchannelmanager-sdpzy``).
+
+    ``POST /api/tasks/dbas_backup/run`` is the only way to produce an encrypted,
+    credential-bearing artifact, and it honours ``passphrase`` /
+    ``include_credentials`` / ``acknowledge_unrecoverable`` inside the
+    ``parameters`` object. The schema endpoint used to answer "No configurable
+    parameters", so the only discoverable way to call it was the one that
+    silently produces a PLAIN artifact.
+
+    These parameters live under a separate ``run_parameters`` key and NOT under
+    ``parameters``: ``parameters`` is what ``ScheduleEditor`` renders and
+    persists into ``task_schedules.parameters``, and a passphrase must never be
+    written to a schedule (``tasks.dbas_backup`` — "there is nowhere safe to keep
+    a passphrase at rest for an unattended run").
+    """
+
+    @pytest.mark.asyncio
+    async def test_lists_the_run_parameters_the_task_honours(self, async_client):
+        import tasks  # noqa: F401 — triggers @register_task side effects
+
+        response = await async_client.get("/api/tasks/dbas_backup/parameter-schema")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["task_id"] == "dbas_backup"
+        assert [p["name"] for p in data["run_parameters"]] == [
+            "passphrase",
+            "include_credentials",
+            "acknowledge_unrecoverable",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_each_run_parameter_carries_usable_metadata(self, async_client):
+        import tasks  # noqa: F401 — triggers @register_task side effects
+
+        response = await async_client.get("/api/tasks/dbas_backup/parameter-schema")
+
+        params = {p["name"]: p for p in response.json()["run_parameters"]}
+        assert params["passphrase"]["type"] == "string"
+        assert params["passphrase"]["default"] is None
+        assert params["include_credentials"]["type"] == "boolean"
+        assert params["include_credentials"]["default"] is False
+        assert params["acknowledge_unrecoverable"]["type"] == "boolean"
+        assert params["acknowledge_unrecoverable"]["default"] is False
+        for param in params.values():
+            assert param["required"] is False
+            assert param["label"]
+            assert param["description"]
+
+    @pytest.mark.asyncio
+    async def test_no_longer_claims_the_task_has_no_parameters(self, async_client):
+        import tasks  # noqa: F401 — triggers @register_task side effects
+
+        response = await async_client.get("/api/tasks/dbas_backup/parameter-schema")
+
+        assert response.json()["description"] != "No configurable parameters"
+
+    @pytest.mark.asyncio
+    async def test_run_parameters_are_not_schedule_configurable(self, async_client):
+        """The security-critical half: a passphrase must never reach a schedule."""
+        import tasks  # noqa: F401 — triggers @register_task side effects
+
+        response = await async_client.get("/api/tasks/dbas_backup/parameter-schema")
+
+        assert response.json()["parameters"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_task_with_no_parameters_is_unchanged(self, async_client):
+        """A task that declares neither kind still gets the generic response."""
+        import tasks  # noqa: F401 — triggers @register_task side effects
+
+        response = await async_client.get(
+            "/api/tasks/journal_noise_purge/parameter-schema"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["description"] == "No configurable parameters"
+        assert data["parameters"] == []
+        assert "run_parameters" not in data
+
+
 class TestGetAllParameterSchemas:
     """Tests for GET /api/tasks/parameter-schemas.
 

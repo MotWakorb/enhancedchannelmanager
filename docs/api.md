@@ -869,6 +869,17 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `PATCH /api/tasks/{id}/schedules/{sid}` | Update schedule |
 | `DELETE /api/tasks/{id}/schedules/{sid}` | Delete schedule |
 
+`GET /api/tasks/{id}/parameter-schema` returns two lists. `parameters` are
+schedule-configurable — the schedule editor renders them and they are persisted
+with the schedule. `run_parameters`, when present, are ad-hoc parameters the task
+honours **only** inside the `parameters` object of `POST /api/tasks/{id}/run`,
+and are never persisted to a schedule. `dbas_backup` declares its encryption
+parameters (`passphrase`, `include_credentials`, `acknowledge_unrecoverable`)
+this way: a passphrase applies to one manual run and there is nowhere safe to
+keep it at rest for an unattended one. Sent at the top level of the run request
+instead of inside `parameters`, they are ignored and a plain artifact is
+produced.
+
 ## Channel Pipeline
 
 > **Deprecated alias:** every endpoint below is also reachable at the old `/api/auto-creation/...` prefix. The alias forwards to the same handler and continues to work, but is hidden from the OpenAPI schema and should not be used in new integrations. Use the canonical `/api/channel-pipeline/...` paths shown here.

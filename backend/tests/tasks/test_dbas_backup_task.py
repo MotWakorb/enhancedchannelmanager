@@ -661,6 +661,50 @@ def test_config_round_trip():
 
 
 # ---------------------------------------------------------------------------
+# Declared run parameters match what the task reads (bead …-sdpzy)
+# ---------------------------------------------------------------------------
+
+
+def test_declared_run_parameters_are_the_ones_update_config_reads():
+    """The declaration is only worth publishing if it cannot drift.
+
+    ``run_parameter_schema`` is what GET /api/tasks/dbas_backup/parameter-schema
+    tells an operator to send. Each declared name must actually change task
+    state when passed through ``update_config`` — the same path the run endpoint
+    uses for ad-hoc parameters.
+    """
+    from tasks.dbas_backup import DbasBackupTask
+
+    declared = [p["name"] for p in DbasBackupTask.run_parameter_schema["parameters"]]
+    assert declared == [
+        "passphrase",
+        "include_credentials",
+        "acknowledge_unrecoverable",
+    ]
+
+    task = DbasBackupTask()
+    task.update_config({
+        "passphrase": "correct horse battery",
+        "include_credentials": True,
+        "acknowledge_unrecoverable": True,
+    })
+    assert task.passphrase == "correct horse battery"
+    assert task.include_credentials is True
+    assert task.acknowledge_unrecoverable is True
+
+
+def test_run_parameters_are_absent_from_the_persisted_config():
+    """They are manual-run transients — get_config() is what reaches journal.db."""
+    from tasks.dbas_backup import DbasBackupTask
+
+    declared = {p["name"] for p in DbasBackupTask.run_parameter_schema["parameters"]}
+    task = DbasBackupTask()
+    task.update_config({"passphrase": "correct horse battery"})
+
+    assert declared.isdisjoint(task.get_config().keys())
+
+
+# ---------------------------------------------------------------------------
 # Encryption transients are ONE-SHOT (bead …-cytzj)
 # ---------------------------------------------------------------------------
 #
