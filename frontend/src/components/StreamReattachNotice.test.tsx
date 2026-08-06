@@ -111,6 +111,30 @@ describe('StreamReattachNotice', () => {
     expect(rows[0].textContent).toContain('101');
   });
 
+  it('points at the credentials panel only when there is one', () => {
+    // On a credential-bearing (encrypted) artifact this panel can fire alone,
+    // and "the credentials named above" would then name nothing.
+    const withoutCredentials = report({
+      channels_needing_stream_reattach: 1,
+      channels_with_no_playable_stream: 1,
+      stream_reattach_details: [detail()],
+    });
+    const { unmount } = render(<StreamReattachNotice report={withoutCredentials} />);
+    expect(screen.getByTestId('stream-reattach-notice').textContent).not.toContain(
+      'credentials named above',
+    );
+    unmount();
+
+    render(
+      <StreamReattachNotice
+        report={{ ...withoutCredentials, credentials_needing_reentry: 2 }}
+      />,
+    );
+    expect(screen.getByTestId('stream-reattach-notice').textContent).toContain(
+      'credentials named above',
+    );
+  });
+
   it('uses the singular for a single dead channel', () => {
     render(
       <StreamReattachNotice

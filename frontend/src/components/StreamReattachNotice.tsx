@@ -100,6 +100,7 @@ export function StreamReattachNotice({ report, mode }: StreamReattachNoticeProps
     return null;
   }
 
+  const credentialsPending = (report.credentials_needing_reentry ?? 0) > 0;
   const details = report.stream_reattach_details ?? [];
   const dead = unplayableRows(details);
   const holding = holdingRows(details);
@@ -132,8 +133,16 @@ export function StreamReattachNotice({ report, mode }: StreamReattachNoticeProps
             <span className="stream-reattach-detail">
               Not one of the streams left on{' '}
               {unplayable === 1 ? 'this channel' : 'these channels'} carries a URL, so nothing
-              will play until you attach a real stream to each. Re-entering any credential the
-              panel above names, then refreshing that account, is what usually resolves it.
+              will play until you attach a real stream to each.
+              {/*
+                Only point at the credentials panel when there IS one: on a
+                credential-bearing artifact this panel can fire alone, and
+                "the panel above" would then name nothing.
+              */}
+              {credentialsPending
+                ? ' Re-entering the credentials named above, then refreshing that account, is' +
+                  ' what usually resolves it.'
+                : ''}
             </span>
             <ChannelRows rows={dead} kind="unplayable" />
           </>
