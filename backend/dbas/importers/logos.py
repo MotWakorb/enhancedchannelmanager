@@ -197,6 +197,19 @@ class LogoImportResult(BaseModel):
     misses: int = Field(default=0)
     rejected: int = Field(default=0)
     deleted_existing: int = Field(default=0)
+    # SOURCE (archive) ids of the logos a DRY RUN determined it would create —
+    # by upload or by URL re-create (bead …-dgnms). Empty on an apply, where a
+    # created logo has a real destination id in the LOGO remap instead.
+    #
+    # A source id, never a fabricated destination id: this importer deliberately
+    # registers NO dry-run remap entry for a would-create (the id an apply mints
+    # is not knowable, and inventing one would corrupt every FK resolved through
+    # it). But ``channel_reattach.reattach_channel_logos`` still needs to know
+    # the logo WILL exist, or its preview split reads 0 for a restore that
+    # reattaches N — drill run 4 measured preview 0 against apply 11 on a fresh
+    # target, because a fresh target matches nothing and every logo is a
+    # would-create. This set is the missing fact, carried without faking an id.
+    would_create_source_ids: set[int] = Field(default_factory=set)
 
 
 def _logo_label(archive_logo: dict) -> str:
@@ -581,15 +594,31 @@ def _simulate_create_logo_from_url(
 
     Nothing is written: no ledger entry, no remap registration (a dry-run remap
     id would be a fabrication), and no logo miss (the apply's URL path does not
-    record one either, because the logo does come back).
+    record one either, because the logo does come back). The SOURCE id is
+    recorded on the result instead, so the logo-reattach pass can count a channel
+    whose logo this preview knows will exist without inventing its id.
     """
     cat.would_create += 1
     result.uploaded += 1
+    _note_would_create(result, source_id)
     logger.info(
         "[DBAS-LOGOS] Dry run: logo '%s' would be re-created from its archived "
         "URL (source id=%s).",
         label, source_id,
     )
+
+
+def _note_would_create(result: "LogoImportResult", source_id) -> None:
+    """Record that a DRY RUN would create the logo with this SOURCE id.
+
+    The one place :attr:`LogoImportResult.would_create_source_ids` is written, so
+    the two dry-run create branches (URL re-create and validated upload) cannot
+    diverge. A record with no usable integer id is skipped rather than guessed —
+    the reattach pass keys on the archived ``logo_id`` FK, which is an int or
+    nothing.
+    """
+    if isinstance(source_id, int) and not isinstance(source_id, bool):
+        result.would_create_source_ids.add(source_id)
 
 
 def _channels_by_logo_id(archive_channels: list[dict] | None) -> dict[int, list[dict]]:
@@ -932,6 +961,10 @@ async def import_logos(
         # :meth:`RestoreReport.record_logo_miss` for the invariant.
         if is_dry_run:
             cat.would_create += 1
+            # The apply WILL upload this logo, so a channel pointing at it will
+            # get its logo back. Record the source id for the reattach pass's
+            # preview split (bead …-dgnms) — see would_create_source_ids.
+            _note_would_create(result, source_id)
             # Release the decoded bytes promptly (no upload in dry-run).
             del data
             continue

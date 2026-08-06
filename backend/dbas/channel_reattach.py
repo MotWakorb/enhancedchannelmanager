@@ -109,16 +109,28 @@ already exist, or does THIS RESTORE create it?
   none of them. A channel that does not resolve is in NEITHER half of the split
   and is not a miss: it is simply not visible from a preview.
 
-* **Logos — resolve what already exists.** The ``LOGO`` remap this pass reads is
-  populated during the SAME run by the logos importer, which registers a
-  destination id for every archived logo it MATCHES against the destination
-  (``importers/logos.py``) on a dry run as much as on an apply. For a merge into
-  a live install — the only case where the split is non-zero — that matched
-  population IS the population, so the preview is faithful. The residual gap is
-  a logo the restore would UPLOAD: it has no destination id until the upload
-  happens, so a pre-existing channel pointing at one is not counted. The
-  dry-run logo split is therefore a LOWER BOUND, and the direction is stated
-  here rather than papered over.
+* **Logos — resolve what already exists, plus what this run has decided to
+  create.** The ``LOGO`` remap this pass reads is populated during the SAME run
+  by the logos importer, which registers a destination id for every archived
+  logo it MATCHES against the destination (``importers/logos.py``) on a dry run
+  as much as on an apply. For a merge into a live install that matched
+  population IS the population, so the preview was already faithful there.
+
+  It was NOT faithful on a FRESH target (bead ``…-dgnms``, drill run 4). Nothing
+  matches on an empty destination, so every logo is a would-CREATE, and a
+  would-create has no destination id — the importer deliberately registers none,
+  because the id an apply mints is not knowable and a fabricated one would
+  corrupt every FK resolved through it. The whole population fell out of the
+  split and the preview reported ``logo_reattach.created_channels: 0`` for an
+  apply that reattached 11 minutes later.
+
+  So the importer now also reports the SOURCE ids it would create
+  (``LogoImportResult.would_create_source_ids``) and this pass counts those
+  channels too. No id is invented: "this logo will exist" is a decision the same
+  run's importer has already taken, which is the same class of already-existing
+  state as the CHANNEL remap — and squarely the opposite of the destination
+  GUIDE, which no part of the preview has decided anything about. A logo the
+  importer REJECTS is not in the set, so it stays out of the split.
 
 ----------------------------------------------------------------------------
 BEST-EFFORT, NEVER FATAL
@@ -226,6 +238,7 @@ async def reattach_channel_logos(
     created_source_ids: set[int] | None,
     mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
     is_dry_run: bool = False,
+    would_create_logo_source_ids: set[int] | None = None,
 ) -> int:
     """Put each restored channel's archived logo back on it.
 
@@ -243,13 +256,21 @@ async def reattach_channel_logos(
 
     DRY RUN. Resolves exactly what the apply resolves, PATCHes nothing, and
     records NO miss. A channel is counted into the split only when BOTH its
-    destination id and its logo's destination id resolve, which is the same
-    condition the apply requires before it touches anything: counting before
-    resolution told the operator two channels would be replaced when the apply
-    replaced none. The one thing a preview cannot see is a logo the restore would
-    UPLOAD, which has no destination id until the upload happens, so the dry-run
-    split is a LOWER BOUND. See the module docstring for why the EPG pass makes
-    the opposite call.
+    destination id and its logo resolve, which is the same condition the apply
+    requires before it touches anything: counting before resolution told the
+    operator two channels would be replaced when the apply replaced none.
+
+    A logo the restore will CREATE counts too, via
+    ``would_create_logo_source_ids`` (bead ``…-dgnms``, drill run 4). It has no
+    destination id yet — the logos importer registers none for a would-create,
+    because the id an apply mints is not knowable — but "this logo will exist"
+    is a FACT that importer already established, so the preview reports it. This
+    used to be the documented LOWER BOUND, and on a FRESH target the bound was
+    the whole answer: nothing matches, so every logo is a would-create, and the
+    preview reported ``created_channels: 0`` for an apply that reattached 11.
+    See the module docstring for why the EPG pass makes the opposite call about
+    the destination GUIDE — that is state the restore creates and cannot be read
+    early; this is state the SAME RUN's logos importer has already decided.
 
     Args:
         client: The Dispatcharr API client.
@@ -264,6 +285,11 @@ async def reattach_channel_logos(
             information".
         mode: What to do about channels this restore did not create.
         is_dry_run: Report the split without mutating anything.
+        would_create_logo_source_ids: ARCHIVE (source) logo ids a DRY RUN
+            determined the apply would create — from
+            :attr:`dbas.importers.logos.LogoImportResult.would_create_source_ids`.
+            Read ONLY on a dry run; an apply resolves real destination ids
+            through the remap and ignores this entirely.
 
     Returns:
         The number of channels whose logo was reattached (0 on a dry run).
@@ -297,7 +323,17 @@ async def reattach_channel_logos(
             else None
         )
         dest_logo_id = remap.resolve(EntityType.LOGO, source_logo_id)
-        if dest_logo_id is None or dest_channel_id is None:
+        # A dry-run-only widening (bead …-dgnms): the logo has no destination id
+        # because the apply has not created it yet, but the logos importer has
+        # already decided it WILL. Never consulted on an apply, where
+        # ``dest_logo_id`` is the real, minted id and the only thing PATCHable.
+        would_be_created = (
+            is_dry_run
+            and dest_logo_id is None
+            and would_create_logo_source_ids is not None
+            and source_logo_id in would_create_logo_source_ids
+        )
+        if (dest_logo_id is None and not would_be_created) or dest_channel_id is None:
             # A dry run records NO miss: the logos importer has not uploaded yet,
             # so an unresolved reference here is "not visible from a preview",
             # not "the operator lost this". Claiming otherwise is the dgnms
@@ -650,6 +686,7 @@ async def reattach_profile_memberships(
     remap: IdRemapTable,
     archive_profiles: list[dict],
     archive_channels: list[dict],
+    is_dry_run: bool = False,
 ) -> int:
     """Re-assert each archived profile's channel selection on the destination.
 
@@ -663,6 +700,22 @@ async def reattach_profile_memberships(
     existed on the destination and is not in the archive keeps whatever
     membership the operator gave it.
 
+    DRY RUN (bead ``…-dgnms``, drill run 4). This pass used to be apply-only, so
+    a preview reported ``profile_membership_drift: 0`` for an apply that then
+    reported 6 — the counter that exists precisely to warn an operator their
+    hide-these-channels profile is about to widen was silent in the one place it
+    could still be acted on. It is now predicted, because it is entirely
+    computable from state the preview already holds: the flip set is
+    "restored channels the archived profile EXCLUDES", and Dispatcharr's
+    enable-everything create default is what they would all be flipped away
+    from. The dry run does the identical arithmetic against the identical remap
+    entries and PATCHes nothing.
+
+    The prediction is exact rather than a bound because the apply's own count is
+    "memberships we set to disabled", not "memberships that were observed
+    enabled first" — the apply never reads the destination's current membership
+    either. Whatever changes that must change both branches together.
+
     Args:
         client: The Dispatcharr API client.
         report: The shared :class:`RestoreReport`; each flip away from the
@@ -670,9 +723,11 @@ async def reattach_profile_memberships(
         remap: The shared :class:`IdRemapTable` (``CHANNEL`` + ``CHANNEL_PROFILE``).
         archive_profiles: The CHANNEL_PROFILE records from the export archive.
         archive_channels: The CHANNEL records from the export archive.
+        is_dry_run: Report the drift without PATCHing any membership.
 
     Returns:
-        The number of memberships successfully asserted.
+        The number of memberships successfully asserted (the WOULD-BE number on
+        a dry run).
     """
     asserted = 0
 
@@ -709,6 +764,14 @@ async def reattach_profile_memberships(
                 continue
             label = _channel_label(archive_channel)
             should_be_enabled = source_channel_id in enabled_sources
+            if is_dry_run:
+                # Predict, never PATCH. Falls through to the same counting below
+                # so the preview and the apply can only ever report the same
+                # number for the same inputs.
+                asserted += 1
+                if not should_be_enabled:
+                    disabled_names.append(label)
+                continue
             try:
                 await client.update_profile_channel(
                     dest_profile_id, dest_channel_id, {"enabled": should_be_enabled}
@@ -740,10 +803,15 @@ async def reattach_profile_memberships(
         )
         if disabled_names:
             logger.warning(
-                "[DBAS-REATTACH] Profile '%s': re-excluded %d channel(s) that the "
+                "[DBAS-REATTACH] Profile '%s': %s %d channel(s) that the "
                 "destination had enabled by default.",
-                profile_label, len(disabled_names),
+                profile_label,
+                "would re-exclude" if is_dry_run else "re-excluded",
+                len(disabled_names),
             )
 
-    logger.info("[DBAS-REATTACH] Asserted %d channel-profile membership(s).", asserted)
+    logger.info(
+        "[DBAS-REATTACH] Asserted %d channel-profile membership(s) (dry_run=%s).",
+        asserted, is_dry_run,
+    )
     return asserted

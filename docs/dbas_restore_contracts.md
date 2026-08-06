@@ -117,6 +117,34 @@ operator-meaningful unit ("3 channels a profile was built to exclude were
 exposed") — so unlike the others it does **not** track the length of its detail
 list. An already-correct profile records nothing.
 
+#### What a DRY RUN reports for each (bead `…-dgnms`)
+
+A preview must never report a confident `0` for a condition the apply will
+report as N. Drill run 4 previewed and applied the same artifact against a fresh
+target back to back and measured exactly that, four times over. The counters
+above split into two groups, and they answer differently:
+
+| Counter | On a dry run |
+|---|---|
+| `credentials_needing_reentry` | predicted (it is a fact about the artifact) |
+| `epg_links_unrestored` | never recorded — a preview does not claim a loss |
+| `profile_membership_drift` | **predicted.** The flip set is the restored channels the archived profile EXCLUDES, computed from the archive and the remap the same run already populated. Preview N == apply N |
+| `channels_needing_stream_reattach` | **`null` — not predicted** |
+| `channels_with_no_playable_stream` | **`null` — not predicted** |
+| `streams_rebound` | `0`, and that is literally true: a preview rebinds nothing |
+
+The two `null`s are the honest answer, not a gap. The pass that writes them
+re-runs the stream matcher against the provider streams the **deferred M3U
+refresh** materializes, and a dry run performs no refresh — the number is not
+knowable before the apply. `null` is additive-compatible: the fields were
+already optional, every backend consumer coerces with `or 0`, and a client that
+renders them must show "not predicted" rather than `0`.
+
+The population SPLITS (`epg_link_reattach` / `logo_reattach`) are predicted in
+both modes and must agree with the apply. `logo_reattach` counts both the logos
+that MATCH on the destination and the ones this run has decided to CREATE; the
+second half is what a fresh target consists of entirely.
+
 ### Outcome: never "success" on mixed state
 
 `RestoreOutcome` has exactly four realized states:

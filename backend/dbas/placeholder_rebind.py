@@ -107,8 +107,9 @@ WHAT IT DOES
    streams than it had. A hit landing on an id the channel ALREADY holds is
    treated as a miss (see the run-3 section above). The channel is PATCHed only
    when the ordered list changed.
-4. Delete every placeholder that is no longer referenced by any channel, then the
-   synthetic account if this run created it and nothing is left under it.
+4. Delete every placeholder that is no longer referenced by any channel, then
+   SWEEP the residue an earlier run left behind, then drop the synthetic account
+   if nothing is left under it. See "THE RESIDUE" below.
 5. Report what is left, in TWO populations (bead ``…-daziw``). A channel holding
    any slot that is NOT a real URL-bearing destination stream is counted in
    :attr:`~dbas.restore_contracts.RestoreReport.channels_needing_stream_reattach`
@@ -140,6 +141,42 @@ streams. Who created a bad slot is irrelevant to whether the channel plays. A
 slot that is not a candidate is named from the destination's own stream list, so
 a prior run's placeholder gets its real name rather than ``<unknown>``. A channel
 whose every slot IS a candidate is healthy and is not reported at all.
+
+----------------------------------------------------------------------------
+THE RESIDUE (bead ``…-dgnms``, drill runs 2026-08-05-run4 AND run5)
+----------------------------------------------------------------------------
+
+Step 4 above deleted only the placeholders in THIS run's ``RollbackLedger``, and
+dropped the synthetic account only when THIS run had created it. Both conditions
+are about provenance, and provenance turns out to be the wrong question for
+cleanup. Two measured consequences, neither an outage — every channel played —
+but both accumulating on every redacted restore cycle:
+
+* **14 URL-less placeholder streams bound to NO channel.** They were created by
+  an EARLIER restore and superseded when a later one rebound their channels onto
+  real streams. Nothing referenced them again, and nothing this run owned
+  referenced them either, so nothing ever deleted them.
+* **The synthetic account survived while empty.** Run 5 rebound and deleted every
+  placeholder (``14 placeholder(s) deleted``, ``0 channel(s) still hold a slot
+  that cannot play``) and the M3U account list still showed
+  ``ECM Custom Streams (DBAS restore)`` — this run had REUSED the account rather
+  than created it, so the ledger held no entry and the drop no-oped.
+
+Both are fixed by asking the state question instead of the provenance question,
+and BY KEEPING every safety condition that is about state:
+
+* :func:`_sweep_orphaned_placeholders` deletes a stream only when it is on the
+  synthetic account AND carries no url AND no channel references it. An
+  operator's own URL-less stream on a DIFFERENT account is untouched; so is any
+  placeholder a channel still holds.
+* :func:`_drop_empty_synthetic_account` deletes the account only when NO stream
+  remains under it, verified against the destination's own stream list. The
+  "never delete an account that still has streams" property — the one that stops
+  a cascade from cutting channels this run never touched — is unchanged.
+
+The ledger-scoped guarantee that governs REBINDING is likewise unchanged: only
+streams this run synthesized are ever rebound, and only they are deleted by the
+ledger-owned pass. The sweep is a strictly additional, strictly narrower pass.
 
 BEST-EFFORT BY CONSTRUCTION: every upstream call here is post-create cleanup on
 an otherwise-successful restore. A failure is logged and surfaced as a report
@@ -190,7 +227,13 @@ class RebindResult:
     Attributes:
         rebound: Placeholder slots swapped for a real provider stream.
         channels_updated: Channels whose ordered stream list was PATCHed.
-        placeholders_deleted: Orphaned placeholder streams removed.
+        placeholders_deleted: Orphaned placeholder streams THIS RUN created that
+            were removed.
+        orphans_swept: Orphaned placeholder streams an EARLIER run left behind
+            that were removed (bead ``…-dgnms``). Counted apart from
+            ``placeholders_deleted`` so the drill log keeps the two populations
+            legible: the first is this run cleaning up after itself, the second
+            is it cleaning up after its predecessors.
         account_deleted: Whether the synthetic custom-stream account was removed.
         still_placeholder: Channels left holding at least one slot that is not a
             real, URL-bearing destination stream — whoever created it (``…-oebpv``).
@@ -201,6 +244,7 @@ class RebindResult:
     rebound: int = 0
     channels_updated: int = 0
     placeholders_deleted: int = 0
+    orphans_swept: int = 0
     account_deleted: bool = False
     still_placeholder: list[str] = field(default_factory=list)
     unplayable: list[str] = field(default_factory=list)
@@ -255,6 +299,64 @@ def _stream_name(stream: dict) -> str:
     """Operator-facing stream name — never the URL."""
     name = stream.get("name")
     return str(name) if isinstance(name, str) and name else "<unknown>"
+
+
+def _stream_account_id(stream: dict) -> int | None:
+    """The M3U account a destination stream belongs to, or ``None``.
+
+    Dispatcharr serializes ``m3u_account`` as the account's integer pk; a nested
+    object is accepted defensively so a serializer change cannot silently turn
+    the residue sweep's account test into "no match" (which would leave residue,
+    not delete the wrong thing — but a silent no-op is still worth not having).
+    """
+    raw = stream.get("m3u_account")
+    if isinstance(raw, dict):
+        raw = raw.get("id")
+    return _as_int(raw)
+
+
+async def _synthetic_account_ids(
+    client: DispatcharrClient, ledger: RollbackLedger
+) -> set[int]:
+    """Every destination id the synthetic custom-stream account is known under.
+
+    The union of two sources, because either alone is incomplete:
+
+    * the LIVE account list, matched on the well-known
+      :data:`~dbas.custom_stream_fallback.CUSTOM_STREAM_ACCOUNT_NAME` — this is
+      what finds an account an EARLIER restore created and this one merely
+      REUSED (:func:`dbas.custom_stream_fallback._ensure_custom_stream_account`
+      find-or-creates on exactly that name);
+    * this run's LEDGER — the account this run created is guaranteed to be in it
+      and is the historical identification path, kept so the sweep still works
+      if the account list read fails or the account was renamed after creation.
+
+    Never raises: a failed or garbled account list degrades to the ledger alone,
+    which is exactly the pre-existing behaviour.
+    """
+    ids = {
+        entry.destination_id
+        for entry in ledger.entries
+        if entry.entity_type == EntityType.M3U_ACCOUNT
+        and entry.label == CUSTOM_STREAM_ACCOUNT_NAME
+    }
+    try:
+        accounts = await client.get_m3u_accounts()
+    except Exception as exc:  # noqa: BLE001 - best-effort cleanup pass
+        logger.warning(
+            "[DBAS-REBIND] Could not list M3U accounts; the residue sweep will "
+            "consider only the account this run created: %s", exc,
+        )
+        return ids
+    for account in accounts or []:
+        if not isinstance(account, dict):
+            continue
+        if account.get("name") != CUSTOM_STREAM_ACCOUNT_NAME:
+            continue
+        account_id = _as_int(account.get("id"))
+        if account_id is not None:
+            ids.add(account_id)
+    return ids
 
 
 async def rebind_placeholder_streams(
@@ -360,6 +462,10 @@ async def rebind_placeholder_streams(
     }
 
     still_referenced: set[int] = set()
+    # Destination channel id -> the ordered stream ids it is left holding once
+    # this pass is done with it. Seeded per channel below; a channel this pass
+    # does not touch is read from ``current_by_channel`` instead.
+    final_by_channel: dict[int, list[int]] = {}
 
     for archive_channel in archive_channels or []:
         source_channel_id = _as_int(archive_channel.get("id"))
@@ -452,6 +558,12 @@ async def rebind_placeholder_streams(
                     label, dest_channel_id, rebound_here,
                 )
 
+        # What this channel ENDS UP holding, so the residue sweep below can ask
+        # "is this stream referenced by anything" against the post-rebind truth
+        # rather than the pre-rebind list it fetched (bead …-dgnms). A channel
+        # this loop never reached keeps its fetched list, which is still current.
+        final_by_channel[dest_channel_id] = list(final_ids)
+
         # THE VERDICT (beads …-daziw / …-oebpv). Taken from ``final_ids`` — what
         # the channel is ACTUALLY left holding — and keyed on ``candidate_ids``,
         # the real URL-bearing destination streams. Deliberately NOT keyed on
@@ -483,6 +595,7 @@ async def rebind_placeholder_streams(
 
     # --- Drop the orphaned placeholders, then the synthetic account. ---------
     orphaned = sorted(placeholder_ids - still_referenced)
+    deleted_ids: set[int] = set()
     for stream_id in orphaned:
         try:
             await client.delete_stream(stream_id)
@@ -493,6 +606,24 @@ async def rebind_placeholder_streams(
             )
             continue
         result.placeholders_deleted += 1
+        deleted_ids.add(stream_id)
+
+    # Everything any channel is left referencing, post-rebind. Built from the
+    # per-channel final lists this pass just computed, falling back to the
+    # fetched list for a channel it never touched.
+    referenced_ids: set[int] = set()
+    for channel_id, current in current_by_channel.items():
+        referenced_ids.update(final_by_channel.get(channel_id, current))
+
+    synthetic_account_ids = await _synthetic_account_ids(client, ledger)
+    swept_ids = await _sweep_orphaned_placeholders(
+        client=client,
+        all_streams=all_streams,
+        referenced_ids=referenced_ids,
+        already_deleted=deleted_ids,
+        synthetic_account_ids=synthetic_account_ids,
+    )
+    result.orphans_swept = len(swept_ids)
 
     if result.still_placeholder:
         # Say which of the two populations each number is: the drill's own report
@@ -513,11 +644,18 @@ async def rebind_placeholder_streams(
             )
         report.notes.append(note)
 
-    # The synthetic account goes only when nothing this run created is still
-    # bound. A channel stranded by an EARLIER run does not keep THIS run's
-    # account alive — its placeholders belong to the prior restore's account.
-    if not still_referenced:
-        result.account_deleted = await _drop_synthetic_account(client, ledger)
+    # The synthetic account goes when it is EMPTY — no stream is left under it —
+    # regardless of which run created it (bead …-dgnms). The emptiness test is
+    # what protects the operator, and it is unchanged; only the "who created it"
+    # condition is gone. The old ``if not still_referenced`` gate is subsumed:
+    # a placeholder this run must keep IS a stream under the account, so the
+    # account is not empty and is not dropped.
+    result.account_deleted = await _drop_empty_synthetic_account(
+        client=client,
+        all_streams=all_streams,
+        deleted_ids=deleted_ids | swept_ids,
+        synthetic_account_ids=synthetic_account_ids,
+    )
 
     logger.info(
         "[DBAS-REBIND] Rebind complete: %d slot(s) rebound across %d channel(s); "
@@ -529,40 +667,161 @@ async def rebind_placeholder_streams(
         len(result.still_placeholder),
         len(result.unplayable),
     )
+    if result.orphans_swept:
+        logger.info(
+            "[DBAS-REBIND] Residue sweep: %d orphaned placeholder(s) left by an "
+            "EARLIER restore removed from the synthetic '%s' account.",
+            result.orphans_swept, CUSTOM_STREAM_ACCOUNT_NAME,
+        )
     return result
 
 
-async def _drop_synthetic_account(
-    client: DispatcharrClient, ledger: RollbackLedger
-) -> bool:
-    """Delete the synthetic custom-stream account, if THIS run created it.
+async def _sweep_orphaned_placeholders(
+    *,
+    client: DispatcharrClient,
+    all_streams: list[dict],
+    referenced_ids: set[int],
+    already_deleted: set[int],
+    synthetic_account_ids: set[int],
+) -> set[int]:
+    """Delete placeholder streams an EARLIER restore stranded (bead ``…-dgnms``).
 
-    Identified by ledger entry + the well-known
-    :data:`~dbas.custom_stream_fallback.CUSTOM_STREAM_ACCOUNT_NAME`, so an
-    account of the same name left by a PRIOR restore (which this run reused
-    rather than created) is never removed — deleting it would cascade its
-    streams away from channels this run did not touch.
+    THE PREDICATE — a stream is swept only when ALL FOUR hold:
 
-    Returns ``True`` when an account was deleted.
+    1. it sits on the synthetic ``CUSTOM_STREAM_ACCOUNT_NAME`` account (an
+       account ECM itself creates for exactly this purpose and puts nothing else
+       under);
+    2. it carries NO url (a URL-bearing stream on that account is not a
+       placeholder — it is something that can actually play, and nothing here
+       deletes a playable stream);
+    3. NO channel references it, taken from the post-rebind reference set;
+    4. this run has not already deleted it via the ledger-owned pass.
+
+    Every one is necessary, and the conjunction is the narrowest predicate that
+    still catches the measured residue. Drill runs 4 AND 5 finished the redacted
+    round trip with 14 URL-less streams bound to NO channel, because the
+    ledger-owned deletion above can only see placeholders THIS run created:
+    a placeholder from an EARLIER restore, superseded when a later restore
+    rebound its channel onto a real stream, is never referenced again and was
+    never cleaned up. The instance accrued dead rows on every redacted cycle.
+
+    WHAT IS DELIBERATELY NOT SWEPT, and why the predicate is not widened:
+
+    * a URL-less stream on ANY OTHER account — an operator may legitimately keep
+      their own custom URL-less streams, and this pass has no business
+      classifying those. The account test is what keeps the sweep to streams ECM
+      itself synthesized;
+    * a placeholder a channel still holds — that binding is load-bearing, and
+      cutting it is precisely the outage the rebind pass exists to prevent;
+    * anything at all when the synthetic account cannot be identified — the set
+      is empty and this function is a no-op, never a guess.
+
+    BEST-EFFORT: a failed delete is logged and skipped; nothing raises, nothing
+    fails the restore, nothing triggers a rollback.
+
+    Returns:
+        The destination ids actually deleted.
     """
-    for entry in ledger.entries:
-        if (
-            entry.entity_type == EntityType.M3U_ACCOUNT
-            and entry.label == CUSTOM_STREAM_ACCOUNT_NAME
-        ):
-            try:
-                await client.delete_m3u_account(entry.destination_id)
-            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
-                logger.warning(
-                    "[DBAS-REBIND] Could not delete the synthetic custom-stream "
-                    "account id=%s: %s",
-                    entry.destination_id, exc,
-                )
-                return False
-            logger.info(
-                "[DBAS-REBIND] Deleted the now-empty synthetic custom-stream "
-                "account id=%s.",
-                entry.destination_id,
+    swept: set[int] = set()
+    if not synthetic_account_ids:
+        return swept
+    for stream in all_streams:
+        stream_id = _as_int(stream.get("id"))
+        if stream_id is None or stream_id in already_deleted:
+            continue
+        if stream.get("url"):
+            continue
+        if _stream_account_id(stream) not in synthetic_account_ids:
+            continue
+        if stream_id in referenced_ids:
+            continue
+        try:
+            await client.delete_stream(stream_id)
+        except Exception as exc:  # noqa: BLE001 - 404 == already gone; both fine
+            logger.warning(
+                "[DBAS-REBIND] Could not sweep orphaned placeholder stream "
+                "id=%s ('%s'): %s",
+                stream_id, _stream_name(stream), exc,
             )
-            return True
-    return False
+            continue
+        swept.add(stream_id)
+        logger.info(
+            "[DBAS-REBIND] Swept orphaned placeholder stream id=%s ('%s'): "
+            "URL-less, on the synthetic custom-stream account, and bound to no "
+            "channel.",
+            stream_id, _stream_name(stream),
+        )
+    return swept
+
+
+async def _drop_empty_synthetic_account(
+    *,
+    client: DispatcharrClient,
+    all_streams: list[dict],
+    deleted_ids: set[int],
+    synthetic_account_ids: set[int],
+) -> bool:
+    """Delete the synthetic custom-stream account once it is EMPTY (``…-dgnms``).
+
+    THE SAFETY PROPERTY IS UNCHANGED, and it is the emptiness test: an account
+    that still has streams under it is NEVER deleted, because deleting it
+    cascades those streams away from channels this run did not touch. That
+    reasoning is sound and this function keeps it verbatim.
+
+    What relaxes is only WHO CREATED IT. The previous implementation walked the
+    :class:`RollbackLedger` for an ``M3U_ACCOUNT`` entry and no-oped when there
+    was none, so an account created by an EARLIER restore and merely REUSED by
+    this one survived forever — drill run 5 emptied it completely
+    (``14 placeholder(s) deleted``, ``0 channel(s) still hold a slot that cannot
+    play``) and still found ``'ECM Custom Streams (DBAS restore)'`` in the M3U
+    account list. Who created an empty account has no bearing on whether it
+    should still exist.
+
+    Emptiness is verified against the LIVE INSTANCE — the destination's own
+    stream list this pass fetched, minus the ids this pass has since confirmed
+    deleted — never against the ledger, which knows only about this run.
+
+    BEST-EFFORT: a failed delete is logged and reported as "not deleted"; it
+    never raises.
+
+    Returns:
+        ``True`` when an account was deleted.
+    """
+    if not synthetic_account_ids:
+        return False
+    # Accounts that still have at least one stream under them. A stream whose id
+    # cannot be read counts as still there: "we could not tell" must keep the
+    # account, never drop it.
+    occupied: set[int] = set()
+    for stream in all_streams:
+        stream_id = _as_int(stream.get("id"))
+        if stream_id is not None and stream_id in deleted_ids:
+            continue
+        account_id = _stream_account_id(stream)
+        if account_id is not None:
+            occupied.add(account_id)
+    deleted_any = False
+    for account_id in sorted(synthetic_account_ids):
+        if account_id in occupied:
+            logger.info(
+                "[DBAS-REBIND] Keeping the synthetic custom-stream account id=%s: "
+                "streams remain under it.",
+                account_id,
+            )
+            continue
+        try:
+            await client.delete_m3u_account(account_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+            logger.warning(
+                "[DBAS-REBIND] Could not delete the synthetic custom-stream "
+                "account id=%s: %s",
+                account_id, exc,
+            )
+            continue
+        deleted_any = True
+        logger.info(
+            "[DBAS-REBIND] Deleted the now-empty synthetic custom-stream "
+            "account id=%s.",
+            account_id,
+        )
+    return deleted_any

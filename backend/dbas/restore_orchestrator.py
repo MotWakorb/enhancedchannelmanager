@@ -862,7 +862,16 @@ async def run_restore(
     #
     # Runs only on a clean, non-dry-run apply: a dry-run mutates nothing, and a
     # failed run is about to be rolled back.
-    if not failure_occurred and not report.is_dry_run:
+    if report.is_dry_run:
+        # A preview cannot run the pass, so it must not report the pass's
+        # verdict as ``0`` (bead …-dgnms). Drill run 4 measured a fresh-target
+        # preview reporting ``channels_needing_stream_reattach: 0`` /
+        # ``channels_with_no_playable_stream: 0`` where the apply, minutes later,
+        # reported 12 and 12. The number is not knowable without the deferred
+        # refresh this preview deliberately does not perform, so the honest
+        # report is NULL — "not predicted" — rather than a confident zero.
+        report.mark_stream_health_unpredicted()
+    elif not failure_occurred:
         await _rebind_placeholders(plan=plan, client=client, report=report,
                                    ledger=ledger, remap=remap)
 
@@ -886,6 +895,21 @@ async def run_restore(
 
     logger.info("[DBAS-RESTORE] Restore complete; outcome=%s.", report.outcome.value if report.outcome else "none")
     return report
+
+
+def _would_create_logo_ids(logo_result: object) -> set[int] | None:
+    """The would-create SOURCE logo ids from a logos-importer result, or ``None``.
+
+    Bead ``…-dgnms``. ``import_logos`` is stubbed in several suites and by the
+    sync engine's step overrides, so its return value is not always a
+    :class:`~dbas.importers.logos.LogoImportResult`. Anything that is not a
+    genuine set of ints yields ``None`` — "no would-create information" — which
+    puts the logo reattach pass back on the remap alone.
+    """
+    ids = getattr(logo_result, "would_create_source_ids", None)
+    if not isinstance(ids, (set, frozenset)):
+        return None
+    return {value for value in ids if isinstance(value, int) and not isinstance(value, bool)}
 
 
 async def _rebind_placeholders(
@@ -1341,13 +1365,23 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             # Dispatcharr adds every new channel to EVERY profile enabled, so a
             # profile seeded to EXCLUDE channels silently widens to all of them
             # unless the archived selection is re-asserted here.
-            if not ctx.is_dry_run and _selected(ctx, EntityType.CHANNEL_PROFILE):
+            #
+            # Runs on a dry run TOO (bead …-dgnms). It was apply-only on the
+            # grounds that it had "no read-only prediction to offer beyond what
+            # the archive already says" — but what the archive says IS the
+            # prediction: the flip set is the restored channels the archived
+            # profile excludes, and the apply computes it from exactly the same
+            # two inputs. Drill run 4 measured a preview reporting 0 for an apply
+            # that reported 6, which silences the widening warning at the only
+            # point the operator can still act on it.
+            if _selected(ctx, EntityType.CHANNEL_PROFILE):
                 await reattach_profile_memberships(
                     client=ctx.client,
                     report=ctx.report,
                     remap=ctx.remap,
                     archive_profiles=_entities(ctx, EntityType.CHANNEL_PROFILE),
                     archive_channels=archive_channels,
+                    is_dry_run=ctx.is_dry_run,
                 )
         return None
 
@@ -1371,7 +1405,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         # clear_existing is the DESTRUCTIVE bulk-delete pre-step; the logos
         # importer itself guards it behind ``not is_dry_run``, and a dry-run plan
         # never carries an apply confirm — so it can never fire here on a dry-run.
-        await import_logos(
+        logo_result = await import_logos(
             archive_logos=_entities(ctx, EntityType.LOGO),
             client=ctx.client,
             selected=_selected(ctx, EntityType.LOGO),
@@ -1397,9 +1431,13 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         # resolve the LOGO remap there: the logos importer registers a
         # destination id for every archived logo it MATCHES, on a dry run as much
         # as on an apply, and for a merge into a live install that matched
-        # population IS the population. What a preview cannot see is a logo the
-        # restore would UPLOAD, which has no destination id yet, so the dry-run
-        # split is a lower bound. See reattach_channel_logos.
+        # population IS the population.
+        #
+        # It also counts the logos the preview knows the apply would CREATE, via
+        # the source-id set the importer just returned (bead …-dgnms). On a FRESH
+        # target nothing matches, so that set is the entire population and
+        # without it the preview reported 0 channels for an apply that reattached
+        # 11. No destination id is invented for them. See reattach_channel_logos.
         if _selected(ctx, EntityType.LOGO):
             from dbas.channel_reattach import reattach_channel_logos
 
@@ -1411,6 +1449,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                 mode=ctx.channel_reattach_mode,
                 created_source_ids=ctx.created_channel_source_ids,
                 is_dry_run=ctx.is_dry_run,
+                # Coerced defensively: the importer is stubbed in several suites,
+                # and a stub's return value is not a LogoImportResult.
+                would_create_logo_source_ids=_would_create_logo_ids(logo_result),
             )
         return None
 
