@@ -132,8 +132,6 @@ This is the same restore flow as uploading. It runs through the same validation,
 
 On a brand-new install, the server-side backups directory (`/config/backups`) does not exist until ECM has written its first backup, so a freshly rebuilt instance shows an empty Saved Backups list. Restoring an artifact you are holding on your own machine doesn't depend on that directory — use **Restore from artifact…** (upload) instead.
 
-**Known quirk: the encrypted-artifact warning can be wrong.** The **Saved Backups → Restore as DBAS backup** modal can show "This backup is encrypted" for an artifact that is not actually encrypted. The saved-backup listing API returns only the filename, size, creation time, and archive type; it carries no encryption flag, so the modal's claim is not derived from the artifact itself. If you never set a passphrase when you took the backup, it is not encrypted: run the preview and it will proceed normally with no passphrase.
-
 ---
 
 ## Logo misses after restore
