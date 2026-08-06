@@ -5,19 +5,21 @@
 ---
 
 !!! danger "Read this before you start"
-    This procedure was run against **Dispatcharr `0.28.2`** and **ECM
-    `0.18.1-0023`**. A restore result is only a result for the version it
-    was measured on. If you are on different versions, treat every claim
-    below as "true as of this pin," re-run the drill, and update your own
-    notes.
+    This article is written for **Dispatcharr `0.28.2`** and **ECM
+    `0.18.1-0036`**. A restore result is only a result for the version it
+    was measured on. Every claim below carries the build it was last
+    confirmed on; where a build isn't named, it's current as of `0.18.1-0036`.
+    If you are on different versions, re-run the drill and update your own
+    notes rather than trusting a claim past its pin.
 
-    The most recent drill (run 2, `0.18.1-0023`) found real progress: a
-    restored lineup now genuinely **plays**, proven by fetching real media
-    bytes, not just checking that a URL is set. That run also found a P0
-    blocker in logo handling, fixed as of `0.18.1-0024`: see
-    [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill)
-    and [Known failures](#known-failures) before you conclude your own
-    drill passed.
+    The most recent full drill (run 9, `0.18.1-0035`) reproduced the
+    instance completely on both artifact variants, including a lineup that
+    genuinely **plays**, proven by fetching real media bytes, not just
+    checking that a URL is set. It also measured the [genuine
+    logo-failure path](#ecm-uploaded-logos-and-this-drill) live for the
+    first time and found three reporting defects, all fixed in
+    `0.18.1-0036`: see [Known failures](#known-failures) before you
+    conclude your own drill passed.
 
 ---
 
@@ -359,6 +361,32 @@ username/password and API key side by side, and both returned
     This is now the useful case to seed, since it exercises the archive
     path the earlier drill runs could not reach.
 
+!!! success "The genuine-failure path was measured live for the first time in run 9"
+    Every earlier drill exercised the happy path only: an uploaded logo
+    that restores cleanly. Run 9 (`0.18.1-0035`) constructed a real
+    failure instead, by occupying the archived logo's destination path
+    with a directory before applying the restore, and checked all five
+    non-fatal-logo claims directly rather than assuming them from the
+    happy-path result:
+
+    - The restore **completed** (`outcome: completed_with_failures`),
+      never a rolled-back outcome.
+    - **Nothing else was rolled back.** Every other category matched the
+      pre-restore counts exactly; only the one blocked logo was missing.
+    - The failure was **named**: `reason: upstream_api_error`, the
+      correct logo label, and the correct affected channel.
+    - **The instance still played**, including the channel whose logo
+      failed.
+
+    One thing was wrong: `logo_misses` read **2** for the one logo that
+    actually failed (`enhancedchannelmanager-k2r7m`). The report's own
+    category line and its `note` field agreed on one failure; only the
+    aggregate count doubled it. **Fixed as of `0.18.1-0036`:** a second
+    report of a logo already recorded now merges into that logo's row
+    instead of appending a duplicate. If you deliberately reproduce this
+    failure to prove the non-fatal path yourself, expect `logo_misses` to
+    equal the actual number of failed logos, not double it.
+
 ---
 
 ## Step 2: Seed a small instance
@@ -404,19 +432,55 @@ looks finished but is not yet applied.
 the time; each of these maps to a specific restore behavior worth
 proving), also set up:
 
-| Feature | Why it's worth seeding |
-|-|-|
-| A multi-stream channel with a deliberate stream order | Proves whether stream ordering survives the restore's 4-tier matcher |
-| A channel profile with non-default membership (some channels excluded) | Proves whether profile scoping survives, or silently widens to "all channels" |
-| A custom stream profile assigned to a channel | Proves the user-agent binding fix (`enhancedchannelmanager-lvfwd`, closed) still holds |
-| A custom user agent assigned to that stream profile | Same as above; the two are usually configured together |
-| A channel with its logo deliberately cleared | Gives you a known-absent case to contrast against the known-present ones |
-| At least one non-default ECM setting (timezone, poll interval, etc.) | Proves whether settings actually restore or silently revert to defaults |
-| EPG links on most but not all channels | Gives you a mix to check post-restore rather than an all-or-nothing signal |
+| Feature | Why it's worth seeding | Where to create it |
+|-|-|-|
+| A multi-stream channel with a deliberate stream order | Proves whether stream ordering survives the restore's 4-tier matcher | ECM, Edit Mode |
+| A channel profile with non-default membership (some channels excluded) | Proves whether profile scoping survives, or silently widens to "all channels" | Create the profile in ECM; toggle membership in Dispatcharr (see below) |
+| A custom stream profile assigned to a channel | Proves the user-agent binding fix (`enhancedchannelmanager-lvfwd`, closed) still holds | Create in Dispatcharr (see below); assign in ECM, Edit Channel → **STREAM PROFILE** |
+| A custom user agent assigned to that stream profile | Same as above; the two are usually configured together | Create in Dispatcharr (see below) |
+| A channel with its logo deliberately cleared | Gives you a known-absent case to contrast against the known-present ones | ECM |
+| At least one non-default ECM setting (timezone, poll interval, etc.) | Proves whether settings actually restore or silently revert to defaults | ECM, Settings |
+| EPG links on most but not all channels | Gives you a mix to check post-restore rather than an all-or-nothing signal | ECM |
 
 If any seeded logo is a **remote CDN URL** auto-assigned from the M3U
 feed (the common case), the backup's binary logo subtree will be empty
 and most of the logo-restore path goes untested.
+
+!!! warning "User agents and stream profiles: ECM can assign, not create. Dispatcharr's UI doesn't create them either."
+    ECM's Edit Channel dialog can *assign* an existing stream profile to a
+    channel, but ECM has no UI to create a stream profile or a user agent
+    at all; neither object is one of ECM's 12 backup categories on its own
+    (they ride in as attributes of what references them). Dispatcharr
+    `0.28.2`'s own Settings page only exposes **Default User Agent** /
+    **Default Stream Profile** dropdowns over objects that already exist,
+    with no visible create-or-manage screen for either.
+
+    Drill run 9 confirmed the only working path is Dispatcharr's REST API:
+
+    ```bash
+    curl -X POST http://<dispatcharr-host>:<port>/api/core/useragents/ \
+      -H "X-API-Key: <key>" -H "Content-Type: application/json" \
+      -d '{"name": "Run9 Custom Agent", "user_agent": "Run9/1.0"}'
+
+    curl -X POST http://<dispatcharr-host>:<port>/api/core/streamprofiles/ \
+      -H "X-API-Key: <key>" -H "Content-Type: application/json" \
+      -d '{"name": "Run9 Custom Profile", "user_agent": <agent id from above>}'
+    ```
+
+    Then, in ECM, open **Edit Channel → STREAM PROFILE** on the channel
+    you want to prove the binding on, and select the profile you just
+    created. If you skip this pair entirely rather than create it via the
+    API, you silently lose the only coverage this drill has for the
+    user-agent binding fix (`enhancedchannelmanager-lvfwd`); a restore
+    that never had a custom stream profile to restore proves nothing about
+    whether the binding survives.
+
+!!! note "Channel-profile membership: toggled in Dispatcharr, not ECM"
+    Create the channel profile itself in ECM. To exclude specific
+    channels from it, go to Dispatcharr's own **Channels** view, select
+    the profile from its profile dropdown, and toggle membership per row.
+    This isn't discoverable from ECM's own screens; you have to go to
+    Dispatcharr to set it up.
 
 !!! note "Upload a logo here to exercise the archive path"
     See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill)
@@ -437,13 +501,30 @@ artifact this instance did not produce itself (for example, copying in a
 `.zip` from another host to test the Saved Backups path against it).
 
 If you are scripting the backup via the API rather than clicking through
-Scheduled Tasks, `GET /api/tasks/dbas_backup/parameter-schema` reports
-"No configurable parameters." That is misleading: the nested
-`{"parameters": {"passphrase": …, "include_credentials": true,
-"acknowledge_unrecoverable": true}}` body on the run-task request is what
-actually produces an encrypted, credential-bearing artifact. The schema
-endpoint does not describe these ad-hoc parameters; do not take its "no
-parameters" answer as proof the encrypted-backup options don't exist.
+Scheduled Tasks, `GET /api/tasks/dbas_backup/parameter-schema` documents
+the encrypted-backup options directly. As of `0.18.1-0035` it returns an
+empty `parameters` array (there is nothing to persist to a *schedule*)
+alongside a `run_parameters` array describing the manual-run-only fields:
+
+```json
+"parameters": [],
+"run_parameters": [
+  {"name": "passphrase", ...},
+  {"name": "include_credentials", ...},
+  {"name": "acknowledge_unrecoverable", ...}
+],
+"description": "Manual-run encryption parameters, sent in the 'parameters'
+                 object of POST /api/tasks/dbas_backup/run. Never persisted
+                 to a schedule; a scheduled run always produces the default
+                 redacted artifact."
+```
+
+Send those three fields nested under `{"parameters": {...}}` on the
+run-task request to produce an encrypted, credential-bearing artifact.
+The empty top-level `parameters` array is accurate, not misleading: it
+correctly says a *schedule* cannot carry these options, and the
+`run_parameters` array right next to it is the best available
+documentation of what a manual run accepts.
 
 Take them **in this order**: standard first, encrypted second. Creating
 an encrypted backup leaves the `DBAS Backup` task producing encrypted,
@@ -459,11 +540,15 @@ come out encrypted too.
    real passphrase you use elsewhere; this is a throwaway artifact), enable
    **Include credentials**, and click **Create Encrypted Backup**.
 
-Confirm both completed at **success**, not warning-level, in
-**Settings → Backup & Restore → Saved Backups**. A warning-level backup
-means the source artifact was already degraded before you ever get to the
-restore side, and any drift you find afterward can't be cleanly attributed
-to the restore path.
+Confirm both completed at **success**, not warning-level, in the
+**Notifications panel** (the bell icon in the header). That is where the
+per-task severity actually lives, for example `Task Completed: DBAS
+Backup — Successfully completed. 1 items processed in 1.8s`. **Settings →
+Backup & Restore → Saved Backups** will not tell you this: that panel
+lists filename, timestamp, and size, with no status, severity, or outcome
+field anywhere in it. A warning-level backup means the source artifact
+was already degraded before you ever get to the restore side, and any
+drift you find afterward can't be cleanly attributed to the restore path.
 
 ---
 
@@ -471,16 +556,37 @@ to the restore path.
 
 This is the gate. Do not proceed past it until both checks below pass.
 
+!!! warning "The two artifacts are not distinguishable by filename"
+    Both land in `/config/backups` as
+    `ecm-backup-<YYYY-MM-DD>_<HHMMSS>.zip`. Nothing in the filename, the
+    Saved Backups row, or the notification says which is which, so
+    `<standard-file>` and `<encrypted-file>` below are not something you
+    can read off the container by name. Copy everything out, then
+    identify each file: an **encrypted** artifact is not a readable zip
+    (attempting to open it as one fails with `BadZipFile`); a standard
+    artifact opens normally. This is the reliable discriminator, not just
+    a caveat about peeking inside one.
+
+    ```bash
+    for f in ./artifact/*.zip; do
+      python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1])" "$f" \
+        2>/dev/null && echo "$f: standard" || echo "$f: encrypted"
+    done
+    ```
+
+    Rename the two files (or just note which is which) before continuing,
+    so the rest of this procedure's `<standard-file>` / `<encrypted-file>`
+    placeholders are unambiguous.
+
 1. Copy both `.zip` artifacts and their `.sha256` sidecars out of the
    container, onto the drill host's filesystem (not a volume that will be
    wiped):
 
    ```bash
-   docker cp bkr-ecm:/config/backups/<standard-file>.zip ./artifact/
-   docker cp bkr-ecm:/config/backups/<standard-file>.zip.sha256 ./artifact/
-   docker cp bkr-ecm:/config/backups/<encrypted-file>.zip ./artifact/
-   docker cp bkr-ecm:/config/backups/<encrypted-file>.zip.sha256 ./artifact/
+   docker cp bkr-ecm:/config/backups/. ./artifact/
    ```
+
+   Then identify which is which, as above.
 
 2. Verify both **on the host copies**, not the in-container ones:
 
@@ -497,18 +603,13 @@ fails, do not destroy the source instance. Re-take the failing backup and
 re-verify. An unverified copy is not a backup; it's an unproven claim
 that a backup exists.
 
-Note: an **encrypted** artifact is not a readable zip (attempting to
-open it as one fails with `BadZipFile`), so you cannot peek inside it
-before restoring. Only the plaintext (standard) artifact can be inspected
-this way. This does not affect the `sha256sum -c` check above, which
-verifies the file's bytes regardless of encryption.
-
 Optional but recommended: capture a "before" inventory (channel count,
 group count, M3U/EPG source counts, ECM settings you changed, logo count
 and hashes) so you have something concrete to diff against after the
-restore, rather than relying on the restore report's own counts, which
-[measured wrong in the reference run](#known-failures)
-(`dfkbn`).
+restore, rather than relying on the restore report's own counts alone.
+Earlier drill runs measured those counts wrong before the reporting
+fixes documented in [Known failures](#known-failures) landed; capturing
+your own inventory is good practice regardless of which build you're on.
 
 ---
 
@@ -717,6 +818,15 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
        header: X-API-Key: <key>
    ```
 
+   **Use at least a 40-second deadline for this first fetch.** Run 9
+   measured a 25-second deadline returning 0 bytes on the very first
+   post-restore fetch of a channel; the identical fetch at 40 seconds
+   returned HTTP 200, `video/mp2t`, 262,144 B. The first fetch after a
+   restore opens a fresh upstream connection to the provider and is
+   materially slower than steady state; a shorter deadline reads as a
+   playback failure that isn't one. Once you've confirmed a channel plays
+   once, later checks in the same session can use a shorter deadline.
+
    Record status, content type, and byte count. A few hundred KB is
    enough to call it real media. A read-deadline hit *after* bytes have
    started arriving counts as a pass; a live stream never ends on its
@@ -758,15 +868,15 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
    numbers either; see the preview warning in
    [Step 6](#step-6-restore) (`enhancedchannelmanager-dgnms`).
 5. **EPG links.** Check whether channels that had an EPG link before the
-   backup still have one. As of `0.18.1-0023`, expect them to still be
-   **gone**. This is a residual, still-open defect, not fixed
-   (`enhancedchannelmanager-dfkbn`). The restore relinks by the channel's
-   archived `tvg_id`, but ECM's own channel rows carry `epg_data_id` with
-   `tvg_id: None` (confirmed this is not a seeding quirk: setting
-   `epg_data_id` through ECM's own API also leaves `tvg_id` null), so
-   there is nothing to match on. The restore report now names exactly
-   which channels lost their link (`epg_link_miss_details`); re-link
-   those channels by hand or re-run EPG auto-match. See
+   backup still have one. Run 9 measured this directly on `0.18.1-0035`:
+   all 9 seeded links survived, on both artifact variants, with
+   `epg_links_unrestored: 0` and an empty `epg_link_miss_details` in
+   every restore. This article previously told you to expect every
+   linked channel to lose its link; that guidance was wrong for this
+   build and is corrected here (`enhancedchannelmanager-dfkbn`). If you
+   ever see a genuine EPG-link loss, the restore report still names the
+   affected channels in `epg_link_miss_details`; re-link by hand or
+   re-run EPG auto-match. See
    [Match channels to EPG data](../epg/channel-to-epg-matching.md).
 6. **Channel-profile membership.** If you seeded a profile with some
    channels deliberately excluded, check whether that exclusion survived.
@@ -808,6 +918,8 @@ one directly rather than trusting the restore-complete report's summary:
     before the backup.
   - Every logo that existed before the backup renders after the restore,
     not just the reported logo count.
+  - Every channel that had an EPG link before the backup still has one
+    after the restore.
   - Channel-profile membership matches exactly, including any
     deliberately excluded channels.
   - Every non-default setting you changed came back as you set it, not
@@ -825,18 +937,15 @@ one directly rather than trusting the restore-complete report's summary:
   placeholders bound to no channel, or an empty synthetic account still
   listed, are a finding on that pin or later.
 
-**What still does not pass, even on an otherwise clean run, as of
-`0.18.1-0023`:** EPG links (`enhancedchannelmanager-dfkbn` residual;
-expect every linked channel to lose its guide link and need manual
-re-linking; see [Step 7](#step-7-verify)). Note this and move on; it's a
-tracked, open defect, not a surprise finding.
-
-As of ECM `0.18.1-0024` / Dispatcharr `0.28.2`, a drill run **can** pass
-this bar: an encrypted artifact with "Include credentials," accepting the
-EPG-link gap as a known residual, plays correctly on the first restore,
-ECM-uploaded logos included. A standard (redacted) artifact can also
-pass, but only after the full Step 6a recovery sequence. See the next two
-sections for the complete, current defect picture.
+As of ECM `0.18.1-0036` / Dispatcharr `0.28.2`, a drill run **can** pass
+this bar in full: an encrypted artifact with "Include credentials" plays
+correctly on the first restore, ECM-uploaded logos and EPG links
+included, and a genuine non-fatal logo failure (see
+[ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill))
+completes with the failure counted once and named, not rolled back. A
+standard (redacted) artifact can also pass, but only after the full
+Step 6a recovery sequence. See the next two sections for the complete,
+current defect picture.
 
 ---
 
@@ -855,37 +964,59 @@ The report carries:
 - `channels_needing_stream_reattach` with `stream_reattach_details`
   naming every channel still holding a placeholder stream, and
   `channels_with_no_playable_stream` counting the ones that have no real
-  stream left at all. Only the second group cannot play; a restore that
-  reports any of them finishes as `completed_with_failures` and raises a
-  warning alert, never a plain success. As of `0.18.1-0029` this audit
-  covers **every** restored channel, judged from what it is actually left
-  holding, so a channel stranded by an *earlier* restore is named too. On
-  the prior pin the audit only inspected placeholders the current run had
-  created, and a repeat restore over an already-stranded channel reported
-  `0` and `0` for a channel that answered HTTP 500 on playback. On a
-  **dry run** both counters read `null`; see the preview warning in
-  [Step 6](#step-6-restore).
+  stream left at all. Only the second group cannot play. As of
+  `0.18.1-0029` this audit covers **every** restored channel, judged from
+  what it is actually left holding, so a channel stranded by an *earlier*
+  restore is named too. On the prior pin the audit only inspected
+  placeholders the current run had created, and a repeat restore over an
+  already-stranded channel reported `0` and `0` for a channel that
+  answered HTTP 500 on playback. On a **dry run** both counters read
+  `null`; see the preview warning in [Step 6](#step-6-restore).
 - `epg_links_unrestored` with `epg_link_miss_details` per channel.
-- `logo_misses` with `logo_miss_details` naming the affected channel.
+- `logo_misses` with `logo_miss_details` naming the affected channel. As
+  of `0.18.1-0036`, a second report of a logo already recorded merges
+  into that logo's row instead of appending a duplicate; see
+  [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill).
 - `profile_membership_drift` listing which channels were enabled or
   disabled relative to the source.
 - A note that a restored Dispatcharr user gets a random password ECM
   does not record, so it needs an out-of-band reset before use.
 
-The UI shows matching panels after a restore, for example "1 logo is
-missing after this restore" with a "Fix in Dispatcharr" link, and "2
-accounts need credentials re-entered before they will work." Use these
-instead of re-deriving the same information by hand.
+**The alert severity is keyed to the outcome, not to which category
+degraded it.** Any restore that finishes `completed_with_failures`, for
+any reason, raises a **warning** alert, never a plain success:
+unplayable channels, a non-fatal category failure (currently only
+logos), or both together. `error` / "Task Failed" is reserved for the
+outcomes that actually failed or rolled back
+(`partial_failed_rolled_back`, `failed_rollback_incomplete`) and for
+orchestration errors. **Fixed as of `0.18.1-0036`
+(`enhancedchannelmanager-cwmid`):** on `0.18.1-0035`, a restore degraded
+*only* by a non-fatal logo miss incorrectly raised `error` / "Task
+Failed: DBAS Restore", while a restore in which not one channel could
+play correctly raised `warning`, the severity ordering was inverted for
+triage. If you hit an `error` / "Task Failed" alert on `0.18.1-0036` or
+later, that means the restore actually rolled back or ended in an
+indeterminate state, not merely that some non-fatal category degraded.
+
+The UI shows matching panels after a restore: a credentials panel (for
+example "2 accounts need credentials re-entered before they will work"),
+and, as of `0.18.1-0036` (`enhancedchannelmanager-d0bd3`), a
+stream-reattach panel alongside it naming every channel with no playable
+stream. On `0.18.1-0035` and earlier, the restore-complete dialog showed
+only the credentials panel even when every restored channel was
+unplayable; the report data was correct, only the panel was missing. Use
+these panels instead of re-deriving the same information by hand.
 
 ---
 
 ## Known failures
 
-The classification below is what run 2 measured on ECM `0.18.1-0023` /
-Dispatcharr `0.28.2` (see the version pin at the top of this article):
-nine beads total, **four fixed and closed**, **two partially fixed with a
-named residual**, and **three new**. Later builds have since resolved some
-of them, and each row says which build if so. Check each bead's live
+Run 2 measured nine beads on ECM `0.18.1-0023` / Dispatcharr `0.28.2`.
+Run 9 (`0.18.1-0035`) added three more, all now fixed as of `0.18.1-0036`.
+Current tally, **twelve beads total**: **eight fixed and closed**, **one
+partially fixed with a named residual**, and **three** that landed fixed
+in the same build that found them (see [ECM-uploaded logos and this
+drill](#ecm-uploaded-logos-and-this-drill)). Check each bead's live
 status before you assume any row is still true on the version you're
 running; this is a snapshot, not a permanent guarantee.
 
@@ -897,13 +1028,16 @@ running; this is a snapshot, not a permanent guarantee.
 | `enhancedchannelmanager-y65si` | The restore aborted and rolled back the entire instance at the `user` category whenever the rebuilt Dispatcharr's superuser had a different username than the source's. | **Fixed.** Run 2 used deliberately **different** superuser names (`rebuiltadmin`, `secondadmin` vs. source `drilladmin`) and both restores completed. |
 | `enhancedchannelmanager-6pilh` | A redacted (standard) restore wrote the literal string `***REDACTED***` into the M3U password field instead of leaving it empty, so the account presented as fully configured and then failed to authenticate. | **Fixed.** The field is now correctly empty. It still needs the real credential re-entered (see [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)), but that part was never the bug. |
 | `enhancedchannelmanager-cytzj` | After one manual encrypted backup, the `DBAS Backup` task kept producing encrypted, credential-bearing artifacts on every later run, including unattended scheduled runs, until the ECM container restarted. | **Fixed.** The encryption transient is now genuinely one-shot. |
+| `enhancedchannelmanager-dfkbn` | This article told you EPG links were "still gone" on every restore, on top of logos, channel-profile membership, and non-default settings all needing verification. | **Fixed, and the doc claim was wrong for this build.** Run 9 measured logos, channel-profile membership (9-of-12), non-default settings, **and EPG links** (9/9) all surviving a restore, on both artifact variants. See [Step 7](#step-7-verify). |
+| `enhancedchannelmanager-k2r7m` | `logo_misses` reported **2** for a single genuinely-failed logo, doubling the operator-facing count of a non-fatal failure. | **Fixed as of `0.18.1-0036`.** A second report of a logo already recorded now merges into that logo's row instead of appending a duplicate. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
+| `enhancedchannelmanager-cwmid` | A restore degraded *only* by a non-fatal logo miss raised `error` / "Task Failed: DBAS Restore", while a restore in which not one channel could play correctly raised `warning`, the severity ordering was inverted for triage. | **Fixed as of `0.18.1-0036`.** The alert severity is now keyed to the restore's outcome, not to which category degraded it; see [Improved reporting](#improved-reporting). |
+| `enhancedchannelmanager-d0bd3` | The restore-complete UI showed only the credentials panel, even when every restored channel had no playable stream. | **Fixed as of `0.18.1-0036`.** A stream-reattach panel now renders alongside the credentials panel; see [Improved reporting](#improved-reporting). |
 
 ### Partially fixed: residual still open
 
 | Bead | What's fixed | What's still broken |
 |-|-|-|
-| `enhancedchannelmanager-2o0cz` | Stream reattachment, stream ordering, M3U enabled-group selection, and playback all now work once the M3U account has a real credential. An encrypted artifact with "Include credentials" plays on the first restore attempt (verified: 2/2 real fetches, HTTP 200, `video/mp2t`). As of `0.18.1-0033`, a **redacted** artifact recovers in two steps: re-enter the credential, then refresh the account. A completed refresh reattaches the channels, and the leftover placeholders and their synthetic account are cleaned up in the same pass. | Two refresh routes are not covered and heal only on the next scheduled M3U refresh: a "refresh all accounts" action, and a refresh performed in Dispatcharr's own UI. Refresh the individual account for the immediate path. On builds before `0.18.1-0033` the recovery still needed a third step, **running the restore again**, because a refresh alone added real streams beside the placeholders without rebinding them. |
-| `enhancedchannelmanager-dfkbn` | Logos (10/11 sha256-identical), channel-profile membership (9-of-12 preserved), and non-default settings (`stats_poll_interval`, `user_timezone`) all now restore correctly, and the report is honest about it. | **EPG links are still lost** on every linked channel, on both artifact variants. Root cause identified: the restore relinks by archived `tvg_id`, but ECM's own channel rows carry `epg_data_id` with `tvg_id: None`. See [Step 7](#step-7-verify). |
+| `enhancedchannelmanager-2o0cz` | Stream reattachment, stream ordering, M3U enabled-group selection, and playback all now work once the M3U account has a real credential. An encrypted artifact with "Include credentials" plays on the first restore attempt (verified: 2/2 real fetches, HTTP 200, `video/mp2t`). As of `0.18.1-0033`, a **redacted** artifact recovers in two steps: re-enter the credential, then refresh the account. A completed refresh reattaches the channels, and the leftover placeholders and their synthetic account are cleaned up in the same pass; run 9 confirmed this again and needed no third restore. | Two refresh routes are not covered and heal only on the next scheduled M3U refresh: a "refresh all accounts" action, and a refresh performed in Dispatcharr's own UI. Refresh the individual account for the immediate path. On builds before `0.18.1-0033` the recovery still needed a third step, **running the restore again**, because a refresh alone added real streams beside the placeholders without rebinding them. |
 
 ### New
 
@@ -921,15 +1055,17 @@ are all gone: the underlying defects are fixed, and (see
 [Step 6](#step-6-restore)) re-applying them now would actively work
 against you, hiding whether the fixes still hold.
 
-**What works, confirmed by run 2:** object identity and naming,
-channel/group/profile assignment, stream ordering on multi-stream
-channels, the custom stream profile → user agent binding, M3U
-enabled-group selection, non-default settings, channel-profile
-membership, and (the headline result) **actual playback**, verified by
-fetching real media bytes rather than checking that a URL is set. The
-restore is no longer just a good skeleton: on an encrypted artifact with
-"Include credentials," it reproduces a working instance, ECM-uploaded
-logos included as of `0.18.1-0024`.
+**What works, confirmed by run 2 and reconfirmed by run 9:** object
+identity and naming, channel/group/profile assignment, stream ordering
+on multi-stream channels, the custom stream profile → user agent
+binding, M3U enabled-group selection, non-default settings,
+channel-profile membership, EPG links, and (the headline result)
+**actual playback**, verified by fetching real media bytes rather than
+checking that a URL is set. The restore is no longer just a good
+skeleton: on an encrypted artifact with "Include credentials," it
+reproduces a working instance, ECM-uploaded logos included as of
+`0.18.1-0024`, with a genuine non-fatal logo failure counted correctly
+and named, not rolled back, as of `0.18.1-0036`.
 
 ---
 
