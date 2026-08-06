@@ -79,9 +79,10 @@ cost one slot rather than the whole channel.
 WHERE THIS RUNS AND WHY
 ----------------------------------------------------------------------------
 
-This is a RESTORE-COMPLETION step in
-:func:`dbas.restore_orchestrator.run_restore`, immediately AFTER the deferred
-phase and only on a clean, non-dry-run apply. That placement is forced:
+The ARCHIVE-DRIVEN pass (:func:`rebind_placeholder_streams`) is a
+RESTORE-COMPLETION step in :func:`dbas.restore_orchestrator.run_restore`,
+immediately AFTER the deferred phase and only on a clean, non-dry-run apply.
+That placement is forced:
 
 * it cannot run inside the channels importer — the real streams do not exist yet;
 * it cannot be left to the operator — the drill proved the documented manual
@@ -90,6 +91,80 @@ phase and only on a clean, non-dry-run apply. That placement is forced:
 * it must run after ``apply_deferred_auto_sync`` — that is the call that
   triggers the refresh and polls until the destination stream count stabilizes,
   which is precisely the moment the real streams are queryable.
+
+----------------------------------------------------------------------------
+WHY ONE SHOT IS NOT ENOUGH (bead ``…-2o0cz`` residual, drill runs 4, 5 AND 7)
+----------------------------------------------------------------------------
+
+The placement above is correct and still insufficient for the artifact most
+operators hold. On a STANDARD (redacted) artifact the restored M3U account has
+no credential at the moment the deferred phase runs, so its refresh materializes
+NOTHING and the pass above has nothing real to match against. Three drill runs
+measured the identical three-step recovery::
+
+    1. straight after the restore   14 streams (0 with url)  all placeholder  0/n, HTTP 500
+    2. + re-enter the credential
+       and refresh                 110 streams (96 with url) STILL all placeholder  0/n, HTTP 500
+    3. + re-run the WHOLE restore    96 streams (96 with url) all REAL  4/4, 200, 262144 B
+
+Step 2 is the recovery an operator reaches for FIRST, and it changed nothing
+they could see: the 96 real streams materialized and sat BESIDE the placeholders.
+Step 3 — re-running an entire restore purely to re-trigger a rebind — is
+non-obvious and nothing in the product said to do it.
+
+:func:`rebind_placeholders_after_refresh` makes step 2 sufficient. It is the
+SAME pass with a different way of naming what each placeholder slot should
+become, and it needs NEITHER the archive, the ledger NOR the id remap — all of
+which are gone once the restore ends. The enabling fact is that
+:mod:`dbas.custom_stream_fallback` builds each placeholder FROM the orphan
+record, carrying the archived stream's own ``name`` verbatim (drill run 6
+observed a placeholder named ``DRILL ORPHAN STREAM (source only)`` — the
+archived name byte-for-byte). So the placeholder is its own match key: the pass
+re-runs :func:`dbas.stream_matcher.match_stream` with the PLACEHOLDER'S OWN
+RECORD as the archived stream. Its ``url`` is empty (Tier 1 skipped) and its
+``m3u_account`` is the synthetic one (Tier 2 misses), so it resolves on Tier 3 —
+the exact-normalized-name rung, which carries the ``…-ixdaw`` RAW-NAME
+PREFERENCE, so the case-differing pair still lands on two DISTINCT ids here.
+
+Both entry points share ONE per-channel implementation
+(:func:`_rebind_one_channel`) and ONE cleanup pair
+(:func:`_sweep_orphaned_placeholders` / :func:`_drop_empty_synthetic_account`).
+There is deliberately no parallel implementation to drift: the ``…-ixdaw``
+``claimed_ids`` de-dup, the in-place slot rewrite that preserves archived ORDER,
+and the all-or-nothing PATCH failure handling are written once and used by both.
+
+WHERE THE REFRESH-DRIVEN PASS IS HOOKED, and what that covers:
+
+* ``routers.m3u._poll_m3u_refresh_completion`` — the completion path of
+  ``POST /api/m3u/refresh/{account_id}``. This is the UI "Refresh" button and
+  the MCP ``refresh_m3u`` tool, i.e. THE step-2 route the drill measured.
+* ``tasks.m3u_refresh.M3URefreshTask`` — once per task run, after every account
+  has been refreshed. This is the scheduled sweep and the manual "run task"
+  button, so an instance heals on its own cadence even if the operator reached
+  materialized streams by a route below.
+
+NOT covered, stated plainly rather than overclaimed: ``POST /api/m3u/refresh``
+(refresh-all, and the MCP ``refresh_all_m3u`` tool) returns the instant it has
+triggered the upstream refresh and exposes no completion signal to hang the pass
+on; direct ``DispatcharrClient.refresh_all_m3u_accounts`` callers
+(``stream_prober``); and a refresh performed in Dispatcharr's own UI. An
+instance reaching materialized streams only by one of those heals on the next
+scheduled ``m3u_refresh`` run, not immediately.
+
+DOUBLE-RUN SAFETY. Two independent guarantees:
+
+* STRUCTURAL — the restore's deferred phase calls
+  ``DispatcharrClient.refresh_m3u_account`` DIRECTLY
+  (:func:`dbas.importers.m3u_accounts.apply_deferred_auto_sync` step 3), never
+  ECM's own ``POST /api/m3u/refresh/{account_id}`` route and never the
+  ``m3u_refresh`` task. So a restore cannot trigger either hook, and the
+  orchestrator's own call is the only rebind a restore performs.
+* EXPLICIT — :data:`_REBIND_LOCK` serializes every entry point. The
+  archive-driven pass WAITS for it (it is the authoritative pass and must never
+  be skipped); the refresh-driven pass SKIPS when it is already held, because a
+  rebind that is already in flight is doing exactly the work it would do. The
+  check and the acquire have no ``await`` between them, so in a single event
+  loop the pair is atomic. This also covers two concurrent refresh completions.
 
 ----------------------------------------------------------------------------
 WHAT IT DOES
@@ -195,7 +270,9 @@ stream URL is ever logged or reported (a provider URL embeds credentials).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from dbas.custom_stream_fallback import CUSTOM_STREAM_ACCOUNT_NAME
@@ -218,6 +295,11 @@ _STREAM_PAGE_SIZE = 1000
 # this is pathological; stopping is better than an unbounded loop in a
 # post-restore cleanup pass.
 _MAX_PAGES = 200
+
+# Serializes every rebind entry point (see the module docstring's DOUBLE-RUN
+# SAFETY section). Constructed at import time, which is safe on 3.10+ — an
+# ``asyncio.Lock`` no longer binds an event loop until it is first awaited.
+_REBIND_LOCK = asyncio.Lock()
 
 
 @dataclass
@@ -316,7 +398,7 @@ def _stream_account_id(stream: dict) -> int | None:
 
 
 async def _synthetic_account_ids(
-    client: DispatcharrClient, ledger: RollbackLedger
+    client: DispatcharrClient, ledger: RollbackLedger | None = None
 ) -> set[int]:
     """Every destination id the synthetic custom-stream account is known under.
 
@@ -331,12 +413,16 @@ async def _synthetic_account_ids(
       and is the historical identification path, kept so the sweep still works
       if the account list read fails or the account was renamed after creation.
 
+    ``ledger`` is ``None`` on the refresh-driven entry point, which runs long
+    after the restore that created the account ended and has no ledger to read;
+    the live account list is the whole of its answer there.
+
     Never raises: a failed or garbled account list degrades to the ledger alone,
     which is exactly the pre-existing behaviour.
     """
     ids = {
         entry.destination_id
-        for entry in ledger.entries
+        for entry in (ledger.entries if ledger is not None else [])
         if entry.entity_type == EntityType.M3U_ACCOUNT
         and entry.label == CUSTOM_STREAM_ACCOUNT_NAME
     }
@@ -357,6 +443,150 @@ async def _synthetic_account_ids(
         if account_id is not None:
             ids.add(account_id)
     return ids
+
+
+@dataclass
+class _ChannelRebind:
+    """What :func:`_rebind_one_channel` left ONE channel holding.
+
+    Attributes:
+        final_ids: The ordered stream ids the channel is ACTUALLY left with —
+            the rewritten list on a successful PATCH, the untouched original
+            when the PATCH failed or nothing changed. The playability verdict
+            must be taken from this and never from the list the pass HOPED to
+            write.
+        rebound: Placeholder slots swapped for a real provider stream.
+        updated: Whether an ``update_channel`` PATCH actually succeeded.
+        retained_placeholders: Placeholder ids the channel still references, so
+            the caller knows not to delete them.
+    """
+
+    final_ids: list[int] = field(default_factory=list)
+    rebound: int = 0
+    updated: bool = False
+    retained_placeholders: set[int] = field(default_factory=set)
+
+
+async def _rebind_one_channel(
+    *,
+    client: DispatcharrClient,
+    dest_channel_id: int,
+    label: str,
+    current_ids: list[int],
+    placeholder_ids: set[int],
+    archived_for: Callable[[int], Mapping | None],
+    candidates: list[dict],
+    allow_fuzzy: bool,
+) -> _ChannelRebind:
+    """Re-match ONE channel's placeholder slots and PATCH it if anything changed.
+
+    THE SHARED CORE of both entry points. Every guarantee runs 3–7 verified lives
+    here and nowhere else, so neither entry point can drift from the other:
+
+    * ORDER — a hit rewrites its slot IN PLACE (``ordered_ids[index] = match_id``).
+      The archived order the importer established is never rebuilt, sorted or
+      re-derived, so it survives the rebind untouched.
+    * DE-DUP (``…-ixdaw`` backstop) — ``claimed_ids`` is seeded with the real
+      streams the channel already holds and grows with every id this pass claims.
+      A match landing on an id the channel already carries is demoted to a MISS,
+      keeping that ONE slot on its placeholder. Dispatcharr enforces a UNIQUE
+      ``(channel_id, stream_id)``, and the PATCH is all-or-nothing, so without
+      this one colliding slot costs the WHOLE channel.
+    * BEST-EFFORT — a failed PATCH is logged, the channel is reported as holding
+      its ORIGINAL list, and every placeholder on it is marked retained
+      (including ones a match had been found for — the channel did not change).
+      Nothing raises.
+
+    The two entry points differ ONLY in ``archived_for``: the restore resolves
+    each placeholder back to the archive record that produced it (via the id
+    remap), while the refresh-driven pass hands back the PLACEHOLDER'S OWN
+    record, which carries the archived name verbatim.
+
+    Args:
+        client: The Dispatcharr API client.
+        dest_channel_id: The destination channel to rebind.
+        label: Operator-facing channel name, for logs.
+        current_ids: The ordered stream ids the channel holds right now.
+        placeholder_ids: The ids this pass is allowed to rebind away from.
+            Anything outside it is a real stream and is never touched.
+        archived_for: ``placeholder_id -> the stream record to re-match with``,
+            or ``None`` when there is none (which yields a MISS).
+        candidates: The REAL, URL-bearing destination streams to match against.
+        allow_fuzzy: Whether the matcher may use its Tier-4 fuzzy rung.
+
+    Returns:
+        A :class:`_ChannelRebind` describing what the channel is left holding.
+    """
+    ordered_ids = list(current_ids)
+    outcome = _ChannelRebind(final_ids=ordered_ids)
+
+    # Destination ids this channel already holds. Dispatcharr enforces a
+    # UNIQUE (channel_id, stream_id), so a second slot claiming an id another
+    # slot already carries makes the PATCH 500 and costs the WHOLE channel.
+    # Seeded with the real streams the importer bound for real — they are just
+    # as unique-constrained as the ids this pass claims.
+    claimed_ids = {sid for sid in current_ids if sid not in placeholder_ids}
+
+    for index, bound_id in enumerate(current_ids):
+        if bound_id not in placeholder_ids:
+            # A real stream the importer already matched — never touched.
+            continue
+        archived_stream = archived_for(bound_id)
+        tier, match_id = (
+            match_stream(archived_stream, candidates, allow_fuzzy=allow_fuzzy)
+            if archived_stream is not None
+            else (MatchTier.MISS, None)
+        )
+        if tier != MatchTier.MISS and match_id is not None and match_id in claimed_ids:
+            # Two archived streams normalized to the same name, so the matcher
+            # handed both slots the same destination id. Demote this one to a
+            # MISS: the slot keeps its placeholder and is reported, which costs
+            # one slot instead of the entire channel.
+            logger.info(
+                "[DBAS-REBIND] Channel '%s' (id=%s): archived stream '%s' matched "
+                "destination stream id=%s, which another slot already holds; "
+                "keeping its placeholder so the update carries no duplicate.",
+                label, dest_channel_id, _stream_name(archived_stream), match_id,
+            )
+            tier, match_id = MatchTier.MISS, None
+        if tier != MatchTier.MISS and match_id is not None:
+            # Rewrite this slot IN PLACE — the drill confirmed the matcher's
+            # ordering behaviour is correct, so the archived order the importer
+            # established must survive the rebind untouched.
+            ordered_ids[index] = match_id
+            claimed_ids.add(match_id)
+            outcome.rebound += 1
+        else:
+            outcome.retained_placeholders.add(bound_id)
+            # The placeholder stays in the list, so its id is claimed too.
+            claimed_ids.add(bound_id)
+
+    if not outcome.rebound:
+        return outcome
+
+    try:
+        await client.update_channel(dest_channel_id, {"streams": ordered_ids})
+    except Exception as exc:  # noqa: BLE001 - best-effort cleanup pass
+        logger.warning(
+            "[DBAS-REBIND] Could not rebind channel '%s' (id=%s): %s",
+            label, dest_channel_id, exc,
+        )
+        outcome.final_ids = list(current_ids)
+        outcome.rebound = 0
+        # The channel is unchanged, so EVERY placeholder on it is still live —
+        # including the ones this pass had resolved a match for.
+        outcome.retained_placeholders = {
+            slot_id for slot_id in current_ids if slot_id in placeholder_ids
+        }
+        return outcome
+
+    outcome.updated = True
+    logger.info(
+        "[DBAS-REBIND] Channel '%s' (id=%s): %d placeholder(s) rebound onto real "
+        "provider streams.",
+        label, dest_channel_id, outcome.rebound,
+    )
+    return outcome
 
 
 async def rebind_placeholder_streams(
@@ -395,6 +625,35 @@ async def rebind_placeholder_streams(
 
     Returns:
         A :class:`RebindResult` describing what changed.
+    """
+    # Serialized against the refresh-driven entry point (module docstring,
+    # DOUBLE-RUN SAFETY). This pass WAITS rather than skipping: it is the
+    # authoritative pass, it owns the restore's report, and a restore that
+    # silently skipped its rebind would be the run-1 defect all over again.
+    async with _REBIND_LOCK:
+        return await _rebind_from_archive(
+            client=client,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+            archive_channels=archive_channels,
+            allow_fuzzy=allow_fuzzy,
+        )
+
+
+async def _rebind_from_archive(
+    *,
+    client: DispatcharrClient,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    archive_channels: list[dict],
+    allow_fuzzy: bool,
+) -> RebindResult:
+    """The archive-driven rebind body — see :func:`rebind_placeholder_streams`.
+
+    Split out only so the public entry point can hold :data:`_REBIND_LOCK`
+    around the whole pass without indenting it.
     """
     result = RebindResult()
 
@@ -485,78 +744,33 @@ async def rebind_placeholder_streams(
             continue
 
         label = str(archive_channel.get("name") or "<unknown>")
-        ordered_ids = list(current_ids)
-        rebound_here = 0
 
-        # Destination ids this channel already holds. Dispatcharr enforces a
-        # UNIQUE (channel_id, stream_id), so a second slot claiming an id
-        # another slot already carries makes the PATCH 500 and costs the WHOLE
-        # channel. Seeded with the real streams the importer bound for real —
-        # they are just as unique-constrained as the ids this pass claims.
-        claimed_ids = {sid for sid in current_ids if sid not in placeholder_ids}
-
-        for index, bound_id in enumerate(current_ids):
-            if bound_id not in placeholder_ids:
-                # A real stream the importer already matched — never touched.
-                continue
-            archived_stream = archived_by_source.get(source_by_placeholder.get(bound_id))
-            tier, match_id = (
-                match_stream(archived_stream, candidates, allow_fuzzy=allow_fuzzy)
-                if archived_stream is not None
-                else (MatchTier.MISS, None)
-            )
-            if tier != MatchTier.MISS and match_id is not None and match_id in claimed_ids:
-                # Two archived streams normalized to the same name, so the
-                # matcher handed both slots the same destination id. Demote this
-                # one to a MISS: the slot keeps its placeholder and is reported,
-                # which costs one slot instead of the entire channel.
-                logger.info(
-                    "[DBAS-REBIND] Channel '%s' (id=%s): archived stream '%s' matched "
-                    "destination stream id=%s, which another slot already holds; "
-                    "keeping its placeholder so the update carries no duplicate.",
-                    label, dest_channel_id, _stream_name(archived_stream), match_id,
-                )
-                tier, match_id = MatchTier.MISS, None
-            if tier != MatchTier.MISS and match_id is not None:
-                # Rewrite this slot IN PLACE — the drill confirmed the matcher's
-                # ordering behaviour is correct, so the archived order the
-                # importer established must survive the rebind untouched.
-                ordered_ids[index] = match_id
-                claimed_ids.add(match_id)
-                rebound_here += 1
-            else:
-                still_referenced.add(bound_id)
-                # The placeholder stays in the list, so its id is claimed too.
-                claimed_ids.add(bound_id)
-
+        # THE SHARED CORE — order preservation, the ``…-ixdaw`` de-dup backstop
+        # and the all-or-nothing PATCH failure handling live in ONE place used by
+        # both entry points. The restore path's only contribution is
+        # ``archived_for``: the placeholder resolves back through the STREAM
+        # remap to the archive record that produced it.
+        outcome = await _rebind_one_channel(
+            client=client,
+            dest_channel_id=dest_channel_id,
+            label=label,
+            current_ids=current_ids,
+            placeholder_ids=placeholder_ids,
+            archived_for=lambda pid, _archived=archived_by_source: _archived.get(
+                source_by_placeholder.get(pid)
+            ),
+            candidates=candidates,
+            allow_fuzzy=allow_fuzzy,
+        )
+        still_referenced.update(outcome.retained_placeholders)
         # What the channel is ACTUALLY left holding — the list the playability
-        # verdict must be taken from. The PATCH below can fail, and the handler
-        # reverts every slot, so the list this pass HOPED to write is not
-        # evidence of anything.
-        final_ids = ordered_ids
-
-        if rebound_here:
-            try:
-                await client.update_channel(dest_channel_id, {"streams": ordered_ids})
-            except Exception as exc:  # noqa: BLE001 - best-effort cleanup pass
-                logger.warning(
-                    "[DBAS-REBIND] Could not rebind channel '%s' (id=%s): %s",
-                    label, dest_channel_id, exc,
-                )
-                final_ids = list(current_ids)
-                # The channel is unchanged, so EVERY placeholder on it is still
-                # live — including the ones this pass had resolved a match for.
-                for slot_id in current_ids:
-                    if slot_id in placeholder_ids:
-                        still_referenced.add(slot_id)
-            else:
-                result.rebound += rebound_here
-                result.channels_updated += 1
-                logger.info(
-                    "[DBAS-REBIND] Channel '%s' (id=%s): %d placeholder(s) rebound "
-                    "onto real provider streams.",
-                    label, dest_channel_id, rebound_here,
-                )
+        # verdict must be taken from. The PATCH can fail, and the handler reverts
+        # every slot, so the list this pass HOPED to write is not evidence of
+        # anything.
+        final_ids = outcome.final_ids
+        if outcome.updated:
+            result.rebound += outcome.rebound
+            result.channels_updated += 1
 
         # What this channel ENDS UP holding, so the residue sweep below can ask
         # "is this stream referenced by anything" against the post-rebind truth
@@ -673,6 +887,233 @@ async def rebind_placeholder_streams(
             "EARLIER restore removed from the synthetic '%s' account.",
             result.orphans_swept, CUSTOM_STREAM_ACCOUNT_NAME,
         )
+    return result
+
+
+async def rebind_placeholders_after_refresh(
+    *,
+    client: DispatcharrClient,
+    trigger: str,
+    allow_fuzzy: bool = True,
+) -> RebindResult:
+    """Rebind leftover restore placeholders once an M3U refresh materialized streams.
+
+    THE FIX for the ``…-2o0cz`` residual (module docstring, "WHY ONE SHOT IS NOT
+    ENOUGH"). On a redacted artifact the restore's own rebind runs against an
+    account that has no credential yet and therefore no streams, so it resolves
+    nothing; the operator then re-enters the credential and refreshes, and until
+    now that changed nothing they could see. This is the pass that makes that
+    second step sufficient, without the archive, the ledger or the id remap —
+    each placeholder carries the archived stream's own name and is its own match
+    key.
+
+    CHEAP NO-OP. M3U refresh is a hot, scheduled path, so the pass gates itself
+    twice before doing any real work and logs NOTHING on either exit:
+
+    1. no M3U account named
+       :data:`~dbas.custom_stream_fallback.CUSTOM_STREAM_ACCOUNT_NAME` exists —
+       ONE ``get_m3u_accounts`` call, and the steady state on any instance that
+       has never restored or that a previous pass already tidied (the empty
+       account is dropped, so this stays false afterwards);
+    2. the account exists but holds no URL-less stream — one account-scoped
+       stream page on top.
+
+    Only past both gates does it fetch the full stream and channel lists.
+
+    THE SAFETY ENVELOPE is exactly the one PR #784 established for the residue
+    sweep, reused rather than re-derived: a stream is a rebind candidate ONLY
+    when it sits on the synthetic account AND carries no url. An operator's own
+    URL-less custom stream on ANY OTHER account is never rebound, never counted
+    and never deleted.
+
+    Never raises — every failure path inside is logged and swallowed, and the
+    callers (an M3U refresh completion) must not fail because a hygiene pass did.
+
+    Args:
+        client: The Dispatcharr API client.
+        trigger: Operator-facing name of what invoked the pass (e.g. the account
+            name, or the task id), used only in logs so the drill log says WHICH
+            refresh healed the instance.
+        allow_fuzzy: Whether the matcher may use its Tier-4 fuzzy rung. Defaults
+            to ``True``, matching the restore path this is finishing.
+
+    Returns:
+        A :class:`RebindResult` describing what changed. All-zero when either
+        gate short-circuited or a rebind was already in flight.
+    """
+    if _REBIND_LOCK.locked():
+        # A restore's own rebind, or another refresh completion, is already
+        # doing this work. Skipping is correct AND is the double-run guard: the
+        # check and the acquire below have no ``await`` between them, so in one
+        # event loop the pair is atomic.
+        logger.info(
+            "[DBAS-REBIND] A placeholder rebind is already in flight; skipping "
+            "the one %s would have triggered.", trigger,
+        )
+        return RebindResult()
+    async with _REBIND_LOCK:
+        try:
+            return await _rebind_from_live_placeholders(
+                client=client, trigger=trigger, allow_fuzzy=allow_fuzzy
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail a refresh over hygiene
+            logger.warning(
+                "[DBAS-REBIND] Post-refresh placeholder rebind (%s) hit an error "
+                "and was abandoned; nothing was rolled back: %s", trigger, exc,
+            )
+            return RebindResult()
+
+
+async def _rebind_from_live_placeholders(
+    *,
+    client: DispatcharrClient,
+    trigger: str,
+    allow_fuzzy: bool,
+) -> RebindResult:
+    """The refresh-driven rebind body — see :func:`rebind_placeholders_after_refresh`."""
+    result = RebindResult()
+
+    # --- Gate 1: does the synthetic account exist at all? --------------------
+    synthetic_account_ids = await _synthetic_account_ids(client)
+    if not synthetic_account_ids:
+        return result
+
+    # --- Gate 2: does it hold any URL-less placeholder? ----------------------
+    # Account-scoped so the common case costs one small page, not the whole
+    # stream table. The account filter is re-applied client-side as well: it is
+    # the predicate that keeps this pass off an operator's own streams, and it
+    # must not depend on an upstream query parameter being honoured.
+    placeholder_by_id: dict[int, dict] = {}
+    for account_id in sorted(synthetic_account_ids):
+        for stream in await _fetch_all(
+            client, client.get_streams, m3u_account=account_id
+        ):
+            stream_id = _as_int(stream.get("id"))
+            if stream_id is None or stream.get("url"):
+                continue
+            if _stream_account_id(stream) not in synthetic_account_ids:
+                continue
+            placeholder_by_id[stream_id] = stream
+    if not placeholder_by_id:
+        return result
+
+    placeholder_ids = set(placeholder_by_id)
+    logger.info(
+        "[DBAS-REBIND] %s: %d leftover restore placeholder(s) on the synthetic "
+        "'%s' account; re-running the stream matcher against the materialized "
+        "provider streams.",
+        trigger, len(placeholder_ids), CUSTOM_STREAM_ACCOUNT_NAME,
+    )
+
+    all_streams = await _fetch_all(client, client.get_streams)
+    # REAL candidates — same definition as the archive-driven pass: everything
+    # that is not one of the placeholders and carries a URL.
+    candidates = [
+        s
+        for s in all_streams
+        if _as_int(s.get("id")) not in placeholder_ids and s.get("url")
+    ]
+    candidate_ids = {cid for s in candidates if (cid := _as_int(s.get("id"))) is not None}
+    if not candidates:
+        logger.info(
+            "[DBAS-REBIND] %s: no URL-bearing provider streams on the destination "
+            "yet; the placeholders are kept so nothing loses its binding.", trigger,
+        )
+        return result
+
+    all_channels = await _fetch_all(client, client.get_channels)
+    current_by_channel = {
+        cid: [sid for s in (ch.get("streams") or []) if (sid := _as_int(s)) is not None]
+        for ch in all_channels
+        if (cid := _as_int(ch.get("id"))) is not None
+    }
+    # The channel's OWN name, from the destination — there is no archive here to
+    # take a label from.
+    channel_names = {
+        cid: str(ch.get("name") or "<unknown>")
+        for ch in all_channels
+        if (cid := _as_int(ch.get("id"))) is not None
+    }
+
+    # Post-rebind bindings per channel, so the sweep below asks "is this stream
+    # referenced by anything" against the truth this pass just established
+    # rather than the list it fetched. A channel this loop skipped keeps its
+    # fetched list, which is still current.
+    final_by_channel: dict[int, list[int]] = {}
+
+    for dest_channel_id, current_ids in current_by_channel.items():
+        if not any(sid in placeholder_ids for sid in current_ids):
+            # No synthetic placeholder on this channel — nothing this pass may
+            # touch. Its bindings are read for the reference set below and
+            # otherwise left entirely alone.
+            continue
+        label = channel_names.get(dest_channel_id, "<unknown>")
+
+        # THE SHARED CORE — identical order, de-dup and PATCH-failure behaviour
+        # to the restore path. The only difference is ``archived_for``: the
+        # placeholder IS the record to re-match with, because
+        # ``custom_stream_fallback`` built it from the archived stream and kept
+        # its name verbatim.
+        outcome = await _rebind_one_channel(
+            client=client,
+            dest_channel_id=dest_channel_id,
+            label=label,
+            current_ids=current_ids,
+            placeholder_ids=placeholder_ids,
+            archived_for=placeholder_by_id.get,
+            candidates=candidates,
+            allow_fuzzy=allow_fuzzy,
+        )
+        final_by_channel[dest_channel_id] = list(outcome.final_ids)
+        if outcome.updated:
+            result.rebound += outcome.rebound
+            result.channels_updated += 1
+
+        # The playability audit, scoped to the channels this pass touched. There
+        # is no RestoreReport here, so it exists to LOG the residue an operator
+        # still has to fix, and it uses the same test as the restore path: a
+        # channel plays if any id it is left holding is a URL-bearing candidate.
+        if any(sid not in candidate_ids for sid in outcome.final_ids):
+            result.still_placeholder.append(label)
+            if not any(sid in candidate_ids for sid in outcome.final_ids):
+                result.unplayable.append(label)
+                logger.warning(
+                    "[DBAS-REBIND] Channel '%s' (id=%s) has NO playable stream: "
+                    "not one of its slots carries a URL. Attach a real stream.",
+                    label, dest_channel_id,
+                )
+
+    # --- Cleanup: the SAME sweep and account drop the restore path runs. -----
+    referenced_ids: set[int] = set()
+    for channel_id, current in current_by_channel.items():
+        referenced_ids.update(final_by_channel.get(channel_id, current))
+
+    swept_ids = await _sweep_orphaned_placeholders(
+        client=client,
+        all_streams=all_streams,
+        referenced_ids=referenced_ids,
+        already_deleted=set(),
+        synthetic_account_ids=synthetic_account_ids,
+    )
+    result.orphans_swept = len(swept_ids)
+    result.account_deleted = await _drop_empty_synthetic_account(
+        client=client,
+        all_streams=all_streams,
+        deleted_ids=swept_ids,
+        synthetic_account_ids=synthetic_account_ids,
+    )
+
+    logger.info(
+        "[DBAS-REBIND] %s: rebind complete — %d slot(s) rebound across %d "
+        "channel(s); %d orphaned placeholder(s) swept; %d channel(s) still hold "
+        "a slot that cannot play, %d of them with NO playable stream at all.",
+        trigger,
+        result.rebound,
+        result.channels_updated,
+        result.orphans_swept,
+        len(result.still_placeholder),
+        len(result.unplayable),
+    )
     return result
 
 

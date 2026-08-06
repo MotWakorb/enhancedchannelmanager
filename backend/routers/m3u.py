@@ -263,6 +263,35 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
     return None
 
 
+async def _rebind_restore_placeholders(account_name: str) -> None:
+    """Rebind leftover DBAS-restore placeholders now that this refresh has streams.
+
+    Bead ``enhancedchannelmanager-2o0cz`` residual. Restoring a STANDARD
+    (redacted) backup leaves every channel bound to a URL-less placeholder,
+    because the M3U account has no credential yet and its refresh materializes
+    nothing. Re-entering the credential and refreshing is the recovery an
+    operator reaches for first, and until this hook existed it changed nothing
+    they could see — the real streams appeared BESIDE the placeholders and not
+    one channel was rebound. This is the hook that makes that step sufficient.
+
+    Costs one ``get_m3u_accounts`` call and stays silent on any instance with no
+    synthetic custom-stream account, which is every instance that has never
+    restored (see ``dbas.placeholder_rebind`` for both no-op gates). Imported
+    lazily so the M3U router keeps no import-time dependency on the DBAS
+    subsystem. Best-effort — a failure here never affects the refresh.
+    """
+    try:
+        from dbas.placeholder_rebind import rebind_placeholders_after_refresh
+
+        await rebind_placeholders_after_refresh(
+            client=get_client(), trigger=f"M3U refresh of '{account_name}'",
+        )
+    except Exception as e:
+        logger.warning(
+            "[M3U-REFRESH] Placeholder rebind after '%s' failed: %s", account_name, e
+        )
+
+
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
     """
     Background task to poll Dispatcharr until M3U refresh completes.
@@ -312,6 +341,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # Bead …-2o0cz residual: the streams this refresh just
+                # materialized are the first thing a leftover restore
+                # placeholder can be rebound onto. No-ops (and stays silent) on
+                # any instance with no synthetic custom-stream account.
+                await _rebind_restore_placeholders(account_name)
 
                 # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
                 # of every auto-sync group's channel_profile_ids selection.
@@ -363,6 +398,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # Bead …-2o0cz residual: the streams this refresh just
+                # materialized are the first thing a leftover restore
+                # placeholder can be rebound onto. No-ops (and stays silent) on
+                # any instance with no synthetic custom-stream account.
+                await _rebind_restore_placeholders(account_name)
 
                 # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
                 # of every auto-sync group's channel_profile_ids selection.

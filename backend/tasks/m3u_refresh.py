@@ -328,6 +328,34 @@ class M3URefreshTask(TaskScheduler):
         if "skip_inactive" in config:
             self.skip_inactive = config["skip_inactive"]
 
+    async def _rebind_restore_placeholders(self, client) -> None:
+        """Rebind leftover DBAS-restore placeholders onto the refreshed streams.
+
+        Bead ``enhancedchannelmanager-2o0cz`` residual. Restoring a STANDARD
+        (redacted) backup leaves every channel bound to a URL-less placeholder,
+        because the M3U account had no credential when the restore's own rebind
+        ran. This is the SCHEDULED half of the recovery: whatever route the
+        operator took to get real streams onto the instance, the next refresh
+        cycle heals it. The interactive half is the per-account refresh hook in
+        ``routers.m3u``.
+
+        Costs one ``get_m3u_accounts`` call and logs nothing on any instance
+        with no synthetic custom-stream account (see ``dbas.placeholder_rebind``
+        for both no-op gates). Imported lazily so the task keeps no import-time
+        dependency on the DBAS subsystem. Best-effort — it never fails the task.
+        """
+        try:
+            from dbas.placeholder_rebind import rebind_placeholders_after_refresh
+
+            await rebind_placeholders_after_refresh(
+                client=client, trigger=f"the {self.task_id} task",
+            )
+        except Exception as e:
+            logger.warning(
+                "[%s] Placeholder rebind after the refresh sweep failed: %s",
+                self.task_id, e,
+            )
+
     async def execute(self) -> TaskResult:
         """Execute the M3U refresh."""
         client = get_client()
@@ -496,6 +524,16 @@ class M3URefreshTask(TaskScheduler):
                     failed_count += 1
                     errors.append(f"{account_name}: {str(e)}")
                     self._increment_progress(failed_count=1)
+
+            # Bead …-2o0cz residual: ONCE per run, after every account has been
+            # refreshed, rebind any channel still bound to a URL-less DBAS
+            # restore placeholder onto the streams these refreshes materialized.
+            # Deliberately outside the per-account loop — the pass is
+            # instance-wide, so running it per account would repeat identical
+            # work. Skipped on a cancel, and a complete silent no-op on any
+            # instance with no synthetic custom-stream account.
+            if success_count and not self._cancel_requested:
+                await self._rebind_restore_placeholders(client)
 
             self._set_progress(
                 success_count=success_count,

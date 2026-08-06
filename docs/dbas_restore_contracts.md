@@ -117,6 +117,46 @@ operator-meaningful unit ("3 channels a profile was built to exclude were
 exposed") — so unlike the others it does **not** track the length of its detail
 list. An already-correct profile records nothing.
 
+#### The rebind is no longer restore-only (bead `…-2o0cz` residual)
+
+The rebind pass has **two** entry points. The contract above describes the
+archive-driven one, which runs as a restore-completion step and is the only one
+that writes the report.
+
+On a STANDARD (redacted) artifact that pass has nothing to resolve: the restored
+M3U account carries no credential when the deferred refresh fires, so no real
+stream exists yet. Drill runs 4, 5 and 7 all measured the same consequence — the
+operator re-entered the credential, refreshed, watched 96 real streams appear
+BESIDE the placeholders, and not one channel was rebound. The only recovery was
+re-running the whole restore.
+
+`dbas.placeholder_rebind.rebind_placeholders_after_refresh` closes that. It
+re-runs the same matcher against whatever the refresh materialized, using the
+placeholder's OWN name as the match key (`custom_stream_fallback` copies the
+archived stream's `name` verbatim), so it needs no archive, ledger or id remap.
+
+| | archive-driven | refresh-driven |
+|---|---|---|
+| Runs | restore completion, clean non-dry-run apply | M3U refresh completion |
+| Triggered by | `restore_orchestrator.run_restore` | `POST /api/m3u/refresh/{account_id}` completing (UI button, MCP `refresh_m3u`); the scheduled `m3u_refresh` task, once per run |
+| NOT triggered by | — | `POST /api/m3u/refresh` (refresh-all / MCP `refresh_all_m3u`) — it returns before the refresh completes and exposes no completion signal; direct `DispatcharrClient.refresh_all_m3u_accounts` callers; a refresh performed in Dispatcharr's own UI. Those heal on the next scheduled `m3u_refresh` run |
+| Match key | the ARCHIVE record, via the STREAM remap | the PLACEHOLDER's own record |
+| Scope | streams this run's `RollbackLedger` owns | any URL-less stream on the synthetic `ECM Custom Streams (DBAS restore)` account. An operator's own URL-less stream on any OTHER account is never touched |
+| Writes the report | yes | **no** — there is no `RestoreReport` at that point. The counters above stay apply-only and never move outside a restore |
+
+Both share one per-channel implementation, so archived slot ORDER, the `…-ixdaw`
+de-dup backstop and the all-or-nothing PATCH failure handling are identical on
+both paths. They are serialized by one module-level lock: the archive-driven
+pass waits (it is authoritative), the refresh-driven pass stands down when a
+rebind is already in flight, so neither can double-run. A restore never reaches
+either hook — its deferred phase calls `DispatcharrClient.refresh_m3u_account`
+directly rather than ECM's own route or task.
+
+The refresh-driven pass is a silent no-op on any instance with no synthetic
+custom-stream account (one `get_m3u_accounts` call), and on any account with no
+URL-less stream under it (one extra account-scoped page). M3U refresh is a hot
+scheduled path and the pass must not cost it anything in the common case.
+
 #### What a DRY RUN reports for each (bead `…-dgnms`)
 
 A preview must never report a confident `0` for a condition the apply will
@@ -139,6 +179,14 @@ refresh** materializes, and a dry run performs no refresh — the number is not
 knowable before the apply. `null` is additive-compatible: the fields were
 already optional, every backend consumer coerces with `or 0`, and a client that
 renders them must show "not predicted" rather than `0`.
+
+A PREDICTED counter must also be worded as a prediction (bead `…-juu3c`). The
+one-line summary `DbasRestoreTask` puts on the task-history row and the MCP
+result renders each action item in the **future tense** on a dry run — "N
+profile membership(s) **would be** corrected", not "corrected". The counts,
+clauses and clause order are identical to the apply's; only the verb moves.
+`credentials_needing_reentry` is exempt: "N account(s) need credentials
+re-entered" is already true of a preview and of an apply.
 
 The population SPLITS (`epg_link_reattach` / `logo_reattach`) are predicted in
 both modes and must agree with the apply. `logo_reattach` counts both the logos
