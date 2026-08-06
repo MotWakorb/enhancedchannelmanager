@@ -130,6 +130,36 @@ class TaskResult:
         }
 
 
+def completion_notification_type(result: 'TaskResult') -> str:
+    """Map a finished :class:`TaskResult` to the severity the operator sees.
+
+    Single source of truth for "how did this run end?" (bead
+    ``enhancedchannelmanager-asf3n``). A run touches TWO notification records —
+    the completion notification the task engine creates, and the progress
+    notification the scheduler created at start and re-types here at the end —
+    and each used to decide severity on its own. Only the engine learned the
+    ``completed_degraded`` rule from bead ``enhancedchannelmanager-daziw``, so a
+    degraded DBAS restore showed the operator a ``warning`` and an ``error``
+    side by side for one event, with nothing to say which was authoritative.
+
+    The mapping itself is unchanged from what the engine already did:
+
+    * cancelled -> ``warning`` (the run stopped, it did not fail)
+    * succeeded, some items failed -> ``warning``
+    * succeeded cleanly -> ``success``
+    * unsuccessful but ``completed_degraded`` -> ``warning`` (daziw: the applied
+      state stands and the message names the shortfall)
+    * unsuccessful -> ``error``
+    """
+    if result.error == "CANCELLED":
+        return "warning"
+    if result.success:
+        return "warning" if result.failed_count > 0 else "success"
+    if getattr(result, "completed_degraded", False):
+        return "warning"
+    return "error"
+
+
 @dataclass
 class ScheduleConfig:
     """Configuration for task scheduling."""
@@ -176,6 +206,24 @@ class TaskScheduler(ABC):
     task_name: str = ""
     task_description: str = ""
     default_enabled: bool = True  # Whether new installs start with this task enabled
+
+    # Ad-hoc parameters this task honours in the ``parameters`` body of
+    # POST /api/tasks/{task_id}/run but which are deliberately NOT
+    # schedule-configurable (bead ``enhancedchannelmanager-sdpzy``). Declared on
+    # the task itself so the discoverability endpoint cannot drift from what
+    # ``update_config`` actually reads.
+    #
+    # Shape mirrors ``routers.tasks.TASK_PARAMETER_SCHEMAS`` entries:
+    #   {"description": str,
+    #    "parameters": [{"name", "type", "label", "description",
+    #                    "required", "default"}, ...]}
+    #
+    # GET /api/tasks/{task_id}/parameter-schema surfaces these under a SEPARATE
+    # ``run_parameters`` key. They are never merged into ``parameters``, which
+    # the schedule editor renders and PERSISTS into ``task_schedules.parameters``
+    # — the dbas_backup passphrase is a manual-run transient that must never be
+    # written to a schedule.
+    run_parameter_schema: Optional[dict] = None
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         """Initialize the task scheduler."""
@@ -394,21 +442,24 @@ class TaskScheduler(ABC):
             return
 
         try:
-            # Determine final type and message
+            # Severity comes from the shared map so this notification can never
+            # contradict the engine's completion notification for the same run
+            # (asf3n). ``status`` is deliberately NOT re-mapped: the frontend
+            # treats it as a closed set of terminal states
+            # (notificationGrouping.FINAL_PROGRESS_STATUSES, useRestoreProgress),
+            # and a degraded run is terminal-but-not-successful — "failed" is the
+            # member that means that.
+            notification_type = completion_notification_type(result)
             if result.error == "CANCELLED":
-                notification_type = "warning"
                 message = f"Cancelled: {result.success_count} completed"
                 status = "cancelled"
             elif result.success:
-                notification_type = "success"
                 if result.failed_count > 0:
-                    notification_type = "warning"
                     message = f"Completed: {result.success_count} ok, {result.failed_count} failed"
                 else:
                     message = f"Completed: {result.success_count} ok"
                 status = "completed"
             else:
-                notification_type = "error"
                 message = result.message or "Task failed"
                 status = "failed"
 

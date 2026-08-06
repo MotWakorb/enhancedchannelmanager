@@ -673,15 +673,52 @@ async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _run_parameter_schema(task_id: str) -> Optional[dict]:
+    """The task's own declaration of its ad-hoc run parameters, or None.
+
+    Read off the registered task CLASS (never instantiated here) so this stays a
+    cheap read on a GET. See :attr:`task_scheduler.TaskScheduler.run_parameter_schema`.
+    """
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover — registry lookup is best-effort
+        logger.debug("[TASKS] Could not read run parameters for %s: %s", task_id, e)
+        return None
+    schema = getattr(task_class, "run_parameter_schema", None) if task_class else None
+    if not schema or not schema.get("parameters"):
+        return None
+    return schema
+
+
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
-    """Get the parameter schema for a task type."""
+    """Get the parameter schema for a task type.
+
+    ``parameters`` are the SCHEDULE-configurable parameters (rendered by the
+    schedule editor and persisted with the schedule). ``run_parameters``, when
+    present, are ad-hoc parameters the task honours only in the ``parameters``
+    body of ``POST /api/tasks/{task_id}/run`` and that must NOT be persisted to a
+    schedule (bead ``enhancedchannelmanager-sdpzy``). The two lists share the same
+    per-entry shape; the keys are separate because their lifetimes are.
+    """
     logger.debug("[TASKS] GET /api/tasks/%s/parameter-schema", task_id)
     schema = TASK_PARAMETER_SCHEMAS.get(task_id)
-    if not schema:
+    run_schema = _run_parameter_schema(task_id)
+    if not schema and not run_schema:
         # Return empty schema for tasks without special parameters
         return {"task_id": task_id, "description": "No configurable parameters", "parameters": []}
-    return {"task_id": task_id, **schema}
+    if schema:
+        response = {"task_id": task_id, **schema}
+    else:
+        response = {
+            "task_id": task_id,
+            "description": run_schema["description"],
+            "parameters": [],
+        }
+    if run_schema:
+        response["run_parameters"] = run_schema["parameters"]
+    return response
 
 
 # -------------------------------------------------------------------------

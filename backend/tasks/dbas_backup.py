@@ -115,7 +115,7 @@ from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskSchedul
 
 import journal
 import observability
-from dbas import retention
+from dbas import artifact_crypto, retention
 from routers.backup import (
     build_backup_artifact,
     verify_artifact_sha256,
@@ -170,6 +170,61 @@ class DbasBackupTask(TaskScheduler):
         "in /config/backups/. Scheduled or manual."
     )
     default_enabled = False
+
+    # Manual-run encryption transients, declared so an operator can discover
+    # them (bead …-sdpzy). They are read by ``update_config`` below and are the
+    # ONLY way to produce an encrypted, credential-bearing artifact; sent at the
+    # top level of the run request instead of inside ``parameters`` they are
+    # silently ignored and the caller gets a plain artifact believing otherwise.
+    #
+    # Excluded from ``routers.tasks.TASK_PARAMETER_SCHEMAS`` on purpose: that
+    # list is the SCHEDULE form, and a persisted passphrase is exactly what the
+    # module docstring above forbids.
+    run_parameter_schema = {
+        "description": (
+            "Manual-run encryption parameters, sent in the 'parameters' object "
+            "of POST /api/tasks/dbas_backup/run. Never persisted to a schedule "
+            "— a scheduled run always produces the default redacted artifact."
+        ),
+        "parameters": [
+            {
+                "name": "passphrase",
+                "type": "string",
+                "label": "Passphrase",
+                "description": (
+                    "Encrypts the whole artifact. Minimum "
+                    f"{artifact_crypto.MIN_PASSPHRASE_LENGTH} characters, and "
+                    "requires acknowledge_unrecoverable. Omit for the default "
+                    "unencrypted, redacted artifact."
+                ),
+                "required": False,
+                "default": None,
+            },
+            {
+                "name": "include_credentials",
+                "type": "boolean",
+                "label": "Include credentials",
+                "description": (
+                    "Keep provider credentials in the artifact instead of "
+                    "redacting them (for migration). Requires a passphrase."
+                ),
+                "required": False,
+                "default": False,
+            },
+            {
+                "name": "acknowledge_unrecoverable",
+                "type": "boolean",
+                "label": "Acknowledge unrecoverable",
+                "description": (
+                    "Confirms that a lost passphrase makes the artifact "
+                    "permanently unrecoverable. Required whenever a passphrase "
+                    "is set."
+                ),
+                "required": False,
+                "default": False,
+            },
+        ],
+    }
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         if schedule_config is None:

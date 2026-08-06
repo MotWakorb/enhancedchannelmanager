@@ -19,7 +19,7 @@ from database import get_session
 from log_throttle import should_log
 from models import TaskExecution
 from task_registry import get_registry
-from task_scheduler import TaskResult
+from task_scheduler import TaskResult, completion_notification_type
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
@@ -1042,7 +1042,7 @@ class TaskEngine:
                 await self._notify_task_result(
                     task_name=instance.task_name,
                     task_id=task_id,
-                    notification_type="warning",
+                    notification_type=completion_notification_type(result),
                     title=f"Task Cancelled: {instance.task_name}",
                     message=cancel_msg,
                     result=result,
@@ -1110,7 +1110,7 @@ class TaskEngine:
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
-                        notification_type="warning",
+                        notification_type=completion_notification_type(result),
                         title=f"Task Completed with Warnings: {instance.task_name}",
                         message=warn_msg,
                         result=result,
@@ -1121,7 +1121,7 @@ class TaskEngine:
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
-                        notification_type="success",
+                        notification_type=completion_notification_type(result),
                         title=f"Task Completed: {instance.task_name}",
                         message=_success_task_completion_message(task_id, result),
                         result=result,
@@ -1159,12 +1159,15 @@ class TaskEngine:
 
                 # Send the completion notification: a warning for a degraded run
                 # (the applied state stands and is named in the message), the
-                # unchanged red error for every real failure.
+                # unchanged red error for every real failure. The severity comes
+                # from task_scheduler.completion_notification_type so the
+                # progress notification for the same run cannot disagree with
+                # this one (asf3n); the branch here still selects the wording.
                 if degraded:
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
-                        notification_type="warning",
+                        notification_type=completion_notification_type(result),
                         title=f"Task Completed with Warnings: {instance.task_name}",
                         message=result.message or result.error or "Completed with warnings",
                         result=result,
@@ -1174,7 +1177,7 @@ class TaskEngine:
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
-                        notification_type="error",
+                        notification_type=completion_notification_type(result),
                         title=f"Task Failed: {instance.task_name}",
                         message=result.error or result.message or "Unknown error",
                         result=result,
