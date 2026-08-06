@@ -134,6 +134,26 @@ describe('DbasRestoreSavedModal', () => {
     );
   });
 
+  it('reaches the results step when the run finished with warnings', async () => {
+    // Bead fexq1 — same terminal-status widening as DbasRestoreModal. This
+    // modal polls the same history row, so it needs the same fix or a degraded
+    // restore never renders its report here either.
+    (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed_with_warnings', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreSavedModal filename={FILENAME} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+  });
+
   it('applying requires typing the exact filename in the confirm dialog', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
       status: 'started', task_id: 'dbas_restore', is_dry_run: true,

@@ -869,6 +869,16 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `PATCH /api/tasks/{id}/schedules/{sid}` | Update schedule |
 | `DELETE /api/tasks/{id}/schedules/{sid}` | Delete schedule |
 
+Each row from `GET /api/tasks/{id}/history` carries a `status` from a closed
+set: `running`, `completed`, `completed_with_warnings`, `failed`, `cancelled`.
+`completed_with_warnings` is a run that reached the end and left real, kept
+state without being clean — some items failed, or the task reported itself
+degraded (a DBAS restore that applied every row and left a channel with no
+playable stream). **It is not a failure**, its `success` field is `true`, and
+the run's notification for the same event is a `warning`. A consumer that
+branches on `status` should treat it alongside `completed`; rows written before
+build `0.18.1-0036` only ever carry `completed` or `failed`.
+
 `GET /api/tasks/{id}/parameter-schema` returns two lists. `parameters` are
 schedule-configurable — the schedule editor renders them and they are persisted
 with the schedule. `run_parameters`, when present, are ad-hoc parameters the task

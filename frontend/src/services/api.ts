@@ -2932,7 +2932,18 @@ export interface TaskExecution {
   started_at: string;
   completed_at: string | null;
   duration_seconds: number | null;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * How the run ended. `completed_with_warnings` (bead fexq1) is the run that
+   * reached the end and left real, kept state without being clean — some items
+   * failed, or the task declared itself degraded. It is NOT a failure and must
+   * never be rendered as one: a DBAS restore that applied everything and left a
+   * channel with no playable stream lands here.
+   *
+   * Rows written before that build carry `completed` or `failed` only, so any
+   * consumer that switches on this must keep whatever fallback it had.
+   */
+  status: 'running' | 'completed' | 'completed_with_warnings' | 'failed' | 'cancelled';
+  /** True when the run produced what it was asked for — warnings included. */
   success: boolean | null;
   message: string | null;
   error: string | null;

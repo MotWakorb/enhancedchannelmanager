@@ -271,6 +271,30 @@ describe('DbasRestoreModal', () => {
       expect(screen.getByText(/wrong passphrase or corrupted artifact/i)).toBeInTheDocument(),
     );
   });
+  it('reaches the results step when the run finished with warnings', async () => {
+    // Bead fexq1: a degraded restore's history row now reads
+    // `completed_with_warnings`. The terminal check used to accept only
+    // `completed` and `failed`, so the drill's degraded restore would poll
+    // until the retries ran out and land back on configure with
+    // "Restore failed" — for a restore that completed and rolled nothing back.
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed_with_warnings', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+  });
+
   // --- Channel-reattach mode (bead dfkbn, PR review W1) -------------------
 
   it('defaults the reattach mode to keeping existing channels as they are', async () => {
