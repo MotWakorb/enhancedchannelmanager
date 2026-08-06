@@ -28,10 +28,11 @@ This walkthrough assumes:
       ECM-uploaded logos before you rely on this procedure. See
       [Before you begin](#before-you-begin-check-for-ecm-uploaded-logos)
       below.
-    - **A standard (redacted) backup needs a specific, counter-intuitive
-      recovery sequence** before playback works: re-enter credentials,
-      refresh, and **run the restore again** (a refresh alone is not
-      enough). See Step 6.
+    - **A standard (redacted) backup needs a recovery sequence** before
+      playback works: re-enter credentials, then refresh the M3U account.
+      As of `0.18.1-0033` those two steps are the whole recovery; on
+      earlier builds a third step (re-running the restore) was also
+      required. See Step 6.
 
     EPG links are also still lost on every migration and need re-linking by
     hand (Step 7). See [Run a restore drill](run-a-restore-drill.md) for
@@ -174,12 +175,12 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
   [Before you begin](#before-you-begin-check-for-ecm-uploaded-logos).
   Any ECM-uploaded logo on the old install currently aborts the whole
   restore before logos are even reached
-  (`enhancedchannelmanager-d0agi`). Don't trust the dry-run preview's
-  logo numbers either: the preview reports every URL-restorable logo as
-  failed even when it will restore fine on apply
-  (`enhancedchannelmanager-dgnms`). Verify logos on the new install
-  directly rather than trusting either the preview or the report's logo
-  count.
+  (`enhancedchannelmanager-d0agi`). On builds before `0.18.1-0032` the
+  dry-run preview also reported every URL-restorable logo as failed even
+  when it would restore fine on apply (`enhancedchannelmanager-dgnms`);
+  as of `0.18.1-0032` the preview's logo counts match what the apply
+  does. Either way, verify logos on the new install directly rather than
+  trusting a count.
 
 ---
 
@@ -196,24 +197,31 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
     credential entered before the account will authenticate, same as
     before.
 
-!!! danger "A refresh alone does not finish this. Read the whole sequence before you start."
-    This is the single most counter-intuitive fact about a redacted
-    restore, and skipping the last step is why playback looks broken
-    afterward even when everything else worked:
+!!! success "Two steps, as of `0.18.1-0033`: re-enter the credential, then refresh"
+    A redacted restore leaves every channel on a placeholder stream,
+    because the M3U account had no credential at the moment the restore
+    tried to attach real streams. The recovery is:
 
     1. Re-enter the credential (steps 1–4 below).
-    2. Refresh the M3U account.
-    3. **Run the restore again, from the same artifact.**
+    2. Refresh the M3U account (step 5 below).
 
-    Step 2 alone is not enough. ECM's placeholder-rebind pass (the step
-    that reattaches restored channels to real streams) runs once,
-    immediately after the restore's own deferred M3U refresh. On a
-    redacted artifact there is nothing to match against at that instant
-    (no credential yet), and the rebind pass never re-runs on its own. A
-    later manual refresh adds the real streams *beside* the placeholders
-    without rebinding anything to them. Re-running the restore is what
-    triggers the rebind pass again, this time with real streams present
-    to match against.
+    When that refresh completes, ECM reattaches every channel still
+    holding a placeholder onto the real stream, then removes the leftover
+    placeholders and the synthetic **ECM Custom Streams (DBAS restore)**
+    account. Only placeholders ECM itself created are touched.
+
+    **This covers the Refresh action on an individual M3U account and the
+    scheduled M3U refresh task.** A "refresh all accounts" action, or a
+    refresh performed in Dispatcharr's own UI, is picked up on the next
+    scheduled refresh instead of immediately. If you used one of those and
+    channels are still on placeholders, refresh the individual account.
+
+    **On builds before `0.18.1-0033`** there was a mandatory third step:
+    **run the restore again, from the same artifact**. The reattach pass
+    ran only once, during the restore itself, and never re-ran on its own,
+    so a later refresh added the real streams *beside* the placeholders
+    and rebound nothing. If you are migrating onto an older build, do that
+    third step after the refresh.
 
 1. Go to **Settings → M3U Accounts**.
 2. Edit each M3U account and enter the real password. The restore report
@@ -230,10 +238,11 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
    returned from Xtream Codes provider` with `0 / N` groups enabled, that
    specifically means no groups are enabled yet, not a provider outage;
    enable your groups and refresh again.
-6. **Go back to Settings → Backup & Restore → Restore DBAS Backup and run
-   the same restore again**, from the same artifact. This is the step
-   that actually reattaches your channels to the now-real streams. See
-   the callout above; do not skip it.
+6. Check that your channels now play. The completed refresh in step 5 is
+   what reattaches them to the real streams. On a build before
+   `0.18.1-0033`, go back to **Settings → Backup & Restore → Restore DBAS
+   Backup** and run the same restore again from the same artifact; see
+   the callout above.
 7. Run an EPG refresh to populate guide data.
 
 If you used an encrypted backup with **Include credentials**, none of this
@@ -266,8 +275,9 @@ After the restore:
    If you used an encrypted backup with **Include credentials** and had no
    ECM-uploaded logos, expect this to pass on the first restore. If you
    used a standard (redacted) backup, expect it to pass only after you
-   completed the **full** Step 6 sequence, including running the restore
-   a second time.
+   completed the **full** Step 6 sequence: on `0.18.1-0033` and later,
+   that is the credential re-entry plus the M3U refresh; on an earlier
+   build it also includes running the restore a second time.
 
 !!! danger "EPG links are still lost, and still need manual re-linking"
     Every channel that had an EPG link on the old install loses it on the

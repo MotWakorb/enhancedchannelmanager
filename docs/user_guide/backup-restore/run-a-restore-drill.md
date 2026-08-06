@@ -597,19 +597,26 @@ contaminate each other, or run them sequentially with a `down -v` /
 2. If encrypted, enter the passphrase.
 3. Click **Preview** (dry-run). Sanity-check the counts.
 
-   !!! warning "The preview lies about logos"
-       The dry-run preview reports **every** URL-restorable logo as
-       `validation_error: unsafe or empty logo filename`, even ones that
-       restore fine on apply. Run 2 measured this directly: the preview
-       flagged all 11 seeded logos as failures; the apply then restored
-       10 of them correctly and failed only the one genuinely-lost logo
-       (`enhancedchannelmanager-dgnms`). Cause: the preview never
-       simulates the URL re-create path, so every URL-only logo falls
-       through to a byte-validation path that expects a `filename` key
-       the preview's records don't have. **Preview first, always**, but
-       do not abort a restore because of logo failures shown in a
-       preview; the real miss is easy to miss among the invented ones.
-       Every other category's preview numbers are unaffected.
+   !!! warning "What a preview does and does not predict"
+       As of `0.18.1-0032`, the per-category counts, the logo and
+       EPG-link reattach splits, and `profile_membership_drift` all match
+       what the apply then does. The two stream-health counters
+       (`channels_needing_stream_reattach`,
+       `channels_with_no_playable_stream`) read **`null`**, meaning "not
+       predicted": the pass that writes them matches against streams the
+       deferred M3U refresh materializes, and a preview refreshes nothing.
+       Read `null` as "unknowable until the apply", not as zero.
+
+       On builds before `0.18.1-0032`, the preview reported **every**
+       URL-restorable logo as `validation_error: unsafe or empty logo
+       filename`, even ones that restored fine on apply. Run 2 measured
+       this directly: the preview flagged all 11 seeded logos as failures;
+       the apply then restored 10 of them correctly and failed only the
+       one genuinely-lost logo (`enhancedchannelmanager-dgnms`). The same
+       pin reported a confident `0` for both stream-health counters where
+       the apply reported 12 and 12. **Preview first, always**, but on
+       those builds do not abort a restore because of logo failures shown
+       in a preview; the real miss is easy to lose among the invented ones.
 
 4. Click **Apply these changes**. The confirmation dialog requires you to
    **type the artifact's exact filename** before it will let you
@@ -651,13 +658,49 @@ for your next try.
 
 ## Step 6a: If you restored a standard (redacted) artifact, recover credentials before you check playback
 
-This is the single most valuable, most counter-intuitive fact from run 2.
-Skip it and playback will look broken when it's actually just unfinished.
+Skip this and playback will look broken when it's actually just
+unfinished.
 
 A standard (redacted) artifact has no M3U password, so nothing was ever
 ingested from the real provider. Right after the restore, playback is
 *expected* to fail, not because of a defect, but because the M3U account
-has no credential yet. Run 2 measured the recovery in three states:
+has no credential yet.
+
+**The recovery sequence, as of `0.18.1-0033`:**
+
+1. Re-enter the provider credential on every M3U account the restore
+   report or the post-restore UI names as needing it. Both name the exact
+   account and field; see [Improved reporting](#improved-reporting) below.
+2. Refresh that M3U account, and wait for the refresh to complete.
+
+That is the whole recovery. When the refresh finishes, ECM re-runs the
+reattach pass over the streams it has just materialized, moves every
+channel off its placeholder onto the real stream, and then deletes the
+leftover placeholders and the synthetic `ECM Custom Streams (DBAS
+restore)` account. Only placeholders ECM itself created are touched.
+Measured end to end: 12 channels went from unplayable to all playing after
+the refresh alone, finishing with zero leftover placeholder streams and
+the synthetic account gone.
+
+!!! note "Which refresh actions trigger the reattach, and which do not"
+    **Covered:** the **Refresh** action on an individual M3U account, and
+    the scheduled M3U refresh task.
+
+    **Not covered:** a "refresh all accounts" action, and a refresh
+    performed in Dispatcharr's own UI. Neither reports completion back to
+    ECM in a way the reattach can hang on, so an instance that reached
+    real streams by one of those routes heals on the **next scheduled M3U
+    refresh** rather than immediately. For a drill, refresh the individual
+    account so you are measuring the immediate path.
+
+**On builds before `0.18.1-0033`,** step 2 was not enough, and this was
+the part operators would not guess. The reattach pass ran once,
+immediately after the restore's own deferred M3U refresh, and never
+re-ran on its own. On a redacted artifact there was nothing to match
+against at that instant, so a later manual refresh added the real streams
+*beside* the placeholders and rebound nothing. Recovery needed a third
+step: **run the same restore again**, from the same artifact. Measured on
+that pin, in three states:
 
 | State | Streams | Channel bindings | Playback (bytes actually fetched) |
 |-|-|-|-|
@@ -665,31 +708,18 @@ has no credential yet. Run 2 measured the recovery in three states:
 | 2. After re-entering the credential **and** refreshing the M3U account | 124 (110 real) | **still** 12 on placeholders | still fails |
 | 3. After **running the same restore again** | 124 | all 12 on real streams, correct order | **2/2 (HTTP 200, `video/mp2t`, real bytes)** |
 
-**State 2 is not enough, and this is the part operators will not guess.**
-ECM's placeholder-rebind pass is a one-shot step that runs immediately
-after the restore's own deferred M3U refresh. On a redacted artifact
-there is nothing to match against at that instant: no credential yet,
-and the rebind pass never re-runs on its own. A later manual refresh adds
-the real streams *beside* the placeholders and rebinds nothing.
-
-**The correct recovery sequence:**
-
-1. Re-enter the provider credential on every M3U account the restore
-   report or the post-restore UI names as needing it. Both now name the
-   exact account and field; see
-   [Improved reporting](#improved-reporting) below.
-2. Refresh the M3U account.
-3. **Run the same restore again**, from the same artifact. This is the
-   step most operators will not think to do, and skipping it is why
-   playback still looks broken after step 2.
+If your drill is on a build before `0.18.1-0033`, expect state 2 and do
+the third step. If you are on `0.18.1-0033` or later and state 2 still
+leaves channels on placeholders after the refresh **completed**, that is
+a fresh finding worth filing with the restore report attached.
 
 **Alternative: skip this whole sequence.** An **encrypted artifact with
 "Include credentials" enabled** restores the credential automatically.
-Verified in run 2 with an identical credential fingerprint before and
-after, and playback working on the first restore, no recovery pass
-needed. If you don't specifically need the redacted variant's
-smaller/shareable footprint, prefer the encrypted-with-credentials path
-for any artifact you actually intend to restore onto a working instance.
+Verified with an identical credential fingerprint before and after, and
+playback working on the first restore, no recovery pass needed. If you
+don't specifically need the redacted variant's smaller/shareable
+footprint, prefer the encrypted-with-credentials path for any artifact you
+actually intend to restore onto a working instance.
 
 ---
 
@@ -715,14 +745,14 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
    - **Encrypted artifact with "Include credentials":** expect this to
      pass immediately, on the first restore, no extra steps.
    - **Standard (redacted) artifact:** expect this to **fail**
-     immediately after the restore. That is not the `2o0cz` defect
-     resurfacing; it's an M3U account with no credential yet. Work
-     through [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
-     above; playback should pass once you've re-entered the credential,
-     refreshed, and **run the restore again**. If it still fails after
-     that full sequence, that *is* the residual
-     `enhancedchannelmanager-2o0cz` defect and is worth filing as a fresh
-     occurrence rather than assuming it away.
+     immediately after the restore. That is not a defect resurfacing;
+     it's an M3U account with no credential yet. Work through
+     [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
+     above. As of `0.18.1-0033`, playback should pass once you have
+     re-entered the credential and the account's refresh has **completed**;
+     on an earlier build it passes only after you also run the restore
+     again. If it still fails after the full sequence for your build, that
+     is worth filing as a fresh occurrence rather than assuming it away.
 2. **Credentials.** Open the M3U account. On a standard (redacted)
    artifact, the password field is now correctly **empty**. The
    `***REDACTED***` sentinel bug is fixed and closed
@@ -804,9 +834,16 @@ one directly rather than trusting the restore-complete report's summary:
     at its default.
 - If you restored a **standard (redacted)** artifact, you completed the
   full [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
-  recovery sequence (re-enter credential, refresh, **run the restore
-  again**) before checking playback. Playback failing before that
-  sequence is complete is expected, not a regression.
+  recovery sequence before checking playback: re-enter the credential and
+  refresh the individual account, plus, on a build before `0.18.1-0033`,
+  **run the restore again**. Playback failing before that sequence is
+  complete is expected, not a regression.
+- After that sequence, the synthetic `ECM Custom Streams (DBAS restore)`
+  account and its placeholder streams are **gone**, not merely unused. As
+  of `0.18.1-0032` a redacted round trip finishes with zero URL-less
+  leftovers and the M3U account list back to what the source had. Leftover
+  placeholders bound to no channel, or an empty synthetic account still
+  listed, are a finding on that pin or later.
 
 **What still does not pass, even on an otherwise clean run, as of
 `0.18.1-0023`:** EPG links (`enhancedchannelmanager-dfkbn` residual;
@@ -841,7 +878,14 @@ The report carries:
   `channels_with_no_playable_stream` counting the ones that have no real
   stream left at all. Only the second group cannot play; a restore that
   reports any of them finishes as `completed_with_failures` and raises a
-  warning alert, never a plain success.
+  warning alert, never a plain success. As of `0.18.1-0029` this audit
+  covers **every** restored channel, judged from what it is actually left
+  holding, so a channel stranded by an *earlier* restore is named too. On
+  the prior pin the audit only inspected placeholders the current run had
+  created, and a repeat restore over an already-stranded channel reported
+  `0` and `0` for a channel that answered HTTP 500 on playback. On a
+  **dry run** both counters read `null`; see the preview warning in
+  [Step 6](#step-6-restore).
 - `epg_links_unrestored` with `epg_link_miss_details` per channel.
 - `logo_misses` with `logo_miss_details` naming the affected channel.
 - `profile_membership_drift` listing which channels were enabled or
@@ -858,12 +902,13 @@ instead of re-deriving the same information by hand.
 
 ## Known failures
 
-As of ECM `0.18.1-0023` / Dispatcharr `0.28.2` (see the version pin at
-the top of this article). Nine beads total: **four fixed and closed**,
-**two partially fixed with a named residual**, and **three new**. Check
-each bead's live status before you assume any row below is still true on
-the version you're running; this describes what run 2 measured, not a
-permanent guarantee.
+The classification below is what run 2 measured on ECM `0.18.1-0023` /
+Dispatcharr `0.28.2` (see the version pin at the top of this article):
+nine beads total, **four fixed and closed**, **two partially fixed with a
+named residual**, and **three new**. Later builds have since resolved some
+of them, and each row says which build if so. Check each bead's live
+status before you assume any row is still true on the version you're
+running; this is a snapshot, not a permanent guarantee.
 
 ### Fixed, closed
 
@@ -878,7 +923,7 @@ permanent guarantee.
 
 | Bead | What's fixed | What's still broken |
 |-|-|-|
-| `enhancedchannelmanager-2o0cz` | Stream reattachment, stream ordering, M3U enabled-group selection, and playback all now work once the M3U account has a real credential. An encrypted artifact with "Include credentials" plays on the first restore attempt (verified: 2/2 real fetches, HTTP 200, `video/mp2t`). | A **redacted** artifact still requires the recovery sequence in [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback): re-enter credential, refresh, then **run the restore again**. A refresh alone is not enough; it adds real streams beside the placeholders without rebinding them. |
+| `enhancedchannelmanager-2o0cz` | Stream reattachment, stream ordering, M3U enabled-group selection, and playback all now work once the M3U account has a real credential. An encrypted artifact with "Include credentials" plays on the first restore attempt (verified: 2/2 real fetches, HTTP 200, `video/mp2t`). As of `0.18.1-0033`, a **redacted** artifact recovers in two steps: re-enter the credential, then refresh the account. A completed refresh reattaches the channels, and the leftover placeholders and their synthetic account are cleaned up in the same pass. | Two refresh routes are not covered and heal only on the next scheduled M3U refresh: a "refresh all accounts" action, and a refresh performed in Dispatcharr's own UI. Refresh the individual account for the immediate path. On builds before `0.18.1-0033` the recovery still needed a third step, **running the restore again**, because a refresh alone added real streams beside the placeholders without rebinding them. |
 | `enhancedchannelmanager-dfkbn` | Logos (10/11 sha256-identical), channel-profile membership (9-of-12 preserved), and non-default settings (`stats_poll_interval`, `user_timezone`) all now restore correctly, and the report is honest about it. | **EPG links are still lost** on every linked channel, on both artifact variants. Root cause identified: the restore relinks by archived `tvg_id`, but ECM's own channel rows carry `epg_data_id` with `tvg_id: None`. See [Step 7](#step-7-verify). |
 
 ### New
@@ -887,7 +932,7 @@ permanent guarantee.
 |-|-|-|
 | `enhancedchannelmanager-xb58a` | **P0, root cause** | The backup does not archive the bytes of logos uploaded through ECM's own Logo Manager, even though Dispatcharr serves them on request over its logo cache endpoint with the same API key ECM already holds. `binary/metadata.json` records zero logos for a source that has one. See [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker). |
 | `enhancedchannelmanager-d0agi` | **P0, consequence** | Because the uploaded logo's bytes were never archived, the restore can't recreate it, records the miss, and (since a logo failure is currently fatal) aborts and rolls back the **entire** restore, not just the logo category. See [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker). |
-| `enhancedchannelmanager-dgnms` | P1 | The dry-run preview reports every URL-restorable logo as failed (`validation_error: unsafe or empty logo filename`), even ones that restore fine on apply. Logo-category preview numbers specifically are not trustworthy; every other category's preview is unaffected. |
+| `enhancedchannelmanager-dgnms` | P1 | The dry-run preview reported every URL-restorable logo as failed (`validation_error: unsafe or empty logo filename`), even ones that restore fine on apply, and reported a confident `0` for counters it had not measured. **Fixed as of `0.18.1-0032`:** the logo split and `profile_membership_drift` are genuinely predicted and match the apply, and the two stream-health counters report `null` ("not predicted") instead of a misleading `0`. See the preview warning in [Step 6](#step-6-restore). |
 
 **No workarounds are required to get an ordinary restore to complete on
 this pin**, unless your source has an ECM-uploaded logo. In that case,

@@ -104,50 +104,88 @@ shipped; re-check both beads' status before relying on this section.
 `validation_error: unsafe or empty logo filename`, but the apply of the
 same artifact restores most or all of them successfully.
 
-**Cause:** The preview never simulates the URL re-create path for logos
-(it's gated behind an `if not is_dry_run` check), so every URL-only logo
-falls through to a byte-validation path that expects a `filename` key
-the preview's records don't have. This makes the logo category's preview
-numbers unreliable in both directions: it can report failures that won't
-happen, and it can hide the one that will
-(`enhancedchannelmanager-dgnms`).
+**Applies to:** builds before `0.18.1-0032`.
 
-**Fix:** Still preview first; every other category's preview numbers
-are accurate. But do not abort a restore solely because of logo failures
-shown in the preview. Compare the preview's logo count against what you
-expect qualitatively, then verify actual logo outcomes after the apply
-completes (see [Logo misses: red banner after restore](#logo-misses-red-banner-after-restore)
+**Cause:** On those builds the preview never simulated the URL re-create
+path for logos, so every URL-only logo fell through to a byte-validation
+path that expects a `filename` key the preview's records don't carry.
+That made the logo category's preview numbers unreliable in both
+directions: they could report failures that would not happen, and they
+could bury the one that would (`enhancedchannelmanager-dgnms`).
+
+**Fix:** As of `0.18.1-0032` the preview takes the same branch the apply
+takes. A logo with no archived bytes but a usable absolute `http(s)` URL
+is counted as a would-create, not a failure, so the logo category's
+preview counts now match what the apply does.
+
+On an older build, still preview first (every other category's numbers
+were accurate there too), but do not abort a restore solely because of
+logo failures shown in the preview. Compare the preview's logo count
+against what you expect qualitatively, then verify actual logo outcomes
+after the apply completes (see
+[Logo misses: red banner after restore](#logo-misses-red-banner-after-restore)
 below), not before.
 
 ---
 
-## Playback still fails after a redacted restore, even after a refresh
+## Playback fails after a redacted restore
 
-**Symptom:** You restored a standard (redacted) backup. Streams populate
-after you re-enter the M3U credential and refresh, but restored channels
-still won't play; they remain bound to placeholder streams.
+**Symptom:** You restored a standard (redacted) backup. Restored channels
+will not play, and their stream lists show the provider **ECM Custom
+Streams (DBAS restore)** instead of your real provider.
 
-**Cause:** ECM's placeholder-rebind pass (the step that reattaches
-restored channels to real provider streams) runs exactly once,
-immediately after the restore's own deferred M3U refresh. On a redacted
-artifact, the M3U account has no credential yet at that instant, so
-there is nothing to match against, and the rebind pass does not re-run on
-its own. A later manual refresh adds the real streams *beside* the
-placeholders without rebinding anything to them.
+**Cause:** A standard artifact carries no provider credentials, so at the
+moment the restore reattaches channels to real streams there are no real
+streams to attach to: the M3U account cannot authenticate yet. Every
+channel is parked on a URL-less placeholder instead. Immediately after a
+redacted restore this is the expected state, not a defect.
 
-**Fix:** Re-entering the credential and refreshing is necessary but not
-sufficient. After the refresh confirms real streams are present, **run
-the same restore again, from the same artifact.** This re-triggers the
-rebind pass, now with real streams to match against. See
+**Fix, as of `0.18.1-0033`: re-enter the credential and refresh. That is
+the whole recovery.**
+
+1. Go to **Settings → M3U Accounts** and enter the real password on every
+   account the restore report (or the post-restore panel) names as
+   needing one.
+2. Refresh that account, with **Save & Refresh** or the account's own
+   **Refresh** action.
+
+When that refresh completes, ECM re-runs the reattach pass over the
+streams it has just materialized, moves each channel off its placeholder
+onto the real stream, and then deletes the leftover placeholders and the
+synthetic **ECM Custom Streams (DBAS restore)** account behind it. Only
+placeholders ECM itself created are ever touched. A custom stream you
+created yourself is never rebound and never removed.
+
+!!! note "Which refresh actions trigger the reattach"
+    **Covered:** the **Refresh** action on an individual M3U account, and
+    the scheduled M3U refresh task.
+
+    **Not covered:** a "refresh all accounts" action, and a refresh
+    performed in Dispatcharr's own UI. Neither reports completion back to
+    ECM in a way the reattach can hang on, so an instance that reached
+    real streams by one of those routes is picked up on the **next
+    scheduled M3U refresh** rather than immediately. If you used one of
+    those and your channels are still on placeholders, refresh the
+    individual account and they will rebind straight away.
+
+**On builds before `0.18.1-0033`,** the reattach pass ran exactly once,
+during the restore itself, and never re-ran on its own. A later refresh
+added the real streams *beside* the placeholders and rebound nothing to
+them, so the recovery needed a third step: once the refresh confirmed
+real streams were present, **run the same restore again, from the same
+artifact**. If you are on an older build, that third step is still
+required. See
 [Step 6a of Run a restore drill](run-a-restore-drill.md#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
-for the full measured sequence. If playback still fails after a full
-credential re-entry → refresh → re-restore cycle, that is the residual
-`enhancedchannelmanager-2o0cz` defect, not a step you missed. File it as
-a fresh occurrence with the restore report attached.
+for the measured sequence on both builds.
 
-An encrypted artifact with **Include credentials** does not need this
-sequence at all; the credential round-trips automatically and playback
-works on the first restore.
+An encrypted artifact with **Include credentials** needs none of this on
+any build. The credential round-trips with the artifact and playback works
+on the first restore.
+
+If a channel is still on a placeholder after a completed refresh of its
+own M3U account, see
+[A restored channel is still on the ECM Custom Streams provider](#a-restored-channel-is-still-on-the-ecm-custom-streams-provider)
+below.
 
 ---
 
@@ -170,15 +208,24 @@ shapes of this, and only one of them is an outage:
 
 **Cause of the leftover placeholder (the channel plays):** When ECM
 reattaches a restored channel to real streams, it matches each archived
-stream by name. If two streams on the same channel have names that
-differ only in ways the name matcher normalizes away (capitalization,
-spacing, punctuation), both archived streams resolve to the **same**
-real stream — and a channel cannot hold the same stream twice. ECM
-gives the contested stream to the first slot that claimed it and leaves
-the second slot on its placeholder, so the collision costs one slot
-rather than the whole channel. Real measured example: two streams named
-`TX | Dallas | PBS KERA` and `TX | DALLAS | PBS KERA` on one channel are
-enough to trigger it.
+stream by name. A channel cannot hold the same stream twice, so if two
+archived streams on one channel resolve to the **same** real stream, ECM
+gives that stream to the first slot which claimed it and leaves the second
+slot on its placeholder. The collision costs one slot rather than the
+whole channel.
+
+As of `0.18.1-0029` this only happens when two archived streams on the
+same channel have names that are **genuinely identical**. No per-stream
+name match can tell those apart, so one of them must lose its slot.
+
+On builds before `0.18.1-0029`, names that differed only in ways the
+matcher normalizes away also collided. Two streams named
+`TX | Dallas | PBS KERA` and `TX | DALLAS | PBS KERA` on one channel were
+enough to trigger it, because the matcher folded the case difference and
+handed both slots the same stream. Matching now prefers a destination
+stream whose name is character-for-character identical to the archived
+one, so a case-differing pair resolves to the two distinct streams that
+actually exist and the channel restores complete, in its archived order.
 
 **Cause of a channel that will not play:** every one of its slots is a
 placeholder, so there is nothing to stream. That happens when nothing on
@@ -197,98 +244,108 @@ per-channel repair:
 3. Add the real streams back from your provider, in the order you want.
 4. Play the channel to confirm.
 
-Re-running the restore is worth trying **only** for a channel that will
-not play, and only once the real streams are actually present on the
-destination. Be aware of what a second run actually does to a
-name-collision placeholder, though: it does clear the leftover slot, but
-by dropping it rather than repairing it. Measured directly: a channel
-holding `TX | Dallas | PBS KERA (real)`, `TX | Austin | PBS KLRU (real)`,
-and `TX | Dallas | PBS KERA (placeholder, no url)` went, after a second
-run of the same artifact, to `TX | Austin | PBS KLRU (real)`, `TX |
-Dallas | PBS KERA (real)`. The channel now has two streams where the
-archive has three, and the surviving streams' order silently changed
-(Austin moved from slot 2 to slot 1). The uppercase stream `TX | DALLAS
-| PBS KERA` still exists on the destination with a working URL; the
-second run never bound it, it simply dropped the empty placeholder slot.
-Worse, the second run reported this as entirely clean:
-`outcome: success`, `channels_needing_stream_reattach: 0`,
-`streams_rebound: 0`, `stream_reattach_details: []`, and an empty
-`notes[]`. Nothing in the report flags the missing slot or the order
-change. Hand-reattaching (above) is still the reliable repair for a
-name-collision channel; do not use a second restore run as a substitute
-for it. Either way the channel is a named action item, never a `failed`
-row, and every other channel is unaffected; there is no need to redo the
-whole restore.
+Before you re-run a restore to fix one channel, refresh that channel's
+own M3U account first. On `0.18.1-0033` and later, a completed refresh of
+an individual account re-runs the reattach pass by itself, which is
+cheaper and safer than a second restore. Re-running the restore is worth
+trying only for a channel that will not play, and only once the real
+streams are actually present on the destination.
 
-Prevention: on the source instance, give near-identical streams on the
-same channel distinguishable names before taking the backup. This
-prevents the leftover placeholder, which is an annoyance rather than an
-outage — a channel that will not play at all has a different cause and
-is not prevented by renaming.
+!!! warning "On builds before `0.18.1-0029`, a second run made a collided channel worse"
+    A second run of the same artifact cleared the leftover slot by
+    *dropping* it rather than repairing it, leaving the channel with fewer
+    streams than the archive holds and silently reordering the survivors,
+    while reporting the run as entirely clean. Hand-reattaching (above) was
+    the only reliable repair. From `0.18.1-0029` the collision that caused
+    it does not occur for case-differing names, and the report names every
+    channel left holding a slot that streams nothing, whichever run created
+    it.
+
+Either way the channel is a named action item, never a `failed` row, and
+every other channel is unaffected. There is no need to redo the whole
+restore.
+
+Prevention: on the source instance, give identically-named streams on the
+same channel distinguishable names before taking the backup. This prevents
+the leftover placeholder, which is an annoyance rather than an outage. A
+channel that will not play at all has a different cause and is not
+prevented by renaming.
 
 ---
 
-## A second restore's clean report is not proof of playback
+## A clean report is not proof of playback
 
-**Symptom:** You worked through the standard (redacted) restore recovery
-sequence: restore, re-enter the M3U credential, refresh, then run the
-restore again. The report says the run finished cleanly. Most channels
-play. One does not.
+**Symptom:** The report says the run finished cleanly. Most channels play.
+One does not.
 
-**Measured**, on the standard redacted path, at that third step (restore
-→ credential re-entry + refresh → re-run restore):
+**The durable advice:** a restore report tells you what ECM believes it
+did, not what your instance can stream. Before you call any restore done,
+actually play a channel: fetch the stream and confirm you get both a 2xx
+status and real media bytes, not merely that a URL field is populated.
+When something is wrong, read the per-category `failed` rows as well as
+the summary counters, and check Dispatcharr's own log for the underlying
+cause. Summary counters are a starting point, never the verdict.
 
-- 11 of 12 channels rebound to real streams and played: HTTP 200,
-  `video/mp2t`, 262144 bytes fetched.
-- The 12th channel (`KERA Dallas PBS`, the multi-stream one) failed
-  playback with HTTP 500 and remained bound to three placeholders.
-- The report for that run said `channels_needing_stream_reattach: 0` and
-  `channels_with_no_playable_stream: 0`, with `notes: []`. Nothing in
-  the summary counters pointed at the failing channel.
-- The only trace was one row: the `stream` category showed `failed: 1`
-  with `{"reason":"upstream_api_error","label":"KERA Dallas PBS",
-  "message":"Server error '500 Internal Server Error' for url
-  '.../api/channels/channels/12/'"}`.
-- Dispatcharr's own log gave the real cause:
+That advice is worth keeping regardless of build, because it is what
+caught the two defects below.
+
+**On builds before `0.18.1-0029`,** the counters could be actively
+misleading on a repeat restore:
+
+- The "channels needing attention" counters
+  (`channels_needing_stream_reattach`, `channels_with_no_playable_stream`)
+  only inspected placeholders the *current* restore had created. A channel
+  stranded by an *earlier* restore was invisible to them, so a repeat run
+  could report `0` and `0`, with an empty `notes[]`, for a channel that
+  answered HTTP 500 on playback. As of `0.18.1-0029` the audit is taken
+  for **every** restored channel, from what it is actually left holding,
+  whichever run put it there.
+- The channel that hid behind those zeroes was a name-collision case: the
+  reattach pass tried to attach a stream the channel already held, and
+  Dispatcharr rejected the whole update with
   `psycopg.errors.UniqueViolation: duplicate key value violates unique
-  constraint "unique_channel_stream"`.
+  constraint "unique_channel_stream"`. The only trace in the report was a
+  single `stream` category row with `failed: 1` and
+  `reason: upstream_api_error`. That collision is resolved as of
+  `0.18.1-0029`; see
+  [A restored channel is still on the ECM Custom Streams provider](#a-restored-channel-is-still-on-the-ecm-custom-streams-provider)
+  above.
 
-**The operator-facing point:** on a second or later restore, the
-"channels needing attention" counters (`channels_needing_stream_reattach`,
-`channels_with_no_playable_stream`) can read `0` while a channel
-genuinely cannot play. Do not trust the summary counters alone on a
-repeat run. Check the per-category `failed` rows, and actually play a
-channel, rather than reading the report at face value.
-
-**Confirming check:** if a channel fails playback after a repeat restore
-and the summary counters look clean, check Dispatcharr's own log for the
-matching cause:
+If you are on an older build and a channel fails playback while the
+summary counters look clean, this check confirms the failure mode:
 
 ```bash
 docker logs <dispatcharr-container> 2>&1 | grep -i "unique_channel_stream"
 ```
 
-A hit confirms the same failure mode measured here: the rebind pass
-tried to attach a stream that was already bound to the channel from an
-earlier run, and Dispatcharr's own unique constraint rejected it.
-
 ---
 
-## Preview's health counters are not a promise on a fresh target
+## What a preview can and cannot tell you about stream health
 
-**Symptom:** The dry-run preview reports zero channels needing
-attention, but the apply of the same artifact leaves every channel
-needing a stream reattach.
+**Symptom:** You want to know, before you commit, whether the restore will
+leave channels unable to play. The preview's stream-health counters do not
+answer that question.
 
-**Cause:** The preview's per-category `would_create` / `would_update` /
-`would_skip` counts are accurate: measured against a matching apply,
-they matched exactly, category by category. But the preview's *health*
-counters, the ones meant to warn you before you commit, are simulated
-differently from what actually happens on apply, and can under-report
-badly on a fresh target.
+**How to read a preview as of `0.18.1-0032`:**
 
-Measured, dry-run preview vs. apply of the same standard artifact
-against the same freshly-rolled-out target:
+| What the preview reports | How far to trust it |
+|-|-|
+| Per-category `would_create` / `would_update` / `would_skip` | Accurate. Measured against a matching apply, these matched exactly, category by category. |
+| `logo_reattach` and `epg_link_reattach` splits | Predicted, and they match the apply. |
+| `profile_membership_drift` | Predicted, and it matches the apply exactly. |
+| `channels_needing_stream_reattach` and `channels_with_no_playable_stream` | **Not predicted.** Both read `null` on a dry run. |
+
+**What `null` means here.** These two counters are written by the pass
+that reattaches channels to real provider streams, and that pass matches
+against streams the restore's own deferred M3U refresh materializes. A
+preview performs no refresh, so it has nothing to look at. `null` says
+exactly that: this number is not knowable before the apply. Read it as
+"not predicted", never as "zero channels need attention".
+
+**On builds before `0.18.1-0032`,** those two counters reported a
+confident `0` derived from having looked at nothing, and the logo split
+and profile-membership counts under-reported on a fresh target. Measured
+on the same artifact against the same freshly-rolled-out target:
 
 | counter | preview | apply |
 |-|-|-|
@@ -298,28 +355,18 @@ against the same freshly-rolled-out target:
 | `channels_with_no_playable_stream` | 0 | 12 |
 | `profile_membership_drift` | 0 | 6 |
 
-Per-category `would_create` matched the apply's `created` exactly for
-every category: `m3u_account` 1, `epg_source` 1, `channel_group` 377,
-`channel_profile` 1, `user_agent` 1, `stream_profile` 1, `user` 1,
-`channel` 12, `logo` 11.
+Per-category `would_create` matched the apply's `created` exactly even
+then, for every category: `m3u_account` 1, `epg_source` 1,
+`channel_group` 377, `channel_profile` 1, `user_agent` 1,
+`stream_profile` 1, `user` 1, `channel` 12, `logo` 11. On a **populated**
+target the splits were already exact in both relink modes: preserve mode
+(keeps a channel's own existing EPG link and logo) measured preview 12/11
+preserved matching apply 12/11 preserved, and overwrite mode (replaces
+them with the archive's values) measured preview 12/11 existing matching
+apply 12/11 existing. Only the fresh-target case under-reported.
 
-**The point:** the category counts are trustworthy. The health/split
-counters are not, at least on a fresh target. A preview can show "0
-channels needing attention" for a restore that will leave every channel
-unplayable.
-
-**Contrast, so you don't over-correct:** on a **populated** target (one
-that already has the channels from a prior restore), the split counts
-were exact in both relink modes: preserve mode (keeps a channel's own
-existing EPG link and logo) measured preview 12/11 preserved matching
-apply 12/11 preserved; overwrite mode (replaces them with the archive's
-values) measured preview 12/11 existing matching apply 12/11 existing.
-The under-prediction above is specific to the fresh-target
-`logo_reattach.created_channels` case and the health counters that
-depend on it.
-
-**Fix:** Preview to confirm scope (the category counts). Verify health,
-and actual playback, only after the apply completes.
+**Fix:** Preview to confirm scope. Verify stream health, and actual
+playback, after the apply completes, on any build.
 
 ---
 
@@ -329,7 +376,7 @@ and actual playback, only after the apply completes.
 
 **Check 1: Stream matching tiers.** The restore-complete report shows how many streams were matched at each tier (exact URL, exact name+provider, exact normalized name, fuzzy name). A large number of Tier-4 fuzzy matches or misses means ECM had trouble re-attaching streams from the archive to the streams on this Dispatcharr instance. This happens most often when the M3U provider's stream URLs have changed significantly, or when restoring onto an instance with different M3U accounts.
 
-**Fix for stream misses:** Check that the M3U accounts on the destination instance are configured and active. Run an M3U refresh to make sure all streams are present. Then re-attempt the restore. The stream matcher will have more candidates to match against.
+**Fix for stream misses:** Check that the M3U accounts on the destination instance are configured and active, then refresh each account so all streams are present. As of `0.18.1-0033`, a completed refresh of an individual account also reattaches any channel still holding a placeholder, so check playback before doing anything else. If channels are still short of streams after that, re-attempt the restore: the stream matcher will have more candidates to match against.
 
 **Check 2: Did the M3U accounts restore first?** If you ran a partial restore that included channels but excluded M3U accounts, channels cannot be attached to their providers. Restore M3U accounts first, then restore channels.
 
