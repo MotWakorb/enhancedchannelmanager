@@ -548,8 +548,34 @@ class DbasRestoreTask(TaskScheduler):
             return ["%d channel(s) still hold a placeholder stream" % holding]
         return []
 
+    # Post-restore action items, as ``(attribute, apply_template,
+    # preview_template)``. A PREVIEW makes no changes, so its clause must be in
+    # the FUTURE tense (bead ``enhancedchannelmanager-juu3c``): PR #784 made
+    # these counters genuinely PREDICTED on a dry run, and rendering a real
+    # prediction as "N profile membership(s) corrected" reads as though the
+    # restore already happened — which is exactly the trust the preview exists
+    # to earn. The counters and the summary structure are identical either way;
+    # only the verb moves.
+    _ACTION_ITEM_TEMPLATES = (
+        (
+            "logo_misses",
+            "%d logo(s) could not be reinstated",
+            "%d logo(s) would not be reinstated",
+        ),
+        (
+            "epg_links_unrestored",
+            "%d channel(s) restored without an EPG link",
+            "%d channel(s) would be restored without an EPG link",
+        ),
+        (
+            "profile_membership_drift",
+            "%d profile membership(s) corrected",
+            "%d profile membership(s) would be corrected",
+        ),
+    )
+
     @staticmethod
-    def _credential_reentry_suffix(report) -> str:
+    def _credential_reentry_suffix(report, *, is_preview: bool = False) -> str:
         """Name every post-restore ACTION ITEM in the one-line summary.
 
         The task-history row and the MCP tool result are the ONLY surfaces an
@@ -561,6 +587,15 @@ class DbasRestoreTask(TaskScheduler):
         EPG link was gone, and a channel profile had silently widened
         (beads …-6pilh / …-2o0cz / …-dfkbn). They belong in the message itself,
         not only in ``details``.
+
+        Args:
+            report: The :class:`RestoreReport` to summarize.
+            is_preview: Whether this suffix is being appended to a DRY-RUN
+                summary. When true the action items are rendered in the future
+                tense, because a preview changed nothing (bead ``…-juu3c``).
+                ``credentials_needing_reentry`` is unaffected — "N account(s)
+                need credentials re-entered" is already an is/will-be statement
+                that is true of both a preview and an apply.
         """
         parts: list[str] = []
         credentials = getattr(report, "credentials_needing_reentry", 0) or 0
@@ -568,16 +603,13 @@ class DbasRestoreTask(TaskScheduler):
             parts.append("%d account(s) need credentials re-entered" % credentials)
         # The two placeholder populations need each other's counts to read
         # correctly, so they are rendered together rather than as two rows of the
-        # generic table below.
+        # generic table below. They are NULL (not predicted) on a preview, so the
+        # tense question does not arise for them.
         parts.extend(DbasRestoreTask._stream_reattach_phrases(report))
-        for attribute, template in (
-            ("logo_misses", "%d logo(s) could not be reinstated"),
-            ("epg_links_unrestored", "%d channel(s) restored without an EPG link"),
-            ("profile_membership_drift", "%d profile membership(s) corrected"),
-        ):
+        for attribute, applied, predicted in DbasRestoreTask._ACTION_ITEM_TEMPLATES:
             count = getattr(report, attribute, 0) or 0
             if count > 0:
-                parts.append(template % count)
+                parts.append((predicted if is_preview else applied) % count)
         if not parts:
             return ""
         return "; " + "; ".join(parts)
@@ -601,7 +633,7 @@ class DbasRestoreTask(TaskScheduler):
                     total_create, total_update, total_skip, total_conflict,
                     len(report.categories),
                 )
-            ) + DbasRestoreTask._credential_reentry_suffix(report)
+            ) + DbasRestoreTask._credential_reentry_suffix(report, is_preview=True)
         outcome = report.outcome.value if report.outcome else "unknown"
         total_created = sum(c.created for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
