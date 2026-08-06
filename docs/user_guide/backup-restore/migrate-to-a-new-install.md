@@ -17,17 +17,9 @@ This walkthrough assumes:
     Measured against ECM `0.18.1-0023` / Dispatcharr `0.28.2`. A restored
     lineup now genuinely **plays**, confirmed by fetching real media bytes,
     not just checking a URL is set: a substantial improvement over the
-    prior pin (`0.18.1-0022`), where nothing played at all. But two things
-    still need your attention on every migration:
+    prior pin (`0.18.1-0022`), where nothing played at all. One thing
+    still needs your attention on every migration:
 
-    - **If your source instance has any logo uploaded through ECM's own
-      Logo Manager, the restore will abort and roll back entirely**
-      (`enhancedchannelmanager-d0agi`), because the backup does not
-      currently archive those logo bytes even though Dispatcharr serves
-      them on request (`enhancedchannelmanager-xb58a`). Check for
-      ECM-uploaded logos before you rely on this procedure. See
-      [Before you begin](#before-you-begin-check-for-ecm-uploaded-logos)
-      below.
     - **A standard (redacted) backup needs a recovery sequence** before
       playback works: re-enter credentials, then refresh the M3U account.
       As of `0.18.1-0033` those two steps are the whole recovery; on
@@ -41,39 +33,27 @@ This walkthrough assumes:
 
 ---
 
-## Before you begin: check for ECM-uploaded logos
+## ECM-uploaded logos and this migration
 
-!!! danger "P0: the backup does not archive uploaded logo bytes, and the resulting miss aborts the migration"
-    On `0.18.1-0023`, if the old install has **any** logo uploaded through
-    ECM's own Logo Manager, the restore on the new install will **abort
-    and roll back the entire migration**, not just the logo category
-    (`enhancedchannelmanager-d0agi`).
+!!! success "Uploaded logos are included in the backup and restore intact"
+    As of `0.18.1-0024`, a logo uploaded through ECM's own Logo Manager
+    has its image bytes archived in the backup and restores intact on the
+    new install. No manual steps are needed for these logos.
 
-    A logo uploaded through ECM's Logo Manager is written to
-    **Dispatcharr's** storage, not ECM's own upload directory. Those bytes
-    are fully retrievable at backup time, over Dispatcharr's own logo
-    cache endpoint, using the same API key ECM already holds for every
-    other backup category, but the backup does not currently request
-    them (`enhancedchannelmanager-xb58a`, P0). Because the backup never
-    captured the bytes, the restore correctly detects the miss on the new
-    install, and currently treats a logo failure as **fatal**: everything
-    else that had already migrated successfully, including channels,
-    streams, accounts, profile, users, and other logos, is deleted again
-    by the compensating rollback (`enhancedchannelmanager-d0agi`).
+    Logos assigned from a remote http(s) URL (auto-assigned from an M3U
+    or EPG feed) were always handled differently: they are not stored in
+    the artifact, and restore by re-fetching the same URL on the new
+    install.
 
-    Logos referenced by a remote http(s) URL are unaffected and
-    round-trip correctly; this gap is specific to logos uploaded through
-    ECM's own Logo Manager.
+    If a logo still fails to restore for some other reason, that failure
+    is counted and named in the restore report. It no longer aborts or
+    rolls back the rest of the migration.
 
-    **The only way to get the migration restore to complete today is to
-    remove ECM-uploaded logo records on the old install before taking the
-    backup you intend to migrate from, and re-add them manually on the
-    new install afterward.** That means those logos are not in the backup
-    at all. Before you start this migration, check the old install for
-    any logo that was uploaded through ECM's Logo Manager (as opposed to
-    auto-assigned from an M3U or EPG feed). Neither
-    `enhancedchannelmanager-xb58a` nor `enhancedchannelmanager-d0agi` is
-    shipped; re-check both beads' status before you rely on this section.
+    **On builds before `0.18.1-0024`:** none of this applied. The backup
+    did not archive uploaded-logo bytes at all, and a logo miss aborted
+    and rolled back the entire migration. If you are migrating from an
+    install running an older build, upgrade to `0.18.1-0024` or later
+    before you rely on this section.
 
 ---
 
@@ -168,14 +148,12 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
     longer have to reproduce the old install's admin username to avoid a
     failed migration.
 
-- **Logo bytes now restore correctly.** A round-trip drill measured 10
-  of 11 logos sha256-identical to source (`enhancedchannelmanager-dfkbn`,
-  the logo-loss part of this defect is fixed). **But this only matters if
-  the restore completes at all**: see
-  [Before you begin](#before-you-begin-check-for-ecm-uploaded-logos).
-  Any ECM-uploaded logo on the old install currently aborts the whole
-  restore before logos are even reached
-  (`enhancedchannelmanager-d0agi`). On builds before `0.18.1-0032` the
+- **Logo bytes now restore correctly**, including logos uploaded through
+  ECM's own Logo Manager. A round-trip drill measured 10 of 11 logos
+  sha256-identical to source (`enhancedchannelmanager-dfkbn`, the
+  logo-loss part of this defect is fixed). See
+  [ECM-uploaded logos and this migration](#ecm-uploaded-logos-and-this-migration)
+  for what's archived and what isn't. On builds before `0.18.1-0032` the
   dry-run preview also reported every URL-restorable logo as failed even
   when it would restore fine on apply (`enhancedchannelmanager-dgnms`);
   as of `0.18.1-0032` the preview's logo counts match what the apply
@@ -272,12 +250,12 @@ After the restore:
        header: X-API-Key: <key>
    ```
 
-   If you used an encrypted backup with **Include credentials** and had no
-   ECM-uploaded logos, expect this to pass on the first restore. If you
-   used a standard (redacted) backup, expect it to pass only after you
-   completed the **full** Step 6 sequence: on `0.18.1-0033` and later,
-   that is the credential re-entry plus the M3U refresh; on an earlier
-   build it also includes running the restore a second time.
+   If you used an encrypted backup with **Include credentials**, expect
+   this to pass on the first restore. If you used a standard (redacted)
+   backup, expect it to pass only after you completed the **full** Step 6
+   sequence: on `0.18.1-0033` and later, that is the credential re-entry
+   plus the M3U refresh; on an earlier build it also includes running the
+   restore a second time.
 
 !!! danger "EPG links are still lost, and still need manual re-linking"
     Every channel that had an EPG link on the old install loses it on the

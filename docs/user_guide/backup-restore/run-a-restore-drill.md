@@ -13,16 +13,11 @@
 
     The most recent drill (run 2, `0.18.1-0023`) found real progress: a
     restored lineup now genuinely **plays**, proven by fetching real media
-    bytes, not just checking that a URL is set. But there is also a new
-    **P0 blocker**: the backup does not archive the bytes of logos
-    uploaded through ECM's own Logo Manager
-    (`enhancedchannelmanager-xb58a`), so if the source instance has any
-    such logo, the restore aborts and rolls back the entire run
-    (`enhancedchannelmanager-d0agi`). Read
-    [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker)
-    below before you get anywhere near Step 2, and
-    [Known failures](#known-failures) before you conclude your own drill
-    passed.
+    bytes, not just checking that a URL is set. That run also found a P0
+    blocker in logo handling, fixed as of `0.18.1-0024`: see
+    [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill)
+    and [Known failures](#known-failures) before you conclude your own
+    drill passed.
 
 ---
 
@@ -321,62 +316,48 @@ username/password and API key side by side, and both returned
 
 ---
 
-## Before you seed: the logo blocker
+## ECM-uploaded logos and this drill
 
-!!! danger "P0: the backup does not archive uploaded logo bytes, and the resulting miss aborts the restore"
-    As of `0.18.1-0023`, if the source instance has **any** logo uploaded
-    through ECM's own Logo Manager, restoring that backup **aborts and
-    rolls back the entire run**, not just the logo category
-    (`enhancedchannelmanager-d0agi`).
+!!! success "Fixed as of 0.18.1-0024: uploaded logo bytes are archived, and a logo miss is no longer fatal"
+    Run 2 of this drill (`0.18.1-0023`) found that the backup never
+    archived the bytes of a logo uploaded through ECM's own Logo Manager,
+    and that the resulting miss on restore was classified as fatal,
+    aborting and rolling back the entire run. Both are fixed as of
+    `0.18.1-0024`:
 
-    **Why:** a logo uploaded through ECM's Logo Manager is written to
-    **Dispatcharr's** `/data/logos/`, not ECM's own
-    `/config/uploads/logos/` (ECM's own upload directory stays empty,
-    verified). Those bytes are fully retrievable at backup time.
-    Dispatcharr serves them over its own logo cache endpoint (each logo
-    row carries a `cache_url`), reachable with the same API key ECM
-    already holds and already uses for every other backup category. The
-    drill proved this directly: it fetched an uploaded logo's bytes over
-    HTTP and got a byte-identical copy of the original file (matching
-    SHA-256). **The backup simply never asks for them**:
-    `binary/metadata.json` records `{"logo_count": 0, "logos": []}` even
-    when an uploaded logo exists on the source. This is a backup-side
-    gap, not something inherent to the storage location, tracked as
-    `enhancedchannelmanager-xb58a` (P0). The bytes only become genuinely
-    unrecoverable once the source Dispatcharr volume is destroyed, which
-    is exactly the event a backup exists to survive.
+    - **The backup now archives uploaded-logo bytes.** A logo uploaded
+      through ECM's Logo Manager is written to **Dispatcharr's**
+      `/data/logos/`, not ECM's own `/config/uploads/logos/`. The backup
+      now fetches those bytes at gather time over Dispatcharr's own logo
+      cache endpoint, using the same API key ECM already holds for every
+      other backup category, and archives them alongside the logo's
+      filename. A round-trip drill confirmed the restored file is
+      byte-for-byte identical to the source (matching SHA-256), on both
+      artifact variants.
+    - **A logo failure is no longer fatal.** Logos joined Dispatcharr
+      users as a non-fatal restore category: a logo that cannot be
+      restored is counted and named in the report, and the rest of the
+      restore completes as `completed_with_failures` rather than rolling
+      back.
 
-    Because the backup never captured the bytes, the restore correctly
-    detects the miss (`logo_misses: 1`). A logo failure is currently
-    classified as **fatal**, so the whole restore rolls back:
-    `outcome: partial_failed_rolled_back`. Everything that had already
-    succeeded, including channels, streams, both accounts, the profile,
-    the user, and the other logos, is deleted again by the compensating
-    rollback (`enhancedchannelmanager-d0agi`). Settings changes are the
-    one exception; they are not compensatable and remain applied even
-    after this rollback.
+    **Logos referenced by a remote http(s) URL are unaffected either
+    way** and always round-tripped correctly: a drill run measured 10 of
+    10 restored byte-identical. Only logos uploaded through ECM's own
+    Logo Manager were ever affected by this gap.
 
-    **Logos referenced by a remote http(s) URL are unaffected** and
-    round-trip correctly: a drill run measured 10 of 10 restored
-    byte-identical. This gap is specific to logos uploaded through ECM's
-    own Logo Manager.
+    **On builds before `0.18.1-0024`:** neither fix applied. Any
+    ECM-uploaded logo on the source made the restore abort and roll back
+    entirely. The only way to get a restore to complete on those builds
+    was to remove ECM-uploaded logo records before taking the backup, at
+    the cost of the logo not being in the backup at all. If you are
+    drilling against an older build, expect that behavior instead of what
+    this section describes.
 
-    **The only way to get a restore to complete today is to remove
-    ECM-uploaded logo records before taking the backup you intend to
-    restore.** That has a real cost: those logos are then not in the
-    backup at all, and must be re-uploaded by hand after the restore.
-    Neither `enhancedchannelmanager-xb58a` (archive the bytes at backup
-    time) nor `enhancedchannelmanager-d0agi` (stop treating a logo miss as
-    fatal) is shipped. Do not treat this warning as describing a problem
-    someone has already fixed; re-check both beads' status before you
-    rely on this section being current.
-
-    **For this drill:** to reach a restore that can complete on this pin,
-    do not upload a logo through ECM's own Logo Manager in Step 2 below.
-    Stick to remote-CDN logos auto-assigned from the M3U feed (the common
-    case anyway). If you specifically want to *exercise* this defect,
-    upload one deliberately and expect the restore to abort; that is the
-    correct (bad) result, not a mistake on your part.
+    **For this drill:** on `0.18.1-0024` and later, upload a logo through
+    ECM's own Logo Manager in Step 2 below like any other seeded data;
+    the restore should complete and the logo should come back intact.
+    This is now the useful case to seed, since it exercises the archive
+    path the earlier drill runs could not reach.
 
 ---
 
@@ -437,13 +418,12 @@ If any seeded logo is a **remote CDN URL** auto-assigned from the M3U
 feed (the common case), the backup's binary logo subtree will be empty
 and most of the logo-restore path goes untested.
 
-!!! danger "Uploading a logo here changes what this drill measures"
-    See [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker)
-    above. On this version pin, uploading a logo through ECM's own Logo
-    Manager will make your restore abort and roll back
-    (`enhancedchannelmanager-d0agi`). Only do this if you are
-    deliberately exercising that defect and expect the restore not to
-    complete.
+!!! note "Upload a logo here to exercise the archive path"
+    See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill)
+    above. On `0.18.1-0024` and later, uploading a logo through ECM's own
+    Logo Manager is the useful case to seed: it exercises the archived-bytes
+    path that a remote-URL-only logo does not. On an older build, expect
+    this to make the restore abort and roll back instead.
 
 ---
 
@@ -769,14 +749,13 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
    restored; on the prior pin, `0.18.1-0022`, this reverted to zero every
    time).
 4. **Logos.** Open a channel that had a logo before the backup and
-   confirm the logo actually renders. As of `0.18.1-0023`, expect logo
-   bytes to restore correctly when the restore completes at all: run 2
-   measured 10 of 11 logos sha256-identical to source. **But the restore
-   may not complete at all**: see
-   [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker);
-   any ECM-uploaded logo currently aborts the whole restore before logos
-   are even reached (`enhancedchannelmanager-d0agi`). Don't trust the
-   dry-run preview's logo numbers either; see the preview warning in
+   confirm the logo actually renders. As of `0.18.1-0024`, this includes
+   logos uploaded through ECM's own Logo Manager: run 2 measured 10 of 11
+   logos sha256-identical to source, and a genuine logo miss no longer
+   aborts the rest of the restore. See
+   [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill).
+   On builds before `0.18.1-0032`, don't trust the dry-run preview's logo
+   numbers either; see the preview warning in
    [Step 6](#step-6-restore) (`enhancedchannelmanager-dgnms`).
 5. **EPG links.** Check whether channels that had an EPG link before the
    backup still have one. As of `0.18.1-0023`, expect them to still be
@@ -811,11 +790,12 @@ one directly rather than trusting the restore-complete report's summary:
 - Both backup artifacts completed at **success**, not warning-level.
 - Both `.sha256` sidecars verified `OK` on host copies **before** the
   source instance was destroyed.
-- Your source instance had **no ECM-uploaded logos**, or you have
-  consciously accepted that the restore will abort. See
-  [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker).
-  A drill that hits `enhancedchannelmanager-d0agi` did not fail because of
-  something you did wrong; it reproduced a real, currently-unfixed defect.
+- On `0.18.1-0024` and later, ECM-uploaded logos on the source are no
+  longer a precondition to check: they restore like any other category.
+  See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill).
+  On an older build, a drill that aborts on an ECM-uploaded logo did not
+  fail because of something you did wrong; it reproduced a real,
+  since-fixed defect.
 - The restore report shows `FAILED: 0` across every category, **and** you
   independently confirmed:
   - At least one restored channel actually plays: fetch the stream and
@@ -851,13 +831,12 @@ expect every linked channel to lose its guide link and need manual
 re-linking; see [Step 7](#step-7-verify)). Note this and move on; it's a
 tracked, open defect, not a surprise finding.
 
-As of ECM `0.18.1-0023` / Dispatcharr `0.28.2`, a drill run **can** pass
-this bar: an encrypted artifact with "Include credentials," from a source
-with no ECM-uploaded logos, accepting the EPG-link gap as a known
-residual, plays correctly on the first restore. A standard (redacted)
-artifact can also pass, but only after the full Step 6a recovery
-sequence. See the next two sections for the complete, current defect
-picture.
+As of ECM `0.18.1-0024` / Dispatcharr `0.28.2`, a drill run **can** pass
+this bar: an encrypted artifact with "Include credentials," accepting the
+EPG-link gap as a known residual, plays correctly on the first restore,
+ECM-uploaded logos included. A standard (redacted) artifact can also
+pass, but only after the full Step 6a recovery sequence. See the next two
+sections for the complete, current defect picture.
 
 ---
 
@@ -930,19 +909,17 @@ running; this is a snapshot, not a permanent guarantee.
 
 | Bead | Severity | What happens |
 |-|-|-|
-| `enhancedchannelmanager-xb58a` | **P0, root cause** | The backup does not archive the bytes of logos uploaded through ECM's own Logo Manager, even though Dispatcharr serves them on request over its logo cache endpoint with the same API key ECM already holds. `binary/metadata.json` records zero logos for a source that has one. See [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker). |
-| `enhancedchannelmanager-d0agi` | **P0, consequence** | Because the uploaded logo's bytes were never archived, the restore can't recreate it, records the miss, and (since a logo failure is currently fatal) aborts and rolls back the **entire** restore, not just the logo category. See [Before you seed: the logo blocker](#before-you-seed-the-logo-blocker). |
+| `enhancedchannelmanager-xb58a` | **P0, root cause** | The backup did not archive the bytes of logos uploaded through ECM's own Logo Manager, even though Dispatcharr serves them on request over its logo cache endpoint with the same API key ECM already holds. `binary/metadata.json` recorded zero logos for a source that had one. **Fixed as of `0.18.1-0024`:** the backup now fetches and archives those bytes at gather time; a round-trip restore reproduces the file byte-for-byte. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
+| `enhancedchannelmanager-d0agi` | **P0, consequence** | Because the uploaded logo's bytes were never archived, the restore couldn't recreate it, recorded the miss, and (since a logo failure was classified as fatal) aborted and rolled back the **entire** restore, not just the logo category. **Fixed as of `0.18.1-0024`:** logos joined Dispatcharr users as a non-fatal restore category; a logo miss is now counted and named, and the rest of the restore completes. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
 | `enhancedchannelmanager-dgnms` | P1 | The dry-run preview reported every URL-restorable logo as failed (`validation_error: unsafe or empty logo filename`), even ones that restore fine on apply, and reported a confident `0` for counters it had not measured. **Fixed as of `0.18.1-0032`:** the logo split and `profile_membership_drift` are genuinely predicted and match the apply, and the two stream-health counters report `null` ("not predicted") instead of a misleading `0`. See the preview warning in [Step 6](#step-6-restore). |
 
-**No workarounds are required to get an ordinary restore to complete on
-this pin**, unless your source has an ECM-uploaded logo. In that case,
-completing the restore requires removing that logo's record before
-taking the backup (see above); the logo itself is then not preserved and
-must be re-uploaded by hand afterward. The two workarounds this article
-used to document (matching superuser name, pre-created user agent) are
-gone: both underlying defects are fixed, and (see [Step 6](#step-6-restore))
-re-applying them now would actively work against you, hiding whether the
-fixes still hold.
+**No workarounds are required to get an ordinary restore to complete**,
+on `0.18.1-0024` and later, including one with an ECM-uploaded logo. The
+workarounds this article used to document (matching superuser name,
+pre-created user agent, removing ECM-uploaded logo records before backup)
+are all gone: the underlying defects are fixed, and (see
+[Step 6](#step-6-restore)) re-applying them now would actively work
+against you, hiding whether the fixes still hold.
 
 **What works, confirmed by run 2:** object identity and naming,
 channel/group/profile assignment, stream ordering on multi-stream
@@ -951,8 +928,8 @@ enabled-group selection, non-default settings, channel-profile
 membership, and (the headline result) **actual playback**, verified by
 fetching real media bytes rather than checking that a URL is set. The
 restore is no longer just a good skeleton: on an encrypted artifact with
-"Include credentials" and no ECM-uploaded logos, it reproduces a working
-instance.
+"Include credentials," it reproduces a working instance, ECM-uploaded
+logos included as of `0.18.1-0024`.
 
 ---
 

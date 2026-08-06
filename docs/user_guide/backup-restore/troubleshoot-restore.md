@@ -59,7 +59,9 @@ Common pre-flight failures:
 
 ## Restore aborted and rolled back at the logo category
 
-**Symptom:** The restore-complete report shows `outcome:
+**Applies to:** builds before `0.18.1-0024`.
+
+**Symptom:** The restore-complete report showed `outcome:
 partial_failed_rolled_back`, with a logo entry like:
 
 ```
@@ -74,27 +76,25 @@ notes:
 
 **Cause:** A logo uploaded through ECM's own Logo Manager (as opposed to
 one auto-assigned from an M3U or EPG feed) is written to **Dispatcharr's**
-storage, not ECM's own upload directory. Those bytes are retrievable at
-backup time over Dispatcharr's own logo cache endpoint, using the same
-API key ECM already holds for every other backup category, but the
-backup does not currently request them (`enhancedchannelmanager-xb58a`).
-Because the backup never captured the bytes, the restore correctly
-detects the miss, but a logo failure is currently classified as
-**fatal**, so it aborts and rolls back the entire restore, not just the
-logo category. Every other category that had already succeeded
-(channels, streams, accounts, profile, users, other logos) is deleted
-again by the compensating rollback (`enhancedchannelmanager-d0agi`).
-Logos referenced by a remote http(s) URL are unaffected; this only
-happens for logos uploaded through ECM's own Logo Manager.
+storage, not ECM's own upload directory. On these builds the backup did
+not fetch those bytes, even though they were retrievable at backup time
+over Dispatcharr's own logo cache endpoint, using the same API key ECM
+already holds for every other backup category. Because the backup never
+captured the bytes, the restore correctly detected the miss, and a logo
+failure was classified as **fatal**, so it aborted and rolled back the
+entire restore, not just the logo category. Every other category that
+had already succeeded (channels, streams, accounts, profile, users,
+other logos) was deleted again by the compensating rollback. Logos
+referenced by a remote http(s) URL were unaffected; this only happened
+for logos uploaded through ECM's own Logo Manager.
 
-**Fix:** Removing the ECM-uploaded logo record from the source before
-taking the backup you intend to restore, then re-adding the logo
-manually on the destination afterward, is still the only way to get the
-restore to complete today. Those logos are then not in the backup at
-all. Neither the backup gap (`enhancedchannelmanager-xb58a`, archiving
-the bytes at backup time) nor the fatal classification
-(`enhancedchannelmanager-d0agi`, treating a logo miss as non-fatal) is
-shipped; re-check both beads' status before relying on this section.
+**Fix:** As of `0.18.1-0024`, the backup archives an uploaded logo's
+image bytes at gather time, and a logo failure of any kind is a
+non-fatal restore category: it is counted and named in the report, and
+the rest of the restore completes. Upgrade to `0.18.1-0024` or later.
+This symptom should not occur on current builds; if you see it anyway,
+check the Dispatcharr logs for what actually failed on that specific
+logo rather than assuming this is the same defect.
 
 ---
 
