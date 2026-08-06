@@ -349,6 +349,27 @@ class LogoMissDetail(BaseModel):
     )
 
 
+def _merge_logo_miss_channels(
+    existing: list[LogoMissChannel],
+    incoming: list[LogoMissChannel],
+) -> list[LogoMissChannel]:
+    """Union two producers' affected-channel lists for ONE logo (bead ``…-k2r7m``).
+
+    Order-preserving, first-seen wins. Identity is ``(channel_id, name)``: both
+    producers resolve the destination id through the same ``CHANNEL`` remap in
+    the same run, so the same channel yields the same pair from either.
+    """
+    merged: list[LogoMissChannel] = []
+    seen: set[tuple[int | None, str]] = set()
+    for channel in [*existing, *incoming]:
+        key = (channel.channel_id, channel.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(channel)
+    return merged
+
+
 class CredentialReentryDetail(BaseModel):
     """One restored entity whose credential the archive could not carry (…-6pilh).
 
@@ -825,6 +846,7 @@ class RestoreReport(BaseModel):
         label: str,
         source_export_id: int | None = None,
         channels: "list[LogoMissChannel] | None" = None,
+        label_is_synthetic: bool = False,
     ) -> None:
         """Record ONE logo the operator has LOST (aggregate + drill-down together).
 
@@ -868,6 +890,34 @@ class RestoreReport(BaseModel):
         ``…-dfkbn`` under-reported (every logo lost, ``logo_misses: 0``) and
         ``…-xb58a`` over-reported (a logo that restored fine counted as lost).
 
+        ONE LOST LOGO IS ONE ROW, HOWEVER MANY PRODUCERS SEE IT (bead ``…-k2r7m``)
+        -------------------------------------------------------------------------
+
+        Producers 1 and 3 above fire on the SAME failure by design: an upload the
+        destination rejected leaves no entry in the ``LOGO`` remap, so the
+        reattach pass that runs next cannot resolve the reference either. Both
+        reports are correct; they are not two losses. ``logo_misses`` counts
+        LOGOS (see :class:`LogoMissDetail`), so a second report of an archived
+        logo already recorded MERGES into its row rather than appending:
+
+        * the affected channels are UNIONED — each producer sees a different
+          slice (the importer sees every channel that referenced the logo; the
+          reattach pass sees the ones whose PATCH it could not perform), and
+          dropping either slice under-names the damage;
+        * the operator-facing display name WINS over a synthesized one. The
+          reattach pass holds only the archive id, so it labels its rows
+          ``"logo #13 (archived)"`` and declares that with
+          ``label_is_synthetic``; a producer that knows the archived NAME does
+          not, and its label survives the merge regardless of which ran first.
+
+        Identity is :attr:`LogoMissDetail.source_export_id`, the archived logo's
+        id. A miss recorded WITHOUT one carries no identity to merge on and
+        always gets its own row — under-counting a real loss is the failure this
+        surface exists to prevent, so ambiguity resolves toward reporting.
+
+        The run9 drill measured the pre-merge behaviour: one logo failed, and the
+        report read ``failed 1`` beside ``2 logo(s) could not be reinstated``.
+
         The single place :attr:`logo_misses` and :attr:`logo_miss_details` are
         both updated, so ``len(logo_miss_details) == logo_misses`` holds by
         construction. Call THIS method; never increment the field directly.
@@ -876,15 +926,38 @@ class RestoreReport(BaseModel):
             label: Operator-facing logo name — never a path, URL, or secret.
             source_export_id: The logo's id in the export archive, when known.
             channels: The affected channels (destination id where known + name).
+            label_is_synthetic: ``True`` when ``label`` was composed from the
+                archive id because the producer never had the logo's name. Such
+                a label yields to a real one on a merge.
         """
+        incoming = list(channels or [])
+        existing = self._logo_miss_for(source_export_id)
+        if existing is not None:
+            if not label_is_synthetic:
+                existing.label = label
+            existing.channels = _merge_logo_miss_channels(existing.channels, incoming)
+            return
         self.logo_miss_details.append(
             LogoMissDetail(
                 source_export_id=source_export_id,
                 label=label,
-                channels=list(channels or []),
+                channels=incoming,
             )
         )
         self.logo_misses = len(self.logo_miss_details)
+
+    def _logo_miss_for(self, source_export_id: int | None) -> "LogoMissDetail | None":
+        """The already-recorded row for this archived logo, if any (…-k2r7m).
+
+        ``None`` for an unknown ``source_export_id``: without the archive id
+        there is no identity, so nothing merges.
+        """
+        if source_export_id is None:
+            return None
+        for detail in self.logo_miss_details:
+            if detail.source_export_id == source_export_id:
+                return detail
+        return None
 
     def record_stream_reattach_needed(
         self,
