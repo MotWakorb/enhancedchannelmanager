@@ -682,9 +682,22 @@ class RestoreReport(BaseModel):
     # play, and it never has: a channel that kept its real streams and holds one
     # leftover placeholder is counted here and plays perfectly (…-daziw). Use
     # :attr:`channels_with_no_playable_stream` for the unplayability signal.
-    channels_needing_stream_reattach: int = Field(
+    #
+    # NULL means NOT PREDICTED, and only a DRY RUN ever writes it (bead
+    # …-dgnms). The pass that populates this counter is the post-refresh
+    # placeholder rebind, which by construction cannot run on a preview: it
+    # reads the provider streams the DEFERRED M3U refresh materializes, and a
+    # dry run performs no refresh. Reporting ``0`` from a preview is therefore a
+    # confident claim ("no channel needs attention") derived from having looked
+    # at nothing — drill run 4 measured preview ``0`` against apply ``12`` on a
+    # fresh target. ``None`` says what is true: this number is unknowable before
+    # the apply. Consumers coerce with ``or 0``; see ``docs/api.md``.
+    channels_needing_stream_reattach: int | None = Field(
         default=0,
-        description="Channels still holding at least one URL-less placeholder stream slot.",
+        description=(
+            "Channels still holding at least one URL-less placeholder stream slot. "
+            "NULL on a dry run — the rebind pass cannot run before the apply."
+        ),
     )
     stream_reattach_details: list[StreamReattachDetail] = Field(
         default_factory=list,
@@ -696,9 +709,13 @@ class RestoreReport(BaseModel):
     # ``len([d for d in stream_reattach_details if not d.has_playable_stream])``
     # by construction; both are written by ``record_stream_reattach_needed``.
     # ADDITIVE optional — no CONTRACT_VERSION bump.
-    channels_with_no_playable_stream: int = Field(
+    # NULL means NOT PREDICTED on a dry run, exactly as above.
+    channels_with_no_playable_stream: int | None = Field(
         default=0,
-        description="Channels left with NO URL-bearing stream at all — they cannot play.",
+        description=(
+            "Channels left with NO URL-bearing stream at all — they cannot play. "
+            "NULL on a dry run — the rebind pass cannot run before the apply."
+        ),
     )
     # How many placeholder slots the rebind pass DID resolve onto real provider
     # streams. Purely informational — it is the counterpart to the counter above
@@ -904,6 +921,28 @@ class RestoreReport(BaseModel):
         self.channels_with_no_playable_stream = sum(
             1 for detail in self.stream_reattach_details if not detail.has_playable_stream
         )
+
+    def mark_stream_health_unpredicted(self) -> None:
+        """Say ``not predicted`` instead of ``0`` for the stream-health counters.
+
+        Bead ``…-dgnms``. Called by :func:`dbas.restore_orchestrator.run_restore`
+        on a DRY RUN, where the post-refresh placeholder rebind that writes these
+        two aggregates cannot run at all: it matches against the provider streams
+        the DEFERRED M3U refresh materializes, and a preview refreshes nothing.
+        The default ``0`` is then not a measurement, it is the absence of one —
+        drill run 4 read ``0`` from a preview whose apply immediately reported
+        ``12``, which is worse for the operator than no number at all.
+
+        Deliberately does NOT touch :attr:`streams_rebound`: ``0`` is literally
+        true there — a preview rebinds nothing — and it is a work-done counter,
+        not a "channels needing attention" alarm.
+
+        A no-op once a detail row exists, so it can never erase a real count.
+        """
+        if self.stream_reattach_details:
+            return
+        self.channels_needing_stream_reattach = None
+        self.channels_with_no_playable_stream = None
 
     def record_epg_link_unrestored(
         self,

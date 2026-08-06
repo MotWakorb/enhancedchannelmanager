@@ -4328,14 +4328,22 @@ export interface RestoreReport {
    * signal: a channel that kept its real streams and holds one leftover
    * placeholder is counted here and plays fine (bead daziw). May be absent on
    * reports produced before this field existed.
+   *
+   * `null` means NOT PREDICTED and only ever appears on a DRY RUN (bead dgnms):
+   * the rebind pass that answers this re-matches against provider streams the
+   * deferred M3U refresh materializes, and a preview refreshes nothing. Render
+   * it as "not predicted" or omit the row — never as `0`, which is the confident
+   * claim this null exists to stop making.
    */
-  channels_needing_stream_reattach?: number;
+  channels_needing_stream_reattach?: number | null;
   /**
    * The SUBSET of the above left with NO URL-bearing stream at all (bead daziw)
    * — those channels CANNOT PLAY, and an apply that reports any of them
    * resolves to `completed_with_failures`, never `success`.
+   *
+   * `null` on a dry run, for the same reason as the field above (bead dgnms).
    */
-  channels_with_no_playable_stream?: number;
+  channels_with_no_playable_stream?: number | null;
   /** Which channels still need a playable stream attached (bead 2o0cz). */
   stream_reattach_details?: StreamReattachDetail[];
   /** Placeholder bindings the rebind pass swapped for a real provider stream. */
