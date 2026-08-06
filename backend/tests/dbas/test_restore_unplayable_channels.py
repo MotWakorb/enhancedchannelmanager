@@ -24,6 +24,14 @@ aggregate, never on ``channels_needing_stream_reattach``. The second test below
 is the one that pins that distinction: it reuses the EXACT ``…-ixdaw`` drill
 fixture and asserts the outcome stays ``SUCCESS``.
 
+WHAT RUN 4 ADDED (bead ``enhancedchannelmanager-oebpv``)
+-------------------------------------------------------
+Both counters were BLIND on a repeat restore: the verdict only ran for a channel
+holding a placeholder THIS run had synthesized, so a channel stranded by an
+EARLIER restore scored 0/0 with an empty ``notes[]`` while returning HTTP 500 on
+playback. Section 2b pins the widened population — and the two controls that
+stop it over-triggering on a channel that still plays or is fully healthy.
+
 Conventions: ``docs/pytest_conventions.md``; the Dispatcharr client is an
 ``AsyncMock`` (no live upstream).
 """
@@ -181,6 +189,228 @@ async def test_the_ixdaw_leftover_placeholder_case_stays_a_success():
     assert compute_outcome(
         report=report, failure_occurred=False, rollback=None
     ) == RestoreOutcome.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# 2b. THE oebpv CASE — the verdict is blind to WHO created the bad slot
+#
+# Drill run 4 (2026-08-05) ran the standard redacted recovery: restore ->
+# credential re-entry + M3U refresh -> RE-RUN the restore. 11 of 12 channels
+# played; ``KERA Dallas PBS`` answered HTTP 500 — and the run's report said
+# ``channels_needing_stream_reattach: 0``, ``channels_with_no_playable_stream:
+# 0``, ``stream_reattach_details: []``, ``notes: []``. Reproduced on the
+# encrypted path too: a first restore named the channel, an immediate SECOND
+# restore over that exact state reported 0 for both counters.
+#
+# Cause: the verdict was nested inside "did THIS run's placeholder survive?",
+# and a channel stranded by an EARLIER run holds none of this run's placeholders.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_channel_stranded_by_an_earlier_run_is_still_counted_unplayable():
+    """A repeat restore must SEE a channel the previous restore left stranded.
+
+    Nothing on this channel belongs to THIS run's ledger — its URL-less slots
+    were synthesized by an earlier restore — and it genuinely cannot play. The
+    verdict is keyed on what the channel HOLDS, not on who created it.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            # A PRIOR run's placeholders — URL-less, and absent from this run's
+            # ledger, so nothing here is ever rebound or deleted by this pass.
+            {"id": 601, "name": "TX | Dallas | PBS KERA", "url": None, "m3u_account": 4},
+            {"id": 602, "name": "TX | DALLAS | PBS KERA", "url": None, "m3u_account": 4},
+            # This run DID synthesize one placeholder, for a different channel.
+            {"id": 500, "name": "Other Placeholder", "url": None, "m3u_account": 3},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 12, "name": "KERA Dallas PBS", "streams": [601, 602]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    ledger.record_created(EntityType.STREAM, 500, "Other Placeholder")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 12)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 101,
+                "name": "KERA Dallas PBS",
+                "streams": [
+                    {"id": 7, "name": "TX | Dallas | PBS KERA"},
+                    {"id": 8, "name": "TX | DALLAS | PBS KERA"},
+                ],
+            }
+        ],
+    )
+
+    assert report.channels_needing_stream_reattach == 1
+    assert report.channels_with_no_playable_stream == 1
+    detail = report.stream_reattach_details[0]
+    assert detail.name == "KERA Dallas PBS"
+    assert detail.channel_id == 12
+    assert detail.has_playable_stream is False
+    # NAMED from the destination's own stream list — the prior run's placeholders
+    # are not in this run's ledger, so the old lookup would have said "<unknown>".
+    assert detail.placeholder_streams == [
+        "TX | DALLAS | PBS KERA",
+        "TX | Dallas | PBS KERA",
+    ]
+    # And the operator is told, in the report notes, not only in the logs.
+    assert any("NO playable stream" in note for note in report.notes)
+    # A prior run's placeholder is NEVER deleted — it is not in this ledger.
+    assert 601 not in {c.args[0] for c in client.delete_stream.await_args_list}
+    # The downgrade fires: this restore did not leave the instance playable.
+    assert compute_outcome(
+        report=report, failure_occurred=False, rollback=None
+    ) == RestoreOutcome.COMPLETED_WITH_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_a_stranded_channel_is_seen_even_when_this_run_made_no_placeholder():
+    """The pass must not short-circuit when its own ledger holds no placeholder.
+
+    The repeat restore that produced the run-4 evidence matched every archived
+    stream first time, so it synthesized nothing — and the pass returned before
+    it could look at the channel that was already broken.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 601, "name": "TX | Dallas | PBS KERA", "url": None, "m3u_account": 4},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 12, "name": "KERA Dallas PBS", "streams": [601]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")  # EMPTY — this run synthesized nothing
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 12)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "KERA Dallas PBS",
+             "streams": [{"id": 7, "name": "TX | Dallas | PBS KERA"}]}
+        ],
+    )
+
+    assert report.channels_with_no_playable_stream == 1
+    assert report.stream_reattach_details[0].name == "KERA Dallas PBS"
+    # It looked, but it changed nothing — the slots are not this run's to touch.
+    client.update_channel.assert_not_awaited()
+    client.delete_stream.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_stranded_slot_beside_a_real_stream_still_reports_playable():
+    """NO OVER-TRIGGER: one dead slot + one real stream is still a PLAYABLE channel.
+
+    The widened verdict must not sweep the ``…-daziw`` population into the
+    unplayable list — a channel that kept a URL-bearing stream plays, and the
+    restore that produced it is still a success.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 601, "name": "Stale Placeholder", "url": None, "m3u_account": 4},
+            {"id": 98, "name": "TX | Austin | PBS KLRU",
+             "url": "http://p/live/klru", "m3u_account": 1},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 12, "name": "KERA Dallas PBS", "streams": [601, 98]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 12)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "KERA Dallas PBS",
+             "streams": [{"id": 7, "name": "Stale Placeholder"},
+                         {"id": 8, "name": "TX | Austin | PBS KLRU"}]}
+        ],
+    )
+
+    assert report.channels_needing_stream_reattach == 1
+    assert report.stream_reattach_details[0].has_playable_stream is True
+    assert report.channels_with_no_playable_stream == 0
+    assert compute_outcome(
+        report=report, failure_occurred=False, rollback=None
+    ) == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_a_fully_healthy_channel_is_not_reported_at_all():
+    """Every slot a real URL-bearing stream -> nothing to report about it.
+
+    The widened verdict reports only a channel that genuinely holds a slot that
+    streams nothing; it must not start naming healthy channels.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 101, "name": "TX | Dallas | PBS KERA",
+             "url": "http://p/live/kera", "m3u_account": 1},
+            {"id": 98, "name": "TX | Austin | PBS KLRU",
+             "url": "http://p/live/klru", "m3u_account": 1},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 12, "name": "KERA Dallas PBS", "streams": [101, 98]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 12)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "KERA Dallas PBS",
+             "streams": [{"id": 7, "name": "TX | Dallas | PBS KERA"},
+                         {"id": 8, "name": "TX | Austin | PBS KLRU"}]}
+        ],
+    )
+
+    assert report.channels_needing_stream_reattach == 0
+    assert report.channels_with_no_playable_stream == 0
+    assert report.stream_reattach_details == []
+    assert report.notes == []
+    client.update_channel.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

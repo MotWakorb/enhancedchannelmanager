@@ -64,6 +64,17 @@ is demoted to a MISS, keeping that one slot on its placeholder (counted and name
 like any other miss) so the PATCH can never carry a duplicate. Archived ORDER is
 untouched — the demoted slot stays exactly where it sat.
 
+RUN-4 UPDATE (bead ``…-ixdaw``, drill run 2026-08-05-run4): the matcher now
+resolves the case-differing pair ITSELF. Its exact-name tiers prefer a candidate
+whose RAW name is byte-identical to the archived name, so
+``'TX | DALLAS | PBS KERA'`` and ``'TX | Dallas | PBS KERA'`` land on the two
+DISTINCT destination ids that actually exist instead of collapsing onto the lower
+one. ``claimed_ids`` is therefore no longer the primary handling for that shape —
+it is the BACKSTOP, and it stays exactly as written. It remains the only defence
+against a GENUINE collision (two archived streams whose raw names are truly
+identical), which no pure per-stream matcher can resolve and which must still
+cost one slot rather than the whole channel.
+
 ----------------------------------------------------------------------------
 WHERE THIS RUNS AND WHY
 ----------------------------------------------------------------------------
@@ -98,8 +109,8 @@ WHAT IT DOES
    when the ordered list changed.
 4. Delete every placeholder that is no longer referenced by any channel, then the
    synthetic account if this run created it and nothing is left under it.
-5. Report what is left, in TWO populations (bead ``…-daziw``). A channel still
-   holding a placeholder is counted in
+5. Report what is left, in TWO populations (bead ``…-daziw``). A channel holding
+   any slot that is NOT a real URL-bearing destination stream is counted in
    :attr:`~dbas.restore_contracts.RestoreReport.channels_needing_stream_reattach`
    and NAMED in ``stream_reattach_details``. A channel left with NOT ONE
    URL-bearing stream is additionally counted in
@@ -110,6 +121,25 @@ WHAT IT DOES
    leaves ONE slot on its placeholder while the channel keeps its real streams:
    that channel plays, and calling it a failure would false-fail the very fix
    that saved it.
+
+----------------------------------------------------------------------------
+WHY THE VERDICT IS NOT KEYED ON THIS RUN'S PLACEHOLDERS (bead ``…-oebpv``,
+drill run 2026-08-05-run4)
+----------------------------------------------------------------------------
+
+Step 5 used to be nested inside "did THIS run's placeholder survive?", so the
+whole verdict was skipped for a channel whose bad slots were left by an EARLIER
+restore. Run 4 measured it twice: a repeat restore over an already-stranded
+``KERA Dallas PBS`` reported ``channels_needing_stream_reattach: 0``,
+``channels_with_no_playable_stream: 0`` and an empty ``notes[]`` for a channel
+that answered HTTP 500 on playback.
+
+The verdict is now taken for EVERY restored channel, from what it is ACTUALLY
+left holding, against ``candidate_ids`` — the real, URL-bearing destination
+streams. Who created a bad slot is irrelevant to whether the channel plays. A
+slot that is not a candidate is named from the destination's own stream list, so
+a prior run's placeholder gets its real name rather than ``<unknown>``. A channel
+whose every slot IS a candidate is healthy and is not reported at all.
 
 BEST-EFFORT BY CONSTRUCTION: every upstream call here is post-create cleanup on
 an otherwise-successful restore. A failure is logged and surfaced as a report
@@ -162,7 +192,8 @@ class RebindResult:
         channels_updated: Channels whose ordered stream list was PATCHed.
         placeholders_deleted: Orphaned placeholder streams removed.
         account_deleted: Whether the synthetic custom-stream account was removed.
-        still_placeholder: Channels still holding at least one placeholder.
+        still_placeholder: Channels left holding at least one slot that is not a
+            real, URL-bearing destination stream — whoever created it (``…-oebpv``).
         unplayable: Channels left with NO URL-bearing stream at all — the SUBSET
             of ``still_placeholder`` that cannot play (bead ``…-daziw``).
     """
@@ -242,12 +273,15 @@ async def rebind_placeholder_streams(
     Args:
         client: The Dispatcharr API client.
         report: The shared :class:`RestoreReport`. Updated with
-            ``streams_rebound`` and, for anything still holding a placeholder,
+            ``streams_rebound`` and, for any restored channel left holding a slot
+            that is not a real URL-bearing stream,
             ``channels_needing_stream_reattach`` + ``stream_reattach_details``,
             plus ``channels_with_no_playable_stream`` for the subset left with
             no URL-bearing stream at all.
         ledger: The shared :class:`RollbackLedger` — the ONLY source of which
-            streams/accounts this run synthesized. Nothing outside it is touched.
+            streams/accounts this run synthesized. Nothing outside it is
+            rebound or deleted; the playability verdict, by contrast, covers
+            every restored channel regardless of the ledger (bead ``…-oebpv``).
         remap: The shared :class:`IdRemapTable`; ``CHANNEL`` resolves each
             archived channel to its destination id, ``STREAM`` resolves each
             archived stream to the placeholder that was synthesized for it.
@@ -262,15 +296,17 @@ async def rebind_placeholder_streams(
     """
     result = RebindResult()
 
+    # Only streams THIS run synthesized are ever rebound or deleted. The pass
+    # runs even when the set is EMPTY: the playability verdict below covers every
+    # restored channel, including one stranded on an EARLIER run's placeholders,
+    # and returning early here is exactly what made those channels invisible
+    # (bead …-oebpv).
     placeholder_ids = _ledgered_ids(ledger, EntityType.STREAM)
-    if not placeholder_ids:
-        # No orphan was synthesized this run — every archived stream matched a
-        # real destination stream first time. Nothing to undo.
-        return result
 
     logger.info(
         "[DBAS-REBIND] Post-refresh rebind: %d placeholder stream(s) created this "
-        "run; re-running the stream matcher against the materialized provider streams.",
+        "run; re-running the stream matcher against the materialized provider "
+        "streams and auditing every restored channel for playability.",
         len(placeholder_ids),
     )
 
@@ -295,11 +331,14 @@ async def rebind_placeholder_streams(
     # necessarily a URL-bearing stream (a PRIOR restore's placeholder is neither).
     candidate_ids = {cid for s in candidates if (cid := _as_int(s.get("id"))) is not None}
 
-    # Placeholder id -> name, for the operator-facing detail rows.
-    placeholder_names = {
-        pid: _stream_name(s)
+    # EVERY destination stream id -> its operator-facing name, for the detail
+    # rows. Keyed over all_streams rather than only this run's placeholders so a
+    # slot left behind by an EARLIER restore is named too (bead …-oebpv) instead
+    # of surfacing to the operator as "<unknown>".
+    stream_names = {
+        sid: _stream_name(s)
         for s in all_streams
-        if (pid := _as_int(s.get("id"))) in placeholder_ids
+        if (sid := _as_int(s.get("id"))) is not None
     }
 
     # The DESTINATION's own channel -> ordered stream ids. This, not a list
@@ -342,7 +381,6 @@ async def rebind_placeholder_streams(
         label = str(archive_channel.get("name") or "<unknown>")
         ordered_ids = list(current_ids)
         rebound_here = 0
-        held_placeholders: list[str] = []
 
         # Destination ids this channel already holds. Dispatcharr enforces a
         # UNIQUE (channel_id, stream_id), so a second slot claiming an id
@@ -381,7 +419,6 @@ async def rebind_placeholder_streams(
                 claimed_ids.add(match_id)
                 rebound_here += 1
             else:
-                held_placeholders.append(placeholder_names.get(bound_id, "<unknown>"))
                 still_referenced.add(bound_id)
                 # The placeholder stays in the list, so its id is claimed too.
                 claimed_ids.add(bound_id)
@@ -406,9 +443,6 @@ async def rebind_placeholder_streams(
                 for slot_id in current_ids:
                     if slot_id in placeholder_ids:
                         still_referenced.add(slot_id)
-                        held_placeholders.append(
-                            placeholder_names.get(slot_id, "<unknown>")
-                        )
             else:
                 result.rebound += rebound_here
                 result.channels_updated += 1
@@ -418,20 +452,30 @@ async def rebind_placeholder_streams(
                     label, dest_channel_id, rebound_here,
                 )
 
-        if held_placeholders:
+        # THE VERDICT (beads …-daziw / …-oebpv). Taken from ``final_ids`` — what
+        # the channel is ACTUALLY left holding — and keyed on ``candidate_ids``,
+        # the real URL-bearing destination streams. Deliberately NOT keyed on
+        # this run's placeholders: a channel stranded by an EARLIER restore holds
+        # none of them and used to escape the verdict entirely while returning
+        # HTTP 500 on playback. A channel whose every slot is a candidate is
+        # healthy and is not reported at all.
+        non_playable_ids = [sid for sid in final_ids if sid not in candidate_ids]
+        if non_playable_ids:
             has_playable = any(slot_id in candidate_ids for slot_id in final_ids)
             result.still_placeholder.append(label)
             if not has_playable:
                 result.unplayable.append(label)
                 logger.warning(
                     "[DBAS-REBIND] Channel '%s' (id=%s) has NO playable stream: "
-                    "every slot is a URL-less placeholder. Attach a real stream.",
+                    "not one of its slots carries a URL. Attach a real stream.",
                     label, dest_channel_id,
                 )
             report.record_stream_reattach_needed(
                 name=label,
                 channel_id=dest_channel_id,
-                placeholder_streams=sorted(set(held_placeholders)),
+                placeholder_streams=sorted(
+                    {stream_names.get(sid, "<unknown>") for sid in non_playable_ids}
+                ),
                 has_playable_stream=has_playable,
             )
 
@@ -450,27 +494,35 @@ async def rebind_placeholder_streams(
             continue
         result.placeholders_deleted += 1
 
-    if still_referenced:
+    if result.still_placeholder:
         # Say which of the two populations each number is: the drill's own report
         # claimed every still-placeholder channel "will not play", which was not
-        # true of the ones that kept their real streams (bead …-daziw).
-        report.notes.append(
-            "%d channel(s) are still bound to a placeholder stream, %d of which "
-            "have NO playable stream at all; the synthetic '%s' account was kept "
-            "so those bindings survive. Attach a real stream to each named channel."
-            % (
-                len(result.still_placeholder),
-                len(result.unplayable),
-                CUSTOM_STREAM_ACCOUNT_NAME,
-            )
+        # true of the ones that kept their real streams (bead …-daziw). The
+        # sentence counts the WIDENED population — every channel left holding a
+        # slot that streams nothing, not only the ones this run stranded.
+        note = (
+            "%d channel(s) are still bound to a stream that cannot play, %d of "
+            "which have NO playable stream at all. Attach a real stream to each "
+            "named channel."
+            % (len(result.still_placeholder), len(result.unplayable))
         )
-    else:
+        if still_referenced:
+            note += (
+                " The synthetic '%s' account was kept so those bindings survive."
+                % CUSTOM_STREAM_ACCOUNT_NAME
+            )
+        report.notes.append(note)
+
+    # The synthetic account goes only when nothing this run created is still
+    # bound. A channel stranded by an EARLIER run does not keep THIS run's
+    # account alive — its placeholders belong to the prior restore's account.
+    if not still_referenced:
         result.account_deleted = await _drop_synthetic_account(client, ledger)
 
     logger.info(
         "[DBAS-REBIND] Rebind complete: %d slot(s) rebound across %d channel(s); "
-        "%d placeholder(s) deleted; %d channel(s) still hold a placeholder, "
-        "%d of them with NO playable stream.",
+        "%d placeholder(s) deleted; %d channel(s) still hold a slot that cannot "
+        "play, %d of them with NO playable stream at all.",
         result.rebound,
         result.channels_updated,
         result.placeholders_deleted,
