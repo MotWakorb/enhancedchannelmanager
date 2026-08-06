@@ -542,8 +542,10 @@ come out encrypted too.
 
 Confirm both completed at **success**, not warning-level, in the
 **Notifications panel** (the bell icon in the header). That is where the
-per-task severity actually lives, for example `Task Completed: DBAS
-Backup — Successfully completed. 1 items processed in 1.8s`. **Settings →
+per-task severity actually lives: look for a success-level entry for each
+`DBAS Backup` run (icon and heading along the lines of `Task Completed:
+DBAS Backup`, not an exact transcript, since the message body's wording
+and counts change between builds), not a warning-level one. **Settings →
 Backup & Restore → Saved Backups** will not tell you this: that panel
 lists filename, timestamp, and size, with no status, severity, or outcome
 field anywhere in it. A warning-level backup means the source artifact
