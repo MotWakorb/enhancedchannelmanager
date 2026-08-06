@@ -193,3 +193,46 @@ def test_generic_task_warning_message_unchanged():
     msg = _warning_task_completion_message("some_other_task", result)
     assert "Completed with 2 failures out of 10 items" in msg
     assert "8 succeeded" in msg
+
+
+def test_dbas_backup_success_message_names_the_unit_it_is_counting():
+    """Bead …-fexq1. The counts are CATEGORIES; a bare "N items" hides that.
+
+    Before the counts meant items, a clean backup's completion notification
+    read "Successfully completed. 1 items processed in 1.8s" — the `1` being a
+    boolean in disguise, and the unit invisible either way. This task's WARNING
+    message already names categories; this is its clean-run counterpart.
+    """
+    started = datetime(2026, 8, 6, 12, 0, 0)
+    completed = datetime(2026, 8, 6, 12, 0, 2)
+    result = TaskResult(
+        success=True,
+        message="Built DBAS backup ecm-backup-2026-08-06_120000.zip (schema v6, 41 files)",
+        started_at=started,
+        completed_at=completed,
+        total_items=16,
+        success_count=16,
+        failed_count=0,
+        details={"filename": "ecm-backup-2026-08-06_120000.zip"},
+    )
+    msg = _success_task_completion_message("dbas_backup", result)
+    assert "16 categories" in msg
+    assert "items processed" not in msg
+    assert "2.0s" in msg
+
+
+def test_dbas_backup_success_message_uses_the_singular_for_one_category():
+    started = datetime(2026, 8, 6, 12, 0, 0)
+    completed = datetime(2026, 8, 6, 12, 0, 1)
+    result = TaskResult(
+        success=True,
+        message="Built DBAS backup",
+        started_at=started,
+        completed_at=completed,
+        total_items=1,
+        success_count=1,
+        failed_count=0,
+    )
+    msg = _success_task_completion_message("dbas_backup", result)
+    assert "1 category" in msg
+    assert "categories" not in msg
