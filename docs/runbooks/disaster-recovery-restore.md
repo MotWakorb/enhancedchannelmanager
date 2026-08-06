@@ -183,11 +183,25 @@ Repeat for each listed entity type and ID. Once all residue is deleted, take a f
 
 **6.2** Check channel groups are present: **Settings → Channel Groups**.
 
-**6.3** Run an M3U refresh to confirm streams are populating:
+**6.3** Run an M3U refresh. This confirms streams are populating **and**,
+as of `0.18.1-0033`, repairs the channel bindings: a completed refresh
+reattaches any channel still holding a placeholder stream onto the real
+provider stream, then removes the leftover placeholders and the synthetic
+`ECM Custom Streams (DBAS restore)` account. On a restore from a standard
+(redacted) artifact, this is the step that makes the lineup playable, and
+it is why you re-enter the provider credential before running it.
+
 ```bash
 curl -s -X POST http://localhost:8080/api/tasks/m3u_refresh/run \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+The scheduled `m3u_refresh` task above and the Refresh action on an
+individual account both trigger the reattach. A "refresh all accounts"
+call (`POST /api/m3u/refresh`) and a refresh performed in Dispatcharr's
+own UI do not; those are picked up on the next scheduled `m3u_refresh`
+run. On builds before `0.18.1-0033` no refresh reattached anything, and
+recovery required re-running the whole restore after the refresh.
 
 **6.4** Run an EPG refresh if guide data is absent.
 
