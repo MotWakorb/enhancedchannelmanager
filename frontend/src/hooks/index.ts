@@ -20,6 +20,8 @@ export type {
   UseDedupOnDropOptions,
   UseDedupOnDropReturn,
 } from './useDedupOnDrop';
+export { invalidateServerData, useServerDataInvalidation } from './useServerDataInvalidation';
+export type { ServerDataKey } from './useServerDataInvalidation';
 export { useAddStreamDedup } from './useAddStreamDedup';
 export type {
   AddStreamDedupModalState,

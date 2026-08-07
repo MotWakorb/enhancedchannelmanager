@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { useServerDataInvalidation } from '../../hooks/useServerDataInvalidation';
 import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
@@ -56,6 +57,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       setLoadingSaved(false);
     }
   }, []);
+
+  // A DBAS artifact can be produced by a sibling card on this same page (the
+  // Encrypted Backup card), which this list cannot see — so it kept showing
+  // only the previous artifact, through an in-app navigation away and back,
+  // until a full page reload (bead enhancedchannelmanager-5z7c9, instance 3).
+  useServerDataInvalidation('saved-backups', loadSavedBackups);
 
   // Load export sections and saved backups on mount
   useEffect(() => {

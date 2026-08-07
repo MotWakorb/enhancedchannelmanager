@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { invalidateServerData } from '../../hooks/useServerDataInvalidation';
 import './EncryptedBackupCard.css';
 
 // Mirrors the API/primitive minimum (artifact_crypto.MIN_PASSPHRASE_LENGTH).
@@ -45,6 +46,13 @@ export function EncryptedBackupCard() {
         acknowledge_unrecoverable: acknowledged,
       });
       if (result.success) {
+        // The artifact is written by the time run_task returns, but the Saved
+        // Backups list beside this card fetched itself on mount and had no way
+        // to hear about it — so the operator saw a success toast next to a list
+        // that still showed only the previous artifact, and the natural
+        // response is to create ANOTHER credential-bearing encrypted backup
+        // (bead enhancedchannelmanager-5z7c9, instance 3).
+        invalidateServerData('saved-backups');
         notifications.success(result.message || 'Encrypted backup created', 'Encrypted Backup');
       } else {
         notifications.error(result.error || result.message || 'Encrypted backup failed', 'Encrypted Backup');

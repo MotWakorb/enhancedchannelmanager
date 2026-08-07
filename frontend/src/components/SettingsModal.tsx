@@ -2,6 +2,7 @@ import { logger } from '../utils/logger';
 import { useState, useEffect, useRef, memo } from 'react';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
+import { invalidateServerData } from '../hooks/useServerDataInvalidation';
 import { ModalOverlay } from './ModalOverlay';
 import type { DispatcharrAuthMethod, Theme } from '../services/api';
 import './ModalBase.css';
@@ -166,6 +167,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         hide_auto_sync_groups: hideAutoSyncGroups,
         theme: theme,
       } as Parameters<typeof api.saveSettings>[0]);
+      // This modal is rendered in two places — behind the Settings tab's Edit
+      // button, and by App, which opens it unprompted on a first run. Only one
+      // of those owners refreshes the Settings tab's connection summary card,
+      // so a save through the other left the card reading "Not configured"
+      // until a page reload (bead enhancedchannelmanager-5z7c9, instance 1).
+      invalidateServerData('settings');
       onSaved();
       onClose();
       notifications.success('Settings saved successfully');
