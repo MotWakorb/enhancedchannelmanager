@@ -90,6 +90,26 @@ Key fields:
      remap afterwards. Added by bead `…-dfkbn` after a round-trip drill measured
      `logo_misses: 0` while 12 channels lost a logo they had.
 
+  **Both producers fire on the same failure**, and that is one lost logo, not
+  two (bead `…-k2r7m`): an upload the destination rejected leaves no `LOGO`
+  remap entry, so the reattach pass that runs next cannot resolve the reference
+  either. `record_logo_miss` therefore MERGES a second report of an archived
+  logo it already holds, keyed on `source_export_id`:
+
+  - the `channels` lists are **unioned** — the importer sees every channel that
+    referenced the logo, the reattach pass sees the ones whose PATCH it could
+    not perform, and dropping either slice under-names the damage;
+  - the operator-facing `label` **wins over a synthesized one**. The reattach
+    pass holds only the archive id, so it labels its rows `logo #13 (archived)`
+    and passes `label_is_synthetic=True`; a producer that knows the archived
+    NAME does not, and its label survives regardless of which ran first.
+
+  A miss recorded with `source_export_id: None` carries no identity to merge on
+  and always gets its own row — under-counting a real loss is the failure this
+  surface exists to prevent, so ambiguity resolves toward reporting. Drill run
+  `2026-08-06-run9` measured the pre-merge behaviour: one logo failed and the
+  report read `failed 1` beside `2 logo(s) could not be reinstated`.
+
 ### Post-restore action items (beads `…-6pilh` / `…-2o0cz` / `…-dfkbn`)
 
 Each is an **aggregate count + a named drill-down**, written through one

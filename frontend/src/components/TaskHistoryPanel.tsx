@@ -13,9 +13,18 @@ function StatusBadge({ status, success, failedCount = 0 }: { status: string; suc
   // y3m6o.1 review (Finding 4): a task that reports success=True but had
   // failures (e.g. a channel-pipeline post-refresh run with a failed action —
   // the PO-chosen "Completed with Warnings" envelope) must NOT render solid
-  // green. Derive an amber warning indicator from failed_count>0 so the History
-  // surface is honest about partial failures.
-  const completedWithWarnings = success === true && status !== 'running' && failedCount > 0;
+  // green.
+  //
+  // The server now NAMES that state (bead fexq1), so read it rather than infer
+  // it: the count-based derivation cannot see a degraded run whose counts are
+  // clean — a DBAS restore where every row applied and not one channel could
+  // play — and that run was being stored, and rendered, as a failure.
+  //
+  // The old derivation is kept as the fallback: rows written by an earlier
+  // build are still in the database and must keep rendering amber.
+  const completedWithWarnings =
+    status === 'completed_with_warnings'
+    || (success === true && status !== 'running' && failedCount > 0);
 
   const getColor = () => {
     if (status === 'running') return '#3498db';

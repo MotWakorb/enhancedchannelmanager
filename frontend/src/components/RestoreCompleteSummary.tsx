@@ -38,6 +38,7 @@ import type {
 } from '../services/api';
 import { CredentialReentryNotice } from './CredentialReentryNotice';
 import { ExistingChannelReattachNotice } from './ExistingChannelReattachNotice';
+import { StreamReattachNotice } from './StreamReattachNotice';
 import './RestoreCompleteSummary.css';
 
 /** Which framing the summary renders. `dry-run` reads would_* counts. */
@@ -258,6 +259,16 @@ export function RestoreCompleteSummary({ report, mode, bannerSlot }: RestoreComp
         only signal the operator has that nothing will actually fetch.
       */}
       <CredentialReentryNotice report={report} mode={effectiveMode} />
+
+      {/*
+        Which channels cannot play (bead d0bd3). The sibling of the credentials
+        panel and first-class for the same reason: the drill's redacted restore
+        reported 12 of 12 channels with NO playable stream, named every one of
+        them, and the modal showed only the credentials panel — so the single
+        condition that makes a restored instance useless was the one condition
+        the UI omitted.
+      */}
+      <StreamReattachNotice report={report} mode={effectiveMode} />
 
       {/*
         What this restore does to channels it did NOT create (bead dfkbn). Also

@@ -65,3 +65,63 @@ describe('TaskHistoryPanel — completed-with-warnings honesty (Finding 4)', () 
     expect(screen.queryByTestId('status-completed-with-warnings')).toBeNull();
   });
 });
+
+/**
+ * Bead enhancedchannelmanager-fexq1. The badge used to INFER the middle state
+ * in the browser from `success === true && failed_count > 0`, because the
+ * persisted row had no way to say it. That inference cannot see a degraded run
+ * with clean counts — a DBAS restore where every row applied and not one
+ * channel could play — which is exactly the run the drill found stored as
+ * `status: "failed"` while its own alert said "Completed with Warnings".
+ *
+ * The server now names the severity. The count-based derivation is KEPT as a
+ * fallback: history rows written by an earlier build are still in the database
+ * and must keep rendering amber.
+ */
+describe('TaskHistoryPanel — the server names the severity (fexq1)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders a warning for a degraded run whose counts are clean', async () => {
+    vi.spyOn(api, 'getTaskHistory').mockResolvedValue({
+      history: [
+        exec({
+          id: 3,
+          task_id: 'dbas_restore',
+          status: 'completed_with_warnings',
+          success: true,
+          failed_count: 0,
+          message: '12 channel(s) have NO playable stream',
+        }),
+      ],
+    });
+
+    render(<TaskHistoryPanel taskId="dbas_restore" visible />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status-completed-with-warnings')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/completed with warnings/i)).toBeInTheDocument();
+    // And it is NOT rendered as a failure.
+    expect(screen.queryByText(/^failed$/i)).toBeNull();
+  });
+
+  it('still renders a genuine failure as a failure', async () => {
+    vi.spyOn(api, 'getTaskHistory').mockResolvedValue({
+      history: [
+        exec({ id: 4, status: 'failed', success: false, failed_count: 3 }),
+      ],
+    });
+
+    render(<TaskHistoryPanel taskId="auto_creation" visible />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/^failed$/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('status-completed-with-warnings')).toBeNull();
+  });
+});

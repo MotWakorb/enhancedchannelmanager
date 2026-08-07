@@ -130,34 +130,126 @@ class TaskResult:
         }
 
 
+class TaskOutcome(str, Enum):
+    """How a finished run ENDED — the run's severity, named once.
+
+    Bead ``enhancedchannelmanager-fexq1``. Before this, four surfaces each
+    re-derived severity from two fields that do not carry it
+    (:attr:`TaskResult.success` and :attr:`TaskResult.failed_count`), and they
+    disagreed: drill run ``2026-08-06-run9`` produced a DBAS restore whose alert
+    was correctly ``warning`` / "Task Completed with Warnings" and whose
+    task-history row read ``status: "failed"``, ``success: false`` — for the
+    same run. ``failed_count > 0`` was doing the work of a severity field, which
+    is why a degraded run with CLEAN counts (a restore where every row applied
+    and not one channel could play) could not be expressed at all.
+
+    Every terminal surface now maps from THIS: the notification severity
+    (:func:`completion_notification_type`), the persisted history row
+    (:func:`execution_status` / :func:`execution_succeeded`), and the Journal.
+
+    * ``SUCCESS`` — every item did what it was asked to. Nothing to report.
+    * ``WARNING`` — the run RAN TO COMPLETION and left real, kept state, but the
+      result is not clean: some items failed, or the task declared itself
+      degraded (:attr:`TaskResult.completed_degraded`). An action item, not a
+      failure, and never announced as one.
+    * ``ERROR`` — the run did not produce what it was asked for. This is the
+      only outcome that says "failed" to an operator.
+    * ``CANCELLED`` — an operator stopped it. Neither success nor failure.
+    """
+
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+def task_outcome(result: 'TaskResult') -> TaskOutcome:
+    """Derive a finished run's :class:`TaskOutcome`. The ONE derivation.
+
+    Deliberately computed from the fields tasks ALREADY set, so no task has to
+    be changed and no existing run's severity moves: this is the same ladder
+    ``completion_notification_type`` has always applied, given a name and a
+    single home.
+
+    * cancelled -> ``CANCELLED`` (the run stopped, it did not fail)
+    * succeeded, some items failed -> ``WARNING``
+    * succeeded cleanly -> ``SUCCESS``
+    * unsuccessful but ``completed_degraded`` -> ``WARNING`` (bead
+      ``…-daziw``: the applied state stands and the message names the shortfall)
+    * unsuccessful -> ``ERROR``
+
+    Note the third and fourth rules are the SAME severity reached two ways, and
+    that is the point: a warning-level run is one that completed and left kept
+    state, whether or not any individual item failed.
+    """
+    if result.error == "CANCELLED":
+        return TaskOutcome.CANCELLED
+    if result.success:
+        return TaskOutcome.WARNING if result.failed_count > 0 else TaskOutcome.SUCCESS
+    if getattr(result, "completed_degraded", False):
+        return TaskOutcome.WARNING
+    return TaskOutcome.ERROR
+
+
 def completion_notification_type(result: 'TaskResult') -> str:
     """Map a finished :class:`TaskResult` to the severity the operator sees.
 
-    Single source of truth for "how did this run end?" (bead
+    Single source of truth for the NOTIFICATION severity (bead
     ``enhancedchannelmanager-asf3n``). A run touches TWO notification records —
     the completion notification the task engine creates, and the progress
-    notification the scheduler created at start and re-types here at the end —
-    and each used to decide severity on its own. Only the engine learned the
+    notification the scheduler created at start and re-types at the end — and
+    each used to decide severity on its own. Only the engine learned the
     ``completed_degraded`` rule from bead ``enhancedchannelmanager-daziw``, so a
     degraded DBAS restore showed the operator a ``warning`` and an ``error``
     side by side for one event, with nothing to say which was authoritative.
 
-    The mapping itself is unchanged from what the engine already did:
-
-    * cancelled -> ``warning`` (the run stopped, it did not fail)
-    * succeeded, some items failed -> ``warning``
-    * succeeded cleanly -> ``success``
-    * unsuccessful but ``completed_degraded`` -> ``warning`` (daziw: the applied
-      state stands and the message names the shortfall)
-    * unsuccessful -> ``error``
+    Now a thin projection of :func:`task_outcome` onto the notification
+    vocabulary, which has no "cancelled" severity of its own: a cancelled run is
+    shown as a ``warning`` and titled "Task Cancelled". Outputs are unchanged.
     """
-    if result.error == "CANCELLED":
+    outcome = task_outcome(result)
+    if outcome is TaskOutcome.CANCELLED:
         return "warning"
-    if result.success:
-        return "warning" if result.failed_count > 0 else "success"
-    if getattr(result, "completed_degraded", False):
-        return "warning"
-    return "error"
+    return outcome.value
+
+
+def execution_status(result: 'TaskResult') -> str:
+    """Map a finished run to its persisted ``TaskExecution.status`` (…-fexq1).
+
+    The history vocabulary is a closed set consumed by the Task History panel,
+    the DBAS restore modals, and the MCP ``get_task_history`` tool:
+    ``running`` / ``completed`` / ``completed_with_warnings`` / ``failed`` /
+    ``cancelled``.
+
+    ``completed_with_warnings`` is the member added by this bead. Without it the
+    row had to round a warning-level run to one of its neighbours, and it rounded
+    the wrong way: a degraded restore was stored as ``failed`` while its own
+    alert said "Task Completed with Warnings". The browser was left inferring
+    the middle state from ``success && failed_count > 0``, which cannot see a
+    degraded run with clean counts at all.
+    """
+    outcome = task_outcome(result)
+    if outcome is TaskOutcome.CANCELLED:
+        return "cancelled"
+    if outcome is TaskOutcome.ERROR:
+        return "failed"
+    if outcome is TaskOutcome.WARNING:
+        return "completed_with_warnings"
+    return "completed"
+
+
+def execution_succeeded(result: 'TaskResult') -> bool:
+    """Map a finished run to its persisted ``TaskExecution.success`` (…-fexq1).
+
+    Answers "did this run produce what it was asked for?" — TRUE for a
+    warning-level run, whose applied state is real and kept. It is NOT the same
+    question as :attr:`TaskResult.success`, which means "cleanly, with nothing
+    to report", and it is NOT the question the
+    ``ecm_task_schedule_last_success_timestamp`` gauge answers (that one is
+    narrower still — "when did this task last run CLEANLY" — and deliberately
+    keeps its own trigger; see ``task_engine``).
+    """
+    return task_outcome(result) in (TaskOutcome.SUCCESS, TaskOutcome.WARNING)
 
 
 @dataclass

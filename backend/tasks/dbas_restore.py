@@ -472,26 +472,38 @@ class DbasRestoreTask(TaskScheduler):
 
     @staticmethod
     def _degraded_not_failed(report, is_apply: bool) -> bool:
-        """True when unplayable channels are the ONLY reason this is not a success.
+        """True when the restore RAN TO COMPLETION and rolled nothing back.
 
-        Bead ``…-daziw``, PO decision 2. Such a run is a WARNING, not a red
-        "Task Failed": every row applied, nothing was rolled back, and the
-        applied state is real and kept — it is one attached stream away from
-        working. The task declares that state here; ``task_engine`` maps it to
-        the alert severity (:attr:`task_scheduler.TaskResult.completed_degraded`).
+        Beads ``…-daziw`` (PO decision 2) and ``…-cwmid``. Such a run is a
+        WARNING, not a red "Task Failed": the applied state is real and kept, and
+        the summary names the shortfall. The task declares that state here;
+        ``task_engine`` maps it to the alert severity
+        (:attr:`task_scheduler.TaskResult.completed_degraded`).
 
-        Deliberately narrow. Any category failure, any rollback outcome, and any
-        dry run answer ``False`` and keep the error branch they have today.
+        The condition is the OUTCOME, not the particular category that degraded.
+        :class:`dbas.restore_contracts.RestoreOutcome.COMPLETED_WITH_FAILURES`
+        already means exactly "ran to completion and NOTHING was rolled back",
+        for either of its two triggers — a non-fatal category's failed row, or a
+        channel left with no playable stream.
+
+        daziw's original form keyed on ``channels_with_no_playable_stream`` and
+        excluded any run with a failed row, which inverted the severity ordering
+        for triage (bead ``…-cwmid``, drill run 2026-08-06-run9): a restore in
+        which 12 of 12 channels could not play alerted as a ``warning`` while one
+        unwritable logo — on a category deliberately made NON-FATAL — alerted as
+        ``error`` / "Task Failed". "Task Failed" was also untrue, and the
+        published docs warn that re-running a restore after a failed attempt
+        starts from an unknown state.
+
+        ``error`` is reserved for what it describes: the two rolled-back /
+        indeterminate outcomes, an orchestration error, and any dry run's
+        failure mode.
         """
         from dbas.restore_contracts import RestoreOutcome
 
         if not is_apply or report.is_dry_run:
             return False
-        if report.outcome != RestoreOutcome.COMPLETED_WITH_FAILURES:
-            return False
-        if any(cat.failed for cat in report.categories):
-            return False
-        return (getattr(report, "channels_with_no_playable_stream", 0) or 0) > 0
+        return report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
 
     @staticmethod
     def _counts_from_report(report, is_apply: bool) -> RestoreCounts:

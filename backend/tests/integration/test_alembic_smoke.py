@@ -4373,8 +4373,16 @@ class TestFastPathDestructiveRevisions:
                 "test premise broken: _schema_matches_head must be True at "
                 "0040 for this to reproduce the production bug."
             )
+            # Head-agnostic on purpose: the scenario is "0041 is PENDING and is
+            # drop-only", not "0041 happens to be the newest revision". Pinning
+            # the literal made every later migration break this test.
             head = database.get_alembic_head_revision()
-            assert head == "0041", f"test premise: head must be 0041, got {head}"
+            assert database.get_current_schema_revision(engine) == "0040", (
+                "test premise: the DB must sit at 0040 with 0041 pending."
+            )
+            assert head >= "0041", (
+                f"test premise: head must include the drop revision, got {head}"
+            )
 
             database._bootstrap_alembic(engine)
 
@@ -4599,7 +4607,11 @@ class TestStampedPastDropSelfHeal:
                 f"{sorted(set(self.LEFTOVER_0029).intersection(live))}"
             )
             # The version row must be restored, not left at a predecessor.
-            assert database.get_current_schema_revision(engine) == "0041"
+            # Compared against head rather than a literal so a later migration
+            # does not break a test that is about the HEAL, not the revision id.
+            assert database.get_current_schema_revision(engine) == (
+                database.get_alembic_head_revision()
+            )
         finally:
             engine.dispose()
 

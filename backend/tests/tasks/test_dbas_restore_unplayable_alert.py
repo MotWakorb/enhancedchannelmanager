@@ -1,6 +1,7 @@
-"""An unplayable-channel downgrade is a WARNING, and it says what it means.
+"""A restore that completed and rolled nothing back is a WARNING, not a failure.
 
-Bead ``enhancedchannelmanager-daziw``, PO decision 2. Two layers:
+Beads ``enhancedchannelmanager-daziw`` (PO decision 2) and
+``enhancedchannelmanager-cwmid``. Two layers:
 
 1. **The task layer** (:mod:`tasks.dbas_restore`) — the one-line summary an
    operator who restored via MCP or reads task history ever sees. It used to
@@ -11,12 +12,37 @@ Bead ``enhancedchannelmanager-daziw``, PO decision 2. Two layers:
    ``channels_with_no_playable_stream``; the placeholder counter gets wording
    that is true of it.
 
-2. **The engine layer** (:mod:`task_engine`) — an apply downgraded SOLELY by
-   unplayable channels alerts as ``Task Completed with Warnings`` /
-   ``notification_type="warning"``, not as the red ``Task Failed`` error. Every
-   other unsuccessful result — a real category failure, a rollback, any
-   non-DBAS task — keeps the error branch byte-for-byte. The task declares the
-   state (``TaskResult.completed_degraded``); the engine maps state to severity.
+2. **The engine layer** (:mod:`task_engine`) — an apply that reached
+   ``COMPLETED_WITH_FAILURES`` alerts as ``Task Completed with Warnings`` /
+   ``notification_type="warning"``, not as the red ``Task Failed`` error. A
+   rolled-back outcome, and any non-DBAS task, keep the error branch
+   byte-for-byte. The task declares the state
+   (``TaskResult.completed_degraded``); the engine maps state to severity.
+
+WHAT ``…-cwmid`` WIDENED, AND WHY
+--------------------------------
+The daziw rule keyed the warning on ``channels_with_no_playable_stream`` and
+excluded any run with a failed category row. Drill run ``2026-08-06-run9``
+measured the consequence on two restores with the SAME ``outcome``:
+
+* redacted artifact, 12 of 12 channels unable to play -> ``type=warning`` ✅
+* one logo genuinely unwritable, every channel playing -> ``type=error``,
+  ``"Task Failed: DBAS Restore"`` ❌
+
+The severity ordering was inverted for triage — the restore where NOT ONE
+CHANNEL CAN PLAY whispered and the one missing a cosmetic logo shouted — and
+"Task Failed" was factually wrong: logos are a deliberately NON-FATAL category,
+so the report's own note read "this category is non-fatal, so the rest of the
+restore was applied and nothing was rolled back." That matters beyond tone: the
+published docs warn that re-running a restore after a failed attempt starts from
+an unknown state, so a false "Failed" can push an operator into a genuinely
+risky action.
+
+:class:`dbas.restore_contracts.RestoreOutcome` already draws the line the alert
+needs — ``COMPLETED_WITH_FAILURES`` MEANS "ran to completion and NOTHING was
+rolled back". So the rule is now the outcome itself, not the particular
+non-fatal category that degraded, and ``error`` is reserved for the two
+rolled-back/indeterminate outcomes.
 
 Conventions: ``docs/pytest_conventions.md``. The engine-layer class is modelled
 on ``tests/unit/test_channel_pipeline_task_failed_action_notify.py``.
@@ -32,6 +58,22 @@ from dbas.restore_contracts import EntityType, RestoreOutcome, RestoreReport
 from tasks.dbas_restore import DbasRestoreTask
 
 from tests.tasks.test_dbas_restore_task import _make_task, _write_artifact
+
+
+def _logo_failure_report() -> RestoreReport:
+    """Drill run9 round 3: one archived logo could not be written, nothing else.
+
+    Every channel plays. Logos are a non-fatal category, so the restore ran to
+    completion and rolled nothing back.
+    """
+    report = RestoreReport(
+        is_dry_run=False, outcome=RestoreOutcome.COMPLETED_WITH_FAILURES
+    )
+    report.category(EntityType.CHANNEL).created = 12
+    report.category(EntityType.LOGO).created = 12
+    report.category(EntityType.LOGO).failed = 1
+    report.record_logo_miss(label="Run9 Uploaded Logo", source_export_id=13)
+    return report
 
 
 def _apply_report(
@@ -113,13 +155,26 @@ class TestDegradedNotFailed:
         assert result.success is False
         assert result.completed_degraded is True
 
-    async def test_a_real_category_failure_is_a_hard_failure(self, tmp_path):
-        """A failed row is a failure even when channels are also unplayable."""
+    async def test_a_logo_only_degradation_is_degraded(self, tmp_path):
+        """cwmid: the run9 shape. A non-fatal logo failure is not "Task Failed".
+
+        Nothing was rolled back and every channel plays — announcing this as a
+        failure is both wrong and more alarming than the restore in which not
+        one channel could play.
+        """
+        result = await _run_apply(tmp_path, _logo_failure_report())
+        assert result.success is False
+        assert result.completed_degraded is True
+
+    async def test_a_non_fatal_category_failure_alongside_unplayable_is_degraded(
+        self, tmp_path
+    ):
+        """cwmid: which non-fatal category degraded does not change the severity."""
         result = await _run_apply(
             tmp_path, _apply_report(holding=1, unplayable=1, failed=1)
         )
         assert result.success is False
-        assert result.completed_degraded is False
+        assert result.completed_degraded is True
 
     async def test_a_rolled_back_run_is_a_hard_failure(self, tmp_path):
         report = _apply_report(holding=1, unplayable=1)
@@ -128,10 +183,37 @@ class TestDegradedNotFailed:
         assert result.success is False
         assert result.completed_degraded is False
 
+    async def test_a_compensated_rollback_is_a_hard_failure(self, tmp_path):
+        """The other rolled-back outcome: the instance is back where it started.
+
+        Nothing the operator asked for was applied, so this IS a failure.
+        """
+        report = _apply_report(failed=1)
+        report.outcome = RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+        result = await _run_apply(tmp_path, report)
+        assert result.success is False
+        assert result.completed_degraded is False
+
     async def test_a_clean_apply_is_not_degraded(self, tmp_path):
         result = await _run_apply(tmp_path, _apply_report())
         assert result.success is True
         assert result.completed_degraded is False
+
+    async def test_the_logo_only_degradation_alerts_as_a_warning(self, tmp_path):
+        """The severity an operator actually receives, not just the flag."""
+        from task_scheduler import completion_notification_type
+
+        result = await _run_apply(tmp_path, _logo_failure_report())
+        assert completion_notification_type(result) == "warning"
+
+    async def test_a_rolled_back_run_alerts_as_an_error(self, tmp_path):
+        """The control: ``error`` still means something."""
+        from task_scheduler import completion_notification_type
+
+        report = _apply_report(failed=1)
+        report.outcome = RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+        result = await _run_apply(tmp_path, report)
+        assert completion_notification_type(result) == "error"
 
     async def test_a_dry_run_is_not_degraded(self, tmp_path):
         report = RestoreReport(is_dry_run=True)

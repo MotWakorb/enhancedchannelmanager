@@ -410,3 +410,68 @@ describe('RestoreCompleteSummary — credential re-entry', () => {
     expect(screen.getByTestId('credential-reentry-notice').getAttribute('role')).toBe('alert');
   });
 });
+
+/**
+ * Stream-reattach action item (bead d0bd3).
+ *
+ * The sibling of the credentials panel, and the one the drill found missing: a
+ * redacted restore reported `channels_with_no_playable_stream: 12` with all
+ * twelve channels named, and the restore-complete dialog rendered only the
+ * credentials panel plus the count grid. An operator following the product's own
+ * advice — read the panels rather than re-derive the information — walked away
+ * believing a credential was the only outstanding item, on an instance that
+ * played nothing.
+ *
+ * These pin the WIRING (the panel reaches the modal from the report alone); the
+ * panel's own copy and population split are pinned in
+ * StreamReattachNotice.test.tsx.
+ */
+describe('RestoreCompleteSummary — stream reattach', () => {
+  it('does NOT render when every restored channel plays', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          channels_needing_stream_reattach: 0,
+          channels_with_no_playable_stream: 0,
+        })}
+      />,
+    );
+
+    expect(screen.queryByTestId('stream-reattach-notice')).toBeNull();
+  });
+
+  it('does NOT render when the fields are absent (report from an older build)', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+
+    expect(screen.queryByTestId('stream-reattach-notice')).toBeNull();
+  });
+
+  it('surfaces "no channel can play" alongside the credentials panel', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          outcome: 'completed_with_failures',
+          credentials_needing_reentry: 2,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 2 },
+            { entity_type: 'ecm_settings', label: 'ECM settings', fields: ['mcp_api_key'] },
+          ],
+          channels_needing_stream_reattach: 12,
+          channels_with_no_playable_stream: 12,
+          stream_reattach_details: Array.from({ length: 12 }, (_, index) => ({
+            channel_id: 101 + index,
+            name: `Channel ${index + 1}`,
+            placeholder_streams: ['placeholder'],
+            has_playable_stream: false,
+          })),
+        })}
+      />,
+    );
+
+    // Both panels, not one.
+    expect(screen.getByTestId('credential-reentry-notice')).toBeInTheDocument();
+    const notice = screen.getByTestId('stream-reattach-notice');
+    expect(notice.textContent).toContain('12 channels have no playable stream');
+    expect(within(notice).getAllByTestId('stream-reattach-unplayable-row')).toHaveLength(12);
+  });
+});

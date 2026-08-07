@@ -375,10 +375,16 @@ async def reattach_channel_logos(
             population.name_existing(label)
 
     for source_logo_id, channels in missed.items():
+        # This pass never sees the archived logo's NAME — only the reference on
+        # the channel — so the label is composed from the id and declares itself
+        # synthetic (bead …-k2r7m). When the logos importer already reported the
+        # same logo lost, its row keeps the operator-facing name and absorbs
+        # these channels instead of a second row appearing under this label.
         report.record_logo_miss(
             label="logo #%d (archived)" % source_logo_id,
             source_export_id=source_logo_id,
             channels=channels,
+            label_is_synthetic=True,
         )
 
     if missed:

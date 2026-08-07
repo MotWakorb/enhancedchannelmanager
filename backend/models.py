@@ -482,8 +482,17 @@ class TaskExecution(Base):
     completed_at = Column(DateTime, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     # Execution result
-    status = Column(String(20), nullable=False)  # "running", "completed", "failed", "cancelled"
-    success = Column(Boolean, nullable=True)  # True if completed successfully
+    # "running", "completed", "completed_with_warnings", "failed", "cancelled".
+    # Written from task_scheduler.execution_status (bead …-fexq1) — the ONE
+    # severity derivation, shared with the run's notification, so the row and
+    # the alert cannot describe the same run differently.
+    # Widened 20 -> 32 by migration 0042 to hold "completed_with_warnings"
+    # (23 chars), mirroring what 0039 did for the pipeline's status column.
+    status = Column(String(32), nullable=False)
+    # True when the run produced what it was asked for — including a
+    # warning-level run, whose applied state is real and kept. NOT the same
+    # question as TaskResult.success ("cleanly, with nothing to report").
+    success = Column(Boolean, nullable=True)
     message = Column(Text, nullable=True)  # Summary message
     error = Column(Text, nullable=True)  # Error message if failed
     # Counters

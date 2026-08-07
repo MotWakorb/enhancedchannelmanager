@@ -8,6 +8,7 @@ import { ChannelReattachModeField } from './ChannelReattachModeField';
 import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
+import { isTerminalExecutionStatus } from '../utils/taskExecutionStatus';
 import type { ChannelReattachMode, RestoreReport } from '../services/api';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
@@ -144,7 +145,10 @@ export function DbasRestoreSavedModal({
         try {
           const { history } = await api.getTaskHistory(DBAS_RESTORE_TASK_ID, 1);
           const exec = history?.[0];
-          if (exec && (exec.status === 'completed' || exec.status === 'failed')) {
+          // Any terminal status, not just completed/failed: a degraded run
+          // reports `completed_with_warnings` (bead fexq1) and its report is
+          // just as readable as a clean one's.
+          if (exec && isTerminalExecutionStatus(exec.status)) {
             const rep = exec.details?.restore_report as RestoreReport | undefined;
             if (rep) { report = rep; break; }
             failMsg = exec.error || exec.message || 'Restore failed';

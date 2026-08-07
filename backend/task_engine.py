@@ -19,7 +19,14 @@ from database import get_session
 from log_throttle import should_log
 from models import TaskExecution
 from task_registry import get_registry
-from task_scheduler import TaskResult, completion_notification_type
+from task_scheduler import (
+    TaskOutcome,
+    TaskResult,
+    completion_notification_type,
+    execution_status,
+    execution_succeeded,
+    task_outcome,
+)
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
@@ -973,14 +980,14 @@ class TaskEngine:
                     if execution:
                         execution.completed_at = result.completed_at
                         execution.duration_seconds = result.duration_seconds
-                        # Set status based on result: completed, cancelled, or failed
-                        if result.error == "CANCELLED":
-                            execution.status = "cancelled"
-                        elif result.success:
-                            execution.status = "completed"
-                        else:
-                            execution.status = "failed"
-                        execution.success = result.success
+                        # Severity comes from the ONE derivation (bead …-fexq1),
+                        # so the stored row cannot contradict the alert emitted
+                        # for the same run a few lines below. Previously both
+                        # fields were read off result.success alone, which
+                        # stored a degraded-but-completed run as "failed" while
+                        # its own notification said "Completed with Warnings".
+                        execution.status = execution_status(result)
+                        execution.success = execution_succeeded(result)
                         execution.message = result.message
                         execution.error = result.error
                         execution.total_items = result.total_items
@@ -1002,9 +1009,15 @@ class TaskEngine:
             # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
             alert_category = "probe_failures" if task_id == "stream_probe" else None
 
-            # Log task completion to journal and send notifications
-            # Check for cancellation first - cancelled tasks should show a distinct message
-            if result.error == "CANCELLED":
+            # ONE branch per TaskOutcome (bead …-fexq1). Severity is derived
+            # once, in task_scheduler.task_outcome, and the Journal row, the
+            # completion notification and the TaskExecution row written above all
+            # map from it. Before this, each surface re-derived severity from
+            # ``result.success`` plus ``failed_count > 0`` and they disagreed:
+            # the drill's degraded restore alerted "Completed with Warnings"
+            # while its history row said ``failed``.
+            outcome = task_outcome(result)
+            if outcome is TaskOutcome.CANCELLED:
                 log_entry(
                     category="task",
                     action_type="cancel",
@@ -1048,42 +1061,104 @@ class TaskEngine:
                     result=result,
                     alert_category=alert_category,
                 )
-            elif result.success:
+            elif outcome is TaskOutcome.ERROR:
+                logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
+                log_entry(
+                    category="task",
+                    action_type="fail",
+                    entity_name=instance.task_name,
+                    description=f"Failed {instance.task_name}: {result.error or result.message}",
+                    entity_id=execution_id,
+                    after_value={
+                        "task_id": task_id,
+                        "success": False,
+                        "severity": outcome.value,
+                        "error": result.error,
+                        "message": result.message,
+                    },
+                    user_initiated=(triggered_by == "manual"),
+                )
+                await self._notify_task_result(
+                    task_name=instance.task_name,
+                    task_id=task_id,
+                    notification_type=completion_notification_type(result),
+                    title=f"Task Failed: {instance.task_name}",
+                    message=result.error or result.message or "Unknown error",
+                    result=result,
+                    alert_category=alert_category,
+                )
+            else:
+                # SUCCESS or WARNING — the run reached the end and left real,
+                # kept state. Both were previously reachable only through
+                # ``result.success``, which excluded the degraded runs of bead
+                # ``…-daziw`` (a DBAS restore whose only shortfall is a channel
+                # with no playable stream) and pushed them into the failure
+                # branch above. They belong here: nothing was rolled back.
+                warned = outcome is TaskOutcome.WARNING
+
                 # bd-qxi02 (SRE recommendation from bd-p5b8i spike):
                 # stamp the per-task success gauge so the
                 # ECMTaskScheduleStale* alerts in prometheus_rules.yaml
                 # can distinguish "task hasn't been scheduled in days"
                 # (the disease bd-p5b8i hid for 39+ days) from "task
-                # is healthy." Wrapped defensively in observability —
+                # is healthy."  Wrapped defensively in observability —
                 # this MUST NOT break the task completion path.
                 #
-                # CANCELLED is intentionally excluded from success-
-                # stamping. The `if result.error == "CANCELLED"`
-                # branch above is part of the same if/elif chain, so
-                # a cancelled result never reaches this elif — even
-                # if a task returns success=True alongside
-                # error="CANCELLED", the gauge is not stamped. This
-                # is the right behavior: a cancelled run is not a
-                # successful run and should not reset the staleness
-                # clock.
-                try:
-                    from observability import record_task_success
-                    record_task_success(task_id)
-                except Exception as obs_err:  # pragma: no cover — best-effort
-                    logger.debug(
-                        "[%s] Failed to record task success gauge: %s",
-                        task_id, obs_err,
+                # THE TRIGGER IS DELIBERATELY ``result.success``, NOT THE
+                # OUTCOME (bead …-fexq1). The gauge answers a NARROWER question
+                # than the history row: "when did this task last run CLEANLY".
+                # Widening it to every warning-level run would let a task that
+                # degrades on every run keep resetting the staleness clock and
+                # mask exactly the alert this gauge exists to raise; narrowing
+                # it to clean runs only would start a stale-schedule alert storm
+                # for the tasks that always report some failed items. So the
+                # condition is left exactly where bd-qxi02 put it, and a
+                # degraded run does not stamp.
+                #
+                # CANCELLED is excluded structurally: the branch above is part
+                # of the same if/elif chain, so a cancelled result never reaches
+                # here even if a task returns success=True alongside
+                # error="CANCELLED".
+                if result.success:
+                    try:
+                        from observability import record_task_success
+                        record_task_success(task_id)
+                    except Exception as obs_err:  # pragma: no cover — best-effort
+                        logger.debug(
+                            "[%s] Failed to record task success gauge: %s",
+                            task_id, obs_err,
+                        )
+
+                if getattr(result, "completed_degraded", False):
+                    # Kept as narrow as it was: only a task that DECLARED itself
+                    # degraded logs here. Widening it to every partial-failure
+                    # run would put a WARNING line in the log for each routine
+                    # probe that could not reach two streams.
+                    logger.warning(
+                        "[%s] Task completed in a degraded state: %s", task_id, result.message
                     )
 
+                # fexq1: the Journal row said "Completed X: 0 ok, 1 failed"
+                # beside ``success: true`` — self-contradictory at a glance for
+                # an operator scanning the Journal rather than the notification.
+                # The severity now LEADS the line, and the row carries it
+                # explicitly instead of leaving it to be inferred from counts.
                 log_entry(
                     category="task",
                     action_type="complete",
                     entity_name=instance.task_name,
-                    description=f"Completed {instance.task_name}: {result.success_count} ok, {result.failed_count} failed",
+                    description=(
+                        f"Completed with warnings — {instance.task_name}: "
+                        f"{result.success_count} ok, {result.failed_count} failed"
+                        if warned else
+                        f"Completed {instance.task_name}: {result.success_count} ok, {result.failed_count} failed"
+                    ),
                     entity_id=execution_id,
                     after_value={
                         "task_id": task_id,
                         "success": True,
+                        "severity": outcome.value,
+                        "message": result.message,
                         "duration_seconds": result.duration_seconds,
                         "total_items": result.total_items,
                         "success_count": result.success_count,
@@ -1093,7 +1168,6 @@ class TaskEngine:
                     user_initiated=(triggered_by == "manual"),
                 )
 
-                # Send notification - warning if partial failure, success if all ok.
                 # y3m6o.1 review (Finding 2): a task that already emitted ONE
                 # coherent completion notification (e.g. a channel-pipeline run
                 # that was BOTH capped and had failed actions) sets
@@ -1104,82 +1178,31 @@ class TaskEngine:
                         "[%s] Completion notification suppressed by task "
                         "(single coherent notification already emitted)", task_id,
                     )
-                elif result.failed_count > 0:
-                    # Partial success - some items failed
-                    warn_msg = _warning_task_completion_message(task_id, result)
+                elif warned:
+                    # Two shapes of warning message, both preserved exactly:
+                    # a run with failed ITEMS gets the per-task count summary,
+                    # and a degraded run with clean counts gets its own message,
+                    # which is the only place the shortfall is named.
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
                         notification_type=completion_notification_type(result),
                         title=f"Task Completed with Warnings: {instance.task_name}",
-                        message=warn_msg,
+                        message=(
+                            _warning_task_completion_message(task_id, result)
+                            if result.failed_count > 0
+                            else result.message or result.error or "Completed with warnings"
+                        ),
                         result=result,
                         alert_category=alert_category,
                     )
                 else:
-                    # Full success
                     await self._notify_task_result(
                         task_name=instance.task_name,
                         task_id=task_id,
                         notification_type=completion_notification_type(result),
                         title=f"Task Completed: {instance.task_name}",
                         message=_success_task_completion_message(task_id, result),
-                        result=result,
-                        alert_category=alert_category,
-                    )
-            else:
-                # daziw (PO decision 2): an unsuccessful run that nonetheless ran
-                # to completion and left real, kept state (a DBAS restore whose
-                # only shortfall is a channel with no playable stream) is a
-                # WARNING, not a red "Task Failed" — the task says so with
-                # completed_degraded. Everything else about this branch is
-                # unchanged, and no task that leaves the flag at its default can
-                # reach the warning wording.
-                degraded = getattr(result, "completed_degraded", False)
-                if degraded:
-                    logger.warning(
-                        "[%s] Task completed in a degraded state: %s", task_id, result.message
-                    )
-                else:
-                    logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
-                log_entry(
-                    category="task",
-                    action_type="fail",
-                    entity_name=instance.task_name,
-                    description=f"Failed {instance.task_name}: {result.error or result.message}",
-                    entity_id=execution_id,
-                    after_value={
-                        "task_id": task_id,
-                        "success": False,
-                        "error": result.error,
-                        "message": result.message,
-                    },
-                    user_initiated=(triggered_by == "manual"),
-                )
-
-                # Send the completion notification: a warning for a degraded run
-                # (the applied state stands and is named in the message), the
-                # unchanged red error for every real failure. The severity comes
-                # from task_scheduler.completion_notification_type so the
-                # progress notification for the same run cannot disagree with
-                # this one (asf3n); the branch here still selects the wording.
-                if degraded:
-                    await self._notify_task_result(
-                        task_name=instance.task_name,
-                        task_id=task_id,
-                        notification_type=completion_notification_type(result),
-                        title=f"Task Completed with Warnings: {instance.task_name}",
-                        message=result.message or result.error or "Completed with warnings",
-                        result=result,
-                        alert_category=alert_category,
-                    )
-                else:
-                    await self._notify_task_result(
-                        task_name=instance.task_name,
-                        task_id=task_id,
-                        notification_type=completion_notification_type(result),
-                        title=f"Task Failed: {instance.task_name}",
-                        message=result.error or result.message or "Unknown error",
                         result=result,
                         alert_category=alert_category,
                     )
