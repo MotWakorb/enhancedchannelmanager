@@ -302,8 +302,8 @@ describe('DbasRestoreModal', () => {
     dropFile(zip('backup.zip', 'PK'));
     await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
 
-    const keep = screen.getByLabelText(/keep their current guide data and logos/i);
-    const replace = screen.getByLabelText(/replace their guide data and logos/i);
+    const keep = screen.getByLabelText(/keep their current guide data, logos, and grouping/i);
+    const replace = screen.getByLabelText(/replace their guide data, logos, and grouping/i);
     expect(keep).toBeChecked();
     expect(replace).not.toBeChecked();
   });
@@ -321,7 +321,7 @@ describe('DbasRestoreModal', () => {
     dropFile(zip('backup.zip', 'PK'));
     await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
@@ -374,7 +374,7 @@ describe('DbasRestoreModal', () => {
     fireEvent.click(back);
     await waitFor(() =>
       expect(
-        screen.getByLabelText(/keep their current guide data and logos/i),
+        screen.getByLabelText(/keep their current guide data, logos, and grouping/i),
       ).toBeInTheDocument(),
     );
   });

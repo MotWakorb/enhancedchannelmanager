@@ -1,4 +1,8 @@
-import type { ReattachPopulation, RestoreReport } from '../services/api';
+import type {
+  ChannelGroupDriftDetail,
+  ReattachPopulation,
+  RestoreReport,
+} from '../services/api';
 import type { RestoreSummaryMode } from './RestoreCompleteSummary';
 import './ExistingChannelReattachNotice.css';
 
@@ -17,7 +21,28 @@ import './ExistingChannelReattachNotice.css';
  *
  * Silent when there is nothing to say (an empty destination creates every
  * channel, so both populations are zero and the mode never mattered).
+ *
+ * CHANNEL GROUPING (bead r1ei7) is the third thing the mode governs, and it is
+ * the one `preserve` still reports. A channel that already exists is never
+ * overwritten, so on a populated target the lineup keeps whatever grouping the
+ * destination had — drill run 12 measured seven channels in the wrong group,
+ * in BOTH modes, behind a `success / failed 0` report whose counts reconciled
+ * exactly. Under `preserve` the rows say what diverged and that nothing was
+ * touched; under `overwrite` they say what moved.
  */
+
+/**
+ * How the relink option that keeps existing channels reads on screen.
+ *
+ * Quoted verbatim from ChannelReattachModeField's radio label — the remedy copy
+ * below tells the operator to go and pick it, so a drifted string would point at
+ * a control that does not exist.
+ */
+const KEEP_OPTION_LABEL = 'Keep their current guide data, logos, and grouping';
+
+/** Upper bound on the drift rows listed by name; the count beside them is exact. */
+const DRIFT_ROW_CAP = 50;
+
 function PopulationRow({
   label,
   population,
@@ -77,6 +102,53 @@ function ChannelNames({ names, total }: { names: string[]; total: number }) {
   );
 }
 
+/**
+ * The channels sitting in a group the archive does not assign them (bead r1ei7).
+ *
+ * Names the channel AND both groups, because "7 channels are in the wrong group"
+ * on its own leaves the operator to diff two group lists by hand — which is
+ * exactly what the drill had to do to find this at all. Capped for the same
+ * reason the name lists above are: the count is the decision input, the names
+ * make it concrete, and a few dozen does that.
+ */
+function ChannelGroupDriftRow({
+  details,
+  total,
+  mode,
+}: {
+  details: ChannelGroupDriftDetail[];
+  total: number;
+  mode: RestoreSummaryMode;
+}) {
+  const preview = mode === 'dry-run';
+  const moved = details.filter((d) => d.moved).length;
+  const shown = details.slice(0, DRIFT_ROW_CAP);
+  const remainder = total - shown.length;
+
+  return (
+    <li className="ecrn-row" data-testid="ecrn-channel-group-drift">
+      <span className="ecrn-row-label">Channel groups</span>
+      <span className={`ecrn-row-detail ${moved ? 'ecrn-destructive' : ''}`}>
+        {moved > 0
+          ? `${preview ? 'Would move' : 'Moved'} ${moved} of ${total} `
+          : `${total} `}
+        {total === 1 ? 'channel' : 'channels'} you already had{' '}
+        {moved > 0
+          ? 'into the group this backup puts them in'
+          : `${preview ? 'are' : 'were'} in a different group than this backup — left as they are`}
+        <ul className="ecrn-drift-list">
+          {shown.map((d, i) => (
+            <li key={`${d.name}-${i}`} className="ecrn-drift-item">
+              <strong>{d.name}</strong>: {d.current_group} &rarr; {d.archive_group}
+            </li>
+          ))}
+        </ul>
+        {remainder > 0 && <>and {remainder} more</>}
+      </span>
+    </li>
+  );
+}
+
 export function ExistingChannelReattachNotice({
   report,
   mode,
@@ -90,9 +162,16 @@ export function ExistingChannelReattachNotice({
   const epg = report.epg_link_reattach;
   const logo = report.logo_reattach;
 
-  const touched = (epg?.existing_channels ?? 0) + (logo?.existing_channels ?? 0);
+  const driftDetails = report.channel_group_drift_details ?? [];
+  const driftTotal = report.channel_group_drift ?? 0;
+  const driftMoved = driftDetails.filter((d) => d.moved).length;
+
+  // Moving a channel between groups is as unrecoverable as replacing its logo —
+  // the rollback ledger compensates CREATES only — so it counts as touched.
+  const touched =
+    (epg?.existing_channels ?? 0) + (logo?.existing_channels ?? 0) + driftMoved;
   const preserved = (epg?.preserved_channels ?? 0) + (logo?.preserved_channels ?? 0);
-  if (!touched && !preserved) return null;
+  if (!touched && !preserved && !driftTotal) return null;
 
   return (
     <div
@@ -116,6 +195,13 @@ export function ExistingChannelReattachNotice({
         <ul className="ecrn-list">
           {epg && <PopulationRow label="Guide data" population={epg} mode={effectiveMode} />}
           {logo && <PopulationRow label="Logos" population={logo} mode={effectiveMode} />}
+          {driftTotal > 0 && (
+            <ChannelGroupDriftRow
+              details={driftDetails}
+              total={driftTotal}
+              mode={effectiveMode}
+            />
+          )}
         </ul>
         {touched > 0 && (
           <span className="ecrn-note">
@@ -123,10 +209,10 @@ export function ExistingChannelReattachNotice({
               ? // Names the control that IS on screen. The dry-run footer has a
                 // "Back to options" button for exactly this; without it, this
                 // sentence pointed at a picker the results step had unmounted.
-                'Undoing a restore cannot bring these back. Use “Back to options” and choose “Keep their current guide data and logos” to leave them as they are.'
+                `Undoing a restore cannot bring these back. Use “Back to options” and choose “${KEEP_OPTION_LABEL}” to leave them as they are.`
               : // Applied: there is nothing left to go back to, so say the only
                 // thing that is actually true.
-                'Undoing a restore cannot bring these back. To leave them as they are, run the restore again with “Keep their current guide data and logos” selected.'}
+                `Undoing a restore cannot bring these back. To leave them as they are, run the restore again with “${KEEP_OPTION_LABEL}” selected.`}
           </span>
         )}
       </div>

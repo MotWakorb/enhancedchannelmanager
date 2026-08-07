@@ -11,7 +11,11 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import { ExistingChannelReattachNotice } from './ExistingChannelReattachNotice';
-import type { ReattachPopulation, RestoreReport } from '../services/api';
+import type {
+  ChannelGroupDriftDetail,
+  ReattachPopulation,
+  RestoreReport,
+} from '../services/api';
 
 function population(over: Partial<ReattachPopulation> = {}): ReattachPopulation {
   return {
@@ -228,5 +232,106 @@ describe('ExistingChannelReattachNotice', () => {
     expect(
       screen.queryByTestId('existing-channel-reattach-notice'),
     ).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------
+  // Channel -> group membership (bead r1ei7)
+  // ---------------------------------------------------------------------
+
+  const drift = (over: Partial<ChannelGroupDriftDetail> = {}): ChannelGroupDriftDetail => ({
+    name: 'ch101',
+    current_group: 'Drill Movies',
+    archive_group: 'Drill Sports',
+    moved: false,
+    ...over,
+  });
+
+  it('names the drifted channels and BOTH groups under preserve', () => {
+    // Drill run 12: seven channels sat in a group the archive does not assign
+    // them, in both relink modes, and the restore reported success with nothing
+    // said about it. Naming only the channel would leave the operator to go and
+    // diff the group lists by hand — which is what the drill had to do.
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          channel_group_drift: 2,
+          channel_group_drift_details: [
+            drift(),
+            drift({ name: 'ch201', current_group: 'Drill Sports RENAMED', archive_group: 'Drill Movies' }),
+          ],
+        })}
+      />,
+    );
+    const notice = screen.getByTestId('existing-channel-reattach-notice');
+    expect(notice.textContent).toMatch(/ch101/);
+    expect(notice.textContent).toMatch(/Drill Movies/);
+    expect(notice.textContent).toMatch(/Drill Sports/);
+    expect(notice.textContent).toMatch(/ch201/);
+    // preserve changed nothing, so this is not the destructive framing.
+    expect(notice.textContent).toMatch(/left .*as (they are|it is)/i);
+  });
+
+  it('renders the drift on its own, with no reattach populations at all', () => {
+    // The reattach populations are zero whenever the operator deselected logos
+    // and EPG sources. The grouping finding must not disappear with them.
+    render(
+      <ExistingChannelReattachNotice
+        report={report({ channel_group_drift: 1, channel_group_drift_details: [drift()] })}
+      />,
+    );
+    expect(screen.getByTestId('existing-channel-reattach-notice')).toBeInTheDocument();
+  });
+
+  it('says the channels were MOVED when the mode reconciled them', () => {
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          channel_group_drift: 1,
+          channel_group_drift_details: [drift({ moved: true })],
+        })}
+      />,
+    );
+    const notice = screen.getByTestId('existing-channel-reattach-notice');
+    expect(notice).toHaveAttribute('role', 'alert');
+    expect(notice.textContent).toMatch(/moved/i);
+    expect(notice.textContent).not.toMatch(/would move/i);
+  });
+
+  it('keeps the moves in FUTURE tense on a preview', () => {
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          is_dry_run: true,
+          outcome: null,
+          channel_group_drift: 1,
+          channel_group_drift_details: [drift({ moved: true })],
+        })}
+      />,
+    );
+    expect(
+      screen.getByTestId('existing-channel-reattach-notice').textContent,
+    ).toMatch(/would move/i);
+  });
+
+  it('quotes the relink option by its real on-screen label', () => {
+    // The remedy copy names a radio the operator has to find. When the option's
+    // wording changes, this sentence has to change with it or it points at a
+    // control that does not exist.
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          is_dry_run: true,
+          outcome: null,
+          logo_reattach: population({
+            mode: 'overwrite',
+            existing_channels: 1,
+            existing_channels_named: ['A'],
+          }),
+        })}
+      />,
+    );
+    expect(
+      screen.getByTestId('existing-channel-reattach-notice').textContent,
+    ).toMatch(/Keep their current guide data, logos, and grouping/);
   });
 });

@@ -560,6 +560,38 @@ class DbasRestoreTask(TaskScheduler):
             return ["%d channel(s) still hold a placeholder stream" % holding]
         return []
 
+    @staticmethod
+    def _channel_group_drift_phrases(report, *, is_preview: bool = False) -> list[str]:
+        """Say whether the drifted channels were REGROUPED or merely reported (…-r1ei7).
+
+        One counter, two outcomes: under the default relink mode the restore
+        reports the divergence and leaves the operator's grouping alone, and
+        under ``replace`` it also moves each channel into the archive's group.
+        A single template would have to describe both, so the clause is built
+        from the detail rows' ``moved`` flag instead — the same reason the two
+        placeholder populations get their own builder.
+        """
+        total = getattr(report, "channel_group_drift", 0) or 0
+        if not total:
+            return []
+        details = getattr(report, "channel_group_drift_details", None) or []
+        moved = sum(1 for d in details if getattr(d, "moved", False))
+        if moved >= total:
+            return [
+                "%d channel(s) %s into the group the backup assigns them"
+                % (total, "would be moved" if is_preview else "were moved")
+            ]
+        if moved:
+            return [
+                "%d channel(s) are in a different group than the backup "
+                "(%d %s, the rest left as they are)"
+                % (total, moved, "would be moved" if is_preview else "moved")
+            ]
+        return [
+            "%d channel(s) are in a different group than the backup; left as they are"
+            % total
+        ]
+
     # Post-restore action items, as ``(attribute, apply_template,
     # preview_template)``. A PREVIEW makes no changes, so its clause must be in
     # the FUTURE tense (bead ``enhancedchannelmanager-juu3c``): PR #784 made
@@ -618,6 +650,11 @@ class DbasRestoreTask(TaskScheduler):
         # generic table below. They are NULL (not predicted) on a preview, so the
         # tense question does not arise for them.
         parts.extend(DbasRestoreTask._stream_reattach_phrases(report))
+        # Channel->group drift reads differently depending on whether the mode
+        # also reconciled it, so it too gets a builder rather than a template.
+        parts.extend(
+            DbasRestoreTask._channel_group_drift_phrases(report, is_preview=is_preview)
+        )
         for attribute, applied, predicted in DbasRestoreTask._ACTION_ITEM_TEMPLATES:
             count = getattr(report, attribute, 0) or 0
             if count > 0:

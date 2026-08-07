@@ -268,6 +268,12 @@ class ApplyContext:
     # run would create. Filled by the channels step, read by BOTH reattach passes
     # (the logo pass runs in the LOGO step, later in the same context).
     created_channel_source_ids: set[int] = field(default_factory=set)
+    # Its complement (bead …-r1ei7): ARCHIVE source id -> the DESTINATION channel
+    # row the channels importer MATCHED it against, exactly as it was found. The
+    # channel-group reconcile pass reads the destination's pre-restore
+    # ``channel_group_id`` from it; nothing else in the run can supply that
+    # without a second full channel list and a race against this run's creates.
+    matched_existing_channels: dict[int, dict] = field(default_factory=dict)
 
     def flush_ledger(self) -> None:
         """Durably persist the shared ledger (per-create flush; no-op on dry-run).
@@ -1324,6 +1330,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             # Populated on BOTH a dry run and an apply, so the reattach passes
             # split the two channel populations identically in either mode.
             created_source_ids=ctx.created_channel_source_ids,
+            # The matched pre-existing rows the channel-group reconcile pass
+            # below reads the destination's current grouping from (…-r1ei7).
+            matched_existing_channels=ctx.matched_existing_channels,
         )
         # Post-create reattachment (bead …-dfkbn items 2-3). Both references are
         # DROPPED from the channel create payload because they carry SOURCE ids;
@@ -1351,7 +1360,35 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             from dbas.channel_reattach import (
                 reattach_epg_links,
                 reattach_profile_memberships,
+                reconcile_channel_groups,
             )
+
+            # Channel -> GROUP membership (bead …-r1ei7). Runs here, after every
+            # channel is created or matched, because a group's membership is not
+            # on the group row — it is the ``channel_group_id`` on each channel,
+            # and the groups importer runs BEFORE channels, when the destination
+            # has no membership to compare yet.
+            #
+            # Gated on the CHANNEL_GROUP category as well: with groups
+            # deselected, no archived group resolves through the remap, and every
+            # matched channel would report drift this restore was never asked to
+            # touch. Same gate shape as the profile pass below.
+            #
+            # Runs on a dry run TOO, and PATCHes nothing there: "how many of my
+            # channels would replace move into a different group" is the number
+            # that decides the mode, and it is useless after the fact.
+            if _selected(ctx, EntityType.CHANNEL_GROUP):
+                await reconcile_channel_groups(
+                    client=ctx.client,
+                    report=ctx.report,
+                    remap=ctx.remap,
+                    archive_channels=archive_channels,
+                    archive_channel_groups=_entities(ctx, EntityType.CHANNEL_GROUP),
+                    matched_existing_channels=ctx.matched_existing_channels,
+                    created_source_ids=ctx.created_channel_source_ids,
+                    mode=ctx.channel_reattach_mode,
+                    is_dry_run=ctx.is_dry_run,
+                )
 
             await reattach_epg_links(
                 client=ctx.client,

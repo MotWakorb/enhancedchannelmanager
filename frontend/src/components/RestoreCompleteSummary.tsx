@@ -12,6 +12,9 @@
  *   2. A PER-ENTITY breakdown — one row per {@link EntityCategoryReport} with
  *      created / updated / skipped / failed counts; skipped and failed rows
  *      expand to their reasons (human-readable labels, not raw enum values).
+ *      A dry-run category the backend could not predict renders as "not
+ *      predicted" instead of four zeroes, and a category carrying a `caveat`
+ *      renders it under the counts (bead tddmw).
  *
  * The SAME component renders both the dry-run counts-only preview (bead .16)
  * and the realized restore result. The `mode` prop switches the framing
@@ -77,6 +80,10 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
 
 const SKIP_REASON_LABELS: Record<RestoreSkipReason, string> = {
   already_exists_identical: 'Already exists (identical)',
+  // Deliberately NOT "identical" (bead 3t74w): a channel group is adopted on its
+  // NAME with nothing else compared, and the label has to stop short of the
+  // claim the restore never checked.
+  already_exists_name_match: 'Already exists (matched by name)',
   excluded_by_operator: 'Excluded by operator',
   current_admin_preserved: 'Current admin preserved',
   unsupported_in_this_version: 'Unsupported in this version',
@@ -167,18 +174,36 @@ function CategoryRow({ category, mode }: { category: EntityCategoryReport; mode:
   const labels = COUNT_LABELS[mode];
   const hasSkipDetails = category.skip_details.length > 0;
   const hasFailureDetails = category.failure_details.length > 0;
+  // `predicted: false` (bead tddmw) means this preview did not predict the
+  // category at all. Rendering its four zeroes would be a confident claim
+  // derived from having looked at nothing — the same mistake the null
+  // stream-health counters exist to stop. Say "not predicted" instead. Only a
+  // preview can carry it; an apply reports facts.
+  const notPredicted = isDryRun && category.predicted === false;
 
   return (
     <div className="rcs-category" data-testid={`rcs-category-${category.entity_type}`}>
       <div className="rcs-category-header">
         <span className="rcs-category-name">{ENTITY_LABELS[category.entity_type]}</span>
-        <div className="rcs-counts">
-          <CountCell kind="created" value={created} label={labels.created} />
-          <CountCell kind="updated" value={updated} label={labels.updated} />
-          <CountCell kind="skipped" value={skipped} label={labels.skipped} />
-          <CountCell kind="failed" value={failed} label={labels.failed} />
-        </div>
+        {notPredicted ? (
+          <span className="rcs-not-predicted" data-testid="rcs-not-predicted">
+            Not predicted
+          </span>
+        ) : (
+          <div className="rcs-counts">
+            <CountCell kind="created" value={created} label={labels.created} />
+            <CountCell kind="updated" value={updated} label={labels.updated} />
+            <CountCell kind="skipped" value={skipped} label={labels.skipped} />
+            <CountCell kind="failed" value={failed} label={labels.failed} />
+          </div>
+        )}
       </div>
+
+      {category.caveat && (
+        <p className="rcs-category-caveat" data-testid="rcs-category-caveat">
+          {category.caveat}
+        </p>
+      )}
 
       {hasSkipDetails && (
         <div className="rcs-detail-block">

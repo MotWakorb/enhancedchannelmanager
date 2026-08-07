@@ -172,10 +172,10 @@ describe('Re-running a preview in one modal session', () => {
     // --- Back, switch to the destructive mode, run again. ---
     fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
     await waitFor(() =>
-      expect(screen.getByLabelText(/replace their guide data and logos/i))
+      expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
         .toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
@@ -216,10 +216,10 @@ describe('Re-running a preview in one modal session', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
     await waitFor(() =>
-      expect(screen.getByLabelText(/replace their guide data and logos/i))
+      expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
         .toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
@@ -281,10 +281,10 @@ describe('Re-running a preview in one modal session', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
     await waitFor(() =>
-      expect(screen.getByLabelText(/replace their guide data and logos/i))
+      expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
         .toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     // It waited out the stale polls and landed on run 2's report. Three polls
@@ -351,10 +351,10 @@ describe('Re-running a preview in one modal session', () => {
       // Back, switch to the destructive mode, run again — and it never starts.
       fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
       await waitFor(() =>
-        expect(screen.getByLabelText(/replace their guide data and logos/i))
+        expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
           .toBeInTheDocument(),
       );
-      fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+      fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
 
       // The budget is 20 polls at a 1s cadence. Burn it on fake time rather
       // than 20 real seconds; the budget ITSELF is pinned in the hook's own
@@ -390,10 +390,10 @@ describe('Re-running a preview in one modal session', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
       await waitFor(() =>
-        expect(screen.getByLabelText(/replace their guide data and logos/i))
+        expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
           .toBeInTheDocument(),
       );
-      fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+      fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
 
       await burnRunStartBudget(
         () => fireEvent.click(screen.getByRole('button', { name: /run preview/i })),
@@ -455,10 +455,10 @@ describe('Re-running a preview in one modal session', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /back to options/i }));
     await waitFor(() =>
-      expect(screen.getByLabelText(/replace their guide data and logos/i))
+      expect(screen.getByLabelText(/replace their guide data, logos, and grouping/i))
         .toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     // Hold the trigger open well past several poll intervals.

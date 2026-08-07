@@ -15,8 +15,10 @@ For EACH category the same behaviours are exercised:
   EntityType) and the create is recorded in the RollbackLedger.
 * Collision skip + remap-to-existing — an archived row whose identity (name,
   case-insensitive/trimmed) already exists on the destination is skipped
-  ALREADY_EXISTS_IDENTICAL and its source id is remapped to the EXISTING dest id
-  (so a later FK reference resolves) — never blind delete-all.
+  with the category's name-match reason (ALREADY_EXISTS_NAME_MATCH for channel
+  groups, ALREADY_EXISTS_IDENTICAL for the two profile categories — bead
+  …-3t74w) and its source id is remapped to the EXISTING dest id (so a later FK
+  reference resolves) — never blind delete-all.
 * Opt-in off -> no-op — nothing is created; every row is EXCLUDED_BY_OPERATOR.
 * Dry-run -> zero creates + zero ledger; reports would_create.
 * CONFLICT vs UPSTREAM_API_ERROR — a create that races into a uniqueness
@@ -109,6 +111,18 @@ def _client(*, groups=None, channel_profiles=None, stream_profiles=None):
 # The three real categories, parametrized so each behavioural test runs once per
 # category. ``fn`` is the per-category entry, ``etype`` its EntityType, ``getter``
 # / ``creator`` the client method names, ``existing_kw`` the _client kwarg.
+# What a NAME match reports, per category (bead …-3t74w). Channel groups adopt on
+# a name and compare NOTHING else — their contents live on the channels, restored
+# later — so they say ``already_exists_name_match``. The two profile categories
+# keep ``already_exists_identical``. Read off the importer's own config table so
+# this suite cannot drift from the shipped behaviour.
+def _name_match_reason(entity_type):
+    for config in _CATEGORY_CONFIGS.values():
+        if config.entity_type == entity_type:
+            return config.name_match_skip_reason
+    raise AssertionError("no config for %r" % entity_type)
+
+
 _CATEGORIES = [
     pytest.param(
         import_channel_groups,
@@ -262,9 +276,13 @@ async def test_profile_create_strips_source_id_and_readonly_fields():
 @pytest.mark.parametrize("fn, etype, creator, existing_kw", _CATEGORIES)
 async def test_existing_by_name_skipped_and_remapped(fn, etype, creator, existing_kw):
     """An archived row whose name already exists on the destination
-    (case-insensitive / trimmed) is skipped ALREADY_EXISTS_IDENTICAL and its
-    source id is remapped to the EXISTING dest id (so a later FK resolves).
-    No create, no ledger entry — never blind delete-all."""
+    (case-insensitive / trimmed) is SKIPPED and its source id is remapped to the
+    EXISTING dest id (so a later FK resolves). No create, no ledger entry — never
+    blind delete-all.
+
+    The skip REASON is per-category (bead …-3t74w): channel groups report
+    ``ALREADY_EXISTS_NAME_MATCH`` because nothing beyond the name was compared;
+    channel profiles and stream profiles keep ``ALREADY_EXISTS_IDENTICAL``."""
     client = _client(**{existing_kw: [{"id": 700, "name": "Sports"}]})
     report = _report()
     ledger = _ledger()
@@ -282,7 +300,7 @@ async def test_existing_by_name_skipped_and_remapped(fn, etype, creator, existin
     getattr(client, creator).assert_not_called()
     cat = report.category(etype)
     assert cat.skipped == 1
-    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.skip_details[0].reason == _name_match_reason(etype)
     assert remap.resolve(etype, 5) == 700
     assert len(ledger.entries) == 0
 
@@ -341,7 +359,7 @@ async def test_dry_run_existing_reports_would_skip(fn, etype, creator, existing_
     getattr(client, creator).assert_not_called()
     cat = report.category(etype)
     assert cat.would_skip == 1
-    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.skip_details[0].reason == _name_match_reason(etype)
 
 
 # ---------------------------------------------------------------------------
