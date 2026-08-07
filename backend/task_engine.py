@@ -295,6 +295,18 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
             msg += f" ({black} black screen, {low} low FPS)"
         return msg
 
+    if task_id == "dbas_backup":
+        # …-fexq1: this task's counts are CATEGORIES, not opaque "items" (see
+        # tasks.dbas_backup._counts_from_artifact). The generic line below left
+        # the unit invisible, and before the counts meant anything it rendered
+        # the boolean as "1 items processed". The task's WARNING message
+        # already names categories; this is its clean-run counterpart. Only a
+        # run with zero degraded categories reaches here, so "all" is exact.
+        total = result.total_items
+        return "Backup artifact built. All %d categor%s archived%s" % (
+            total, "y" if total == 1 else "ies", dur,
+        )
+
     skip_note = f", {result.skipped_count} skipped" if result.skipped_count else ""
     return f"Successfully completed. {result.success_count} items processed{skip_note}{dur}"
 

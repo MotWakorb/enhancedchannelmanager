@@ -75,6 +75,20 @@ categories in both the task message and the completion notification
 (below) takes precedence when both are unhealthy — an upload failure is the
 more severe, already-notified condition.
 
+The counts are ITEM counts, and the item is a CATEGORY (bead …-fexq1)
+--------------------------------------------------------------------
+``zt3kf`` reached that warning branch with ``total_items=1`` and the two
+counters in ``{0, 1}`` — enough to satisfy ``failed_count > 0``, but a boolean
+wearing the shape of item counts. One surface over, a backup that archived
+fifteen categories cleanly and stubbed one wrote ``0 ok, 1 failed`` into the
+Journal, the task-history row and the progress notification: a restorable
+artifact described as a total loss to anyone scanning at a glance.
+:meth:`DbasBackupTask._counts_from_artifact` now derives the counts from the
+artifact's own per-category outcome — the same shape ``dbas_restore``'s
+``RestoreCounts`` uses. Severity is deliberately unmoved by that: the ladder
+keys on ``failed_count > 0``, which still holds exactly when a category
+degraded.
+
 The SAME rule covers a partial LOGO-BYTE gather (bead …-xb58a). Logo images live
 in Dispatcharr, so the builder fetches them at gather time; when some of those
 fetches fail the artifact is built and useful but carries fewer logo bytes than
@@ -525,12 +539,7 @@ class DbasBackupTask(TaskScheduler):
             # clean success (zt3kf; mirrors the tyei5/dbas_restore counts-wiring
             # pattern — real counts, no new notification path).
             success = (run_result == "success")
-            if success:
-                success_count = 0 if degraded_categories else 1
-                failed_count = 1 if degraded_categories else 0
-            else:
-                success_count = 0
-                failed_count = 1
+            counts = self._counts_from_artifact(artifact, degraded_categories)
 
             return TaskResult(
                 success=success,
@@ -538,9 +547,9 @@ class DbasBackupTask(TaskScheduler):
                 error=None if run_result == "success" else "CLOUD_UPLOAD_%s" % run_result.upper(),
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
-                total_items=1,
-                success_count=success_count,
-                failed_count=failed_count,
+                total_items=counts["total_items"],
+                success_count=counts["success_count"],
+                failed_count=counts["failed_count"],
                 details=details,
             )
         except Exception as e:
@@ -554,6 +563,62 @@ class DbasBackupTask(TaskScheduler):
                 completed_at=datetime.now(timezone.utc),
                 failed_count=1,
             )
+
+    @staticmethod
+    def _counts_from_artifact(artifact, degraded_categories: list) -> dict:
+        """Item counts for a run that produced an artifact (bead …-fexq1).
+
+        THE ITEM IS A CATEGORY. That is what the gather iterates, what
+        ``degraded_categories`` already names, and the only unit this run has
+        more than one of. Mirrors ``dbas_restore``'s ``RestoreCounts``, which
+        likewise derives its numbers from the per-category outcome instead of
+        inventing a scalar::
+
+            total_items   = artifact.gathered_categories
+            failed_count  = len(degraded_categories)
+            success_count = total_items - failed_count
+
+        ``zt3kf`` originally wired the degraded signal in as ``total_items=1``
+        with the two counters in ``{0, 1}`` — a BOOLEAN in the shape of item
+        counts — because reaching the existing "Completed with Warnings" branch
+        only needed ``failed_count > 0``. The cost showed up one surface over:
+        a backup that archived fifteen categories cleanly and stubbed one wrote
+        ``0 ok, 1 failed`` into the Journal, the task-history row and the
+        progress notification. A real, checksum-verified, restorable artifact,
+        described as a total loss to an operator scanning at a glance.
+
+        SEVERITY IS UNCHANGED, and that is a requirement, not a coincidence.
+        ``task_scheduler``'s ladder keys on ``failed_count > 0``, and that
+        predicate still holds exactly when ``degraded_categories`` is non-empty
+        — the count moves from 1 to N, never from 1 to 0. A clean backup stays
+        ``success``, a degraded one stays ``warning``, and an upload failure
+        stays ``error`` through ``success=False``, which no count can soften.
+
+        The counts describe the GATHER, in both the upload-succeeded and
+        upload-failed cases, so the unit never silently changes meaning with
+        the weather; upload health is carried by ``success`` / ``error`` /
+        ``details["upload"]``.
+
+        Args:
+            artifact: The built :class:`routers.backup.BackupArtifact`.
+            degraded_categories: Categories that stubbed instead of gathering.
+
+        Returns:
+            A ``{total_items, success_count, failed_count}`` mapping.
+        """
+        failed_count = len(degraded_categories)
+        total_items = int(getattr(artifact, "gathered_categories", 0) or 0)
+        if total_items <= 0:
+            # An artifact object that does not report its gather count (an
+            # older build's, or a stub). Falling through to 0/0 would restate
+            # the defect this method removes, so the floor is the categories we
+            # do know about — never "0 ok" for a run that produced an artifact.
+            total_items = max(failed_count, 1)
+        return {
+            "total_items": total_items,
+            "success_count": max(total_items - failed_count, 0),
+            "failed_count": failed_count,
+        }
 
     async def _check_credential_freshness(
         self, started_at: datetime

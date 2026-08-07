@@ -82,7 +82,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0037"
+APP_VERSION = "0.18.1-0038"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -482,6 +482,17 @@ class BackupArtifact:
             (ADR-012 D12 / u81kh); the manifest/schema_version then live INSIDE
             the ciphertext and only the envelope ``format_version`` is readable
             pre-decrypt.
+        gathered_categories: How many ``RESTORABLE_SECTIONS`` categories this
+            artifact gathered — the DENOMINATOR that makes
+            ``degraded_categories`` a count of items rather than a boolean
+            (bead …-fexq1). ``degraded_categories`` is always a subset of
+            these, so ``gathered_categories - len(degraded_categories)`` is
+            how many archived cleanly.
+            :class:`tasks.dbas_backup.DbasBackupTask` reports the pair as the
+            run's ``success_count`` / ``failed_count``; without it, a backup
+            that archived fifteen categories and stubbed one reported
+            "0 ok, 1 failed" — a real, restorable artifact described as a
+            total loss in the Journal and the task-history row.
         degraded_categories: Sorted list of ``RESTORABLE_SECTIONS`` category
             keys whose Dispatcharr gather failed and were written into the
             artifact as a ``{"_warning": ...}`` stub instead of real data
@@ -514,20 +525,21 @@ class BackupArtifact:
 
     __slots__ = (
         "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
-        "encrypted", "degraded_categories", "unarchived_logo_bytes",
-        "unresolved_epg_links", "epg_index_truncated",
+        "encrypted", "gathered_categories", "degraded_categories",
+        "unarchived_logo_bytes", "unresolved_epg_links", "epg_index_truncated",
     )
 
     def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
                  encrypted=False, degraded_categories=None,
                  unarchived_logo_bytes=0, unresolved_epg_links=0,
-                 epg_index_truncated=False):
+                 epg_index_truncated=False, gathered_categories=0):
         self.zip_path = zip_path
         self.sidecar_path = sidecar_path
         self.schema_version = schema_version
         self.sha256 = sha256
         self.file_count = file_count
         self.encrypted = encrypted
+        self.gathered_categories = int(gathered_categories or 0)
         self.degraded_categories = list(degraded_categories or [])
         self.unarchived_logo_bytes = int(unarchived_logo_bytes or 0)
         self.unresolved_epg_links = int(unresolved_epg_links or 0)
@@ -1590,6 +1602,10 @@ async def build_backup_artifact(
             sha256=artifact_sha,
             file_count=len(file_hashes),
             encrypted=encrypt,
+            # The denominator behind degraded_categories (bead …-fexq1): one
+            # entry per category the gather emitted, which is exactly the set
+            # degraded_categories draws from.
+            gathered_categories=len(categories),
             degraded_categories=degraded_categories,
             unarchived_logo_bytes=unarchived_logos,
             unresolved_epg_links=unresolved_epg_links,

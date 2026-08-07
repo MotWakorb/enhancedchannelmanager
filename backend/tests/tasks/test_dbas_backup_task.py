@@ -92,12 +92,19 @@ def _make_target(session, **overrides) -> CloudStorageTarget:
     return target
 
 
+# How many categories the stubbed builder claims to have gathered. A fixed
+# stand-in for len(RESTORABLE_SECTIONS) so these tests pin the counts ARITHMETIC
+# (bead …-fexq1) without churning every time a category is added.
+_GATHERED_CATEGORIES = 16
+
+
 def _fake_artifact(
     dest_dir: Path,
     *,
     degraded_categories=None,
     unresolved_epg_links=0,
     epg_index_truncated=False,
+    gathered_categories=_GATHERED_CATEGORIES,
 ) -> BackupArtifact:
     """Materialize a fake sealed artifact + sidecar in dest_dir so the
     happy-path assertions can confirm files actually land there."""
@@ -113,6 +120,7 @@ def _fake_artifact(
         schema_version=1,
         sha256="deadbeef",
         file_count=7,
+        gathered_categories=gathered_categories,
         degraded_categories=degraded_categories,
         unresolved_epg_links=unresolved_epg_links,
         epg_index_truncated=epg_index_truncated,
@@ -202,7 +210,10 @@ async def test_execute_builds_artifact_in_backups_dir(
     assert result.details["filename"] == zips[0].name
     # zt3kf — a clean gather (no degraded categories) reports a coherent
     # clean-success count, and details carries no degraded_categories key.
-    assert result.success_count == 1
+    # …-fexq1: the counts are CATEGORIES now, so a clean run reports every one
+    # of them as archived rather than the placeholder "1 item".
+    assert result.total_items == _GATHERED_CATEGORIES
+    assert result.success_count == _GATHERED_CATEGORIES
     assert result.failed_count == 0
     assert "degraded_categories" not in result.details
 
@@ -272,8 +283,10 @@ async def test_degraded_gather_is_warning_not_clean_success(
     # "Completed with Warnings" branch reachable — never a hard failure.
     assert result.success is True
     assert result.failed_count == 1
-    assert result.success_count == 0
-    assert result.total_items == 1
+    # …-fexq1: the fifteen categories that DID archive are counted. This read
+    # "0 ok, 1 failed" for a real, restorable artifact.
+    assert result.success_count == _GATHERED_CATEGORIES - 1
+    assert result.total_items == _GATHERED_CATEGORIES
     assert result.details["degraded_categories"] == ["dvr_rules"]
     assert "dvr_rules" in result.message
 
@@ -304,7 +317,10 @@ async def test_degraded_gather_names_multiple_categories(
         result = await task.execute()
 
     assert result.success is True
-    assert result.failed_count == 1
+    # …-fexq1: two degraded categories are two failed items, not one degraded
+    # run rounded to a boolean.
+    assert result.failed_count == 2
+    assert result.success_count == _GATHERED_CATEGORIES - 2
     assert result.details["degraded_categories"] == ["core_settings", "dvr_rules"]
     assert "core_settings" in result.message
     assert "dvr_rules" in result.message
@@ -332,7 +348,7 @@ async def test_clean_gather_is_unaffected_by_degraded_wiring(
 
     assert result.success is True
     assert result.failed_count == 0
-    assert result.success_count == 1
+    assert result.success_count == _GATHERED_CATEGORIES
     assert "degraded_categories" not in result.details
 
 
@@ -394,8 +410,17 @@ async def test_total_client_unavailability_reaches_warning_level_end_to_end(
     assert result.details["degraded_categories"] == all_dispatcharr_keys
     # WARNING-level, never a clean silent success.
     assert result.success is True
-    assert result.failed_count == 1
-    assert result.success_count == 0
+    # …-fexq1, measured against the REAL section list rather than a stub: every
+    # Dispatcharr-backed category is a failed item, and the LOCAL categories
+    # that archived fine from the DB are counted as the successes they are.
+    # Reporting "0 ok" here said the whole artifact was worthless when the
+    # settings, rules and profiles inside it had all come through.
+    assert result.failed_count == len(all_dispatcharr_keys)
+    assert result.total_items == len(backup_mod.RESTORABLE_SECTIONS)
+    assert result.success_count == (
+        len(backup_mod.RESTORABLE_SECTIONS) - len(all_dispatcharr_keys)
+    )
+    assert result.success_count > 0
 
 
 @pytest.mark.asyncio
