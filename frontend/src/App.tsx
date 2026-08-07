@@ -16,7 +16,7 @@ import {
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
-import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop } from './hooks';
+import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
@@ -1160,6 +1160,11 @@ function App() {
       logger.error('Failed to load logos:', err);
     }
   };
+
+  // `logos` is the catalogue the Edit Channel picker renders, and Logo Manager
+  // can add to or delete from it without this component ever hearing about it
+  // (bead enhancedchannelmanager-5z7c9, instance 2). Refetch when it does.
+  useServerDataInvalidation('logos', loadLogos);
 
   const loadStreamProfiles = async () => {
     try {

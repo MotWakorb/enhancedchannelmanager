@@ -362,6 +362,7 @@ interface SettingsTabProps {
 }
 
 import type { SettingsPage } from '../../hooks';
+import { useServerDataInvalidation } from '../../hooks/useServerDataInvalidation';
 
 export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onProbeComplete, initialSettingsPage, onSettingsPageChange }: SettingsTabProps) {
   const [activePage, setActivePageInternal] = useState<SettingsPage>(initialSettingsPage || 'general');
@@ -1181,6 +1182,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       throw err;
     }
   };
+
+  // The Dispatcharr connection can be saved from a modal this tab does not
+  // own — App opens its own copy of SettingsModal on a first run, and that
+  // save used to leave the connection summary card here reading "Not
+  // configured" until a page reload (bead enhancedchannelmanager-5z7c9,
+  // instance 1). Refetch whoever saved it.
+  useServerDataInvalidation('settings', () => {
+    void loadSettings().catch(() => {
+      // The tab keeps its current values if the refresh fails; the operator
+      // still has the modal's own success/failure feedback.
+    });
+  });
 
   const handleSaveSmtpRecipients = async () => {
     setSmtpAlertRecipientsSaving(true);
@@ -6397,8 +6410,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         isOpen={showConnectionModal}
         onClose={() => setShowConnectionModal(false)}
         onSaved={() => {
+          // No reload here — the modal invalidates `settings` on a successful
+          // save and the subscription above refetches exactly once, whichever
+          // copy of this modal the operator used.
           setShowConnectionModal(false);
-          loadSettings();
         }}
       />
     </div>

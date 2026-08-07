@@ -39,6 +39,15 @@ export const M3UAccountModal = memo(function M3UAccountModal({
 }: M3UAccountModalProps) {
   const isEdit = account !== null;
 
+  // The account holds no provider password (bead
+  // enhancedchannelmanager-tsbdq). "Leave blank to keep current" is the right
+  // hint only when there IS a current value; after restoring a standard
+  // (redacted) artifact there is not, and following that hint guarantees the
+  // account keeps failing to authenticate. The account's own `password` field
+  // is the signal and it is truthful — the API reports a real value when one
+  // exists and null/empty when it does not, never a redaction sentinel.
+  const storedPasswordMissing = isEdit && !account.password;
+
   // Form state
   const [name, setName] = useState('');
   const [accountType, setAccountType] = useState<UIAccountType>('STD');
@@ -405,11 +414,21 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                 <input
                   id="xcPassword"
                   type="password"
-                  placeholder={isEdit ? 'Leave blank to keep current' : 'password'}
+                  placeholder={storedPasswordMissing
+                    ? 'No stored password — enter it'
+                    : isEdit ? 'Leave blank to keep current' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-                {isEdit && <span className="form-hint">Only fill in if changing password</span>}
+                {storedPasswordMissing ? (
+                  <span className="form-hint form-hint-warning" role="alert">
+                    This account has no stored password and must be re-entered before it can
+                    authenticate. A standard (redacted) backup does not carry provider
+                    credentials, so a restore leaves this field empty on purpose.
+                  </span>
+                ) : isEdit ? (
+                  <span className="form-hint">Only fill in if changing password</span>
+                ) : null}
               </div>
             </>
           )}

@@ -8,6 +8,7 @@ import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
+import { invalidateServerData } from '../../hooks/useServerDataInvalidation';
 import './LogoManagerTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 
@@ -159,6 +160,7 @@ export function LogoManagerTab() {
       await api.deleteLogo(deletingLogo.id);
       setDeletingLogo(null);
       loadLogos();
+      invalidateServerData('logos');
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete logo', 'Logos');
     } finally {
@@ -176,6 +178,11 @@ export function LogoManagerTab() {
 
   const handleModalSaved = () => {
     loadLogos();
+    // This tab holds only its own current page. The catalogue behind the Edit
+    // Channel logo picker is App's, loaded once via api.getAllLogos() — so a
+    // logo added here was invisible to the picker until a page reload (bead
+    // enhancedchannelmanager-5z7c9, instance 2).
+    invalidateServerData('logos');
   };
 
   const handleModalClose = () => {
