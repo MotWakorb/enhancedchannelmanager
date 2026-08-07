@@ -570,7 +570,18 @@ class DbasRestoreTask(TaskScheduler):
         A single template would have to describe both, so the clause is built
         from the detail rows' ``moved`` flag instead — the same reason the two
         placeholder populations get their own builder.
+
+        THIRD OUTCOME: the check did not run at all, because the operator
+        deselected the channel-groups category. The counter is ``0`` then for a
+        reason that has nothing to do with the lineup, and a suffix that stays
+        silent lets that zero pass for a clean bill of health — so the report's
+        ``channel_group_drift_note`` is emitted verbatim instead. It is the only
+        clause here that is a sentence rather than a count phrase, which is
+        correct: it is a caveat, not an action item.
         """
+        note = getattr(report, "channel_group_drift_note", None)
+        if note:
+            return [note]
         total = getattr(report, "channel_group_drift", 0) or 0
         if not total:
             return []

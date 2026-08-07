@@ -4403,6 +4403,14 @@ export interface RestoreReport {
   /** Which channels drifted, the group they are in, and the archive's (r1ei7). */
   channel_group_drift_details?: ChannelGroupDriftDetail[];
   /**
+   * Set when the channel-group check did NOT run, because the operator
+   * deselected the channel groups category (bead r1ei7). Its absence is what
+   * makes `channel_group_drift: 0` trustworthy; when it is present that zero
+   * means "not examined", not "no drift" — the same distinction the per-category
+   * `predicted` flag draws (bead tddmw). Render it wherever the count renders.
+   */
+  channel_group_drift_note?: string | null;
+  /**
    * How the EPG-link reattach split across channels this restore created and
    * channels that already existed (bead dfkbn). Reported on the dry run AND the
    * apply, so the preview predicts the split rather than describing it after.

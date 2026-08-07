@@ -1358,6 +1358,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         # offer beyond what the archive already says.
         if _selected(ctx, EntityType.CHANNEL):
             from dbas.channel_reattach import (
+                CHANNEL_GROUPS_NOT_CHECKED_NOTE,
                 reattach_epg_links,
                 reattach_profile_memberships,
                 reconcile_channel_groups,
@@ -1374,6 +1375,14 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             # matched channel would report drift this restore was never asked to
             # touch. Same gate shape as the profile pass below.
             #
+            # SKIPPING IT IS NOT THE SAME AS FINDING NOTHING. A skipped pass
+            # leaves ``channel_group_drift`` at its ``0`` default, and a zero
+            # beside every other counter reads as "your grouping is fine" — the
+            # exact silent-clean-report failure these beads were filed over. So
+            # the skip says so, in the report, in one sentence that reaches the
+            # restore panel and the task one-liner alike. It does NOT try to
+            # compute drift here: there is no honest number to compute.
+            #
             # Runs on a dry run TOO, and PATCHes nothing there: "how many of my
             # channels would replace move into a different group" is the number
             # that decides the mode, and it is useless after the fact.
@@ -1389,6 +1398,8 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                     mode=ctx.channel_reattach_mode,
                     is_dry_run=ctx.is_dry_run,
                 )
+            else:
+                ctx.report.channel_group_drift_note = CHANNEL_GROUPS_NOT_CHECKED_NOTE
 
             await reattach_epg_links(
                 client=ctx.client,

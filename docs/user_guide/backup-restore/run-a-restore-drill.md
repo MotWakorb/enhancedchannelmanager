@@ -6,20 +6,30 @@
 
 !!! danger "Read this before you start"
     This article is written for **Dispatcharr `0.28.2`** and **ECM
-    `0.18.1-0036`**. A restore result is only a result for the version it
+    `0.18.1-0040`**. A restore result is only a result for the version it
     was measured on. Every claim below carries the build it was last
-    confirmed on; where a build isn't named, it's current as of `0.18.1-0036`.
+    confirmed on; where a build isn't named, it's current as of `0.18.1-0040`.
     If you are on different versions, re-run the drill and update your own
     notes rather than trusting a claim past its pin.
 
-    The most recent full drill (run 9, `0.18.1-0035`) reproduced the
-    instance completely on both artifact variants, including a lineup that
-    genuinely **plays**, proven by fetching real media bytes, not just
-    checking that a URL is set. It also measured the [genuine
-    logo-failure path](#ecm-uploaded-logos-and-this-drill) live for the
-    first time and found three reporting defects, all fixed in
-    `0.18.1-0036`: see [Known failures](#known-failures) before you
-    conclude your own drill passed.
+    The most recent full drill (run 12, `0.18.1-0040`) reproduced the
+    instance completely, **on a freshly-wiped target**, on both artifact
+    variants, including a lineup that genuinely **plays**, proven by
+    fetching real media bytes, not just checking that a URL is set. The
+    genuine logo-failure path passed all five of its assertions again.
+    Restoring onto an **already-populated target** is a different story
+    and gets its own section: run 12 found that a channel's group
+    membership drifting from the archive went completely unreported in
+    either relink mode, and that a same-named-but-different channel group
+    was adopted while the report claimed its contents had been compared.
+    Both are **fixed as of `0.18.1-0041`** — drift is now reported on
+    every mode and reconciled under overwrite, and the name-match skip
+    now says what it actually checked — but that fix has not yet been
+    proven by a live drill run against a populated target; run 12 itself
+    measured the pre-fix behavior. See [Known failures](#known-failures)
+    and [Restoring onto a populated
+    target](#restoring-onto-a-populated-target) for the full account
+    before you conclude your own drill passed.
 
 ---
 
@@ -297,24 +307,30 @@ Dispatcharr's documented auth paths work here: a later drill run tested
 username/password and API key side by side, and both returned
 `{"success":true,"message":"Connection successful"}`.
 
-!!! note "Opening the ECM web UI turns authentication on"
-    Measured on a fresh install: after completing setup over the API
-    (`POST /api/auth/setup`), ECM's API stayed reachable **anonymously**;
-    a scripted drill run drove its restores with no credentials at all.
-    The first time the ECM **web UI** was opened, an auth-settings write
-    occurred (log: `[AUTH-SETTINGS] Auth settings saved` at
-    23:11:29.320, immediately after `GET /?cb=…` at 23:11:29.258), and
-    every subsequent API call returned `401 Not authenticated`;
-    `/config/auth_settings.json` then showed `"require_auth": true`. No
-    restore wrote auth settings in that run, and `require_auth` does not
-    appear anywhere in the backup artifact.
+!!! note "Historical: opening the ECM web UI used to turn authentication on"
+    **This no longer reproduces on `0.18.1-0040`.** A brand-new install
+    now reports `"require_auth": true` from `GET /api/auth/status`
+    **before any browser has opened it** — there is no anonymous window
+    to rely on. Authenticate your API calls from the start (cookie-based:
+    `POST /api/auth/login`, then keep the cookie jar); do not script a
+    restore assuming anonymous access will work even briefly.
 
-    If you script a restore against a brand-new install and it works,
-    then stops working with `401` after someone opens the web UI, this
-    is why. This is observed and strongly indicated, not proven with a
-    dedicated isolation experiment. Authenticate your API calls
-    (cookie-based: `POST /api/auth/login`, then keep the cookie jar)
-    rather than relying on the anonymous window.
+    The rest of this note is kept for anyone on an older build who hits
+    a `401` partway through a scripted run and needs to know why.
+    Measured on a fresh install on that earlier pin: after completing
+    setup over the API (`POST /api/auth/setup`), ECM's API stayed
+    reachable **anonymously**; a scripted drill run drove its restores
+    with no credentials at all. The first time the ECM **web UI** was
+    opened, an auth-settings write occurred (log: `[AUTH-SETTINGS] Auth
+    settings saved` at 23:11:29.320, immediately after `GET /?cb=…` at
+    23:11:29.258), and every subsequent API call returned `401 Not
+    authenticated`; `/config/auth_settings.json` then showed
+    `"require_auth": true`. No restore wrote auth settings in that run,
+    and `require_auth` does not appear anywhere in the backup artifact.
+    If you script a restore against a brand-new install on that build and
+    it works, then stops working with `401` after someone opens the web
+    UI, this is why — but the cookie-jar advice above is the right
+    instruction regardless of which build you're on.
 
 ---
 
@@ -428,6 +444,14 @@ one or two channel groups, then **Done → Apply All**. Nothing reaches
 Dispatcharr until you click **Apply All**. A staged change in Edit Mode
 looks finished but is not yet applied.
 
+!!! warning "\"Create in…\" requires a Starting Channel Number, silently"
+    The create dialog requires a **Starting Channel Number**. When you
+    create into an **existing** channel group, this field comes up empty.
+    While it's empty, the dialog's `Create N Channels` button is
+    **disabled with no visible validation message** — it reads exactly
+    like a broken button. Confirmed on `0.18.1-0040`. Fill in a starting
+    channel number before you go looking for a bug.
+
 **To exercise the restore path more thoroughly** (recommended if you have
 the time; each of these maps to a specific restore behavior worth
 proving), also set up:
@@ -435,7 +459,7 @@ proving), also set up:
 | Feature | Why it's worth seeding | Where to create it |
 |-|-|-|
 | A multi-stream channel with a deliberate stream order | Proves whether stream ordering survives the restore's 4-tier matcher | ECM, Edit Mode |
-| A channel profile with non-default membership (some channels excluded) | Proves whether profile scoping survives, or silently widens to "all channels" | Create the profile in ECM; toggle membership in Dispatcharr (see below) |
+| A channel profile with non-default membership (some channels excluded) | Proves whether profile scoping survives, or silently widens to "all channels" | Create the profile in ECM, then set membership in ECM too (see below) |
 | A custom stream profile assigned to a channel | Proves the user-agent binding fix (`enhancedchannelmanager-lvfwd`, closed) still holds | Create in Dispatcharr (see below); assign in ECM, Edit Channel → **STREAM PROFILE** |
 | A custom user agent assigned to that stream profile | Same as above; the two are usually configured together | Create in Dispatcharr (see below) |
 | A channel with its logo deliberately cleared | Gives you a known-absent case to contrast against the known-present ones | ECM |
@@ -475,12 +499,21 @@ and most of the logo-restore path goes untested.
     that never had a custom stream profile to restore proves nothing about
     whether the binding survives.
 
-!!! note "Channel-profile membership: toggled in Dispatcharr, not ECM"
-    Create the channel profile itself in ECM. To exclude specific
-    channels from it, go to Dispatcharr's own **Channels** view, select
-    the profile from its profile dropdown, and toggle membership per row.
-    This isn't discoverable from ECM's own screens; you have to go to
-    Dispatcharr to set it up.
+!!! note "Channel-profile membership: set it in ECM"
+    Create the channel profile itself in ECM, then set membership without
+    leaving ECM. Confirmed working on `0.18.1-0040`:
+
+    **Channel Manager → `⋮` (the overflow control at the top of the
+    CHANNELS panel) → Channel Profiles → `tune` on the profile row.** This
+    opens a **Manage Channels** panel for that profile showing `N / N
+    enabled`, per-channel toggles grouped by channel group, `Enable
+    Visible` / `Disable Visible`, and a `Save Changes (N)` button. Set a
+    non-default membership here and it persists to Dispatcharr.
+
+    Dispatcharr's own **Channels** view can also toggle membership per row
+    (select the profile from its dropdown), if you're already there for
+    another reason. But ECM's own **Manage Channels** panel is the
+    working, discoverable path — you do not need to leave ECM for this.
 
 !!! note "Upload a logo here to exercise the archive path"
     See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill)
@@ -681,14 +714,44 @@ contaminate each other, or run them sequentially with a `down -v` /
 3. Click **Preview** (dry-run). Sanity-check the counts.
 
    !!! warning "What a preview does and does not predict"
-       As of `0.18.1-0032`, the per-category counts, the logo and
-       EPG-link reattach splits, and `profile_membership_drift` all match
-       what the apply then does. The two stream-health counters
-       (`channels_needing_stream_reattach`,
+       As of `0.18.1-0032`, the logo and EPG-link reattach splits and
+       `profile_membership_drift` match what the apply then does. The two
+       stream-health counters (`channels_needing_stream_reattach`,
        `channels_with_no_playable_stream`) read **`null`**, meaning "not
        predicted": the pass that writes them matches against streams the
        deferred M3U refresh materializes, and a preview refreshes nothing.
        Read `null` as "unknowable until the apply", not as zero.
+
+       **`channel_groups` and `Streams` need a second look, though.**
+       Measured on `0.18.1-0040` (`enhancedchannelmanager-tddmw`): a
+       preview reported `378 WILL CREATE / 0 WILL SKIP` for
+       `channel_groups`; the same artifact's apply reported `3 CREATED /
+       375 SKIPPED`. Every other category matched. Mechanism, still true
+       and still worth knowing: the restore creates the M3U account
+       first, and that account's ingest materializes the provider's
+       groups before the `channel_groups` category runs, so by apply time
+       most of them already exist and are skipped, while the preview —
+       which refreshes nothing — predicts creates against the state it
+       can actually see. The end state is correct either way (378 groups
+       exist afterward); this was always a reporting divergence, not data
+       loss. **As of `0.18.1-0041`, the preview says so itself:** the
+       `channel_groups` category now carries an explanatory caveat naming
+       exactly this ordering, instead of leaving the operator to notice
+       the mismatch unaided.
+
+       The same fix also gave the `Streams` category — the one that
+       synthesizes placeholder streams when the matcher misses — a row on
+       the preview for the first time. It used to be absent entirely (not
+       `0`, missing); it now appears **not predicted**, the same
+       treatment the two stream-health counters above already get:
+       Streams is matched against this install's own streams, which the
+       deferred M3U refresh only materializes during the apply, so a
+       preview has nothing to compare against.
+
+       Read a `channel_groups` caveat and a `Streams: not predicted` row
+       as the preview being honest about its own limits, not as proof
+       nothing will change there — the apply is still the number that
+       counts.
 
        On builds before `0.18.1-0032`, the preview reported **every**
        URL-restorable logo as `validation_error: unsafe or empty logo
@@ -907,6 +970,126 @@ Compare against your "before" inventory from Step 4 if you captured one.
 
 ---
 
+## Restoring onto a populated target
+
+Everything above this section was measured on a **freshly-wiped** target:
+`down -v` destroyed the previous state before the restore ran, so there
+was nothing on the target to conflict with the archive. Every drill run
+before run 12 worked this way, which means `preserve` and `overwrite`
+were indistinguishable in practice — a fresh target has no existing
+channel for either relink mode to preserve or overwrite — and the gaps
+below were structurally unreachable until then. Run 12 was the first to
+restore onto a target that already had its own, diverged state, and
+found two silent gaps: a channel's group membership was never
+reconciled to the archive or reported, and a same-named-but-different
+channel group was adopted while the report claimed its contents had
+been compared. **Both are now fixed** (`enhancedchannelmanager-r1ei7`,
+`enhancedchannelmanager-3t74w`) — this section describes the fixed
+behavior and what to check.
+
+!!! success "The relink modes DO differ on a populated target — this part works"
+    Run 12 diverged an identical baseline two ways (a channel's logo
+    changed, a channel's EPG link cleared) and ran both relink modes
+    against separate copies of it. The mode labels themselves widened in
+    the same fix that added the grouping column below
+    (`enhancedchannelmanager-r1ei7`): **preserve** now reads *"Keep their
+    current guide data, logos, and grouping"*, and **overwrite** now
+    reads *"Replace their guide data, logos, and grouping with the
+    backup's"*.
+
+    | field | diverged baseline | after **preserve** | after **overwrite** | archive |
+    |-|-|-|-|-|
+    | channel logo | changed away from archive | **kept the diverged value** | **overwritten with the archive's value** | archive's logo |
+    | channel EPG link | cleared | **left cleared** | **restored from the archive** | archive's link |
+    | channel group | moved to a different group | **kept in the diverged group, and reported as drift** | **moved into the archive's group, and reported as moved** | archive's group |
+
+    The logo and EPG-link rows are run 12's own measurement. The grouping
+    row describes the fixed behavior below — implemented and covered by
+    a test suite that reproduces run 12's exact scenario
+    (`backend/tests/dbas/test_channel_group_drift.py`), but **not yet
+    proven by a live drill run** against a populated target the way the
+    other two rows were. `preserve` is the default, and it also emits an
+    explicit "Channels you already had were left alone" panel naming
+    exactly what it left untouched.
+
+!!! info "Name-matching a channel group is deliberate — the fix was to stop overclaiming, not to stop adopting"
+    **Bead `enhancedchannelmanager-3t74w`.** If the target has a channel
+    group whose **name** matches an archived group, the restore still
+    adopts the target's existing object and remaps the archive's
+    references onto it. That part is unchanged, and it's intentional: a
+    Dispatcharr channel group carries nothing but a name, name is the
+    only identity a group has across two different instances, and
+    treating a name match as a hard conflict would cascade into
+    `DEPENDENCY_UNRESOLVED` for every channel that points at the group.
+
+    What changed is the claim. Run 12 built a target group named `Drill
+    Movies` that was a genuinely different object (different id, holding
+    a different channel), watched the restore adopt it, and read back
+    `already exists identical` and `success` / `failed 0` — a false
+    assurance, since nothing about the group's contents was ever
+    compared. As of the fix, a name-matched channel group reports the
+    new skip reason **`already_exists_name_match`** ("matched by name,
+    nothing else compared") instead. Channel profiles and stream
+    profiles, matched by the same generic engine, are unaffected and
+    still report `already_exists_identical` — only channel groups
+    changed, because only channel groups had nothing else to compare.
+    The evidence that a name-matched group's contents actually diverge
+    now arrives separately, via the channel-group drift reporting below.
+
+!!! success "Channel-group drift is now reported, and reconciled under overwrite"
+    **Bead `enhancedchannelmanager-r1ei7`.** A new pass runs after every
+    channel is created or matched — it has to run after channels, since
+    a group's membership lives on the CHANNEL's `channel_group_id`, not
+    on the group row, and groups restore before channels — and compares
+    each channel's destination group against the group the archive
+    assigns it, by **name** (not id: the archive's own id is
+    instance-local and can collide with an unrelated destination group).
+
+    - **`preserve` (the default) reports only.** Every channel whose
+      destination group differs from the archive's is recorded as
+      **channel-group drift** — naming the channel, the group it's
+      currently in, and the group the archive says it belongs in — and
+      **nothing is moved**. The "never overwrite an existing channel"
+      contract still holds.
+    - **`overwrite` reports and moves.** The same divergence is
+      recorded, and the channel is moved into the archive's group.
+    - A channel **this restore created** is never counted as drift — it
+      was created already carrying the archive's group, so flagging it
+      would report a correction that never happened.
+    - The drift count is **predicted on the dry-run preview**, from the
+      same two inputs the apply itself uses, so an operator can see what
+      `overwrite` is about to do to their lineup before committing to
+      it.
+    - **If you untick the `channel_groups` category, the check can't
+      run** — nothing restores the archive's groups, so there's no
+      destination group to compare against. Rather than report a `0`
+      that reads like a clean result, the restore says *"Channel
+      grouping was not checked"* outright, in the restore-complete panel
+      and in the task-history line. A drift count of zero is only
+      meaningful when that note is **absent**.
+
+    This closes exactly the gap run 12 found: the restore used to report
+    `outcome=success, failed 0` while silently leaving seven channels in
+    the wrong group, with no counter, panel, or report line anywhere
+    mentioning it.
+
+**Operator guidance:** on a populated target, a same-named group being
+adopted is expected — don't treat it as something to work around, it's
+how a group's cross-instance identity is defined. What you should
+actually check is the **channel-group drift count**: read it on the
+dry-run preview before you choose a mode, and read it again in the
+restore-complete report afterward. `preserve` leaves every drifted
+channel exactly where it was and only tells you about it; `overwrite`
+moves it. Stay on `preserve` if you don't want any channel's grouping
+touched; pick `overwrite`, and expect the reported count of channels to
+move, if you want your lineup's grouping to match the archive exactly.
+Before you read a drift count of zero as good news, check that the
+report doesn't also carry the *"Channel grouping was not checked"* note
+— that note means you left the `channel_groups` category unticked and
+nothing was compared.
+
+---
+
 ## What a passing drill looks like
 
 A drill "passes" only when every item below is true, and you checked each
@@ -939,6 +1122,13 @@ one directly rather than trusting the restore-complete report's summary:
     deliberately excluded channels.
   - Every non-default setting you changed came back as you set it, not
     at its default.
+  - **On a populated target only:** the channel-group drift count
+    matches what you expect — read it on the dry-run preview first, then
+    again in the restore-complete report. Under `preserve`, it should
+    equal exactly the channels you deliberately diverged and none should
+    have moved. Under `overwrite`, that same count should have moved
+    into the archive's group. See [Restoring onto a populated
+    target](#restoring-onto-a-populated-target).
 - If you restored a **standard (redacted)** artifact, you completed the
   full [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
   recovery sequence before checking playback: re-enter the credential and
@@ -952,15 +1142,18 @@ one directly rather than trusting the restore-complete report's summary:
   placeholders bound to no channel, or an empty synthetic account still
   listed, are a finding on that pin or later.
 
-As of ECM `0.18.1-0036` / Dispatcharr `0.28.2`, a drill run **can** pass
+As of ECM `0.18.1-0040` / Dispatcharr `0.28.2`, a drill run **can** pass
 this bar in full: an encrypted artifact with "Include credentials" plays
 correctly on the first restore, ECM-uploaded logos and EPG links
 included, and a genuine non-fatal logo failure (see
 [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill))
 completes with the failure counted once and named, not rolled back. A
 standard (redacted) artifact can also pass, but only after the full
-Step 6a recovery sequence. See the next two sections for the complete,
-current defect picture.
+Step 6a recovery sequence. **This bar is for a fresh target.** Restoring
+onto an already-populated target adds one more thing to check —
+channel-group drift, covered above — see [Restoring onto a populated
+target](#restoring-onto-a-populated-target). See the next two sections
+for the complete, current picture.
 
 ---
 
@@ -1028,12 +1221,19 @@ these panels instead of re-deriving the same information by hand.
 
 Run 2 measured nine beads on ECM `0.18.1-0023` / Dispatcharr `0.28.2`.
 Run 9 (`0.18.1-0035`) added three more, all now fixed as of `0.18.1-0036`.
-Current tally, **twelve beads total**: **eight fixed and closed**, **one
-partially fixed with a named residual**, and **three** that landed fixed
-in the same build that found them (see [ECM-uploaded logos and this
-drill](#ecm-uploaded-logos-and-this-drill)). Check each bead's live
-status before you assume any row is still true on the version you're
-running; this is a snapshot, not a permanent guarantee.
+Run 12 (`0.18.1-0040`) added three more, all now fixed as of
+`0.18.1-0041`. Current tally, **fifteen beads total**: **eight fixed and
+closed**, **one partially fixed with a named residual**, **three** that
+landed fixed in the same build that found them (see [ECM-uploaded logos
+and this drill](#ecm-uploaded-logos-and-this-drill)), and **three** more,
+found by restoring onto a populated target and by comparing a preview
+against its own apply, that landed fixed one build after the run that
+found them (see [Restoring onto a populated
+target](#restoring-onto-a-populated-target)). That's **fourteen of
+fifteen fully fixed**, one with a named residual still open, and none
+currently open outright. Check each bead's live status before you
+assume any row is still true on the version you're running; this is a
+snapshot, not a permanent guarantee.
 
 ### Fixed, closed
 
@@ -1061,6 +1261,9 @@ running; this is a snapshot, not a permanent guarantee.
 | `enhancedchannelmanager-xb58a` | **P0, root cause** | The backup did not archive the bytes of logos uploaded through ECM's own Logo Manager, even though Dispatcharr serves them on request over its logo cache endpoint with the same API key ECM already holds. `binary/metadata.json` recorded zero logos for a source that had one. **Fixed as of `0.18.1-0024`:** the backup now fetches and archives those bytes at gather time; a round-trip restore reproduces the file byte-for-byte. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
 | `enhancedchannelmanager-d0agi` | **P0, consequence** | Because the uploaded logo's bytes were never archived, the restore couldn't recreate it, recorded the miss, and (since a logo failure was classified as fatal) aborted and rolled back the **entire** restore, not just the logo category. **Fixed as of `0.18.1-0024`:** logos joined Dispatcharr users as a non-fatal restore category; a logo miss is now counted and named, and the rest of the restore completes. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
 | `enhancedchannelmanager-dgnms` | P1 | The dry-run preview reported every URL-restorable logo as failed (`validation_error: unsafe or empty logo filename`), even ones that restore fine on apply, and reported a confident `0` for counters it had not measured. **Fixed as of `0.18.1-0032`:** the logo split and `profile_membership_drift` are genuinely predicted and match the apply, and the two stream-health counters report `null` ("not predicted") instead of a misleading `0`. See the preview warning in [Step 6](#step-6-restore). |
+| `enhancedchannelmanager-3t74w` | P2 | Found in run 12, restoring onto a **populated target**: a target channel group that shares a **name** with an archived group but is a different object (different id, different members) is silently adopted by name, and reported `already_exists_identical` as if its contents had been compared. **Fixed as of `0.18.1-0041`:** the adopt-by-name behavior is unchanged and intentional (name is the only cross-instance identity a group has), but the claim is now honest — a name-matched channel group reports the new skip reason `already_exists_name_match` instead. See [Restoring onto a populated target](#restoring-onto-a-populated-target). |
+| `enhancedchannelmanager-r1ei7` | P2 | Found in run 12, restoring onto a **populated target**: channel→group membership was never reconciled to the archive or reported, in either relink mode — `profile_membership_drift` covers channel-*profile* membership only, with no channel-*group* equivalent. **Fixed as of `0.18.1-0041`:** a new post-channels pass reports every channel whose group differs from the archive's as channel-group drift under both modes, and `overwrite` additionally moves the channel into the archive's group. Not yet proven by a live drill run against a populated target. See [Restoring onto a populated target](#restoring-onto-a-populated-target). |
+| `enhancedchannelmanager-tddmw` | P2 | Found in run 12: the dry-run preview diverged from the apply on `channel_groups` (`378 WILL CREATE / 0 WILL SKIP` vs. `3 CREATED / 375 SKIPPED`), and the `Streams` category — the one that synthesizes placeholder streams — was absent from the preview entirely, not just `0`. End state was always correct; this was a reporting gap. **Fixed as of `0.18.1-0041`:** the preview now carries an explanatory caveat on `channel_groups` naming the divergence's cause, and a `Streams` row now appears on the preview, flagged **not predicted** rather than omitted. See the preview warning in [Step 6](#step-6-restore). |
 
 **No workarounds are required to get an ordinary restore to complete**,
 on `0.18.1-0024` and later, including one with an ECM-uploaded logo. The

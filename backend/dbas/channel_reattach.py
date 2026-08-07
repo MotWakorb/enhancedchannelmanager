@@ -172,6 +172,7 @@ logger = logging.getLogger(__name__)
 # Re-exported for callers that already import the archive contract from here.
 __all__ = [
     "ARCHIVE_EPG_TVG_ID_KEY",
+    "CHANNEL_GROUPS_NOT_CHECKED_NOTE",
     "EPG_INDEX_MAX_ROWS",
     "reattach_channel_logos",
     "reattach_epg_links",
@@ -182,6 +183,26 @@ __all__ = [
 # Shown in a drift row when a channel belongs to no group on one side. A NAME is
 # what these rows carry, and "no group" is a real state, not a missing value.
 _NO_GROUP_LABEL = "no group"
+
+# What the report says when :func:`reconcile_channel_groups` never ran because
+# the operator deselected the channel-groups category (bead ``…-r1ei7``).
+#
+# The pass CANNOT run in that state — no archived group resolves through the
+# remap, so every matched channel would report drift against a group this
+# restore was never asked to touch — but staying silent leaves
+# ``channel_group_drift = 0`` to be read as "no drift found" when nothing was
+# ever examined. That is the same ambiguity class as an OMITTED preview category
+# (bead ``…-tddmw``), and it gets the same answer: say so, in one sentence, in
+# every surface the count itself reaches.
+#
+# ONE string, used verbatim by the restore-complete panel and by the task
+# one-liner, so the two can never say different things about the same run. It is
+# a complete sentence rather than a count phrase because it is a caveat, not an
+# action item — nothing about it is a number the operator can act on.
+CHANNEL_GROUPS_NOT_CHECKED_NOTE = (
+    "Channel grouping was not checked: the channel groups category was not "
+    "selected for this restore, so no group drift was looked for."
+)
 
 
 def _channel_label(archive_channel: dict) -> str:

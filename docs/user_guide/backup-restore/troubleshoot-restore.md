@@ -363,7 +363,16 @@ target the splits were already exact in both relink modes: preserve mode
 (keeps a channel's own existing EPG link and logo) measured preview 12/11
 preserved matching apply 12/11 preserved, and overwrite mode (replaces
 them with the archive's values) measured preview 12/11 existing matching
-apply 12/11 existing. Only the fresh-target case under-reported.
+apply 12/11 existing. Only the fresh-target case under-reported. This
+measurement predates `enhancedchannelmanager-r1ei7`; as of `0.18.1-0041`
+the same two relink modes also govern a channel's **group**, not just its
+EPG link and logo — preserve reads *"Keep their current guide data,
+logos, and grouping"* and overwrite reads *"Replace their guide data,
+logos, and grouping with the backup's"* — and the resulting
+channel-group drift count is itself predicted on the preview. See
+[Restoring onto a populated
+target](run-a-restore-drill.md#restoring-onto-a-populated-target) for
+that measurement.
 
 **Fix:** Preview to confirm scope. Verify stream health, and actual
 playback, after the apply completes, on any build.

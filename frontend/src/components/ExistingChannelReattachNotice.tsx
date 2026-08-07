@@ -29,6 +29,12 @@ import './ExistingChannelReattachNotice.css';
  * in BOTH modes, behind a `success / failed 0` report whose counts reconciled
  * exactly. Under `preserve` the rows say what diverged and that nothing was
  * touched; under `overwrite` they say what moved.
+ *
+ * And when the grouping check did NOT run — the operator deselected the channel
+ * groups category — the panel renders for that alone, carrying the server's
+ * `channel_group_drift_note`. Otherwise a restore that examined nothing would
+ * look identical to one that examined everything and found nothing, which is
+ * the failure mode this whole panel exists to end.
  */
 
 /**
@@ -165,13 +171,20 @@ export function ExistingChannelReattachNotice({
   const driftDetails = report.channel_group_drift_details ?? [];
   const driftTotal = report.channel_group_drift ?? 0;
   const driftMoved = driftDetails.filter((d) => d.moved).length;
+  const driftNote = report.channel_group_drift_note ?? null;
 
   // Moving a channel between groups is as unrecoverable as replacing its logo —
   // the rollback ledger compensates CREATES only — so it counts as touched.
   const touched =
     (epg?.existing_channels ?? 0) + (logo?.existing_channels ?? 0) + driftMoved;
   const preserved = (epg?.preserved_channels ?? 0) + (logo?.preserved_channels ?? 0);
-  if (!touched && !preserved && !driftTotal) return null;
+  if (!touched && !preserved && !driftTotal && !driftNote) return null;
+
+  // A restore whose ONLY finding is "one of these checks did not run" must not
+  // wear the reassuring copy below. "Channels you already had were left alone"
+  // is a claim about state that was inspected; the note exists precisely because
+  // some of it was not.
+  const noteOnly = !touched && !preserved && !driftTotal;
 
   return (
     <div
@@ -180,17 +193,19 @@ export function ExistingChannelReattachNotice({
       role={touched ? 'alert' : 'status'}
     >
       <span className="material-icons ecrn-icon" aria-hidden="true">
-        {touched ? 'warning' : 'shield'}
+        {touched ? 'warning' : noteOnly ? 'info' : 'shield'}
       </span>
       <div className="ecrn-body">
         <span className="ecrn-title">
-          {touched
-            ? preview
-              ? 'Channels you already have would be affected'
-              : 'Channels you already had are affected'
-            : preview
-              ? 'Channels you already have would be left alone'
-              : 'Channels you already had were left alone'}
+          {noteOnly
+            ? 'Some channel checks did not run'
+            : touched
+              ? preview
+                ? 'Channels you already have would be affected'
+                : 'Channels you already had are affected'
+              : preview
+                ? 'Channels you already have would be left alone'
+                : 'Channels you already had were left alone'}
         </span>
         <ul className="ecrn-list">
           {epg && <PopulationRow label="Guide data" population={epg} mode={effectiveMode} />}
@@ -201,6 +216,16 @@ export function ExistingChannelReattachNotice({
               total={driftTotal}
               mode={effectiveMode}
             />
+          )}
+          {/*
+            Rendered verbatim from the server, and WITHOUT a "Channel groups"
+            label: the sentence names its own subject, and a label beside it
+            would read as a heading over counts that were never computed.
+          */}
+          {driftNote && (
+            <li className="ecrn-row" data-testid="ecrn-channel-group-not-checked">
+              <span className="ecrn-row-detail ecrn-row-note">{driftNote}</span>
+            </li>
           )}
         </ul>
         {touched > 0 && (

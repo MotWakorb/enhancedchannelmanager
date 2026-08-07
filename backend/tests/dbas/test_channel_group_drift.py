@@ -43,6 +43,11 @@ WHAT THIS SUITE PINS
 * A DRY RUN predicts the same drift the apply then reports (the ``dgnms``
   discipline), emits the ``Streams`` category it used to omit entirely, and says
   out loud that the ``channel_groups`` split it shows can differ from the apply's.
+* DESELECTING the channel-groups category skips the check — and SAYS SO, in the
+  report and in the task one-liner, rather than leaving a ``0`` that reads as a
+  clean bill of health. That zero-means-two-things ambiguity is the same one
+  ``predicted``/``caveat`` answer for a preview category; a skipped check gets
+  the same answer for the same reason.
 
 Conventions: ``docs/pytest_conventions.md``. Upstream is a stateful in-test fake
 rather than a bare ``AsyncMock`` so the groups importer, the channels importer
@@ -54,6 +59,7 @@ from __future__ import annotations
 
 import pytest
 
+from dbas.channel_reattach import CHANNEL_GROUPS_NOT_CHECKED_NOTE
 from dbas.importers.channels import import_channels
 from dbas.importers.groups_profiles import (
     import_channel_groups,
@@ -68,6 +74,7 @@ from dbas.restore_contracts import (
     RollbackLedger,
     SkipReason,
 )
+from tasks.dbas_restore import DbasRestoreTask
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +162,12 @@ class _FakeDispatcharr:
     async def get_streams(self, **_kwargs) -> dict:
         return {"results": [], "count": 0}
 
+    async def get_epg_data(self, **_kwargs) -> list[dict]:
+        # The EPG reattach pass runs in the same orchestrator step as the
+        # reconcile below. Nothing here is under test, but a fake that cannot
+        # answer it turns every run into a logged best-effort failure.
+        return []
+
     async def update_channel(self, channel_id: int, payload: dict) -> dict:
         self.patches.append((channel_id, dict(payload)))
         for row in self.channels:
@@ -221,6 +234,50 @@ async def _reconcile(client, *, mode, is_dry_run=False):
         is_dry_run=is_dry_run,
     )
     return report, moved
+
+
+async def _run_channels_step(client, *, channel_groups_selected: bool, is_dry_run=False):
+    """Drive the ORCHESTRATOR's real groups + channels steps, and return the report.
+
+    The gate under test lives in the orchestrator, not in the reconcile pass:
+    ``reconcile_channel_groups`` is only *called* when the CHANNEL_GROUP category
+    is selected. Calling the pass directly (as every test above does) can
+    therefore never observe the deselected state, so these tests go through the
+    step registry the apply and the dry run both build from.
+
+    CHANNEL_PROFILE is deliberately absent from the plan: the profile reattach is
+    gated on it, and nothing here is about profiles.
+    """
+    from dbas.preflight import ImportPlan, PlanCategory
+    from dbas.restore_orchestrator import ApplyContext, _importer_step_builders
+
+    plan = ImportPlan(
+        manifest={"schema_version": 1},
+        categories=[
+            PlanCategory(
+                entity_type=EntityType.CHANNEL_GROUP,
+                entities=_archive_groups(),
+                selected=channel_groups_selected,
+            ),
+            PlanCategory(
+                entity_type=EntityType.CHANNEL,
+                entities=_archive_channels(),
+                selected=True,
+            ),
+        ],
+    )
+    ctx = ApplyContext(
+        plan=plan,
+        client=client,
+        report=RestoreReport(is_dry_run=is_dry_run),
+        ledger=RollbackLedger(restore_id="t"),
+        remap=IdRemapTable(),
+        is_dry_run=is_dry_run,
+    )
+    steps = _importer_step_builders()
+    await steps["channel_groups"](ctx)
+    await steps["channels"](ctx)
+    return ctx.report
 
 
 def _target() -> _FakeDispatcharr:
@@ -670,6 +727,113 @@ async def test_the_channel_groups_caveat_is_absent_on_an_apply():
     report, _, _, _ = await _restore_groups_then_channels(client, is_dry_run=False)
 
     assert report.category(EntityType.CHANNEL_GROUP).caveat is None
+
+
+# ---------------------------------------------------------------------------
+# r1ei7 — a check that did NOT run must not read as a check that found nothing
+# ---------------------------------------------------------------------------
+#
+# Deselecting the channel-groups category skips the reconcile pass entirely (it
+# has no honest number to compute: no archived group resolves through the remap,
+# so every matched channel would report drift against a group this restore was
+# never asked to touch). What it MUST NOT do is leave ``channel_group_drift`` at
+# ``0`` with nothing said — that zero is indistinguishable from "your grouping is
+# fine", which is the exact silent-clean-report failure run 12 was filed over.
+
+
+@pytest.mark.asyncio
+async def test_deselecting_channel_groups_says_the_grouping_was_not_checked():
+    """The run-12 target, with the one category that makes the check possible off."""
+    report = await _run_channels_step(_target(), channel_groups_selected=False)
+
+    assert report.channel_group_drift_note == CHANNEL_GROUPS_NOT_CHECKED_NOTE
+    assert "not checked" in report.channel_group_drift_note
+
+
+@pytest.mark.asyncio
+async def test_the_skipped_check_reports_no_drift_it_did_not_measure():
+    """Silence about grouping, not a fabricated verdict about it.
+
+    The note is the fix; INVENTING drift here would be the other failure — the
+    seven divergences below are real only because the archive's groups were
+    restored, and with the category deselected they were not.
+    """
+    report = await _run_channels_step(_target(), channel_groups_selected=False)
+
+    assert report.channel_group_drift == 0
+    assert report.channel_group_drift_details == []
+
+
+@pytest.mark.asyncio
+async def test_selecting_channel_groups_carries_no_not_checked_note():
+    """The note's ABSENCE is what makes the count trustworthy — so it must be absent."""
+    report = await _run_channels_step(_target(), channel_groups_selected=True)
+
+    assert report.channel_group_drift_note is None
+    assert report.channel_group_drift == 7
+
+
+@pytest.mark.asyncio
+async def test_a_preview_says_it_too_before_the_operator_commits():
+    """A dry run is where the operator can still go back and select the category."""
+    report = await _run_channels_step(
+        _target(), channel_groups_selected=False, is_dry_run=True
+    )
+
+    assert report.channel_group_drift_note == CHANNEL_GROUPS_NOT_CHECKED_NOTE
+    assert report.channel_group_drift == 0
+
+
+# --- ...and it has to reach the operator who never opened the modal. ---------
+#
+# The task-history row and the MCP tool result are the ONLY surfaces a scripted
+# or scheduled restore ever produces, so a note that lives solely in the panel
+# would be invisible in exactly the runs nobody watches.
+
+
+def _summarized(report: RestoreReport, *, is_preview: bool = False) -> str:
+    return DbasRestoreTask._credential_reentry_suffix(report, is_preview=is_preview)
+
+
+@pytest.mark.asyncio
+async def test_the_one_liner_carries_the_not_checked_note():
+    report = await _run_channels_step(_target(), channel_groups_selected=False)
+
+    assert CHANNEL_GROUPS_NOT_CHECKED_NOTE in _summarized(report)
+
+
+@pytest.mark.asyncio
+async def test_the_one_liner_never_claims_a_clean_grouping_it_did_not_check():
+    """No count phrase may appear beside the note — there is no count."""
+    report = await _run_channels_step(_target(), channel_groups_selected=False)
+
+    suffix = _summarized(report)
+    assert "different group than the backup" not in suffix
+    assert "into the group the backup assigns them" not in suffix
+
+
+@pytest.mark.asyncio
+async def test_the_one_liner_reports_drift_as_before_when_the_check_ran():
+    """The note must not displace the counter it qualifies (regression guard)."""
+    report = await _run_channels_step(_target(), channel_groups_selected=True)
+
+    suffix = _summarized(report)
+    assert CHANNEL_GROUPS_NOT_CHECKED_NOTE not in suffix
+    assert "7 channel(s) are in a different group than the backup" in suffix
+
+
+def test_the_preview_one_liner_carries_the_note_unchanged():
+    """The note is tense-free by construction — a caveat, not an action item.
+
+    Every other clause in the suffix moves to the future tense on a preview
+    (bead ``…-juu3c``). "Channel grouping was not checked" is already true of
+    both, and rewording it per-mode would fork one sentence into two.
+    """
+    report = RestoreReport(is_dry_run=True)
+    report.channel_group_drift_note = CHANNEL_GROUPS_NOT_CHECKED_NOTE
+
+    assert CHANNEL_GROUPS_NOT_CHECKED_NOTE in _summarized(report, is_preview=True)
+    assert CHANNEL_GROUPS_NOT_CHECKED_NOTE in _summarized(report, is_preview=False)
 
 
 # ---------------------------------------------------------------------------

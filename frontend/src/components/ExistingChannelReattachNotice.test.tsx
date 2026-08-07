@@ -334,4 +334,88 @@ describe('ExistingChannelReattachNotice', () => {
       screen.getByTestId('existing-channel-reattach-notice').textContent,
     ).toMatch(/Keep their current guide data, logos, and grouping/);
   });
+
+  // ---------------------------------------------------------------------
+  // "This check did not run" is not the same as "this check found nothing"
+  // (bead r1ei7)
+  // ---------------------------------------------------------------------
+  //
+  // Deselecting the channel groups category skips the grouping reconcile
+  // entirely. Without the server's note, the panel is simply absent and the
+  // drift counter is 0 — indistinguishable from a restore that checked the
+  // grouping and found it correct.
+
+  const NOT_CHECKED =
+    'Channel grouping was not checked: the channel groups category was not ' +
+    'selected for this restore, so no group drift was looked for.';
+
+  it('renders the not-checked note on its own, with nothing else to report', () => {
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          channel_group_drift: 0,
+          channel_group_drift_details: [],
+          channel_group_drift_note: NOT_CHECKED,
+        })}
+      />,
+    );
+    expect(screen.getByTestId('ecrn-channel-group-not-checked').textContent).toBe(
+      NOT_CHECKED,
+    );
+  });
+
+  it('drops the "left alone" reassurance when a check did not run', () => {
+    // "Channels you already had were left alone" is a claim about state that was
+    // inspected. The note exists because some of it was not.
+    render(
+      <ExistingChannelReattachNotice
+        report={report({ channel_group_drift_note: NOT_CHECKED })}
+      />,
+    );
+    const notice = screen.getByTestId('existing-channel-reattach-notice');
+    expect(notice.textContent).toMatch(/Some channel checks did not run/);
+    expect(notice.textContent).not.toMatch(/left alone/i);
+  });
+
+  it('carries the note on a preview, where the category can still be re-selected', () => {
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          is_dry_run: true,
+          outcome: null,
+          channel_group_drift_note: NOT_CHECKED,
+        })}
+      />,
+    );
+    expect(
+      screen.getByTestId('ecrn-channel-group-not-checked'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no note, and reports drift as before, when the check DID run', () => {
+    render(
+      <ExistingChannelReattachNotice
+        report={report({
+          channel_group_drift: 1,
+          channel_group_drift_details: [drift()],
+        })}
+      />,
+    );
+    expect(
+      screen.queryByTestId('ecrn-channel-group-not-checked'),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('ecrn-channel-group-drift').textContent).toMatch(/ch101/);
+  });
+
+  it('still renders nothing at all when no note and nothing drifted', () => {
+    // The note must not turn the silent, healthy case into a panel.
+    render(
+      <ExistingChannelReattachNotice
+        report={report({ channel_group_drift: 0, channel_group_drift_note: null })}
+      />,
+    );
+    expect(
+      screen.queryByTestId('existing-channel-reattach-notice'),
+    ).not.toBeInTheDocument();
+  });
 });

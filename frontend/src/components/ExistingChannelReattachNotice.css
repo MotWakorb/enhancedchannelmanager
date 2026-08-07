@@ -83,6 +83,14 @@
   color: var(--warning, #f59e0b);
 }
 
+/* "This check did not run" (bead r1ei7). Muted rather than warning-toned: it is
+   not a finding about the lineup, it is the absence of one — but it still sits
+   at body size, because a caveat set in meta type reads as a footnote and this
+   one is the whole content of the panel when it appears alone. */
+.ecrn-row-detail.ecrn-row-note {
+  color: var(--text-secondary, #888);
+}
+
 /* Meta role. */
 .ecrn-note {
   font-size: var(--type-meta-size);

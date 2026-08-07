@@ -880,6 +880,23 @@ class RestoreReport(BaseModel):
         default_factory=list,
         description="Which channels drifted, the group they are in, and the archive's.",
     )
+    # Why the count above is not a finding, when it is not one. The pass is
+    # SKIPPED when the operator deselects the channel-groups category (no
+    # archived group resolves through the remap, so every matched channel would
+    # report drift this restore was never asked to touch), and a skipped pass
+    # leaves ``channel_group_drift`` at ``0`` — which reads as "nothing drifted"
+    # when the truth is "nothing was examined". That is the SAME ambiguity the
+    # ``predicted`` flag and the per-category ``caveat`` exist to kill
+    # (bead …-tddmw), so it gets the same treatment: a short operator-facing
+    # sentence, sanitized prose, never a secret. ``None`` when the pass ran.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    channel_group_drift_note: str | None = Field(
+        default=None,
+        description=(
+            "Operator-facing note saying the channel-group check did NOT run "
+            "(so its zero is 'not examined', not 'no drift'). No secrets."
+        ),
+    )
 
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)

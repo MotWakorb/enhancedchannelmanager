@@ -14,7 +14,7 @@ This walkthrough assumes:
 - You want to carry your M3U/EPG credentials (if so, you need the encrypted backup path).
 
 !!! danger "Read this before you migrate"
-    Written for ECM `0.18.1-0036` / Dispatcharr `0.28.2`. A restored
+    Written for ECM `0.18.1-0040` / Dispatcharr `0.28.2`. A restored
     lineup genuinely **plays**, confirmed by fetching real media bytes,
     not just checking a URL is set. One thing still needs your attention
     on every migration:
