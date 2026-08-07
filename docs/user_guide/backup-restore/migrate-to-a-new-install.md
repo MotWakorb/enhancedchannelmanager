@@ -14,11 +14,10 @@ This walkthrough assumes:
 - You want to carry your M3U/EPG credentials (if so, you need the encrypted backup path).
 
 !!! danger "Read this before you migrate"
-    Measured against ECM `0.18.1-0023` / Dispatcharr `0.28.2`. A restored
-    lineup now genuinely **plays**, confirmed by fetching real media bytes,
-    not just checking a URL is set: a substantial improvement over the
-    prior pin (`0.18.1-0022`), where nothing played at all. One thing
-    still needs your attention on every migration:
+    Written for ECM `0.18.1-0036` / Dispatcharr `0.28.2`. A restored
+    lineup genuinely **plays**, confirmed by fetching real media bytes,
+    not just checking a URL is set. One thing still needs your attention
+    on every migration:
 
     - **A standard (redacted) backup needs a recovery sequence** before
       playback works: re-enter credentials, then refresh the M3U account.
@@ -26,10 +25,12 @@ This walkthrough assumes:
       earlier builds a third step (re-running the restore) was also
       required. See Step 6.
 
-    EPG links are also still lost on every migration and need re-linking by
-    hand (Step 7). See [Run a restore drill](run-a-restore-drill.md) for
-    the full findings, including the exact version pin this was measured
-    on.
+    EPG links round-trip correctly as of the round-trip drill's most
+    recent measurement (9 of 9 seeded links survived on `0.18.1-0035`,
+    on both artifact variants); this article previously said the
+    opposite. See Step 7 and [Run a restore drill](run-a-restore-drill.md)
+    for the full findings, including the exact version pin each claim was
+    measured on.
 
 ---
 
@@ -257,20 +258,19 @@ After the restore:
    plus the M3U refresh; on an earlier build it also includes running the
    restore a second time.
 
-!!! danger "EPG links are still lost, and still need manual re-linking"
-    Every channel that had an EPG link on the old install loses it on the
-    new one. This is a confirmed, still-open residual defect, not a
-    seeding artifact (`enhancedchannelmanager-dfkbn`). Root cause: the
-    restore relinks by the channel's archived `tvg_id`, but ECM's own
-    channel rows carry `epg_data_id` with `tvg_id: None`, so there is
-    nothing for the restore to match against. Setting `epg_data_id`
-    through ECM's own API has the same effect; this is not specific to
-    the restore path.
+!!! success "EPG links survive a migration"
+    A round-trip drill measured this directly on `0.18.1-0035`: all 9
+    seeded EPG links survived, on both artifact variants, with the
+    restore's own `epg_links_unrestored` at `0` and no channels named in
+    `epg_link_miss_details` (`enhancedchannelmanager-dfkbn`). This
+    article previously said every linked channel loses its EPG link on
+    every migration; that was wrong for this build.
 
-    The restore report now names exactly which channels lost their EPG
-    link (`epg_link_miss_details`), and the post-restore UI surfaces the
-    same list. Re-link those channels by hand, or re-run EPG auto-match;
-    see [Match channels to EPG data](../epg/channel-to-epg-matching.md).
+    If you ever do see a channel lose its EPG link, the restore report
+    names exactly which ones in `epg_link_miss_details`, and the
+    post-restore UI surfaces the same list. Re-link those channels by
+    hand, or re-run EPG auto-match; see
+    [Match channels to EPG data](../epg/channel-to-epg-matching.md).
 
     See [Run a restore drill](run-a-restore-drill.md) for the full
     accounting of what a clean round trip does and does not currently
