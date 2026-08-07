@@ -820,14 +820,27 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
        header: X-API-Key: <key>
    ```
 
-   **Use at least a 40-second deadline for this first fetch.** Run 9
-   measured a 25-second deadline returning 0 bytes on the very first
-   post-restore fetch of a channel; the identical fetch at 40 seconds
-   returned HTTP 200, `video/mp2t`, 262,144 B. The first fetch after a
-   restore opens a fresh upstream connection to the provider and is
-   materially slower than steady state; a shorter deadline reads as a
-   playback failure that isn't one. Once you've confirmed a channel plays
-   once, later checks in the same session can use a shorter deadline.
+   **Use at least a 60-second deadline for this first fetch.** This has
+   now been measured across three separate runs. Run 9 measured a
+   25-second deadline returning 0 bytes on the very first post-restore
+   fetch of a channel, with the identical fetch passing at 40 seconds.
+   **Run 10 is the run that raises the figure: a 40-second deadline
+   itself returned 0 bytes on the first fetch, and the identical fetch
+   passed at 60 seconds.** Run 11, on the published `0.18.1-0038` image,
+   used a 60-second deadline throughout and passed (40 seconds was not
+   retested there, so run 11 corroborates that 60 seconds works without
+   independently proving 40 seconds insufficient — run 10 already
+   establishes that). Treat 60 seconds as the floor, not a guess: it's
+   what has been observed to work on this drill's host and provider, not
+   a guarantee for every environment.
+
+   The first fetch after a restore opens a fresh upstream connection to
+   the provider and is materially slower than steady state; a shorter
+   deadline reads as a playback failure that isn't one. **A timeout hit
+   before any bytes arrive is inconclusive on this cold fetch** — retry
+   once at a longer deadline before concluding playback is broken. Once
+   you've confirmed a channel plays once, later checks in the same
+   session can use a shorter deadline.
 
    Record status, content type, and byte count. A few hundred KB is
    enough to call it real media. A read-deadline hit *after* bytes have
