@@ -230,8 +230,8 @@ describe('DbasRestoreSavedModal', () => {
     render(<DbasRestoreSavedModal filename={FILENAME} onClose={vi.fn()} />);
     await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
 
-    const keep = screen.getByLabelText(/keep their current guide data and logos/i);
-    const replace = screen.getByLabelText(/replace their guide data and logos/i);
+    const keep = screen.getByLabelText(/keep their current guide data, logos, and grouping/i);
+    const replace = screen.getByLabelText(/replace their guide data, logos, and grouping/i);
     expect(keep).toBeInTheDocument();
     expect(replace).toBeInTheDocument();
     expect(keep).toBeChecked();
@@ -250,7 +250,7 @@ describe('DbasRestoreSavedModal', () => {
     render(<DbasRestoreSavedModal filename={FILENAME} onClose={vi.fn()} />);
     await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByLabelText(/replace their guide data and logos/i));
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
@@ -299,7 +299,7 @@ describe('DbasRestoreSavedModal', () => {
     fireEvent.click(back);
     await waitFor(() =>
       expect(
-        screen.getByLabelText(/keep their current guide data and logos/i),
+        screen.getByLabelText(/keep their current guide data, logos, and grouping/i),
       ).toBeInTheDocument(),
     );
   });

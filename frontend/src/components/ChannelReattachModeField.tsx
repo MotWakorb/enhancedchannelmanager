@@ -12,6 +12,13 @@ import type { ChannelReattachMode } from '../services/api';
  * not have to map an enum onto a consequence. The visible text is what happens
  * to their channels.
  *
+ * "grouping" joined "guide data and logos" in bead r1ei7, when the mode was
+ * widened to cover a channel's CHANNEL GROUP as well. It is the plain word for
+ * "which group each channel is in", and it avoids colliding with channel
+ * PROFILES, which the surrounding UI also calls a kind of grouping. The label
+ * is quoted verbatim by ExistingChannelReattachNotice's remedy copy — change it
+ * in both places or that sentence points at a control that does not exist.
+ *
  * Default is keep-mine. In the disaster-recovery case the target is empty, every
  * channel is created, and the two options do exactly the same thing, so the safe
  * default costs that case nothing. It only differs when restoring into a live,
@@ -53,9 +60,10 @@ export function ChannelReattachModeField({
           onChange={() => onChange('preserve')}
         />
         <span>
-          <strong>Keep their current guide data and logos</strong>
+          <strong>Keep their current guide data, logos, and grouping</strong>
           <span className="dbr-mode-hint">
-            Leaves channels you already have exactly as they are. Recommended.
+            Leaves channels you already have exactly as they are. The results still
+            list any channel the backup puts in a different group. Recommended.
           </span>
         </span>
       </label>
@@ -71,10 +79,11 @@ export function ChannelReattachModeField({
           onChange={() => onChange('overwrite')}
         />
         <span>
-          <strong>Replace their guide data and logos with the backup&apos;s</strong>
+          <strong>Replace their guide data, logos, and grouping with the backup&apos;s</strong>
           <span className="dbr-mode-hint">
-            Any guide link or logo you set on those channels yourself is lost. Undo cannot
-            bring it back.
+            Any guide link or logo you set on those channels yourself is lost, and
+            channels move into the groups the backup puts them in. Undo cannot bring
+            any of it back.
           </span>
         </span>
       </label>

@@ -474,4 +474,83 @@ describe('RestoreCompleteSummary — stream reattach', () => {
     expect(notice.textContent).toContain('12 channels have no playable stream');
     expect(within(notice).getAllByTestId('stream-reattach-unplayable-row')).toHaveLength(12);
   });
+  // -----------------------------------------------------------------------
+  // Honest category reporting (beads 3t74w / tddmw)
+  // -----------------------------------------------------------------------
+
+  it('labels a name-only channel-group match as matched by name, not identical', () => {
+    // The restore adopts a destination group on its NAME and compares nothing
+    // else; "Already exists (identical)" was a claim it never checked.
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          categories: [
+            category({
+              entity_type: 'channel_group',
+              skipped: 1,
+              skip_details: [
+                { reason: 'already_exists_name_match', label: 'Drill Movies' },
+              ],
+            }),
+          ],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('rcs-skip-toggle'));
+    const details = screen.getByTestId('rcs-skip-details');
+    expect(within(details).getByText('Already exists (matched by name)')).toBeInTheDocument();
+    expect(within(details).queryByText('Already exists (identical)')).not.toBeInTheDocument();
+  });
+
+  it('renders a NOT-PREDICTED category as such instead of as four zeroes', () => {
+    // Drill run 12: the apply reported "Streams 9 CREATED" and the preview had
+    // no Streams row at all. Emitting the row with zeroes would just swap an
+    // absent claim for a confident wrong one.
+    render(
+      <RestoreCompleteSummary
+        report={dryRunReport({
+          categories: [
+            category({
+              entity_type: 'stream',
+              predicted: false,
+              caveat: 'Streams cannot be previewed.',
+            }),
+          ],
+        })}
+      />,
+    );
+    const row = screen.getByTestId('rcs-category-stream');
+    expect(within(row).getByTestId('rcs-not-predicted')).toBeInTheDocument();
+    expect(within(row).queryByTestId('rcs-count-created')).not.toBeInTheDocument();
+    expect(row.textContent).toContain('Streams cannot be previewed.');
+  });
+
+  it('shows a category caveat beside counts it still renders', () => {
+    render(
+      <RestoreCompleteSummary
+        report={dryRunReport({
+          categories: [
+            category({
+              entity_type: 'channel_group',
+              would_create: 378,
+              caveat: 'Restoring an M3U account makes its provider groups appear first.',
+            }),
+          ],
+        })}
+      />,
+    );
+    const row = screen.getByTestId('rcs-category-channel_group');
+    expect(within(row).getByTestId('rcs-count-created').textContent).toBe('378');
+    expect(within(row).getByTestId('rcs-category-caveat').textContent).toContain(
+      'provider groups appear first',
+    );
+  });
+
+  it('shows no caveat and full counts for a category that carries neither', () => {
+    render(<RestoreCompleteSummary report={appliedReport()} />);
+    const row = screen.getByTestId('rcs-category-channel');
+    expect(within(row).queryByTestId('rcs-category-caveat')).not.toBeInTheDocument();
+    expect(within(row).queryByTestId('rcs-not-predicted')).not.toBeInTheDocument();
+    expect(within(row).getByTestId('rcs-count-created').textContent).toBe('12');
+  });
 });

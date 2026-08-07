@@ -172,11 +172,37 @@ logger = logging.getLogger(__name__)
 # Re-exported for callers that already import the archive contract from here.
 __all__ = [
     "ARCHIVE_EPG_TVG_ID_KEY",
+    "CHANNEL_GROUPS_NOT_CHECKED_NOTE",
     "EPG_INDEX_MAX_ROWS",
     "reattach_channel_logos",
     "reattach_epg_links",
     "reattach_profile_memberships",
+    "reconcile_channel_groups",
 ]
+
+# Shown in a drift row when a channel belongs to no group on one side. A NAME is
+# what these rows carry, and "no group" is a real state, not a missing value.
+_NO_GROUP_LABEL = "no group"
+
+# What the report says when :func:`reconcile_channel_groups` never ran because
+# the operator deselected the channel-groups category (bead ``…-r1ei7``).
+#
+# The pass CANNOT run in that state — no archived group resolves through the
+# remap, so every matched channel would report drift against a group this
+# restore was never asked to touch — but staying silent leaves
+# ``channel_group_drift = 0`` to be read as "no drift found" when nothing was
+# ever examined. That is the same ambiguity class as an OMITTED preview category
+# (bead ``…-tddmw``), and it gets the same answer: say so, in one sentence, in
+# every surface the count itself reaches.
+#
+# ONE string, used verbatim by the restore-complete panel and by the task
+# one-liner, so the two can never say different things about the same run. It is
+# a complete sentence rather than a count phrase because it is a caveat, not an
+# action item — nothing about it is a number the operator can act on.
+CHANNEL_GROUPS_NOT_CHECKED_NOTE = (
+    "Channel grouping was not checked: the channel groups category was not "
+    "selected for this restore, so no group drift was looked for."
+)
 
 
 def _channel_label(archive_channel: dict) -> str:
@@ -821,3 +847,242 @@ async def reattach_profile_memberships(
         asserted, is_dry_run,
     )
     return asserted
+
+
+# ---------------------------------------------------------------------------
+# Channel -> group membership (bead …-r1ei7)
+# ---------------------------------------------------------------------------
+
+
+def _group_name_index(rows) -> dict[int, str]:
+    """``{group id: name}`` for a list of channel-group rows. Never raises."""
+    index: dict[int, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        group_id = _as_int(row.get("id"))
+        name = row.get("name")
+        if group_id is not None and name:
+            index[group_id] = str(name)
+    return index
+
+
+def _group_label(group_id: int | None, names: dict[int, str]) -> str:
+    """Operator-facing name for a group id — never an id, never a blank."""
+    if group_id is None:
+        return _NO_GROUP_LABEL
+    return names.get(group_id) or "group %d" % group_id
+
+
+def _group_identity(group_id: int | None, names: dict[int, str]) -> str | None:
+    """The cross-instance identity of a group reference: its NAME, or ``None``.
+
+    A channel group's ONLY identity across two instances is its name — that is
+    what the restore itself adopts by (kxuj2 contract; ADR-008), and the ids on
+    either side are instance-local. Comparing NAMES rather than ids is also the
+    only comparison a PREVIEW can make honestly: a group this restore would
+    CREATE has no destination id yet, and the provisional id the importers use
+    in its place is the archive's own id, which on a populated target can
+    collide with a real destination group that means something else entirely.
+    (Run 12's target had renamed group 376; comparing ids made a preview report
+    3 of the 7 drifted channels as correct.)
+
+    Returns ``None`` when the id resolves to no name — the caller then falls back
+    to an id comparison rather than guessing. ``group_id`` of ``None`` is not
+    unknown: it is the real state "belongs to no group", and gets its own
+    sentinel so two ungrouped channels compare equal.
+    """
+    if group_id is None:
+        return ""
+    name = names.get(group_id)
+    if not name:
+        return None
+    return name.strip().lower()
+
+
+async def reconcile_channel_groups(
+    *,
+    client: DispatcharrClient,
+    report: RestoreReport,
+    remap: IdRemapTable,
+    archive_channels: list[dict],
+    archive_channel_groups: list[dict],
+    matched_existing_channels: "dict[int, dict] | None",
+    created_source_ids: "set[int] | None",
+    mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    is_dry_run: bool = False,
+) -> int:
+    """Report — and under OVERWRITE, restore — each channel's archived group.
+
+    Bead ``…-r1ei7``. A channel that already exists on the destination is matched
+    ``ALREADY_EXISTS_IDENTICAL`` and never overwritten (spike ``xp6mp``), so its
+    ``channel_group_id`` is never written. On a POPULATED target that means the
+    lineup keeps whatever grouping the destination had — and drill run 12
+    measured exactly that, in BOTH relink modes, with the restore reporting
+    ``outcome=success, failed 0`` and no counter, panel or note mentioning it.
+    The counts reconcile perfectly, which is what makes it dangerous.
+
+    WHY THIS RUNS AFTER CHANNELS, NOT INSIDE THE GROUPS IMPORTER. Groups are
+    restored BEFORE channels (the hard Phase-2 ordering; ADR-012), and a group's
+    membership is not on the group row at all — it is the ``channel_group_id`` on
+    each CHANNEL. At group-import time the destination's future membership does
+    not exist yet, so there is nothing to compare. The comparison is only
+    possible once every channel has been created or matched, which is here.
+
+    MODE. :attr:`ChannelReattachMode.PRESERVE` (the default) REPORTS every
+    divergence and PATCHes nothing — the operator merging into a live install
+    chose it so their own lineup is left alone, and the "never overwrite an
+    existing channel" contract keeps holding. :attr:`ChannelReattachMode.OVERWRITE`
+    additionally moves the channel into the archive's group, and STILL records
+    what it moved: reconciling silently would trade one invisible outcome for
+    another.
+
+    WHAT IS NOT DRIFT. A channel THIS restore created carried the archive's
+    (remapped) group in its create payload, so it is correct by construction —
+    counting it would report a correction that never happened, and on a fresh
+    disaster-recovery target that is every channel. A channel already sitting in
+    the archive's group is not news either.
+
+    DRY RUN. Predicts exactly what the apply reports, from the same two inputs
+    (the archived ``channel_group_id`` and the destination row the channels
+    importer matched), and PATCHes nothing. The number that tells an operator
+    what ``replace`` is about to do to their lineup is useless after the fact —
+    the ``dgnms`` discipline.
+
+    BEST-EFFORT, NEVER FATAL. An upstream failure is logged (by exception TYPE
+    only — an httpx error's ``str()`` embeds the request URL) and the row is
+    reported as NOT moved. Nothing here raises or triggers a rollback.
+
+    Args:
+        client: The Dispatcharr API client.
+        report: The shared :class:`RestoreReport`; each divergence is recorded
+            via ``record_channel_group_drift``.
+        remap: The shared :class:`IdRemapTable` (``CHANNEL`` + ``CHANNEL_GROUP``).
+        archive_channels: The CHANNEL records from the export archive.
+        archive_channel_groups: The CHANNEL_GROUP records from the export
+            archive — read for their NAMES, so a drift row can say which group
+            the archive means rather than quoting an instance-local id.
+        matched_existing_channels: ``source id -> the destination row as the
+            channels importer found it``, its out-parameter. A channel absent
+            from it was not matched against a pre-existing row, so this pass has
+            no destination grouping to compare and stays silent about it.
+        created_source_ids: ARCHIVE ids this restore created (or would create).
+            Excluded — see WHAT IS NOT DRIFT above.
+        mode: What to do about a divergence. See MODE above.
+        is_dry_run: Report the drift without PATCHing anything.
+
+    Returns:
+        The number of channels moved into the archive's group (the WOULD-BE
+        number on a dry run; always ``0`` under ``preserve``).
+    """
+    matched = matched_existing_channels or {}
+    created = created_source_ids or set()
+    if not matched:
+        return 0
+
+    # The destination's group NAMES. Best-effort: a failed read costs the rows
+    # their pretty name, never the finding itself.
+    try:
+        destination_names = _group_name_index(await client.get_channel_groups())
+    except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
+        logger.warning(
+            "[DBAS-REATTACH] Could not list destination channel groups; drift "
+            "rows will name groups by id: %s",
+            type(exc).__name__,
+        )
+        destination_names = {}
+    archive_names = _group_name_index(archive_channel_groups)
+
+    moved_count = 0
+    for archive_channel in archive_channels or []:
+        source_channel_id = _as_int(archive_channel.get("id"))
+        if source_channel_id is None or source_channel_id in created:
+            continue
+        existing = matched.get(source_channel_id)
+        if not isinstance(existing, dict):
+            continue
+
+        current_group_id = _as_int(existing.get("channel_group_id"))
+        archive_group_source = _as_int(archive_channel.get("channel_group_id"))
+        if archive_group_source is None:
+            # The archive puts this channel in NO group. That is a real
+            # selection, and it resolves without consulting the remap.
+            archive_group_dest: int | None = None
+            resolvable = True
+        else:
+            archive_group_dest = remap.resolve(
+                EntityType.CHANNEL_GROUP, archive_group_source
+            )
+            resolvable = archive_group_dest is not None
+
+        # Compare by NAME, the only identity a channel group carries across two
+        # instances, falling back to destination ids only when a name is not
+        # available on both sides (a failed destination read, or an archive that
+        # carries no row for the group). See :func:`_group_identity`.
+        current_identity = _group_identity(current_group_id, destination_names)
+        archive_identity = _group_identity(archive_group_source, archive_names)
+        if current_identity is not None and archive_identity is not None:
+            if current_identity == archive_identity:
+                continue
+        elif resolvable and current_group_id == archive_group_dest:
+            continue
+
+        label = _channel_label(archive_channel)
+        dest_channel_id = remap.resolve(EntityType.CHANNEL, source_channel_id)
+        if dest_channel_id is None:
+            dest_channel_id = _as_int(existing.get("id"))
+
+        moved = False
+        if mode is ChannelReattachMode.OVERWRITE and resolvable:
+            if is_dry_run:
+                moved = True
+            elif dest_channel_id is not None:
+                try:
+                    await client.update_channel(
+                        dest_channel_id, {"channel_group_id": archive_group_dest}
+                    )
+                    moved = True
+                except Exception as exc:  # noqa: BLE001 - per-channel containment
+                    # TYPE only: an httpx error's str() embeds the request URL.
+                    # The channel is already named in this line.
+                    logger.warning(
+                        "[DBAS-REATTACH] Could not move channel '%s' (id=%s) into "
+                        "its archived group: %s",
+                        label, dest_channel_id, type(exc).__name__,
+                    )
+        elif mode is ChannelReattachMode.OVERWRITE and not resolvable:
+            # The archived group is not on this destination (its category was
+            # deselected, or its create failed). There is no id to move the
+            # channel to, and inventing one would be worse than the silence this
+            # bead exists to end. Report it and leave it.
+            logger.warning(
+                "[DBAS-REATTACH] Channel '%s' belongs to an archived group that "
+                "was not restored here; its group was left as-is.",
+                label,
+            )
+
+        report.record_channel_group_drift(
+            name=label,
+            channel_id=dest_channel_id,
+            current_group=_group_label(current_group_id, destination_names),
+            archive_group=(
+                _NO_GROUP_LABEL
+                if archive_group_source is None
+                else _group_label(archive_group_source, archive_names)
+            ),
+            moved=moved,
+        )
+        if moved:
+            moved_count += 1
+
+    if report.channel_group_drift:
+        logger.warning(
+            "[DBAS-REATTACH] %d existing channel(s) are in a different group "
+            "than the backup assigns them; %s %d (mode=%s, dry_run=%s).",
+            report.channel_group_drift,
+            "would move" if is_dry_run else "moved",
+            moved_count,
+            mode.value,
+            is_dry_run,
+        )
+    return moved_count

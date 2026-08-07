@@ -116,6 +116,19 @@ class SkipReason(str, Enum):
     """
 
     ALREADY_EXISTS_IDENTICAL = "already_exists_identical"   # no-op; dest matches archive
+    # A destination row was ADOPTED because its NAME matched, and nothing beyond
+    # the name was (or could be) compared — bead …-3t74w. Distinct from
+    # ALREADY_EXISTS_IDENTICAL, which asserts the destination row MATCHES the
+    # archive's. Used by the CHANNEL_GROUP category, whose only cross-instance
+    # identity IS the name (kxuj2 contract; ADR-008): a group's contents live on
+    # the CHANNELS, which are restored after it, so at match time there is
+    # nothing to compare and "identical" was a claim the importer had not
+    # earned. Run 12 measured a target group named ``Drill Movies`` holding a
+    # DIFFERENT channel adopted under that reason with the restore reporting
+    # ``success / failed 0``. The adopt itself is contractual and unchanged; the
+    # divergence in CONTENTS is reported separately, after channels, as
+    # :attr:`RestoreReport.channel_group_drift`.
+    ALREADY_EXISTS_NAME_MATCH = "already_exists_name_match"
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)
@@ -200,9 +213,20 @@ class ChannelReattachMode(str, Enum):
     back after the create, because both are SOURCE ids the create payload has to
     drop. A channel that already existed on the destination is matched
     ``ALREADY_EXISTS_IDENTICAL`` and is deliberately never overwritten for its
-    name, number or group, but it IS entered in the CHANNEL remap so a reattach
+    name or number, but it IS entered in the CHANNEL remap so a reattach
     pass can resolve it. That makes the pre-existing channel reachable by these
-    two PATCHes even though nothing else about it is touched.
+    PATCHes even though nothing else about it is touched.
+
+    WHAT THE MODE GOVERNS (widened by bead ``…-r1ei7``). It started as "EPG link
+    and logo". It now also governs the channel's GROUP: run 12 restored onto a
+    populated target and measured not one channel's ``channel_group_id``
+    corrected to the archive's, in EITHER mode, with nothing in the report
+    saying so. Grouping belongs to the same question as the other two — "what
+    happens to a channel I already had" — and answering it differently from the
+    logo would be an inconsistency the operator has no way to predict. The
+    DIFFERENCE from the other two is that :attr:`PRESERVE` still REPORTS the
+    divergence (:attr:`RestoreReport.channel_group_drift`): leaving state alone
+    is a choice, leaving it unmentioned is the defect.
 
     The two cases the operator is actually in:
 
@@ -570,6 +594,42 @@ class ProfileMembershipDriftDetail(BaseModel):
     )
 
 
+class ChannelGroupDriftDetail(BaseModel):
+    """One restored channel sitting in a group the archive does not put it in (…-r1ei7).
+
+    The channel-GROUP counterpart to :class:`ProfileMembershipDriftDetail`. A
+    channel that already exists on the destination is matched
+    ``ALREADY_EXISTS_IDENTICAL`` and never overwritten (spike ``xp6mp``), so its
+    ``channel_group_id`` is never written — on a populated target the lineup
+    silently keeps whatever grouping the destination had while the counts
+    reconcile exactly.
+
+    Both group fields are operator-facing NAMES, never ids: the ids are
+    instance-local and mean nothing to the person reading the report. ``moved``
+    is ``True`` only in :attr:`ChannelReattachMode.OVERWRITE`, where the pass
+    also puts the channel back in the archive's group (on a dry run it is the
+    WOULD-BE move, like every other counter these passes predict).
+    """
+
+    channel_id: int | None = Field(
+        default=None, description="Destination Dispatcharr channel id, when known."
+    )
+    name: str = Field(description="Operator-facing channel name — never a secret.")
+    current_group: str = Field(
+        description="The group the destination has this channel in — a name, never an id.",
+    )
+    archive_group: str = Field(
+        description="The group the archive puts this channel in — a name, never an id.",
+    )
+    moved: bool = Field(
+        default=False,
+        description=(
+            "True when the channel was moved into the archive's group (or, on a "
+            "dry run, would be). Always False under the preserve mode."
+        ),
+    )
+
+
 class EntityCategoryReport(BaseModel):
     """Per-entity-category counts for ONE category.
 
@@ -620,6 +680,32 @@ class EntityCategoryReport(BaseModel):
     # (with reason)" UX. Populated on apply; optionally on dry-run for skips.
     skip_details: list[SkipDetail] = Field(default_factory=list)
     failure_details: list[FailureDetail] = Field(default_factory=list)
+
+    # --- How far the counts above can be trusted (bead …-tddmw). -------------
+    # Both are DRY-RUN concepts; an apply reports facts, so it leaves them at
+    # their defaults. ADDITIVE optional — no CONTRACT_VERSION bump.
+    #
+    # ``predicted=False`` says this preview did NOT predict the category at all,
+    # and its zeroes must be rendered as "not predicted" rather than as a
+    # confident zero. It is the per-category form of the ``None`` the
+    # stream-health counters already use (bead …-dgnms): run 12 measured an
+    # apply reporting ``Streams 9 CREATED`` against a preview that omitted the
+    # Streams row ENTIRELY — not zero, absent — which is worse than either,
+    # because an absent row cannot be argued with.
+    predicted: bool = Field(
+        default=True,
+        description=(
+            "False when a dry run could NOT predict this category — render the "
+            "counts as 'not predicted', never as a confident zero."
+        ),
+    )
+    # A short, operator-facing sentence about why the counts may not match the
+    # apply. Sanitized prose, never a secret. ``None`` when there is nothing to
+    # qualify.
+    caveat: str | None = Field(
+        default=None,
+        description="Operator-facing note qualifying this category's counts. No secrets.",
+    )
 
 
 class RestoreReport(BaseModel):
@@ -777,6 +863,39 @@ class RestoreReport(BaseModel):
     profile_membership_drift_details: list[ProfileMembershipDriftDetail] = Field(
         default_factory=list,
         description="Which profiles drifted, and which channels were flipped back.",
+    )
+
+    # Channels sitting in a group the archive does not put them in (…-r1ei7).
+    # The channel-GROUP sibling of the pair above, and the counter run 12 needed
+    # and did not have: a populated-target restore kept the destination's whole
+    # grouping in BOTH relink modes while reporting ``success / failed 0``.
+    # Counts CHANNELS (the operator-meaningful unit), tracking
+    # ``len(channel_group_drift_details)`` — one row per drifted channel.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    channel_group_drift: int = Field(
+        default=0,
+        description="Channels whose group differs from the one the archive assigns them.",
+    )
+    channel_group_drift_details: list[ChannelGroupDriftDetail] = Field(
+        default_factory=list,
+        description="Which channels drifted, the group they are in, and the archive's.",
+    )
+    # Why the count above is not a finding, when it is not one. The pass is
+    # SKIPPED when the operator deselects the channel-groups category (no
+    # archived group resolves through the remap, so every matched channel would
+    # report drift this restore was never asked to touch), and a skipped pass
+    # leaves ``channel_group_drift`` at ``0`` — which reads as "nothing drifted"
+    # when the truth is "nothing was examined". That is the SAME ambiguity the
+    # ``predicted`` flag and the per-category ``caveat`` exist to kill
+    # (bead …-tddmw), so it gets the same treatment: a short operator-facing
+    # sentence, sanitized prose, never a secret. ``None`` when the pass ran.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    channel_group_drift_note: str | None = Field(
+        default=None,
+        description=(
+            "Operator-facing note saying the channel-group check did NOT run "
+            "(so its zero is 'not examined', not 'no drift'). No secrets."
+        ),
     )
 
     started_at: datetime | None = Field(default=None)
@@ -1058,6 +1177,42 @@ class RestoreReport(BaseModel):
             )
         )
         self.profile_membership_drift += len(disabled) + len(enabled)
+
+    def record_channel_group_drift(
+        self,
+        *,
+        name: str,
+        current_group: str,
+        archive_group: str,
+        channel_id: int | None = None,
+        moved: bool = False,
+    ) -> None:
+        """Record ONE channel sitting in a group the archive does not assign it (…-r1ei7).
+
+        The ONE place the aggregate count and the detail list are both updated,
+        so they cannot drift apart — the ``credentials_needing_reentry``
+        precedent. Called in BOTH relink modes: ``preserve`` records the
+        divergence and changes nothing, ``overwrite`` records it and sets
+        ``moved``.
+
+        Args:
+            name: Operator-facing channel name — never a secret.
+            current_group: The group the destination has the channel in, by NAME.
+            archive_group: The group the archive puts the channel in, by NAME.
+            channel_id: The destination channel id, when known.
+            moved: Whether the channel was (or on a dry run would be) moved into
+                the archive's group.
+        """
+        self.channel_group_drift_details.append(
+            ChannelGroupDriftDetail(
+                channel_id=channel_id,
+                name=name,
+                current_group=current_group,
+                archive_group=archive_group,
+                moved=moved,
+            )
+        )
+        self.channel_group_drift = len(self.channel_group_drift_details)
 
 
 # ---------------------------------------------------------------------------

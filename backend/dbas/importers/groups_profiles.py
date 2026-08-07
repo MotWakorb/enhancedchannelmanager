@@ -36,10 +36,26 @@ case-insensitive and whitespace-trimmed (:func:`_norm_name`). This mirrors ECM's
 existing upsert-by-name behaviour for channel groups (``backup.py`` —
 ``_restore_channel_groups``) and stream profiles, and is the only stable identity
 these rows carry across instances (their numeric ids differ). On a name match the
-row is skipped ``ALREADY_EXISTS_IDENTICAL`` and its source id is remapped to the
-EXISTING destination id so a later FK reference resolves — NEVER the
-delete-all-then-recreate strategy, which would destroy the very relationships the
-remap exists to preserve (kxuj2 contract; ADR-008 grooming note).
+row is SKIPPED and its source id is remapped to the EXISTING destination id so a
+later FK reference resolves — NEVER the delete-all-then-recreate strategy, which
+would destroy the very relationships the remap exists to preserve (kxuj2
+contract; ADR-008 grooming note).
+
+WHAT THE SKIP CLAIMS (bead ``…-3t74w``). Channel profiles and stream profiles
+report ``ALREADY_EXISTS_IDENTICAL``. **Channel groups do not**, because that
+claim was never earned: a Dispatcharr channel group carries nothing but a name,
+and its CONTENTS are the ``channel_group_id`` on the CHANNELS — restored after
+this importer, so at match time there is nothing to compare. Drill run 12
+(2026-08-07) built a target group named ``Drill Movies`` that was a genuinely
+different object (different id, holding a different channel), watched the restore
+adopt it, and read ``already exists identical`` and ``success / failed 0`` back.
+Channel groups therefore report ``ALREADY_EXISTS_NAME_MATCH`` — the true
+statement — and the CONTENT divergence is reported after the channels step as
+:attr:`~dbas.restore_contracts.RestoreReport.channel_group_drift`
+(:func:`dbas.channel_reattach.reconcile_channel_groups`). The ADOPT and the FK
+remap are unchanged: name is the identity, and the alternative (a
+``CONFLICT`` failure) would cascade to ``DEPENDENCY_UNRESOLVED`` for every
+channel pointing at the group and lose more than it reported.
 
 ----------------------------------------------------------------------------
 FK REMAP
@@ -136,6 +152,15 @@ class CategoryConfig:
     log_prefix: str
     payload_style: str = "dict"  # "dict" | "name"
     remappable_fk_fields: dict = field(default_factory=dict)
+    # What a NAME match against the destination is reported as (bead …-3t74w).
+    # ``ALREADY_EXISTS_IDENTICAL`` asserts the destination row matches the
+    # archive's; for channel groups nothing is ever compared beyond the name, so
+    # that category reports ``ALREADY_EXISTS_NAME_MATCH`` instead. See the
+    # module docstring's IDENTITY section.
+    name_match_skip_reason: SkipReason = SkipReason.ALREADY_EXISTS_IDENTICAL
+    # Operator-facing qualifier attached to this category's DRY-RUN counts only
+    # (bead …-tddmw). ``None`` when the preview's counts need no qualification.
+    dry_run_caveat: str | None = None
 
 
 # Canonical config table for the three categories. Keyed by the archive section
@@ -147,6 +172,20 @@ _CATEGORY_CONFIGS: dict[str, CategoryConfig] = {
         creator="create_channel_group",
         log_prefix="DBAS-CHGROUP",
         payload_style="name",
+        # A channel group carries no attribute but its name, and its CONTENTS
+        # live on the channels — restored AFTER it. "Identical" was never
+        # checked and cannot be at this point (bead …-3t74w).
+        name_match_skip_reason=SkipReason.ALREADY_EXISTS_NAME_MATCH,
+        # Run 12: preview ``378 will create / 0 will skip`` vs apply ``3 created
+        # / 375 skipped``. The counts are right for the state a preview can see —
+        # the deferred M3U ingest materializes the provider groups before this
+        # category runs on the apply, and a preview refreshes nothing. Say so
+        # rather than model an ingest the preview cannot perform (bead …-tddmw).
+        dry_run_caveat=(
+            "Restoring an M3U account makes its provider groups appear before "
+            "this category runs, so the apply may create far fewer groups than "
+            "this preview shows and skip the rest. The end state is the same."
+        ),
     ),
     "channel_profiles": CategoryConfig(
         entity_type=EntityType.CHANNEL_PROFILE,
@@ -275,8 +314,11 @@ async def _import_category(
     * OPT-IN — off unless ``selected``; an unselected category records every row
       ``EXCLUDED_BY_OPERATOR`` and creates nothing.
     * Collision — a name match (case-insensitive/trimmed) against the destination
-      is skipped ``ALREADY_EXISTS_IDENTICAL`` and the source id is remapped to the
-      EXISTING destination id (never delete-all-then-recreate).
+      is skipped with the category's ``name_match_skip_reason``
+      (``ALREADY_EXISTS_IDENTICAL`` for the two profile categories,
+      ``ALREADY_EXISTS_NAME_MATCH`` for channel groups — bead ``…-3t74w``) and
+      the source id is remapped to the EXISTING destination id (never
+      delete-all-then-recreate).
     * FK remap — any ``remappable_fk_fields`` are rewritten through the remap;
       unresolvable -> ``DEPENDENCY_UNRESOLVED`` (never a stale id upstream).
     * Dry-run — reports ``would_create`` / ``would_skip``; no creates, no ledger.
@@ -321,6 +363,13 @@ async def _import_category(
         len(archive_rows),
     )
 
+    # A PREVIEW's counts for this category may not be what the apply does, for a
+    # reason the preview cannot remove (bead …-tddmw). Say so on the category
+    # itself so every surface that renders the report carries it — an apply
+    # reports facts and never carries a caveat.
+    if is_dry_run and config.dry_run_caveat:
+        cat.caveat = config.dry_run_caveat
+
     # Pre-fetch existing rows to detect name collisions (safe field only).
     try:
         existing = await getattr(client, config.getter)()
@@ -339,12 +388,13 @@ async def _import_category(
         name_key = _norm_name(archive_row.get("name"))
         existing_row = existing_by_name.get(name_key) if name_key else None
         if existing_row is not None:
-            _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
+            _skip(cat, config.name_match_skip_reason, label, source_id, is_dry_run)
             existing_id = existing_row.get("id")
             if source_id is not None and existing_id is not None:
                 remap.add(config.entity_type, int(source_id), int(existing_id))
             logger.info(
-                "[%s] %s '%s' already exists (dest id=%s); skipped.",
+                "[%s] %s '%s' matched an existing destination row by name "
+                "(dest id=%s); adopted, nothing created.",
                 config.log_prefix,
                 noun,
                 label,

@@ -302,6 +302,7 @@ async def import_channels(
     is_dry_run: bool = False,
     allow_fuzzy_stream_match: bool = True,
     created_source_ids: set[int] | None = None,
+    matched_existing_channels: dict[int, dict] | None = None,
 ) -> None:
     """Restore the CHANNEL category: create channel rows + reattach profiles.
 
@@ -344,6 +345,16 @@ async def import_channels(
             deliberately absent from it. SOURCE ids, not destination ids: a dry
             run's provisional destination id is not the id an apply would mint,
             and the population split has to read identically in both modes.
+        matched_existing_channels: OPTIONAL out-parameter, the complement of the
+            one above (bead …-r1ei7). When given, every archived channel MATCHED
+            against a pre-existing destination channel is recorded as
+            ``source id -> the destination row as it was found``. The
+            channel-group reconcile pass needs the destination's CURRENT
+            ``channel_group_id`` to know whether the lineup's grouping drifted,
+            and this importer is the one place that row is read: re-fetching it
+            afterwards would both cost a second full channel list and race the
+            creates this run just made. Populated on a dry run and an apply
+            alike, so the preview predicts the drift the apply reports.
     """
     cat = report.category(EntityType.CHANNEL)
 
@@ -365,6 +376,27 @@ async def import_channels(
         is_dry_run,
         len(archive_channels),
     )
+
+    # The STREAM category on a PREVIEW (bead …-tddmw). The stream layer below is
+    # apply-only — it matches archived streams against the DESTINATION's streams,
+    # and on a preview the provider streams have not been ingested yet (the M3U
+    # refresh is deferred to the end of the apply), so any split it produced
+    # would be a guess. It used to run no part of itself on a dry run and
+    # therefore never touched the category at all: run 12 measured an apply
+    # reporting ``Streams 9 CREATED`` against a preview with NO Streams row —
+    # not zero, ABSENT — for the one category that synthesizes placeholder
+    # streams. An absent row cannot be argued with, so the row is emitted and
+    # flagged NOT PREDICTED, the same answer the null stream-health counters
+    # give.
+    if is_dry_run:
+        stream_cat = report.category(EntityType.STREAM)
+        stream_cat.predicted = False
+        stream_cat.caveat = (
+            "Streams cannot be previewed: they are matched against this "
+            "install's own streams, and the provider streams this backup needs "
+            "are only fetched during the restore itself. Anything that does not "
+            "match is created as a placeholder and reconnected afterwards."
+        )
 
     # Pre-fetch existing channels to detect (name, channel_number) collisions.
     existing_by_key: dict[tuple, dict] = {}
@@ -437,6 +469,14 @@ async def import_channels(
             source_key = as_int(source_id)
             if source_key is not None and existing_id is not None:
                 remap.add(EntityType.CHANNEL, source_key, int(existing_id))
+                # Hand the matched destination row to the channel-group
+                # reconcile pass (bead …-r1ei7). This is the only point in the
+                # restore where the destination's PRE-restore grouping for this
+                # channel is in hand; the pass runs after every channel is
+                # resolved, by which time a re-read would see whatever this run
+                # has already changed.
+                if matched_existing_channels is not None:
+                    matched_existing_channels[source_key] = dict(existing)
                 if not is_dry_run:
                     reattach_queue.append((archive_channel, int(existing_id)))
                     _plan_streams(

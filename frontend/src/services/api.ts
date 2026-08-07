@@ -4205,6 +4205,14 @@ export type RestoreEntityType =
 /** Why an entity was (or would be) skipped. */
 export type RestoreSkipReason =
   | 'already_exists_identical'
+  /**
+   * A destination row was ADOPTED because its NAME matched, with nothing beyond
+   * the name compared (bead 3t74w). Distinct from `already_exists_identical`,
+   * which asserts the destination row matches the archive's. Channel groups
+   * report this: a group's contents live on the CHANNELS, restored after it, so
+   * at match time there is nothing to compare and "identical" was never earned.
+   */
+  | 'already_exists_name_match'
   | 'excluded_by_operator'
   | 'current_admin_preserved'
   | 'unsupported_in_this_version'
@@ -4264,6 +4272,18 @@ export interface EntityCategoryReport {
   would_skip: number;
   skip_details: RestoreSkipDetail[];
   failure_details: RestoreFailureDetail[];
+  /**
+   * `false` when a DRY RUN could not predict this category at all (bead tddmw).
+   * Render the counts as "not predicted" rather than as a confident zero — the
+   * per-category form of the `null` the stream-health counters already use.
+   * Absent on reports produced before this field existed; treat as `true`.
+   */
+  predicted?: boolean;
+  /**
+   * Operator-facing note qualifying how far this category's counts can be
+   * trusted (bead tddmw). Only a preview carries one; an apply reports facts.
+   */
+  caveat?: string | null;
 }
 
 /**
@@ -4373,6 +4393,24 @@ export interface RestoreReport {
   /** Which profiles drifted, and which channels were flipped back (bead dfkbn). */
   profile_membership_drift_details?: ProfileMembershipDriftDetail[];
   /**
+   * Channels sitting in a channel GROUP the archive does not assign them (bead
+   * r1ei7). The channel-group sibling of `profile_membership_drift`, and the
+   * counter a populated-target restore had no equivalent of: it kept the
+   * destination's whole grouping in BOTH relink modes while reporting success.
+   * Reported under `preserve` (which changes nothing) as well as `overwrite`.
+   */
+  channel_group_drift?: number;
+  /** Which channels drifted, the group they are in, and the archive's (r1ei7). */
+  channel_group_drift_details?: ChannelGroupDriftDetail[];
+  /**
+   * Set when the channel-group check did NOT run, because the operator
+   * deselected the channel groups category (bead r1ei7). Its absence is what
+   * makes `channel_group_drift: 0` trustworthy; when it is present that zero
+   * means "not examined", not "no drift" — the same distinction the per-category
+   * `predicted` flag draws (bead tddmw). Render it wherever the count renders.
+   */
+  channel_group_drift_note?: string | null;
+  /**
    * How the EPG-link reattach split across channels this restore created and
    * channels that already existed (bead dfkbn). Reported on the dry run AND the
    * apply, so the preview predicts the split rather than describing it after.
@@ -4389,9 +4427,14 @@ export interface RestoreReport {
  * What a restore does to channels it did NOT create (bead dfkbn).
  *
  * `preserve` leaves a channel that already existed on the destination with the
- * EPG link and logo it already has; `overwrite` replaces both with the
- * archive's. On an empty destination every channel is created, so the two are
- * indistinguishable: the choice only matters when merging into a live install.
+ * EPG link, logo and channel group it already has; `overwrite` replaces all
+ * three with the archive's. On an empty destination every channel is created, so
+ * the two are indistinguishable: the choice only matters when merging into a
+ * live install.
+ *
+ * Grouping joined the other two in bead r1ei7. It differs in one way: `preserve`
+ * still REPORTS the divergence (`channel_group_drift`). Leaving state alone is a
+ * choice; leaving it unmentioned was the defect.
  */
 export type ChannelReattachMode = 'preserve' | 'overwrite';
 
@@ -4447,6 +4490,26 @@ export interface ProfileMembershipDriftDetail {
   name: string;
   channels_disabled?: string[];
   channels_enabled?: string[];
+}
+
+/**
+ * One restored channel sitting in a group the archive does not put it in
+ * (bead r1ei7). A channel that already exists on the destination is never
+ * overwritten, so its group is never written: on a populated target the lineup
+ * silently keeps whatever grouping the destination had while the counts
+ * reconcile exactly.
+ *
+ * Both group fields are NAMES — the ids are instance-local and mean nothing to
+ * the reader. `moved` is true only under the `overwrite` relink mode, where the
+ * restore also puts the channel back in the archive's group (on a preview, the
+ * would-be move).
+ */
+export interface ChannelGroupDriftDetail {
+  channel_id?: number | null;
+  name: string;
+  current_group: string;
+  archive_group: string;
+  moved?: boolean;
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {

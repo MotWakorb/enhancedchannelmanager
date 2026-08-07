@@ -83,10 +83,41 @@
   color: var(--warning, #f59e0b);
 }
 
+/* "This check did not run" (bead r1ei7). Muted rather than warning-toned: it is
+   not a finding about the lineup, it is the absence of one — but it still sits
+   at body size, because a caveat set in meta type reads as a footnote and this
+   one is the whole content of the panel when it appears alone. */
+.ecrn-row-detail.ecrn-row-note {
+  color: var(--text-secondary, #888);
+}
+
 /* Meta role. */
 .ecrn-note {
   font-size: var(--type-meta-size);
   line-height: var(--type-meta-line-height);
   font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
+}
+
+/* The per-channel channel-group drift rows (bead r1ei7). One line per channel:
+   "<channel>: <group it is in> -> <group the backup assigns>". Indented under
+   its row detail so the list reads as evidence for the count above it, and
+   inheriting the row's colour so a "moved" list carries the destructive tone
+   without a second rule. */
+.ecrn-drift-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/* Meta role. */
+.ecrn-drift-item {
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
+  color: inherit;
+  overflow-wrap: anywhere;
 }

@@ -363,8 +363,9 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
                   {/*
                     A preview is a decision point, so the operator must be able
                     to act on what it told them. The summary can report that the
-                    restore would replace guide data and logos on channels they
-                    already have and advise picking the other option — advice
+                    restore would replace guide data, logos and grouping on
+                    channels they already have and advise picking the other
+                    option — advice
                     that pointed at a control this step had unmounted, with no
                     way back to it (bead dfkbn, review round 3).
                   */}
