@@ -970,22 +970,138 @@ Compare against your "before" inventory from Step 4 if you captured one.
 
 ---
 
+## Step 8: Restore onto a populated target
+
+Steps 1–7 above run entirely against a **freshly-wiped** target: every
+`down -v` / `up -d` cycle destroys the previous instance before the
+restore runs, so there is never an existing channel for either relink
+mode to preserve or overwrite. A drill that stops at Step 7 never
+exercises the populated-target path at all, and can't reach the
+group-identity behaviour described in [Restoring onto a populated
+target](#restoring-onto-a-populated-target) just below. This step is
+that missing round.
+
+It exists because `enhancedchannelmanager-r1ei7`, `-3t74w`, and `-tddmw`
+were fixed in `0.18.1-0041`, and none of the three has yet been proven by
+a live drill run against a populated target — run 12, the run that found
+them, measured the pre-fix behavior on `0.18.1-0040`. See [Known
+failures](#known-failures) for the beads themselves.
+
+### Why this round exists
+
+Every restore before run 12 landed on a freshly-wiped target, where
+`preserve` and the overwrite mode are indistinguishable — there is no
+existing channel to preserve or overwrite — so a green result on that
+kind of target meant nothing about either mode's actual behavior. This
+round is the only one that exercises them, and the only one that can
+reach the group-identity behaviour at all.
+
+### Construction
+
+Run this **as an additional round, after the fresh-target rounds in
+Steps 1–7 are measured** — it does not replace them. Do not `down -v`
+first: reuse the instance a completed restore left behind, then
+deliberately diverge it from the archive before restoring onto it again.
+
+1. **Rename** one archived channel group to a name the archive does not
+   contain.
+2. **Delete** a different archived channel group outright. Move its
+   channels out of the group first — Dispatcharr refuses to delete a
+   group that still has channels. Get the order right the first time:
+   run 12 lost a full cycle to this.
+3. **Create a name collision**: a channel group whose name matches an
+   archived group but is a different object — a different id, holding
+   different members.
+4. **Diverge one channel's logo**, and **clear one channel's EPG link**,
+   so `preserve` and the overwrite mode have something observable to
+   differ on. Without this, both modes produce identical output and the
+   comparison proves nothing.
+5. Leave everything else alone, as a control.
+6. **Record the exact before-state**: every group's id, name, and member
+   count; every channel's group, logo, and EPG link. You cannot judge
+   the after-state without this baseline.
+
+### Run it twice, from an identical baseline
+
+1. Restore the same artifact with the default relink mode (`preserve`).
+   Measure against the checklist below.
+2. **Reset to the same baseline**: delete the channel groups the restore
+   in step 1 created, so the target is back to the diverged state you
+   recorded in Construction, step 6.
+3. Restore the same artifact again, this time with the overwrite mode.
+   Measure again.
+
+Both runs must start from the same diverged state, or the comparison
+between them is meaningless.
+
+### What to assert — by measurement, not from the report
+
+Check each of the following directly; do not take the restore-complete
+report's word for any of them.
+
+- **`preserve`:** channel-group drift is reported and **non-zero**,
+  naming each affected channel, the group it is currently in, and the
+  group the archive says it belongs to — and **nothing moved**. Re-read
+  each named channel's own group afterward to confirm.
+- **overwrite mode:** the same channels are reported as drift, **and**
+  are actually moved into the archive's groups. Re-read each channel's
+  group to confirm the move happened, not just that it was reported.
+- **The drift count appears on the dry-run preview**, before the apply.
+  That is the number that tells an operator what overwrite is about to
+  do to their lineup — it is useless after the fact.
+- **The name-collision group reports `already_exists_name_match`**, not
+  `already_exists_identical`. Channel profiles and stream profiles,
+  matched by the same generic engine, must still report
+  `already_exists_identical` — only channel groups changed.
+- **The preview carries its `channel_groups` caveat**, and a
+  **`Streams`** row appears, flagged **not predicted** rather than being
+  absent.
+- **Playback still works** after each run: fetch a stream and confirm a
+  2xx status and real media bytes, per [Step 7](#step-7-verify). Fetched,
+  not inferred.
+- **Deselect the `channel_groups` category once**, on any one restore in
+  this round, and confirm the report says grouping was **not checked**
+  rather than showing a drift count of `0`. A `0` and "not checked" are
+  different claims, and only one of them is honest when the category
+  never ran.
+
+### Expect a noisy diff
+
+The inventory diff after this round is noisy **by construction** — the
+target was deliberately diverged before the restore ran, so most of the
+differences are expected, not defects. Classify each
+difference against the before-state you recorded in Construction, step
+6, and against what the relink mode you ran promises: **expected**, if
+it matches what that mode says it does, or **finding**, if it does not.
+"The diff had findings" is not itself a defect in this round; an
+**unreported** or **unexplainable** difference is.
+
+See [Restoring onto a populated
+target](#restoring-onto-a-populated-target) just below for what each
+relink mode is documented to do, and [Known
+failures](#known-failures) for the beads this round exists to prove.
+
+---
+
 ## Restoring onto a populated target
 
-Everything above this section was measured on a **freshly-wiped** target:
-`down -v` destroyed the previous state before the restore ran, so there
-was nothing on the target to conflict with the archive. Every drill run
-before run 12 worked this way, which means `preserve` and `overwrite`
-were indistinguishable in practice — a fresh target has no existing
-channel for either relink mode to preserve or overwrite — and the gaps
-below were structurally unreachable until then. Run 12 was the first to
-restore onto a target that already had its own, diverged state, and
-found two silent gaps: a channel's group membership was never
-reconciled to the archive or reported, and a same-named-but-different
-channel group was adopted while the report claimed its contents had
-been compared. **Both are now fixed** (`enhancedchannelmanager-r1ei7`,
-`enhancedchannelmanager-3t74w`) — this section describes the fixed
-behavior and what to check.
+Everything above this section, through [Step 7](#step-7-verify), was
+measured on a **freshly-wiped** target: `down -v` destroyed the previous
+state before the restore ran, so there was nothing on the target to
+conflict with the archive. Every drill run before run 12 worked this
+way, which means `preserve` and `overwrite` were indistinguishable in
+practice — a fresh target has no existing channel for either relink mode
+to preserve or overwrite — and the gaps below were structurally
+unreachable until then. Run 12 was the first to restore onto a target
+that already had its own, diverged state, and found two silent gaps: a
+channel's group membership was never reconciled to the archive or
+reported, and a same-named-but-different channel group was adopted while
+the report claimed its contents had been compared. **Both are now fixed**
+(`enhancedchannelmanager-r1ei7`, `enhancedchannelmanager-3t74w`) — this
+section describes the fixed behavior and what to check. [Step
+8](#step-8-restore-onto-a-populated-target) above is the executable
+procedure for actually running a populated-target round yourself; this
+section is the reference, not the procedure.
 
 !!! success "The relink modes DO differ on a populated target — this part works"
     Run 12 diverged an identical baseline two ways (a channel's logo
@@ -1093,7 +1209,10 @@ nothing was compared.
 ## What a passing drill looks like
 
 A drill "passes" only when every item below is true, and you checked each
-one directly rather than trusting the restore-complete report's summary:
+one directly rather than trusting the restore-complete report's summary.
+A complete drill now includes the [Step
+8](#step-8-restore-onto-a-populated-target) populated-target round, not
+just the fresh-target items below:
 
 - Both backup artifacts completed at **success**, not warning-level.
 - Both `.sha256` sidecars verified `OK` on host copies **before** the
@@ -1122,12 +1241,17 @@ one directly rather than trusting the restore-complete report's summary:
     deliberately excluded channels.
   - Every non-default setting you changed came back as you set it, not
     at its default.
-  - **On a populated target only:** the channel-group drift count
-    matches what you expect — read it on the dry-run preview first, then
-    again in the restore-complete report. Under `preserve`, it should
-    equal exactly the channels you deliberately diverged and none should
-    have moved. Under `overwrite`, that same count should have moved
-    into the archive's group. See [Restoring onto a populated
+  - **The Step 8 populated-target round completed and matched its
+    checklist:** channel-group drift reported and non-zero under
+    `preserve`, with nothing moved; the same channels reported as drift
+    and actually moved under the overwrite mode; that drift count
+    visible on the dry-run preview before either apply, not just after;
+    the name-collision group reporting `already_exists_name_match`
+    rather than `already_exists_identical`; and, with the
+    `channel_groups` category deselected once, the report saying
+    grouping was **not checked** rather than showing a drift count of
+    `0`. See [Step 8](#step-8-restore-onto-a-populated-target) and
+    [Restoring onto a populated
     target](#restoring-onto-a-populated-target).
 - If you restored a **standard (redacted)** artifact, you completed the
   full [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
@@ -1289,7 +1413,10 @@ and named, not rolled back, as of `0.18.1-0036`.
 
 ## What this drill does not cover
 
-Stated plainly rather than left as an implied "everything else works":
+Stated plainly rather than left as an implied "everything else works".
+**Restoring onto a populated target is not on this list** — that path is
+covered by [Step 8](#step-8-restore-onto-a-populated-target) above, not
+omitted. What follows is genuinely out of scope:
 
 - **Cloud destinations** (S3, WebDAV, Google Drive): the off-host upload
   and retention-pruning leg of
