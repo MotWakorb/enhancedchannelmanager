@@ -4,10 +4,20 @@ The script is the post-merge guard against `dev` and the container
 registry diverging. Everything that talks to GitHub or a registry is
 exercised through its pure parsing/selection helpers, so the suite needs
 no network, no `gh` auth, and no Docker daemon.
+
+The git-backed helpers are exercised against a THROWAWAY repository built
+in `tmp_path`, never against the checkout the tests happen to run in. An
+earlier revision of this file asserted against `origin/dev` and passed on
+every developer clone while failing in CI, where `actions/checkout` makes
+a single-branch, depth-1 clone that carries no remote-tracking refs at
+all. A test for a git helper must supply its own git history: borrowing
+the ambient repository's shape tests the checkout, not the code.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,6 +40,93 @@ def _load_script_module():
 @pytest.fixture(scope="module")
 def script():
     return _load_script_module()
+
+
+# --- A repository of our own -------------------------------------------------
+
+
+class FakeRepo:
+    """A tiny git repository with a known, asserted-on shape.
+
+    Two commits on `dev` (each bumping `frontend/package.json`), one
+    unmerged commit on `sidebranch`, a matching `refs/remotes/origin/dev`,
+    and a dirty working tree. That is every distinction the script's
+    git helpers make, and none of it is inherited from the checkout the
+    suite runs in.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.first = ""
+        self.tip = ""
+        self.sidebranch = ""
+
+    def git(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(self.root), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+        return result.stdout
+
+    def write_version(self, version: str) -> None:
+        package = self.root / "frontend" / "package.json"
+        package.parent.mkdir(parents=True, exist_ok=True)
+        package.write_text(
+            json.dumps({"name": "ecm-frontend", "version": version}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-m", message)
+        return self.git("rev-parse", "HEAD").strip()
+
+
+@pytest.fixture
+def repo(tmp_path, script, monkeypatch) -> FakeRepo:
+    # Isolate git from the developer's own config: no global identity, no
+    # commit signing, no hooksPath pointing somewhere real.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
+    (tmp_path / "home").mkdir()
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    fake = FakeRepo(root)
+    fake.git("init", "-q")
+    # `git init -b` / `init.defaultBranch` need git >= 2.28; this does not.
+    fake.git("symbolic-ref", "HEAD", "refs/heads/dev")
+
+    fake.write_version("0.1.0-0001")
+    fake.first = fake.commit("first")
+
+    fake.write_version("0.2.0-0002")
+    fake.tip = fake.commit("second")
+
+    fake.git("checkout", "-q", "-b", "sidebranch", fake.first)
+    fake.write_version("9.9.9-9999")
+    fake.sidebranch = fake.commit("unmerged work")
+    fake.git("checkout", "-q", "dev")
+
+    # The remote-tracking ref the real repo would have after a fetch. Tests
+    # that care about its ABSENCE delete it explicitly, so the CI-shaped
+    # environment is covered by assertion rather than by luck.
+    fake.git("update-ref", "refs/remotes/origin/dev", fake.tip)
+
+    # A dirty working tree, so "reads the commit, not the tree" is a real
+    # distinction rather than a tautology.
+    fake.write_version("0.0.0-dirty")
+
+    monkeypatch.setattr(script, "REPO_ROOT", root)
+    return fake
 
 
 def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion="success"):
@@ -133,26 +230,104 @@ class TestParseImagetoolsConfig:
 
 
 class TestExpectedVersion:
-    def test_reads_the_version_from_the_commit_not_the_working_tree(self, script):
+    def test_reads_the_version_from_the_commit_not_the_working_tree(self, script, repo):
         """The distinction is the whole reason this check is legible: a
         feature branch's unbumped/bumped package.json must never be
         compared against what the registry publishes for `dev`.
-        """
-        head_version = script.expected_version_at("HEAD")
-        dev_version = script.expected_version_at("origin/dev")
-        assert head_version.count("-") == 1
-        assert dev_version.count("-") == 1
 
-    def test_unknown_ref_raises_check_error(self, script):
+        The fixture's working tree says 0.0.0-dirty and each commit says
+        something else, so a working-tree read cannot pass this.
+        """
+        assert (repo.root / "frontend" / "package.json").read_text().count("0.0.0-dirty")
+        assert script.expected_version_at(repo.tip) == "0.2.0-0002"
+        assert script.expected_version_at(repo.first) == "0.1.0-0001"
+        assert script.expected_version_at("dev") == "0.2.0-0002"
+
+    def test_reads_a_sibling_branch_independently_of_the_checked_out_one(
+        self, script, repo
+    ):
+        """`dev` is checked out; the answer for another branch must come
+        from that branch's tree, not from HEAD's.
+        """
+        assert script.expected_version_at("sidebranch") == "9.9.9-9999"
+
+    def test_unknown_ref_raises_check_error(self, script, repo):
         with pytest.raises(script.CheckError):
             script.expected_version_at("definitely-not-a-ref")
 
+    def test_missing_origin_ref_says_what_to_fetch(self, script, repo):
+        """The CI failure mode: a checkout with no remote-tracking refs.
+        The operator gets an instruction, not `fatal: ambiguous argument`.
+        """
+        repo.git("update-ref", "-d", "refs/remotes/origin/dev")
+        with pytest.raises(script.CheckError) as caught:
+            script.expected_version_at("origin/dev")
+        message = str(caught.value)
+        assert "git fetch --no-tags origin dev" in message
+        assert "shallow" in message
+
+    def test_missing_package_json_is_reported_as_a_missing_file(self, script, repo):
+        """A resolvable ref whose tree lacks the file is a different fault
+        from an unresolvable ref, and must not be reported as one.
+        """
+        repo.git("rm", "-q", "-f", "frontend/package.json")
+        without_package = repo.commit("drop package.json")
+        with pytest.raises(script.CheckError) as caught:
+            script.expected_version_at(without_package)
+        message = str(caught.value)
+        assert "frontend/package.json" in message
+        assert "does not exist in this checkout" not in message
+
+    def test_malformed_package_json_raises_check_error(self, script, repo):
+        (repo.root / "frontend" / "package.json").write_text("{not json", encoding="utf-8")
+        broken = repo.commit("break package.json")
+        with pytest.raises(script.CheckError, match="not valid JSON"):
+            script.expected_version_at(broken)
+
+
+class TestResolveCommit:
+    def test_resolves_a_branch_to_its_tip(self, script, repo):
+        assert script.resolve_commit("dev") == repo.tip
+
+    def test_unknown_ref_message_is_actionable(self, script, repo):
+        with pytest.raises(script.CheckError) as caught:
+            script.resolve_commit("origin/dev-that-was-never-fetched")
+        message = str(caught.value)
+        assert "git fetch --no-tags origin dev-that-was-never-fetched" in message
+
+    def test_unknown_local_ref_message_names_the_checkout(self, script, repo):
+        with pytest.raises(script.CheckError) as caught:
+            script.resolve_commit("no-such-ref")
+        assert str(repo.root) in str(caught.value)
+
 
 class TestCommitIsOnBranch:
-    def test_dev_tip_is_on_dev(self, script):
-        sha = script.resolve_commit("origin/dev")
-        assert script.commit_is_on_branch(sha, "dev") is True
+    def test_dev_tip_is_on_dev(self, script, repo):
+        assert script.commit_is_on_branch(repo.tip, "dev") is True
 
-    def test_unknown_branch_returns_none(self, script):
-        sha = script.resolve_commit("HEAD")
-        assert script.commit_is_on_branch(sha, "no-such-branch-xyzzy") is None
+    def test_an_ancestor_is_on_the_branch(self, script, repo):
+        assert script.commit_is_on_branch(repo.first, "dev") is True
+
+    def test_an_unmerged_commit_is_not_on_the_branch(self, script, repo):
+        assert script.commit_is_on_branch(repo.sidebranch, "dev") is False
+
+    def test_falls_back_to_the_local_branch_without_a_remote_tracking_ref(
+        self, script, repo
+    ):
+        """The CI/shallow-clone shape. Losing `origin/dev` must not turn a
+        merged commit into "not on dev", which reads as a publish defect.
+        """
+        repo.git("update-ref", "-d", "refs/remotes/origin/dev")
+        assert script.commit_is_on_branch(repo.tip, "dev") is True
+        assert script.commit_is_on_branch(repo.sidebranch, "dev") is False
+
+    def test_prefers_the_remote_tracking_ref_over_the_local_branch(self, script, repo):
+        """`origin/dev` is what the registry built from. When the local
+        branch has moved ahead, the remote-tracking ref is the answer.
+        """
+        repo.git("update-ref", "refs/remotes/origin/dev", repo.first)
+        assert script.commit_is_on_branch(repo.tip, "dev") is False
+        assert script.commit_is_on_branch(repo.first, "dev") is True
+
+    def test_unknown_branch_returns_none(self, script, repo):
+        assert script.commit_is_on_branch(repo.tip, "no-such-branch-xyzzy") is None

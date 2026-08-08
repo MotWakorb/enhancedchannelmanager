@@ -43,6 +43,17 @@ pulled image. See `docs/user_guide/backup-restore/run-a-restore-drill.md`
 ("Confirm the image you are about to measure") for that idiom, and
 `docs/shipping.md` section 6 for where this script sits in the flow.
 
+## Refs it needs
+
+`--commit` defaults to HEAD, and HEAD is the right default precisely
+because this runs after `git checkout dev && git pull`: the local branch
+IS the merged state, so the check never requires a remote-tracking ref to
+do its job. `origin/dev` is only consulted as the preferred (not
+required) input to the "is this commit already on dev?" orientation note,
+which degrades to "unknown" rather than failing. Passing an `origin/*`
+ref explicitly in a checkout that has none reports what to fetch instead
+of surfacing git's raw `ambiguous argument` error.
+
 ## Usage
 
     # Normal use: after `gh pr merge`, `git checkout dev && git pull`
@@ -105,36 +116,115 @@ def _git(*args: str) -> str:
 # --- Repo-side facts --------------------------------------------------------
 
 
+def _ref_exists(ref: str) -> bool:
+    """True when `ref` names a commit that exists in THIS checkout."""
+    probe = _run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"{ref}^{{commit}}",
+        ],
+        timeout=60,
+    )
+    return probe.returncode == 0
+
+
+def _display_ref(ref: str) -> str:
+    """Shorten a raw SHA for reporting, leave symbolic refs readable."""
+    return ref[:12] if _SHA_RE.match(ref) else ref
+
+
+def _unresolvable_ref_message(ref: str) -> str:
+    """Say what to DO about a missing ref instead of echoing git's error.
+
+    `origin/<branch>` is the case worth spelling out: remote-tracking refs
+    are simply absent from a shallow or single-branch clone (any default
+    `actions/checkout`, `git clone --depth 1`), so `fatal: ambiguous
+    argument` there means "this checkout was never told about the remote
+    branch", not "the branch is gone".
+    """
+    if ref.startswith("origin/"):
+        branch = ref.split("/", 1)[1]
+        return (
+            f"{ref!r} does not exist in this checkout ({REPO_ROOT}). "
+            f"Remote-tracking refs are absent from shallow and single-branch "
+            f"clones. Run `git fetch --no-tags origin {branch}` first, or pass "
+            f"a ref this checkout already has (e.g. --commit {branch}, or a SHA)."
+        )
+    return (
+        f"{ref!r} does not resolve to a commit in this checkout ({REPO_ROOT}). "
+        f"Pass a commit SHA or a ref that exists locally."
+    )
+
+
 def resolve_commit(ref: str) -> str:
-    return _git("rev-parse", ref).strip()
+    result = _run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"{ref}^{{commit}}",
+        ],
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise CheckError(_unresolvable_ref_message(ref))
+    return result.stdout.strip()
 
 
 def commit_subject(sha: str) -> str:
     return _git("log", "-1", "--format=%s", sha).strip()
 
 
-def expected_version_at(sha: str) -> str:
+def expected_version_at(ref: str) -> str:
     """Read `frontend/package.json`'s version AS OF the given commit.
 
     Reading the working tree instead would compare the registry against a
     bump that has not merged, which is the single most confusing way this
     check can be misread.
     """
-    text = _git("show", f"{sha}:frontend/package.json")
+    shown = _run(
+        ["git", "-C", str(REPO_ROOT), "show", f"{ref}:frontend/package.json"],
+        timeout=60,
+    )
+    if shown.returncode != 0:
+        if not _ref_exists(ref):
+            raise CheckError(_unresolvable_ref_message(ref))
+        raise CheckError(
+            f"frontend/package.json could not be read at {_display_ref(ref)}: "
+            f"{shown.stderr.strip()}"
+        )
     try:
-        data = json.loads(text)
+        data = json.loads(shown.stdout)
     except json.JSONDecodeError as error:
         raise CheckError(
-            f"frontend/package.json at {sha[:12]} is not valid JSON: {error}"
+            f"frontend/package.json at {_display_ref(ref)} is not valid JSON: {error}"
         ) from error
     version = data.get("version")
     if not isinstance(version, str):
-        raise CheckError(f"no string 'version' field in package.json at {sha[:12]}")
+        raise CheckError(
+            f"no string 'version' field in package.json at {_display_ref(ref)}"
+        )
     return version
 
 
 def commit_is_on_branch(sha: str, branch: str) -> bool | None:
-    """True when `sha` is an ancestor of `branch`, None when unknown."""
+    """True when `sha` is an ancestor of `branch`, None when unknown.
+
+    The remote-tracking ref is preferred because it is what the registry
+    actually built from, but a checkout that has no `origin/<branch>` (a
+    shallow or single-branch clone) falls back to the local branch. When
+    neither ref exists the answer is unknown, not False: this is only
+    orientation for the operator, so a missing ref must never masquerade
+    as "the commit is not on the branch".
+    """
     for ref in (f"origin/{branch}", branch):
         probe = _run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", ref], timeout=60)
         if probe.returncode != 0:
@@ -363,6 +453,14 @@ def main(argv: list[str] | None = None) -> int:
             f"A mismatch below is EXPECTED here and is not a defect. "
             f"Re-run after `gh pr merge` and `git checkout {args.branch} "
             f"&& git pull`."
+        )
+    elif on_branch is None:
+        print(
+            f"\n  NOTE: this checkout has neither 'origin/{args.branch}' nor "
+            f"'{args.branch}', so whether {sha[:12]} is already on "
+            f"'{args.branch}' could not be determined. The two checks below "
+            f"still run. Run `git fetch --no-tags origin {args.branch}` if you "
+            f"want that context in the verdict."
         )
 
     failures: list[str] = []
