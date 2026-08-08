@@ -28,12 +28,42 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Full history so the em-dash ratchet can find the PR's merge
+          # base. A shallow clone has no merge base to diff against.
+          fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: '22'
       - name: Check links, terminology, and screenshots
         run: npm run docs:check
+
+      # ─── Em-dash ratchet (bead enhancedchannelmanager-3tflw) ─────────────
+      # docs/style_guide.md § "Prose Style (Docs and Comments)" bans the
+      # em-dash in documentation prose and code comments. It had no
+      # enforcement, and two documentation passes shipped 144 violations
+      # through two merged PRs without three reviewers noticing.
+      #
+      # RATCHET, NOT CLIFF: the guard fails only on lines the PR ADDS. The
+      # ~12k pre-existing violations are tolerated and reported as a count,
+      # per the PO's "add the guard, defer the cleanup" call.
+      #
+      # It lives in this job, not a new one, because "Operator Docs" is the
+      # only real (non-stub) job duplicated into docs-only-pass.yml. A
+      # Markdown-only PR skips test.yml entirely via paths-ignore, and a
+      # Markdown-only PR is exactly how the 144 violations arrived. Keep the
+      # step in sync between the two workflows.
+      #
+      # Pull requests only: on a push to dev/main the merge commit's content
+      # was already checked on the PR, and there is no base ref to diff.
+      - name: Check for new em-dashes (ratchet)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
 
   # ─── Backend tests ────────────────────────────────────────────────────
   backend:

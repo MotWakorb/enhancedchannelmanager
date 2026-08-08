@@ -77,12 +77,30 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Full history so the em-dash ratchet can find the PR's merge
+          # base. A shallow clone has no merge base to diff against.
+          fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: '22'
       - name: Check links, terminology, and screenshots
         run: npm run docs:check
+
+      # ─── Em-dash ratchet (bead enhancedchannelmanager-3tflw) ─────────────
+      # This job is the REAL check, not a stub: a Markdown-only PR skips
+      # test.yml via paths-ignore, so this copy is the only one that runs on
+      # a docs-only change. That is the case the guard exists for, since the
+      # 144 violations that motivated it arrived in documentation passes.
+      # Keep this step byte-identical to the one in test.yml.
+      - name: Check for new em-dashes (ratchet)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
 
   backend-tests:
     name: Backend Tests
