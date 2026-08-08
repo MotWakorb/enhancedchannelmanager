@@ -214,19 +214,28 @@ def completion_notification_type(result: 'TaskResult') -> str:
 
 
 def execution_status(result: 'TaskResult') -> str:
-    """Map a finished run to its persisted ``TaskExecution.status`` (…-fexq1).
+    """Map a finished run to its TERMINAL STATUS (…-fexq1, …-bdmby).
 
-    The history vocabulary is a closed set consumed by the Task History panel,
+    The status vocabulary is a closed set consumed by the Task History panel,
     the DBAS restore modals, and the MCP ``get_task_history`` tool:
     ``running`` / ``completed`` / ``completed_with_warnings`` / ``failed`` /
     ``cancelled``.
 
-    ``completed_with_warnings`` is the member added by this bead. Without it the
-    row had to round a warning-level run to one of its neighbours, and it rounded
+    ``completed_with_warnings`` is the member added by fexq1. Without it the row
+    had to round a warning-level run to one of its neighbours, and it rounded
     the wrong way: a degraded restore was stored as ``failed`` while its own
     alert said "Task Completed with Warnings". The browser was left inferring
     the middle state from ``success && failed_count > 0``, which cannot see a
     degraded run with clean counts at all.
+
+    Bead ``…-bdmby`` widened the callers rather than the vocabulary: the
+    persisted ``TaskExecution.status``, the LIVE ``TaskProgress.status`` that
+    ``GET /api/tasks/{id}`` publishes, and the finalized progress notification
+    all read this one function. They used to end a run with three independently
+    written strings, and drill run ``2026-08-08-run16`` caught them disagreeing —
+    a restore that rolled nothing back published ``progress.status: "failed"``
+    with ``failed_count: 0`` beside a history row reading
+    ``completed_with_warnings``. One derivation, so they cannot drift again.
     """
     outcome = task_outcome(result)
     if outcome is TaskOutcome.CANCELLED:
@@ -536,24 +545,24 @@ class TaskScheduler(ABC):
         try:
             # Severity comes from the shared map so this notification can never
             # contradict the engine's completion notification for the same run
-            # (asf3n). ``status`` is deliberately NOT re-mapped: the frontend
-            # treats it as a closed set of terminal states
-            # (notificationGrouping.FINAL_PROGRESS_STATUSES, useRestoreProgress),
-            # and a degraded run is terminal-but-not-successful — "failed" is the
-            # member that means that.
+            # (asf3n), and ``status`` comes from the same closed set as the
+            # history row (bdmby) so it cannot contradict that either. It used to
+            # be written here by hand, which spelled a degraded run "failed" —
+            # the one member that means the run did not produce what it was
+            # asked for. The frontend reads this value as a terminal state
+            # (notificationGrouping.FINAL_PROGRESS_STATUSES) and knows the whole
+            # vocabulary.
             notification_type = completion_notification_type(result)
+            status = execution_status(result)
             if result.error == "CANCELLED":
                 message = f"Cancelled: {result.success_count} completed"
-                status = "cancelled"
             elif result.success:
                 if result.failed_count > 0:
                     message = f"Completed: {result.success_count} ok, {result.failed_count} failed"
                 else:
                     message = f"Completed: {result.success_count} ok"
-                status = "completed"
             else:
                 message = result.message or "Task failed"
-                status = "failed"
 
             await self._update_notification_callback(
                 notification_id=self._notification_id,
@@ -737,6 +746,18 @@ class TaskScheduler(ABC):
                 self._status = TaskStatus.COMPLETED
                 await self.on_complete(result)
                 logger.info("[%s] Task completed successfully: %s", self.task_id, result.message)
+            elif task_outcome(result) is TaskOutcome.WARNING:
+                # The run did not succeed CLEANLY, but it ran to completion and
+                # left real, kept state (bead …-daziw). Calling that "Task
+                # failed" was the false positive bead …-bdmby closes:
+                # ``docs/user_guide/troubleshooting/read-the-logs.md`` tells
+                # operators to grep the log, and every degraded DBAS restore hit.
+                # ``on_complete`` stays gated on ``result.success`` — a task's
+                # own success hook is not this line's question.
+                self._status = TaskStatus.COMPLETED
+                logger.warning(
+                    "[%s] Task completed with warnings: %s", self.task_id, result.message
+                )
             else:
                 self._status = TaskStatus.FAILED
                 logger.warning("[%s] Task failed: %s", self.task_id, result.message)
@@ -756,7 +777,12 @@ class TaskScheduler(ABC):
             # Record history
             self._add_to_history(result)
             self._last_run = result.completed_at or datetime.utcnow()
-            self._progress.status = "completed" if result.success else "failed"
+            # The live terminal status is the history row's status (bdmby). It
+            # used to be written from ``result.success`` alone, which spelled
+            # BOTH a degraded run and a cancelled one "failed" — the field a
+            # script polls to know a restore finished said the restore failed
+            # while the row, the alert and the dialog all said it had not.
+            self._progress.status = execution_status(result)
 
             # Calculate next run if scheduled
             if self._enabled and self.schedule_config.schedule_type != ScheduleType.MANUAL:

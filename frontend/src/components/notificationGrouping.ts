@@ -42,8 +42,23 @@ interface ProgressMeta {
   progress?: { status?: string };
 }
 
-/** Statuses that mean the progress notification's run has ended. */
-const FINAL_PROGRESS_STATUSES = new Set(['completed', 'failed', 'cancelled', 'idle']);
+/**
+ * Statuses that mean the progress notification's run has ended.
+ *
+ * `completed_with_warnings` is the terminal status of a run that finished and
+ * left real, kept state without being clean (bead bdmby — the scheduler
+ * finalizes this notification from the same closed set the history row uses).
+ * Left out, a degraded DBAS restore's progress notification would never be
+ * collapsible and would keep a live progress bar in the panel after the run had
+ * finished.
+ */
+const FINAL_PROGRESS_STATUSES = new Set([
+  'completed',
+  'completed_with_warnings',
+  'failed',
+  'cancelled',
+  'idle',
+]);
 
 /** True if this notification is a per-run progress entry for the given task. */
 function isProgressNotificationForTask(n: Notification, taskId: string): boolean {

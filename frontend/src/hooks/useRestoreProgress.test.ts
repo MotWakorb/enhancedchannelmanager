@@ -111,6 +111,31 @@ describe('useRestoreProgress', () => {
     expect(mockedGetTask.mock.calls.length).toBe(callsAtTerminal);
   });
 
+  // Bead bdmby: a restore that ended `completed_with_failures` and rolled
+  // nothing back now publishes the history row's own terminal status. Before
+  // the hook knew the word, it would have polled that run until the 30-minute
+  // safety cap while the restore modal sat on a spinner over a finished job.
+  it('treats completed_with_warnings as a successful terminal status', async () => {
+    mockedGetTask.mockResolvedValue(
+      makeTaskStatus({ status: 'completed_with_warnings', current_item: 'channel', percentage: 100 })
+    );
+
+    const { result } = renderHook(() =>
+      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+    );
+
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    expect(result.current.status).toBe('completed_with_warnings');
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.isError).toBe(false);
+
+    // Polling stopped: no further calls after terminal.
+    const callsAtTerminal = mockedGetTask.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockedGetTask.mock.calls.length).toBe(callsAtTerminal);
+  });
+
   it('renders an error state on a failed status (not a frozen spinner)', async () => {
     mockedGetTask.mockResolvedValue(
       makeTaskStatus({ status: 'failed', current_item: 'channel' })

@@ -185,7 +185,11 @@ describe('collapseTaskNotificationPairs', () => {
 });
 
 describe('isFinalizedProgressNotification', () => {
-  it.each(['completed', 'failed', 'cancelled', 'idle'])('%s counts as finalized', (status) => {
+  // `completed_with_warnings` is a TERMINAL status (bead bdmby): the scheduler
+  // finalizes a degraded run's progress notification with the same closed set
+  // the history row uses. Missing from this set it would never collapse, and a
+  // finished restore would keep a live progress bar in the panel forever.
+  it.each(['completed', 'completed_with_warnings', 'failed', 'cancelled', 'idle'])('%s counts as finalized', (status) => {
     expect(isFinalizedProgressNotification(makeProgress('t', '2026-07-10T12:00:00Z', status))).toBe(true);
   });
 
