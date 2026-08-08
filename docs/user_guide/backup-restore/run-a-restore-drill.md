@@ -22,14 +22,15 @@
     membership drifting from the archive went completely unreported in
     either relink mode, and that a same-named-but-different channel group
     was adopted while the report claimed its contents had been compared.
-    Both are **fixed as of `0.18.1-0041`**: drift is now reported on
-    every mode and reconciled under overwrite, and the name-match skip
-    now says what it actually checked, but that fix has not yet been
-    proven by a live drill run against a populated target; run 12 itself
-    measured the pre-fix behavior. See [Known failures](#known-failures)
-    and [Restoring onto a populated
-    target](#restoring-onto-a-populated-target) for the full account
-    before you conclude your own drill passed.
+    Both are **fixed as of `0.18.1-0041`**, and both are now **proven live
+    on a populated target**: run 13 (`0.18.1-0042`) ran a targeted Step 8
+    round and confirmed drift is reported on every mode and reconciled
+    under overwrite, and that the name-match skip now says what it
+    actually checked. Run 12 itself measured the pre-fix behavior; run 13
+    did not repeat the full round trip, and that result still stands as
+    run 12's. See [Known failures](#known-failures) and [Restoring onto a
+    populated target](#restoring-onto-a-populated-target) for the full
+    account before you conclude your own drill passed.
 
 ---
 
@@ -1031,10 +1032,14 @@ target](#restoring-onto-a-populated-target) just below. This step is
 that missing round.
 
 It exists because `enhancedchannelmanager-r1ei7`, `-3t74w`, and `-tddmw`
-were fixed in `0.18.1-0041`, and none of the three has yet been proven by
-a live drill run against a populated target. Run 12, the run that found
-them, measured the pre-fix behavior on `0.18.1-0040`. See [Known
-failures](#known-failures) for the beads themselves.
+were fixed in `0.18.1-0041`. Run 12, the run that found them, measured
+the pre-fix behavior on `0.18.1-0040`. Run 13 (`0.18.1-0042`) then ran
+this exact round and confirmed all three fixes live on a populated
+target, closing the gap this step used to describe. See [Known
+failures](#known-failures) for the beads themselves, and [Restoring onto
+a populated target](#restoring-onto-a-populated-target) for what run 13
+measured. The steps below remain the procedure to reproduce that round
+on your own build, or to prove out a future fix in the same area.
 
 ### Why this round exists
 
@@ -1112,7 +1117,16 @@ report's word for any of them.
   this round, and confirm the report says grouping was **not checked**
   rather than showing a drift count of `0`. A `0` and "not checked" are
   different claims, and only one of them is honest when the category
-  never ran.
+  never ran. **Not currently performable by hand.** Run 13 (`0.18.1-0042`)
+  inspected the DBAS restore modal at both stages, before the preview and
+  after it, and found no category-selection control at either one;
+  `GET /api/tasks/dbas_restore/parameter-schema` returns empty
+  `parameters` and `run_parameters`. The defensive branch itself is
+  correct, covered by unit tests, and reachable through the API, but an
+  operator using the product's own UI cannot deselect a category to
+  exercise it today. Leave this bullet unchecked in the UI-driven
+  version of the drill; a scripted, API-driven restore is the only
+  current path that can reach it.
 
 ### Expect a noisy diff
 
@@ -1169,13 +1183,14 @@ section is the reference, not the procedure.
     | channel group | moved to a different group | **kept in the diverged group, and reported as drift** | **moved into the archive's group, and reported as moved** | archive's group |
 
     The logo and EPG-link rows are run 12's own measurement. The grouping
-    row describes the fixed behavior below: implemented and covered by
-    a test suite that reproduces run 12's exact scenario
-    (`backend/tests/dbas/test_channel_group_drift.py`), but **not yet
-    proven by a live drill run** against a populated target the way the
-    other two rows were. `preserve` is the default, and it also emits an
-    explicit "Channels you already had were left alone" panel naming
-    exactly what it left untouched.
+    row is now **run 13's own measurement** too: implemented and covered
+    by a test suite that reproduces run 12's exact scenario
+    (`backend/tests/dbas/test_channel_group_drift.py`), and confirmed
+    live on `0.18.1-0042` in a targeted Step 8 round against a populated
+    target, the same way the other two rows were confirmed on `0.18.1-0040`.
+    `preserve` is the default, and it also emits an explicit "Channels you
+    already had were left alone" panel naming exactly what it left
+    untouched.
 
 !!! info "Name-matching a channel group is deliberate: the fix was to stop overclaiming, not to stop adopting"
     **Bead `enhancedchannelmanager-3t74w`.** If the target has a channel
@@ -1295,13 +1310,15 @@ just the fresh-target items below:
     `preserve`, with nothing moved; the same channels reported as drift
     and actually moved under the overwrite mode; that drift count
     visible on the dry-run preview before either apply, not just after;
-    the name-collision group reporting `already_exists_name_match`
-    rather than `already_exists_identical`; and, with the
-    `channel_groups` category deselected once, the report saying
-    grouping was **not checked** rather than showing a drift count of
-    `0`. See [Step 8](#step-8-restore-onto-a-populated-target) and
-    [Restoring onto a populated
-    target](#restoring-onto-a-populated-target).
+    and the name-collision group reporting `already_exists_name_match`
+    rather than `already_exists_identical`. The one remaining item,
+    deselecting `channel_groups` and confirming the "not checked" note,
+    is not presently reachable from the UI (see the note under [What to
+    assert](#what-to-assert-by-measurement-not-from-the-report) in Step
+    8); treat that item as covered by the unit suite rather than by your
+    own hands until category selection is exposed. See [Step
+    8](#step-8-restore-onto-a-populated-target) and [Restoring onto a
+    populated target](#restoring-onto-a-populated-target).
 - If you restored a **standard (redacted)** artifact, you completed the
   full [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)
   recovery sequence before checking playback: re-enter the credential and
@@ -1435,7 +1452,7 @@ snapshot, not a permanent guarantee.
 | `enhancedchannelmanager-d0agi` | **P0, consequence** | Because the uploaded logo's bytes were never archived, the restore couldn't recreate it, recorded the miss, and (since a logo failure was classified as fatal) aborted and rolled back the **entire** restore, not just the logo category. **Fixed as of `0.18.1-0024`:** logos joined Dispatcharr users as a non-fatal restore category; a logo miss is now counted and named, and the rest of the restore completes. See [ECM-uploaded logos and this drill](#ecm-uploaded-logos-and-this-drill). |
 | `enhancedchannelmanager-dgnms` | P1 | The dry-run preview reported every URL-restorable logo as failed (`validation_error: unsafe or empty logo filename`), even ones that restore fine on apply, and reported a confident `0` for counters it had not measured. **Fixed as of `0.18.1-0032`:** the logo split and `profile_membership_drift` are genuinely predicted and match the apply, and the two stream-health counters report `null` ("not predicted") instead of a misleading `0`. See the preview warning in [Step 6](#step-6-restore). |
 | `enhancedchannelmanager-3t74w` | P2 | Found in run 12, restoring onto a **populated target**: a target channel group that shares a **name** with an archived group but is a different object (different id, different members) is silently adopted by name, and reported `already_exists_identical` as if its contents had been compared. **Fixed as of `0.18.1-0041`:** the adopt-by-name behavior is unchanged and intentional (name is the only cross-instance identity a group has), but the claim is now honest. A name-matched channel group reports the new skip reason `already_exists_name_match` instead. See [Restoring onto a populated target](#restoring-onto-a-populated-target). |
-| `enhancedchannelmanager-r1ei7` | P2 | Found in run 12, restoring onto a **populated target**: channel→group membership was never reconciled to the archive or reported, in either relink mode. `profile_membership_drift` covers channel-*profile* membership only, with no channel-*group* equivalent. **Fixed as of `0.18.1-0041`:** a new post-channels pass reports every channel whose group differs from the archive's as channel-group drift under both modes, and `overwrite` additionally moves the channel into the archive's group. Not yet proven by a live drill run against a populated target. See [Restoring onto a populated target](#restoring-onto-a-populated-target). |
+| `enhancedchannelmanager-r1ei7` | P2 | Found in run 12, restoring onto a **populated target**: channel→group membership was never reconciled to the archive or reported, in either relink mode. `profile_membership_drift` covers channel-*profile* membership only, with no channel-*group* equivalent. **Fixed as of `0.18.1-0041`, and confirmed live by run 13 (`0.18.1-0042`):** a new post-channels pass reports every channel whose group differs from the archive's as channel-group drift under both modes, and `overwrite` additionally moves the channel into the archive's group. Run 13's targeted Step 8 round reproduced run 12's exact divergence and measured the drift count on the dry-run preview before either apply, `preserve` reporting all 7 affected channels and moving none, then `overwrite`, re-run from an identical baseline, reporting and actually moving all 7. See [Restoring onto a populated target](#restoring-onto-a-populated-target). |
 | `enhancedchannelmanager-tddmw` | P2 | Found in run 12: the dry-run preview diverged from the apply on `channel_groups` (`378 WILL CREATE / 0 WILL SKIP` vs. `3 CREATED / 375 SKIPPED`), and the `Streams` category (the one that synthesizes placeholder streams) was absent from the preview entirely, not just `0`. End state was always correct; this was a reporting gap. **Fixed as of `0.18.1-0041`:** the preview now carries an explanatory caveat on `channel_groups` naming the divergence's cause, and a `Streams` row now appears on the preview, flagged **not predicted** rather than omitted. See the preview warning in [Step 6](#step-6-restore). |
 
 **No workarounds are required to get an ordinary restore to complete**,
