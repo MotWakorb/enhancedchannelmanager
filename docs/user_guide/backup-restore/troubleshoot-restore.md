@@ -229,9 +229,9 @@ actually exist and the channel restores complete, in its archived order.
 
 **Cause of a channel that will not play:** every one of its slots is a
 placeholder, so there is nothing to stream. That happens when nothing on
-the destination matched any of the channel's archived streams — most
+the destination matched any of the channel's archived streams (most
 often because the provider's streams had not materialized yet, or the
-names moved too far from the archive to match — or when the update that
+names moved too far from the archive to match), or when the update that
 would have reattached the channel failed upstream and left every slot as
 it was. The report names these channels specifically; they are the ones
 worth acting on first.
@@ -366,9 +366,9 @@ them with the archive's values) measured preview 12/11 existing matching
 apply 12/11 existing. Only the fresh-target case under-reported. This
 measurement predates `enhancedchannelmanager-r1ei7`; as of `0.18.1-0041`
 the same two relink modes also govern a channel's **group**, not just its
-EPG link and logo — preserve reads *"Keep their current guide data,
+EPG link and logo: preserve reads *"Keep their current guide data,
 logos, and grouping"* and overwrite reads *"Replace their guide data,
-logos, and grouping with the backup's"* — and the resulting
+logos, and grouping with the backup's"*, and the resulting
 channel-group drift count is itself predicted on the preview. See
 [Restoring onto a populated
 target](run-a-restore-drill.md#restoring-onto-a-populated-target) for
