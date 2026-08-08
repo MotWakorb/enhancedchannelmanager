@@ -1,30 +1,108 @@
 name: Build and Push Docker Image
 
+# ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
+#
+# This workflow owns two of the seven required status checks:
+# `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`,
+# both from the `codeql-analysis` matrix below.
+#
+# The path filter that used to sit here is gone for the reason spelled out at
+# the top of test.yml: `docs-only-pass.yml` mirrored these two names to fill
+# the gap on Markdown-only changes, and its `paths:` filter was not the
+# complement of this `paths-ignore`, so a PR touching code AND Markdown got
+# two check-runs per required context, one of them a permanently green echo.
+#
+# So `codeql-analysis` now runs on every event and gates its expensive steps
+# on the `detect` job. The image-build jobs are NOT required contexts and
+# still have nothing to do on a documentation-only change; they skip cleanly
+# because `wait-for-tests` skips and they already require it to have
+# succeeded.
+
 on:
   push:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
   pull_request:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # ─── Changed-path classifier ──────────────────────────────────────────
+  # Mirrors test.yml's `detect` job. Both call the same classifier script,
+  # scripts/classify_changed_paths.py, so the documentation-only rule has
+  # exactly one definition. As there, the gate is written `!= 'true'` so an
+  # empty or missing output runs the real work.
+  detect:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Classify the changed file set
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          # No `set -e`: a classifier that dies takes every gate with it.
+          set -uo pipefail
+
+          : > changed_files.txt
+
+          case "$EVENT_NAME" in
+            pull_request)
+              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '.[].filename' > changed_files.txt \
+                || { echo "::warning::could not list PR files"; : > changed_files.txt; }
+              ;;
+            push)
+              if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+                echo "::warning::no usable before-SHA on this push"
+              else
+                gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                  --jq '.files[]?.filename' > changed_files.txt \
+                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+              fi
+              ;;
+            *)
+              echo "Event $EVENT_NAME carries no diff; running every gate."
+              ;;
+          esac
+
+          echo "Changed paths:"
+          cat changed_files.txt
+
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          echo "verdict: ${verdict:-<empty, every gate will run>}"
+          echo "$verdict" >> "$GITHUB_OUTPUT"
+
   # Security scanning jobs - run on pushes to main and PRs to main
+  # NOT a required context, so it may skip at the job level. The
+  # `docs_only` clause keeps the pre-5rwzy behaviour: before this workflow
+  # ran on every event, a Markdown-only PR to main never reached npm audit,
+  # and a fresh advisory should not block a typo fix.
   security-scan-frontend:
     name: Frontend Security Scan
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -44,10 +122,12 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=high
 
+  # NOT a required context; may skip at the job level (see above).
   security-scan-backend:
     name: Backend Security Scan
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -67,10 +147,20 @@ jobs:
         #   unused (cryptography backend handles actual signing), no fix planned
         run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-48 --ignore-vuln CVE-2024-23342
 
+  # REQUIRED CONTEXTS: the matrix expands this job's name into
+  # `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`.
+  # It must therefore run on every event so each name is emitted exactly
+  # once, and gate its steps rather than itself. `!cancelled()` is there so a
+  # `detect` failure cannot skip the job: a skipped job counts as a satisfied
+  # required check, which is the hole this whole change closes.
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+    needs: [detect]
+    if: >-
+      !cancelled()
+      && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev')))
     permissions:
       security-events: write
       contents: read
@@ -79,10 +169,23 @@ jobs:
       matrix:
         language: ['javascript-typescript', 'python']
     steps:
+      # A documentation-only change adds no code for CodeQL to analyse, in
+      # either language. Skipping the scan here is the same judgement the
+      # `paths-ignore` filter used to make silently, made explicitly and in
+      # one place. The last analysis on the base branch still stands.
+      - name: Documentation-only change, no code to analyse
+        if: needs.detect.outputs.docs_only == 'true'
+        run: |
+          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "CodeQL has no changed ${{ matrix.language }} source to scan,"
+          echo "so this check passes without running the analysis."
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Initialize CodeQL
+        if: needs.detect.outputs.docs_only != 'true'
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
@@ -90,9 +193,11 @@ jobs:
           config-file: .github/codeql/codeql-config.yml
 
       - name: Autobuild
+        if: needs.detect.outputs.docs_only != 'true'
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
+        if: needs.detect.outputs.docs_only != 'true'
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
@@ -105,7 +210,7 @@ jobs:
       # CodeQL setup, so we enforce delta-zero in the workflow itself and
       # make this job a required status check.
       - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
-        if: github.event_name == 'pull_request'
+        if: needs.detect.outputs.docs_only != 'true' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -251,10 +356,12 @@ jobs:
           echo "Delta-zero check passed: 0 open HIGH/CRITICAL alerts on ref=$REF (language=${LANGUAGE})"
 
   # IaC Security Scanning
+  # NOT a required context; may skip at the job level (see security-scan-frontend).
   iac-security-scan:
     name: IaC Security Scan
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -284,11 +391,19 @@ jobs:
   # or passed on this exact commit. Polls the GitHub Checks API instead of
   # a cross-workflow trigger (workflow_run) or merging the two workflow
   # files — both of those would either complicate the required-status-check
-  # setup or risk drifting the check names dev/main branch protection and
-  # docs-only-pass.yml's sentinel depend on byte-for-byte.
+  # setup or risk drifting the check names dev/main branch protection
+  # depends on byte-for-byte.
+  #
+  # NOT a required context, so it may skip at the job level. Skipping it on a
+  # documentation-only change is what keeps the image builds off: every build
+  # job requires `needs.wait-for-tests.result == 'success'`, and a skipped job
+  # does not report success. Net effect matches the pre-5rwzy behaviour, where
+  # this workflow did not run at all on a Markdown-only change.
   wait-for-tests:
     name: Wait for Test Suite
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true'
     permissions:
       checks: read
     steps:
@@ -344,12 +459,13 @@ jobs:
             all_done=true
 
             for name in "${CHECKS[@]}"; do
-              # A name can legitimately appear MORE than once: a PR that
-              # touches both a .md file and code triggers both the real
-              # test.yml job AND docs-only-pass.yml's sentinel stub for the
-              # same check name (see docs-only-pass.yml's "Mixed-PR safety"
-              # section). Every matching run must be completed and successful
-              # — not just the first one found.
+              # As of bead enhancedchannelmanager-5rwzy each of these names
+              # is emitted by exactly one job, so `matches` should hold a
+              # single run. The loop still checks EVERY match rather than
+              # the first one found: that is what caught the duplicate on
+              # PR #797, where `Backend Tests` reported failure and success
+              # on the same commit, and it is the cheapest possible detector
+              # if a second emitter is ever reintroduced.
               matches=$(echo "$runs_json" | jq -c --arg n "$name" '[.[] | select(.name == $n)]')
               count=$(echo "$matches" | jq 'length')
 

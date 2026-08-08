@@ -478,10 +478,11 @@ def main(argv: list[str] | None = None) -> int:
             if run is None:
                 failures.append(
                     f"no {WORKFLOW_NAME!r} push run exists for {sha[:12]} on "
-                    f"'{args.branch}'. Either the run has not been created yet "
-                    f"(wait and re-run) or the push was filtered out by "
-                    f"paths-ignore (a docs-only merge publishes nothing, which "
-                    f"is expected)."
+                    f"'{args.branch}'. The run has probably not been created "
+                    f"yet; wait and re-run. (A documentation-only merge does "
+                    f"create a run as of bead enhancedchannelmanager-5rwzy, "
+                    f"but its image-build jobs skip, so it publishes nothing "
+                    f"and the marker below legitimately does not move.)"
                 )
                 print(f"  no run found for {sha[:12]} on '{args.branch}'")
             else:

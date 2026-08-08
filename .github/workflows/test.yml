@@ -1,27 +1,120 @@
 name: Tests
 
+# ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
+#
+# INVARIANT: every job in this file whose `name:` is a branch-protection
+# required status check runs on EVERY event, so the context is emitted
+# exactly once, and gates its expensive STEPS on the `detect` job below.
+#
+# Do NOT add a path filter to this workflow, and do NOT give such a job a
+# job-level `if:` that can evaluate false. Both reintroduce the defect this
+# design closes:
+#
+#   * A path filter means the context is absent on the filtered half, so
+#     something else has to fill in for it. That was `docs-only-pass.yml`,
+#     whose `paths: ['**.md', '.beads/**']` was NOT the complement of the
+#     `paths-ignore` here. A PR touching code AND Markdown matched both, so
+#     every required context existed twice: once real, once a permanently
+#     green echo. On PR #797 `Backend Tests` reported failure and success on
+#     the same commit, and the failure was a genuine test defect.
+#   * GitHub treats a SKIPPED job as satisfying a required status check, so
+#     skipping the job is the same hole wearing a different hat.
+#
+# Jobs that are NOT required contexts may skip at the job level. They are
+# marked below. Adding one of them to branch protection without converting
+# it to step-gating reopens the hole; `backend/tests/unit/
+# test_classify_changed_paths.py` fails the PR if a required context ever
+# gains a second emitter or this workflow regains a path filter.
+
 on:
   push:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
   pull_request:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      # Docs-only PRs are satisfied by docs-only-pass.yml (the sentinel posts
-      # the required Backend/Frontend/Semgrep check-runs). Without this, the
-      # real suite ALSO runs and needlessly gates a Markdown-only merge.
-      # Keep in sync with the push trigger above + build.yml's paths-ignore.
-      - '**.md'
   workflow_dispatch:
 
 jobs:
+  # ─── Changed-path classifier ──────────────────────────────────────────
+  # Decides whether anything outside `**.md` / `.beads/**` changed. Every
+  # other job reads `needs.detect.outputs.docs_only`.
+  #
+  # The gate is written as `!= 'true'` everywhere on purpose: if this job
+  # fails outright its output is empty, `!= 'true'` is true, and the real
+  # work runs. Fail-open is the only safe direction, because the failure
+  # mode of fail-closed is a green required check that ran nothing.
+  detect:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Only scripts/classify_changed_paths.py is needed; the changed-file
+          # set comes from the API, not from git, so no history is required.
+          # That also sidesteps the depth-1 CI checkout trap from bd-t8fqg
+          # (no `origin/<base>` remote-tracking ref in a single-branch clone).
+          fetch-depth: 1
+
+      - name: Classify the changed file set
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          # No `set -e`: a classifier that dies takes every gate with it.
+          # Every failure path below leaves changed_files.txt empty, and the
+          # classifier treats an empty set as code.
+          set -uo pipefail
+
+          : > changed_files.txt
+
+          case "$EVENT_NAME" in
+            pull_request)
+              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '.[].filename' > changed_files.txt \
+                || { echo "::warning::could not list PR files"; : > changed_files.txt; }
+              ;;
+            push)
+              if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+                echo "::warning::no usable before-SHA on this push"
+              else
+                gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                  --jq '.files[]?.filename' > changed_files.txt \
+                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+              fi
+              ;;
+            *)
+              # workflow_dispatch and anything else: run everything.
+              echo "Event $EVENT_NAME carries no diff; running every gate."
+              ;;
+          esac
+
+          echo "Changed paths:"
+          cat changed_files.txt
+
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          echo "verdict: ${verdict:-<empty, every gate will run>}"
+          echo "$verdict" >> "$GITHUB_OUTPUT"
+
+  # Not a required context, but deliberately UNGATED: a documentation-only
+  # change is precisely what this job checks, and this workflow now runs on
+  # every event, so it needs no `detect` dependency at all. Until bead
+  # enhancedchannelmanager-5rwzy this job existed twice, once here and once
+  # in docs-only-pass.yml, with a "keep the step byte-identical" comment
+  # holding the two copies together. There is now one copy.
   operator-docs:
     name: Operator Docs
     runs-on: ubuntu-latest
@@ -49,11 +142,10 @@ jobs:
       # ~12k pre-existing violations are tolerated and reported as a count,
       # per the PO's "add the guard, defer the cleanup" call.
       #
-      # It lives in this job, not a new one, because "Operator Docs" is the
-      # only real (non-stub) job duplicated into docs-only-pass.yml. A
-      # Markdown-only PR skips test.yml entirely via paths-ignore, and a
-      # Markdown-only PR is exactly how the 144 violations arrived. Keep the
-      # step in sync between the two workflows.
+      # It lives in this job because a Markdown-only PR is exactly how the
+      # 144 violations arrived, and this job is the one that runs on such a
+      # PR. Since bead enhancedchannelmanager-5rwzy the whole workflow runs
+      # on every event, so there is a single copy of this step.
       #
       # Pull requests only: on a push to dev/main the merge commit's content
       # was already checked on the PR, and there is no base ref to diff.
@@ -66,14 +158,28 @@ jobs:
           python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
 
   # ─── Backend tests ────────────────────────────────────────────────────
+  # REQUIRED CONTEXT. Always runs; the steps below are gated. See the
+  # invariant at the top of this file before changing `if:` on this job.
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
+      - name: Documentation-only change, nothing for pytest to run
+        if: needs.detect.outputs.docs_only == 'true'
+        run: |
+          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "The backend suite has no changed Python to exercise, so this"
+          echo "check passes without running it. Any change under backend/"
+          echo "runs the full suite below."
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Setup Python
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -81,6 +187,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
@@ -90,6 +197,7 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov httpx
 
       - name: Verify required test deps are importable (bd-s8kq3)
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: backend
         # Fast-fail guard: if the install step above silently failed to
         # bring in a required test dep (alembic for migration tests,
@@ -101,6 +209,7 @@ jobs:
         run: python scripts/verify_test_deps.py
 
       - name: Prepare CI SQLite database
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: backend
         run: |
           mkdir -p /tmp/ecm_test_config
@@ -111,6 +220,7 @@ jobs:
           python -c "import sqlite3; sqlite3.connect('/tmp/ecm-test.db').close()"
 
       - name: Run pytest
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: backend
         env:
           CONFIG_DIR: /tmp/ecm_test_config
@@ -141,7 +251,7 @@ jobs:
             --junitxml=junit.xml
 
       - name: Upload backend coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -152,7 +262,7 @@ jobs:
           retention-days: 14
 
       - name: Upload backend JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-backend` artifact name is consumed by
@@ -178,14 +288,27 @@ jobs:
   # docs/testing.md § "Coverage ratchet cadence"). The --cov-config
   # points at mcp-server/.coveragerc which excludes tests/ from the
   # measurement (so self-coverage doesn't inflate the TOTAL).
+  #
+  # REQUIRED CONTEXT. Always runs; the steps below are gated.
   mcp-server:
     name: MCP Server Tests
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
+      - name: Documentation-only change, nothing for pytest to run
+        if: needs.detect.outputs.docs_only == 'true'
+        run: |
+          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "The mcp-server suite has no changed Python to exercise, so"
+          echo "this check passes without running it."
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Setup Python
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -193,6 +316,7 @@ jobs:
           cache-dependency-path: mcp-server/requirements.txt
 
       - name: Install dependencies
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: mcp-server
         run: |
           python -m pip install --upgrade pip
@@ -202,6 +326,7 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run pytest
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: mcp-server
         run: |
           # Coverage threshold is enforced via --cov-fail-under=26 with
@@ -223,7 +348,7 @@ jobs:
             --junitxml=junit.xml
 
       - name: Upload mcp-server coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mcp-server-coverage
@@ -234,7 +359,7 @@ jobs:
           retention-days: 14
 
       - name: Upload mcp-server JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-mcp` artifact name is consumed by
@@ -249,17 +374,29 @@ jobs:
           retention-days: 30
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
+  # REQUIRED CONTEXT. Always runs; the steps below are gated.
   frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
+      - name: Documentation-only change, nothing for the frontend to check
+        if: needs.detect.outputs.docs_only == 'true'
+        run: |
+          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "There is no changed TypeScript to lint, typecheck or test, so"
+          echo "this check passes without running the suite."
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
         with:
           # Need full history so we can diff against origin/main in PR mode.
           fetch-depth: 0
 
       - name: Setup Node.js
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -267,10 +404,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: npm ci
 
       - name: Lint (full repo, blocking)
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: |
           # Full-repo lint at --max-warnings 0. Baseline was cleared in
@@ -279,10 +418,12 @@ jobs:
           npm run lint
 
       - name: Typecheck
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: npm run typecheck
 
       - name: Unit tests with coverage (blocking)
+        if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: |
           # Coverage thresholds are configured in frontend/vitest.config.ts
@@ -303,7 +444,7 @@ jobs:
             --outputFile.junit=./junit.xml
 
       - name: Upload coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
@@ -312,7 +453,7 @@ jobs:
           retention-days: 14
 
       - name: Upload frontend JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.docs_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-frontend` artifact name is consumed by
@@ -335,9 +476,16 @@ jobs:
   # the touchpoints disagree, so the next missed bump fails before merge
   # instead of leaking divergence into dev. See docs/versioning.md →
   # Touchpoints for the canonical list and bd-9rtlc for the audit history.
+  # REQUIRED CONTEXT. Always runs, and unlike the other four it runs its
+  # first check unconditionally: proving the three version touchpoints agree
+  # costs a checkout and is meaningful on any change. Only the ADVANCE gate
+  # is gated, preserving the documentation-only exemption that used to be
+  # inherited from the workflow-level path filter.
   version-consistency:
     name: Version Consistency
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -366,14 +514,18 @@ jobs:
       #     PR targets `main` (base_ref=main) and is therefore skipped here;
       #     the shared script *also* exempts a no-suffix (X.Y.Z) version as a
       #     second safety net.
-      #   - Docs-only PRs never reach this job: test.yml has
-      #     `paths-ignore: ['**.md', '.beads/**']`, so a docs-only PR runs no
-      #     real job — docs-only-pass.yml posts the "Version Consistency"
-      #     check-run instead. The docs-only exemption is inherited for free.
+      #   - Documentation-only PRs are exempt: they carry no build to advance.
+      #     That exemption used to come free from this workflow's path filter;
+      #     since bead enhancedchannelmanager-5rwzy it is explicit, via the
+      #     `detect` job. The job itself still runs and still proves the
+      #     touchpoints agree, so the required context is honest either way.
       # The CHANGELOG [Unreleased] check inside the script is SOFT: it emits a
       # ::warning:: annotation and never fails the job.
       - name: Verify build number advances past base (PRs to dev only)
-        if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+        if: >-
+          needs.detect.outputs.docs_only != 'true'
+          && github.event_name == 'pull_request'
+          && github.base_ref == 'dev'
         run: |
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python scripts/check_version_advances.py \
@@ -391,9 +543,16 @@ jobs:
   # Convention doc: docs/style_guide.md § "Test validity / anti-patterns".
   # Suppression: add `# fake-test-ok: <reason>` (Python) or
   # `// fake-test-ok: <reason>` (TypeScript) on the same line.
+  #
+  # NOT a required context, so it may skip at the job level. If it is ever
+  # added to branch protection, convert it to the step-gated shape the five
+  # required jobs use first: GitHub counts a skipped job as satisfying a
+  # required check.
   fake-test-guard:
     name: Fake-Test Guard
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -414,9 +573,13 @@ jobs:
   # dev server with no backend dependency, so this job runs without a
   # live ECM container — unlike the bd-2lw25-deferred E2E suite under
   # `e2e/*.spec.ts`. Config: `playwright.visual.config.ts`.
+  #
+  # NOT a required context; may skip at the job level (see fake-test-guard).
   visual-regression:
     name: Visual Regression
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -487,9 +650,12 @@ jobs:
           retention-days: 14
 
   # ─── Operator workspace rendered release matrix (.14) ─────────────────
+  # NOT a required context; may skip at the job level (see fake-test-guard).
   operator-workspace-release:
     name: Operator Workspace Release Matrix
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -558,9 +724,13 @@ jobs:
   # `e2e/cross-route-css-leak.spec.ts` stay manual until bd-2lw25 lands a
   # live-service CI environment. See docs/testing.md § "Rendered-CSS
   # regression guards".
+  #
+  # NOT a required context; may skip at the job level (see fake-test-guard).
   sr-only-hidden:
     name: Screen-Reader-Only Rendering Guard
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.docs_only != 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -617,22 +787,39 @@ jobs:
   # backend/safe_regex.py; case-by-case exemptions are annotated inline
   # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
   # a TODO(<bead-id>) pointer to a follow-up migration.
+  # REQUIRED CONTEXT. Always runs; the steps below are gated. `container:`
+  # cannot be made conditional, so a documentation-only event still pulls the
+  # semgrep image and then does nothing. That is a few seconds of runner time
+  # in exchange for the context being emitted exactly once, which is the
+  # trade this design is built on.
   semgrep-lint:
     name: Semgrep Lint
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     # Pinned image tag — semgrep 1.160.x (matches the version used to
     # author and validate the .semgrep.yml rule). Bump deliberately; the
     # rule self-test under .semgrep/tests/ is the canary for regressions.
     container:
       image: returntocorp/semgrep:1.160.0
     steps:
+      - name: Documentation-only change, nothing for semgrep to scan
+        if: needs.detect.outputs.docs_only == 'true'
+        run: |
+          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Neither backend/ nor .semgrep.yml changed, so this check"
+          echo "passes without running the scan."
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Validate Semgrep rule config
+        if: needs.detect.outputs.docs_only != 'true'
         run: semgrep --validate --config .semgrep.yml
 
       - name: Run Semgrep rule self-test
+        if: needs.detect.outputs.docs_only != 'true'
         # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
         # the live .semgrep.yml so the test locks the rule's accept/reject
         # boundary — if the rule drifts, the self-test fails before the
@@ -643,6 +830,7 @@ jobs:
             .semgrep/tests/no-bare-re-on-dynamic-pattern.py
 
       - name: Run Semgrep against backend/
+        if: needs.detect.outputs.docs_only != 'true'
         run: |
           # --error flag exits non-zero on any finding. The rule is
           # severity: ERROR so any hit blocks the job.
