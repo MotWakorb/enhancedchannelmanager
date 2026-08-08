@@ -26,13 +26,7 @@ import {
   stageNumberFromCurrentItem,
   stageLabelFromCurrentItem,
 } from '../utils/restoreStages';
-
-/** Task statuses that end polling — the job is done, no further updates come. */
-const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'failed',
-  'cancelled',
-]);
+import { isTerminalExecutionStatus } from '../utils/taskExecutionStatus';
 
 /** Default poll cadence — small and steady; status reads are cheap GETs. */
 const DEFAULT_POLL_INTERVAL_MS = 1000;
@@ -99,7 +93,7 @@ export interface RestoreProgressView {
   isRunning: boolean;
   /** Whether the job reached a failed/cancelled terminal status. */
   isError: boolean;
-  /** Whether the job completed successfully. */
+  /** Whether the job ran to completion (cleanly, or with warnings). */
   isComplete: boolean;
   /** Polling/fetch error message, if any (transient errors are not surfaced). */
   error: string | null;
@@ -123,7 +117,12 @@ const EMPTY_VIEW: RestoreProgressView = {
 function viewFromProgress(progress: TaskProgress): RestoreProgressView {
   const status = progress.status;
   const isError = status === 'failed' || status === 'cancelled';
-  const isComplete = status === 'completed';
+  // `completed_with_warnings` is a run that FINISHED and rolled nothing back —
+  // a restore whose report is exactly as readable as a clean one's (bead bdmby;
+  // the same rule `isTerminalExecutionStatus` already applies to the history row
+  // both restore modals poll). Treating it as an error here would put the red
+  // "Restore failed" header over a restore that succeeded with warnings.
+  const isComplete = status === 'completed' || status === 'completed_with_warnings';
   return {
     progress,
     stageNumber: stageNumberFromCurrentItem(progress.current_item),
@@ -133,7 +132,7 @@ function viewFromProgress(progress: TaskProgress): RestoreProgressView {
     itemTotal: progress.total,
     percentage: progress.percentage,
     status,
-    isRunning: !TERMINAL_STATUSES.has(status),
+    isRunning: !isTerminalExecutionStatus(status),
     isError,
     isComplete,
     error: null,
