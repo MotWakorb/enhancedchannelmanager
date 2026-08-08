@@ -570,7 +570,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {error}", file=sys.stderr)
         return 1
 
-    print(f"PASS: {ref} carries {expected}, built from a successful run of {sha[:12]}.")
+    # Claim only what actually ran. A PASS line that asserts the registry
+    # carries the right marker after `--skip-image` is a lie the operator
+    # has no way to see through.
+    if args.skip_workflow and args.skip_image:
+        print(f"PASS: nothing was checked (both checks skipped) for {sha[:12]}.")
+    elif args.skip_image:
+        print(f"PASS: {sha[:12]} has a successful build run (image check skipped).")
+    elif args.skip_workflow:
+        print(f"PASS: {ref} carries {expected} (workflow-run check skipped).")
+    else:
+        print(
+            f"PASS: {ref} carries {expected}, built from a successful run "
+            f"of {sha[:12]}."
+        )
     return 0
 
 
