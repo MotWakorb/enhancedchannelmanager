@@ -264,6 +264,45 @@ Comments add the context the code can't carry.
   block, a quoted log line, a quoted UI string, or a filename, URL, or
   command.
 
+#### CI guard
+
+**Automated enforcement covers documentation only.** The code-comment
+clause above still stands as a convention, but it is not machine-enforced.
+It relies on review, the same as any other style rule the guard doesn't
+reach.
+
+`scripts/check_em_dashes.py` runs in CI as a step of the **Operator Docs**
+job (`.github/workflows/test.yml` and `.github/workflows/docs-only-pass.yml`,
+which is the copy that runs on a Markdown-only PR). It scans Markdown under
+`docs/`, plus the top-level `README.md` / `CHANGELOG.md` / `CLAUDE.md`.
+Python and TypeScript were in its scan surface at initial rollout; the PO
+narrowed the scope to documentation only (bead
+`enhancedchannelmanager-3tflw`), so a code comment with an em-dash no
+longer fails CI.
+
+**It is a ratchet, not a cliff.** It fails only on lines a PR *adds*. The
+pre-existing violations already in the tree are tolerated and reported as a
+count, per the "add the guard, defer the cleanup" call on bead
+`enhancedchannelmanager-3tflw`. Run `python scripts/check_em_dashes.py --all`
+for the full cleanup inventory.
+
+Only U+2014 (`—`) is flagged. En-dashes (`–`) and arrows (`→`) are not
+em-dashes and are never flagged. The exemptions above are implemented for
+Markdown: fenced code blocks, inline code spans, link destinations, and
+URLs are all skipped.
+
+If a line is genuinely quoted content the rule exempts and the scanner
+cannot tell, suppress it with `em-dash-ok: <reason>` on the **same line**,
+mirroring the `fake-test-ok` convention below. A bare `em-dash-ok` with no
+reason will be rejected at code review.
+
+Run it locally before pushing:
+
+```bash
+python scripts/check_em_dashes.py                     # vs origin/dev
+python scripts/check_em_dashes.py --paths docs/x.md   # one file, in full
+```
+
 ---
 
 ## Regex
