@@ -5,12 +5,18 @@
 ---
 
 !!! danger "Read this before you start"
-    This article is written for **Dispatcharr `0.28.2`** and **ECM
-    `0.18.1-0040`**. A restore result is only a result for the version it
-    was measured on. Every claim below carries the build it was last
-    confirmed on; where a build isn't named, it's current as of `0.18.1-0040`.
-    If you are on different versions, re-run the drill and update your own
-    notes rather than trusting a claim past its pin.
+    This article is maintained against **Dispatcharr `0.28.2`** and **ECM
+    `0.18.1-0046`**. A restore result is only a result for the version it
+    was measured on: the fresh-target round trip was last measured by run
+    12 on `0.18.1-0040`, and the populated-target round was last measured
+    by run 13 on `0.18.1-0042` (both detailed in the paragraph below). No
+    functional change has landed in the restore path since `0.18.1-0042`,
+    so those two measurements are still the last word on current
+    behavior. Every claim below carries the build it was last confirmed
+    on; where a build isn't named, treat `0.18.1-0042` as the newest
+    build it has actually been checked against. If you are on different
+    versions, re-run the drill and update your own notes rather than
+    trusting a claim past its pin.
 
     The most recent full drill (run 12, `0.18.1-0040`) reproduced the
     instance completely, **on a freshly-wiped target**, on both artifact

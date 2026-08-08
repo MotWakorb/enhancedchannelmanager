@@ -82,4 +82,4 @@ To confirm that the backup produced last night is healthy without waiting for a 
 
 Do this before migrating to a new install. A few minutes of verification now prevents a failed restore at the moment you need it most.
 
-Restore is a highest-care component precisely because it's rarely exercised — see the [disaster-recovery runbook's "Recurring maintenance"](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/disaster-recovery-restore.md#recurring-maintenance) section for a recommended monthly cadence for this check and what to do if a preview surfaces something unexpected.
+Restore is a highest-care component precisely because it's rarely exercised. See the [disaster-recovery runbook's "Recurring maintenance"](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/disaster-recovery-restore.md#recurring-maintenance) section for a recommended monthly cadence for this check and what to do if a preview surfaces something unexpected.

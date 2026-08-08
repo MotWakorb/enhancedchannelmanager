@@ -1,6 +1,6 @@
 # Backup & Restore
 
-The UX label for this feature is **Backup & Restore**. The internal acronym DBAS only appears in dev docs and the threat model — you will not see it in the ECM UI.
+The UX label for this feature is **Backup & Restore**. The internal acronym DBAS only appears in dev docs and the threat model. You will not see it in the ECM UI.
 
 ---
 
