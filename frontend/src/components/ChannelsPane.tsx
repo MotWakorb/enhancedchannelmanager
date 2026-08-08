@@ -807,6 +807,30 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
   const allSelected = channelCount > 0 && selectedCount === channelCount;
   const someSelected = selectedCount > 0 && selectedCount < channelCount;
 
+  // Which Group-actions items this group actually offers (bead
+  // enhancedchannelmanager-o88e9). The whole menu used to be gated on
+  // `!isEmpty`, a guard inherited from the standalone "sort streams by
+  // quality" button this menu replaced in v0.14.0-0021. Sorting needs
+  // members, so the guard was correct for that button and wrong for the
+  // menu that later absorbed Rename Group and Delete Group. An empty group
+  // was therefore un-renamable and un-deletable from the very screen that
+  // creates empty groups. The split below keeps the member-dependent items
+  // gated on membership and lets the member-independent ones through.
+  // Delete stays gated on isManualGroup, not on membership: an empty group
+  // backed by an M3U provider is still recreated by the next refresh, so
+  // deleting it is pointless churn rather than a safe cleanup.
+  const canProbe = !isEmpty && !!onProbeGroup;
+  const canSortStreams =
+    !isEmpty &&
+    (!!onSortStreamsByQuality || !!onSortStreamsByMode) &&
+    (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate ||
+      enabledCriteria.custom_streams || enabledCriteria.catchup);
+  const canSortAndRenumber = !isEmpty && !!onSortAndRenumber;
+  const canRename = groupId !== 'ungrouped' && !!onRenameGroup;
+  const canDelete = isManualGroup && !!onDeleteGroup;
+  const hasMemberActions = canProbe || canSortStreams || canSortAndRenumber;
+  const hasGroupMenuItems = hasMemberActions || canRename || canDelete;
+
   return (
     <div
       ref={setNodeRef}
@@ -935,7 +959,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
         </button>
       )}
       {/* Three-dot menu in edit mode */}
-      {isEditMode && !isEmpty && (
+      {isEditMode && hasGroupMenuItems && (
         <>
           <button
             className="group-menu-btn"
@@ -964,7 +988,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
               onClick={(e) => e.stopPropagation()}
             >
               {/* Probe */}
-              {onProbeGroup && (
+              {canProbe && onProbeGroup && (
                 <button
                   className={`group-menu-item ${isProbing ? 'loading' : ''}`}
                   onClick={() => { setGroupMenuOpen(false); onProbeGroup(); }}
@@ -977,7 +1001,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </button>
               )}
               {/* Sort Streams sub-menu */}
-              {(onSortStreamsByQuality || onSortStreamsByMode) && (enabledCriteria.resolution || enabledCriteria.bitrate || enabledCriteria.framerate || enabledCriteria.custom_streams || enabledCriteria.catchup) && (
+              {canSortStreams && (
                 <>
                   <div className="group-menu-divider" />
                   <button
@@ -1046,7 +1070,7 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </>
               )}
               {/* Sort & Renumber */}
-              {onSortAndRenumber && (
+              {canSortAndRenumber && onSortAndRenumber && (
                 <button
                   className="group-menu-item"
                   onClick={() => { setGroupMenuOpen(false); onSortAndRenumber(); }}
@@ -1056,9 +1080,11 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </button>
               )}
               {/* Rename */}
-              {groupId !== 'ungrouped' && onRenameGroup && (
+              {canRename && onRenameGroup && (
                 <>
-                  <div className="group-menu-divider" />
+                  {/* Separators only separate: an empty group's menu starts
+                      at Rename, so a leading divider would be a stray rule. */}
+                  {hasMemberActions && <div className="group-menu-divider" />}
                   <button
                     className="group-menu-item"
                     onClick={() => { setGroupMenuOpen(false); onRenameGroup(); }}
@@ -1069,9 +1095,9 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                 </>
               )}
               {/* Delete */}
-              {isManualGroup && onDeleteGroup && (
+              {canDelete && onDeleteGroup && (
                 <>
-                  <div className="group-menu-divider" />
+                  {(hasMemberActions || canRename) && <div className="group-menu-divider" />}
                   <button
                     className="group-menu-item danger"
                     onClick={() => { setGroupMenuOpen(false); onDeleteGroup(); }}
