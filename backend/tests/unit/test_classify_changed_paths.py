@@ -238,6 +238,40 @@ class TestWorkflowContract:
                     f"See bead enhancedchannelmanager-5rwzy."
                 )
 
+    def test_required_context_jobs_can_never_be_skipped(self):
+        """The half of the invariant that keeps documentation-only PRs mergeable.
+
+        GitHub counts a SKIPPED job as satisfying a required status check, so
+        a required-context job must never carry a job-level `if:` that can
+        evaluate false: it would be the same permanently-satisfied context
+        the sentinel workflow used to provide. Every such job either has no
+        `if:` at all or guards only against cancellation, and gates its real
+        work at the STEP level instead."""
+        for path in sorted(self.WORKFLOW_DIR.glob("*.yml")):
+            jobs = self._load_workflow(path).get("jobs") or {}
+            for job_id, job in jobs.items():
+                job = job or {}
+                if job.get("name", job_id) not in self.REQUIRED_CONTEXTS:
+                    continue
+                condition = str(job.get("if", "")).strip()
+                if not condition:
+                    continue
+                assert "!cancelled()" in condition, (
+                    f"{path.name}:{job_id} emits a required status check but "
+                    f"has a job-level `if:` that can evaluate false "
+                    f"({condition!r}). A skipped job satisfies a required "
+                    f"check without running anything. Gate the steps instead, "
+                    f"and keep the job-level guard at `!cancelled()`. "
+                    f"See bead enhancedchannelmanager-5rwzy."
+                )
+                assert "docs_only" not in condition, (
+                    f"{path.name}:{job_id} gates the whole job on the "
+                    f"documentation-only classification. That skips the job, "
+                    f"and a skipped job satisfies the required check it is "
+                    f"named for. Gate its steps instead. "
+                    f"See bead enhancedchannelmanager-5rwzy."
+                )
+
     def test_each_required_context_has_exactly_one_emitting_job(self):
         emitters: dict[str, list[str]] = {name: [] for name in self.REQUIRED_CONTEXTS}
         for path in sorted(self.WORKFLOW_DIR.glob("*.yml")):
