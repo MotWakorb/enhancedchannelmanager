@@ -247,6 +247,55 @@ you start; do not change the container-side number.
 
 ---
 
+## Step 0: Confirm the image you are about to measure
+
+Do this before every run, and again after any change to the tag you are
+pinned to. A drill result is only a result for the build it was measured
+on, and a floating tag such as `:dev` can be stale in two directions at
+once: your local copy can lag the registry, and the registry itself can
+lag the branch it is built from. The second one is not hypothetical. The
+published `:dev` tag has silently lagged the `dev` branch four times, and
+on the most recent occasion it stayed stale for about five hours.
+
+Drop the local tag, pull it fresh, and read the build marker out of the
+image you actually have:
+
+```bash
+# Drop any local copy so the pull cannot be satisfied from cache.
+docker rmi ghcr.io/motwakorb/enhancedchannelmanager:dev || true
+
+# Pull the tag you pinned in the compose file above.
+docker pull ghcr.io/motwakorb/enhancedchannelmanager:dev
+
+# Read the build marker baked into the image at build time.
+docker inspect ghcr.io/motwakorb/enhancedchannelmanager:dev \
+  --format '{{json .Config.Env}}' | tr ',' '\n' | grep -E 'ECM_VERSION|GIT_COMMIT'
+```
+
+Expected output shape:
+
+```text
+"ECM_VERSION=0.18.1-0043"
+"GIT_COMMIT=5c571b39f00e1bac8a3a171b234a00a3eda4a987"
+```
+
+Write both values into your drill notes before you start. `ECM_VERSION`
+is the build every claim in your notes is pinned to. `GIT_COMMIT` is the
+exact source revision, which is what you cite if you file a bug.
+
+If `docker rmi` refuses because a running container is using the image,
+stop that container first, or accept that you are measuring whatever the
+running container already had. Do not skip the check.
+
+!!! note "If you have repository access"
+    Contributors can run `python scripts/check_publish.py` instead, which
+    additionally confirms that the **Build and Push Docker Image**
+    workflow run for the commit succeeded. See
+    [`docs/shipping.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/shipping.md)
+    for how that fits into the merge flow.
+
+---
+
 ## Step 1: Roll out the source instance
 
 ```bash

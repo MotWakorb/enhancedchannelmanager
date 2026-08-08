@@ -91,9 +91,54 @@ gh pr merge <#> --merge --delete-branch
 # Verify
 git checkout dev && git pull
 git status  # MUST show "up to date with origin"
+
+# Confirm the image actually published (see below - this step is NOT optional)
+.venv/bin/python scripts/check_publish.py
 ```
 
 The required check names above are pulled from `gh api /repos/MotWakorb/enhancedchannelmanager/branches/dev/protection | jq '.required_status_checks.contexts'`. If branch protection changes, update this list.
+
+#### Confirm the image published
+
+A merged PR is not a published image. Merging to `dev` triggers the **Build and Push Docker Image** workflow, and that workflow can fail *after* the merge for reasons the PR's own checks never saw. The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
+
+1. A Buildx flake that skipped the multi-arch manifest.
+2. A GitHub Actions outage that orphaned queued runs.
+3. A frontend test flake that correctly gated the publish.
+4. PR #793 (2026-08-07): the `dev` Tests workflow failed on one order-dependent frontend flake, so the publish gate correctly refused to ship from a failed suite.
+
+In every case the gate behaved correctly and nothing surfaced the drift. On the most recent one, `dev` carried the fix and the registry did not, for about five hours, until an unrelated merge republished it by accident. Nobody noticed until somebody went looking.
+
+So after `git checkout dev && git pull`, run:
+
+```bash
+.venv/bin/python scripts/check_publish.py
+```
+
+The script checks two things for the merge commit at `HEAD`:
+
+1. The **Build and Push Docker Image** workflow run for that commit concluded `success`.
+2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
+
+Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.
+
+**It is a post-merge check, deliberately not a CI gate.** A check that runs after the merge cannot gate the merge it follows, and adding it to the PR flow would put a permanently-failing context on every open PR. Running it *before* the merge is the one way to misread it: on a feature branch the version bump has not reached `dev` yet, so the registry cannot possibly carry it. The script detects that case and prints a `PRE-MERGE RUN` banner saying the mismatch is expected.
+
+If it fails after a merge, re-run the failed workflow from the URL the script prints. Do not wait for the next merge to republish by accident.
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+Useful flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--commit <sha>` | Verify a specific commit instead of `HEAD`. |
+| `--pull` | Read the marker by dropping and re-pulling the tag (the heavier image gate the restore drill uses) instead of reading the registry config blob. |
+| `--skip-workflow` / `--skip-image` | Run only one of the two checks. |
+
+The same "prove the image before you trust it" discipline applies before a restore drill; see [Confirm the image you are about to measure](user_guide/backup-restore/run-a-restore-drill.md#step-0-confirm-the-image-you-are-about-to-measure).
 
 ### 7. File Beads for Remaining Work
 
