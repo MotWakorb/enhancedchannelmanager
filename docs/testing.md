@@ -203,9 +203,11 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
   `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the checked-out
   source and serves it on an isolated preview port with no backend. The shell,
   Dashboard and Settings all mount that way, so the assertion is reachable.
-  The job is **not** in the required-check set; making it required also needs
-  a matching sentinel job in `.github/workflows/docs-only-pass.yml`, or
-  docs-only PRs will hang waiting for a check that never runs.
+  The job is **not** in the required-check set. Making it required means
+  first converting it to the step-gated shape the required jobs use (see
+  "One source of truth per required check" below): it currently skips at the
+  job level on a documentation-only change, and GitHub counts a skipped job
+  as satisfying a required check.
 - `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
   `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
   `control-typeface.spec.ts` are **manual-only**.
@@ -429,6 +431,75 @@ Do **not** lower the threshold in the config.
 - **Backend tests**: MANDATORY for any backend code changes
 - **Frontend tests**: MANDATORY for any frontend code changes
 - **E2E tests**: Run on merge to main only (CI/CD pipeline)
+
+## One source of truth per required check
+
+`dev` branch protection requires seven status checks: `Backend Tests`,
+`Frontend Tests`, `MCP Server Tests`, `Semgrep Lint`, `Version Consistency`
+(all from `.github/workflows/test.yml`), and `CodeQL Analysis (python)` /
+`CodeQL Analysis (javascript-typescript)` (the `codeql-analysis` matrix in
+`.github/workflows/build.yml`).
+
+**Invariant: each of those names is emitted by exactly one job, and that job
+runs on every pull request.**
+
+### What went wrong before (bead `enhancedchannelmanager-5rwzy`)
+
+`test.yml` triggered on `paths-ignore: ['**.md', '.beads/**']` and a sentinel
+workflow, `docs-only-pass.yml`, triggered on `paths: ['**.md', '.beads/**']`.
+Those two filters look like complements and are not. A pull request touching
+both code and Markdown matches both, so every required context existed twice:
+once real, once a job whose only step was an `echo`.
+
+Every shipped change carries a `CHANGELOG.md` entry, so nearly every pull
+request in this repo has that mixed shape. On PR #797 the duplicate went
+live: `Backend Tests` reported **`failure` and `success` on the same commit**,
+and the failure was a genuine test defect, not a flake. It was caught only
+because the reviewer read every instance of the context individually instead
+of trusting the aggregate.
+
+### The shape that replaced it
+
+1. Neither `test.yml` nor `build.yml` has a path filter. Both run on every
+   push and pull request to `main` and `dev`.
+2. A `detect` job in each classifies the changed file set by calling
+   `scripts/classify_changed_paths.py`. That script holds the single
+   definition of the documentation-only rule (`**.md` and `.beads/**`), which
+   previously lived in three `paths` blocks that drifted apart.
+3. Every job whose name is a required context **always runs**, so the context
+   is emitted exactly once, and gates its expensive **steps** on
+   `needs.detect.outputs.docs_only`. On a documentation-only change the job
+   does a cheap no-op and passes honestly.
+4. `docs-only-pass.yml` is deleted.
+
+### Two rules when editing these workflows
+
+- **Never give a required-context job a path filter or a job-level `if:` that
+  can evaluate false.** GitHub counts a **skipped** job as satisfying a
+  required status check, so skipping is the same hole in a new place. Gate the
+  steps instead.
+- **Never make a duplicate emitter fail instead.** A second check-run
+  reporting failure alongside a real one that passes blocks every mixed pull
+  request. The answer is one emitter, not a louder second one.
+
+Jobs that are **not** required contexts (`Fake-Test Guard`, `Visual
+Regression`, `Operator Workspace Release Matrix`, `Screen-Reader-Only
+Rendering Guard`, the image builds) do skip at the job level on a
+documentation-only change. Promoting any of them to a required check means
+converting it to the step-gated shape first.
+
+`backend/tests/unit/test_classify_changed_paths.py` enforces all of this: it
+pins the classifier's accept/reject boundary and its fail-open behaviour, and
+it fails the pull request if a required context ever gains a second emitting
+job or if `test.yml` / `build.yml` regain a path filter.
+
+### Fail-open, on purpose
+
+The gate expression is always `needs.detect.outputs.docs_only != 'true'`. If
+the `detect` job dies its output is empty, the comparison is true, and the
+real work runs. Classifying code as documentation is the dangerous direction,
+because it turns a required check green without running the work it is named
+for. Classifying documentation as code only costs runner minutes.
 
 ## Container Freshness Check
 

@@ -272,8 +272,10 @@ It relies on review, the same as any other style rule the guard doesn't
 reach.
 
 `scripts/check_em_dashes.py` runs in CI as a step of the **Operator Docs**
-job (`.github/workflows/test.yml` and `.github/workflows/docs-only-pass.yml`,
-which is the copy that runs on a Markdown-only PR). It scans Markdown under
+job in `.github/workflows/test.yml`. There is exactly one copy: since bead
+`enhancedchannelmanager-5rwzy` that workflow runs on every pull request,
+including a Markdown-only one, so the duplicate that used to live in
+`docs-only-pass.yml` is gone. It scans Markdown under
 `docs/`, plus the top-level `README.md` / `CHANGELOG.md` / `CLAUDE.md`.
 Python and TypeScript were in its scan surface at initial rollout; the PO
 narrowed the scope to documentation only (bead
