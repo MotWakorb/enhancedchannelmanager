@@ -1436,8 +1436,15 @@ export function useEditMode({
 
       result.updatedChannels = allChannels;
 
-      // Determine if we had any success (partial or complete)
-      const hadSuccess = result.operationsApplied > 0;
+      // Determine if we had any success (partial or complete).
+      //
+      // Groups are created in `groupsToCreate`, which is a phase rather than an
+      // operation, so it contributes nothing to `operationsApplied`. A batch of
+      // NOTHING BUT staged groups — "Create new channel group", Done, Apply All
+      // — therefore looked like a no-op, and edit mode would never stand down
+      // even though the groups really had been created (bead
+      // enhancedchannelmanager-vtapf).
+      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0;
       const hadFailures = result.operationsFailed > 0 || (result.validationIssues && result.validationIssues.length > 0);
 
       // Always update channels if any operations succeeded

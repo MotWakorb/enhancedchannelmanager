@@ -365,6 +365,28 @@ describe('useEditMode — stageCreateGroup (bd-vtapf)', () => {
     expect(result.operationsFailed).toBe(0);
   });
 
+  it('exits edit mode after a batch of nothing but groups', async () => {
+    // Groups travel in `groupsToCreate`, which is a phase and not an
+    // operation, so it contributes nothing to operationsApplied. "Create new
+    // channel group" -> Done -> Apply All is a whole batch of them.
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateGroup('Drill Empty Group');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(requests[0].groupsToCreate).toEqual([{ name: 'Drill Empty Group' }]);
+    expect(result.success).toBe(true);
+    // The group is real now — nothing must still be staged against a temp id.
+    expect(view.result.current.isEditMode).toBe(false);
+    expect(view.result.current.stagedGroups).toEqual([]);
+  });
+
   it('does not double-count a group reached both explicitly and by newGroupName', () => {
     const { view } = renderEditMode();
 
