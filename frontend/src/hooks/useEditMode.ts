@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type {
   Channel,
+  ChannelGroup,
   ChannelSnapshot,
   EditModeState,
   StagedOperation,
@@ -100,6 +101,22 @@ export function useEditMode({
   // Use a ref for next temp group ID to avoid React batching issues
   const nextTempGroupIdRef = useRef(-1000);
 
+  // Name -> temp group id for every group staged this session. Allocation lives
+  // OUT here rather than inside a setState updater because callers need the id
+  // synchronously (stageCreateGroup returns it, stageCreateChannel puts it on
+  // the operation) and because React StrictMode runs updaters twice.
+  const stagedGroupIdByNameRef = useRef<Map<string, number>>(new Map());
+
+  /** Temp id for `name`, allocating one the first time the name is seen. */
+  const ensureStagedGroupId = useCallback((name: string): number => {
+    const existing = stagedGroupIdByNameRef.current.get(name);
+    if (existing !== undefined) return existing;
+    const tempGroupId = nextTempGroupIdRef.current;
+    nextTempGroupIdRef.current -= 1;
+    stagedGroupIdByNameRef.current.set(name, tempGroupId);
+    return tempGroupId;
+  }, []);
+
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
@@ -108,6 +125,7 @@ export function useEditMode({
     // Reset temp ID refs
     nextTempIdRef.current = -1;
     nextTempGroupIdRef.current = -1000;
+    stagedGroupIdByNameRef.current = new Map();
 
     setState({
       isActive: true,
@@ -130,12 +148,16 @@ export function useEditMode({
   // Exit edit mode (discards changes)
   const exitEditMode = useCallback(() => {
     nextTempIdRef.current = -1; // Reset temp ID ref
+    nextTempGroupIdRef.current = -1000;
+    stagedGroupIdByNameRef.current = new Map();
     setState(createInitialState());
   }, []);
 
   // Discard all staged changes
   const discard = useCallback(() => {
     nextTempIdRef.current = -1; // Reset temp ID ref
+    nextTempGroupIdRef.current = -1000;
+    stagedGroupIdByNameRef.current = new Map();
     setState(createInitialState());
   }, []);
 
@@ -257,6 +279,33 @@ export function useEditMode({
         let newGroupNameToTempId = prev.newGroupNameToTempId;
         let newNextTempGroupId = prev.nextTempGroupId;
 
+        /**
+         * Record a staged group under the temp id its caller already
+         * allocated (see `ensureStagedGroupId`). Idempotent — restaging the
+         * same name reuses the same id.
+         */
+        const registerStagedGroup = (name: string, tempGroupId: number) => {
+          if (prev.newGroupNameToTempId.has(name)) return;
+          newStagedGroups = new Map(newStagedGroups);
+          newStagedGroups.set(tempGroupId, {
+            id: tempGroupId,
+            name,
+            channel_count: 0, // Will be updated as channels are added
+          });
+          newGroupNameToTempId = new Map(newGroupNameToTempId);
+          newGroupNameToTempId.set(name, tempGroupId);
+          newNextTempGroupId = tempGroupId - 1;
+        };
+
+        // A group staged on its own (Channels pane -> "Create new channel
+        // group" while Edit Mode is active) has to appear in `stagedGroups`
+        // like one implied by a createChannel does, or it is invisible to the
+        // group filter, to "Create in...", and to the commit's group creation
+        // phase (bead enhancedchannelmanager-vtapf).
+        if (apiCall.type === 'createGroup') {
+          registerStagedGroup(apiCall.name, apiCall.tempGroupId);
+        }
+
         // Handle create channel specially
         if (apiCall.type === 'createChannel') {
           const tempId = prev.nextTempId;
@@ -265,28 +314,12 @@ export function useEditMode({
           let channelGroupId: number | null = apiCall.groupId ?? null;
 
           if (apiCall.newGroupName) {
-            // Check if we already have a temp ID for this group name
-            if (prev.newGroupNameToTempId.has(apiCall.newGroupName)) {
-              channelGroupId = prev.newGroupNameToTempId.get(apiCall.newGroupName)!;
+            const existing = prev.newGroupNameToTempId.get(apiCall.newGroupName);
+            if (existing !== undefined) {
+              channelGroupId = existing;
             } else {
-              // Create a new staged group
-              const tempGroupId = nextTempGroupIdRef.current;
-              nextTempGroupIdRef.current -= 1;
-
-              const newGroup = {
-                id: tempGroupId,
-                name: apiCall.newGroupName,
-                channel_count: 0, // Will be updated as channels are added
-              };
-
-              // Update maps (need to create new Map instances for immutability)
-              newStagedGroups = new Map(prev.stagedGroups);
-              newStagedGroups.set(tempGroupId, newGroup);
-
-              newGroupNameToTempId = new Map(prev.newGroupNameToTempId);
-              newGroupNameToTempId.set(apiCall.newGroupName, tempGroupId);
-
-              newNextTempGroupId = tempGroupId - 1;
+              const tempGroupId = apiCall.stagedGroupId ?? nextTempGroupIdRef.current;
+              registerStagedGroup(apiCall.newGroupName, tempGroupId);
               channelGroupId = tempGroupId;
             }
           }
@@ -422,14 +455,15 @@ export function useEditMode({
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
+      const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
       stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, logoId, logoUrl, tvgId, tvcGuideStationId, normalize },
+        { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId, normalize },
         `Create channel "${name}"`,
         []
       );
       return tempId;
     },
-    [stageOperation]
+    [stageOperation, ensureStagedGroupId]
   );
 
   const stageDeleteChannel = useCallback(
@@ -444,14 +478,16 @@ export function useEditMode({
   );
 
   const stageCreateGroup = useCallback(
-    (name: string) => {
+    (name: string): number => {
+      const tempGroupId = ensureStagedGroupId(name);
       stageOperation(
-        { type: 'createGroup', name },
+        { type: 'createGroup', name, tempGroupId },
         `Create group "${name}"`,
         [] // No channels directly affected
       );
+      return tempGroupId;
     },
-    [stageOperation]
+    [stageOperation, ensureStagedGroupId]
   );
 
   const stageDeleteChannelGroup = useCallback(
@@ -684,6 +720,7 @@ export function useEditMode({
   const getSummary = useCallback((): EditModeSummary => {
     const summary: EditModeSummary = {
       totalOperations: state.stagedOperations.length,
+      totalChanges: 0, // Derived from the buckets below, once they are filled.
       channelsModified: state.modifiedChannelIds.size,
       streamsAdded: 0,
       streamsRemoved: 0,
@@ -692,6 +729,10 @@ export function useEditMode({
       channelNameChanges: 0,
       epgChanges: 0,
       gracenoteIdChanges: 0,
+      logoChanges: 0,
+      streamProfileChanges: 0,
+      groupMoves: 0,
+      otherChannelChanges: 0,
       newChannels: 0,
       deletedChannels: 0,
       newGroups: 0,
@@ -700,8 +741,13 @@ export function useEditMode({
       operationDetails: [],
     };
 
-    // Track new group names from createChannel operations (deduplicated)
-    const newGroupNamesFromChannels = new Set<string>();
+    // Every group this batch will create, deduplicated: those staged
+    // explicitly (`createGroup`) and those implied by a createChannel's
+    // `newGroupName`. One set so a group reached both ways is counted once.
+    const newGroupNames = new Set<string>();
+    // Those staged explicitly — they already have their own operationDetails
+    // row, so no row is synthesised for them below.
+    const explicitGroupNames = new Set<string>();
 
     for (const op of state.stagedOperations) {
       // Add to operation details
@@ -721,7 +767,14 @@ export function useEditMode({
         case 'reorderChannelStreams':
           summary.streamsReordered++;
           break;
-        case 'updateChannel':
+        case 'updateChannel': {
+          // Every field an Edit Channel save can carry needs a bucket here.
+          // Drill run 2026-08-09-run18 exited with "10 pending changes: 9 EPG
+          // assignments" because a cleared logo matched no branch and simply
+          // disappeared from the summary (bead enhancedchannelmanager-75k49).
+          const before = summary.channelNumberChanges + summary.channelNameChanges
+            + summary.epgChanges + summary.gracenoteIdChanges + summary.logoChanges
+            + summary.streamProfileChanges + summary.groupMoves;
           if (op.apiCall.data.channel_number !== undefined) {
             summary.channelNumberChanges++;
           }
@@ -734,7 +787,24 @@ export function useEditMode({
           if (op.apiCall.data.tvc_guide_stationid !== undefined) {
             summary.gracenoteIdChanges++;
           }
+          if (op.apiCall.data.logo_id !== undefined) {
+            summary.logoChanges++;
+          }
+          if (op.apiCall.data.stream_profile_id !== undefined) {
+            summary.streamProfileChanges++;
+          }
+          if (op.apiCall.data.channel_group_id !== undefined) {
+            summary.groupMoves++;
+          }
+          const after = summary.channelNumberChanges + summary.channelNameChanges
+            + summary.epgChanges + summary.gracenoteIdChanges + summary.logoChanges
+            + summary.streamProfileChanges + summary.groupMoves;
+          if (after === before) {
+            // An unrecognised field still has to be counted somewhere.
+            summary.otherChannelChanges++;
+          }
           break;
+        }
         case 'bulkAssignChannelNumbers':
           summary.channelNumberChanges += op.apiCall.channelIds.length;
           break;
@@ -742,14 +812,15 @@ export function useEditMode({
           summary.newChannels++;
           // Track new groups from createChannel operations
           if (op.apiCall.newGroupName) {
-            newGroupNamesFromChannels.add(op.apiCall.newGroupName);
+            newGroupNames.add(op.apiCall.newGroupName);
           }
           break;
         case 'deleteChannel':
           summary.deletedChannels++;
           break;
         case 'createGroup':
-          summary.newGroups++;
+          newGroupNames.add(op.apiCall.name);
+          explicitGroupNames.add(op.apiCall.name);
           break;
         case 'deleteChannelGroup':
           summary.deletedGroups++;
@@ -760,17 +831,38 @@ export function useEditMode({
       }
     }
 
-    // Add unique new groups from createChannel operations to the count
-    summary.newGroups += newGroupNamesFromChannels.size;
+    summary.newGroups = newGroupNames.size;
 
-    // Add operation details for each new group from channels
-    for (const groupName of newGroupNamesFromChannels) {
+    // Give every implied group a detail row, so the expanded list accounts for
+    // the same groups the summary line counts.
+    for (const groupName of newGroupNames) {
+      if (explicitGroupNames.has(groupName)) continue;
       summary.operationDetails.unshift({
         id: `new-group-${groupName}`,
         type: 'createGroup',
         description: `Create group "${groupName}"`,
       });
     }
+
+    // The headline the operator reads. Derived, never counted independently —
+    // that is the whole point of bead enhancedchannelmanager-75k49.
+    summary.totalChanges =
+      summary.streamsAdded +
+      summary.streamsRemoved +
+      summary.streamsReordered +
+      summary.channelNumberChanges +
+      summary.channelNameChanges +
+      summary.epgChanges +
+      summary.gracenoteIdChanges +
+      summary.logoChanges +
+      summary.streamProfileChanges +
+      summary.groupMoves +
+      summary.otherChannelChanges +
+      summary.newChannels +
+      summary.deletedChannels +
+      summary.newGroups +
+      summary.deletedGroups +
+      summary.renamedGroups;
 
     return summary;
   }, [state.stagedOperations, state.modifiedChannelIds]);
@@ -826,17 +918,70 @@ export function useEditMode({
     }
   }, [state.baselineSnapshot, state.modifiedChannelIds]);
 
-  // Helper to build bulk operations from consolidated staged operations
-  const buildBulkOperations = useCallback((consolidatedOps: StagedOperation[]) => {
+  /**
+   * Translate staged operations into the bulk-commit wire format.
+   *
+   * The wire protocol resolves not-yet-created groups BY NAME: `groupsToCreate`
+   * goes up, the backend returns `groupIdMap`, and a `createChannel` carrying
+   * `newGroupName` is pointed at the real id. A negative temp group id is
+   * meaningless to Dispatcharr — drill run 2026-08-09-run18 staged a channel
+   * into a group that was still pending in the same batch (Create in... ->
+   * <pending group>), which put `groupId: -1000` on the wire verbatim and got
+   * `400 {"channel_group_id":["Invalid pk \"-1000\" - object does not
+   * exist."]}`. The channel was dropped and nothing was said (bead
+   * enhancedchannelmanager-udq1j).
+   *
+   * So every reference to a staged group is rewritten here, by name:
+   *
+   *  - `createChannel.groupId < 0` becomes `newGroupName`, resolved in the
+   *    backend's group-creation phase alongside the ops that named it directly;
+   *  - `updateChannel.data.channel_group_id < 0` (a channel moved into a
+   *    pending group) is left for {@link commit} to swap for the real id once
+   *    `groupIdMap` comes back, because that op is sent after group creation;
+   *  - a `createGroup` operation contributes its name to `groupsToCreate`
+   *    instead of a separate `createGroup` wire op, so ALL group creation
+   *    happens in the one phase that populates `groupIdMap`.
+   *
+   * A negative id that matches no staged group cannot be rewritten and is
+   * returned in `unresolvedGroupRefs` for the caller to fail loudly on. That
+   * path is a programming error, and the one thing it must never do is
+   * silently reach Dispatcharr.
+   */
+  const buildBulkOperations = useCallback((
+    consolidatedOps: StagedOperation[],
+    stagedGroups: Map<number, ChannelGroup>,
+  ) => {
     const bulkOperations: api.BulkOperation[] = [];
     const newGroupNames = new Set<string>();
+    const unresolvedGroupRefs: { description: string; groupId: number }[] = [];
 
-    // Collect new group names
+    /** Name of the staged group `groupId` refers to, or undefined if real/unknown. */
+    const stagedGroupName = (groupId: number | null | undefined): string | undefined =>
+      typeof groupId === 'number' && groupId < 0 ? stagedGroups.get(groupId)?.name : undefined;
+
+    const noteGroupRef = (operation: StagedOperation, groupId: number | null | undefined) => {
+      if (typeof groupId !== 'number' || groupId >= 0) return;
+      const name = stagedGroupName(groupId);
+      if (name === undefined) {
+        unresolvedGroupRefs.push({ description: operation.description, groupId });
+        return;
+      }
+      newGroupNames.add(name);
+    };
+
+    // Collect every group this batch has to create before any channel op runs
     for (const operation of consolidatedOps) {
-      if (operation.apiCall.type === 'createChannel') {
-        if (operation.apiCall.newGroupName) {
-          newGroupNames.add(operation.apiCall.newGroupName);
+      const { apiCall } = operation;
+      if (apiCall.type === 'createChannel') {
+        if (apiCall.newGroupName) {
+          newGroupNames.add(apiCall.newGroupName);
+        } else {
+          noteGroupRef(operation, apiCall.groupId);
         }
+      } else if (apiCall.type === 'updateChannel') {
+        noteGroupRef(operation, apiCall.data.channel_group_id);
+      } else if (apiCall.type === 'createGroup') {
+        newGroupNames.add(apiCall.name);
       }
     }
 
@@ -888,13 +1033,15 @@ export function useEditMode({
         case 'createChannel': {
           const tempId = operation.afterSnapshot[0]?.id ?? -1;
           logger.debug(`buildBulkOperations createChannel: name="${apiCall.name}", tvgId=${apiCall.tvgId}, tvcGuideStationId=${apiCall.tvcGuideStationId}`);
+          // A staged target group travels as a NAME, never as its temp id.
+          const pendingGroupName = apiCall.newGroupName ?? stagedGroupName(apiCall.groupId);
           bulkOperations.push({
             type: 'createChannel',
             tempId: tempId,
             name: apiCall.name,
             channelNumber: apiCall.channelNumber,
-            groupId: apiCall.groupId,
-            newGroupName: apiCall.newGroupName,
+            groupId: pendingGroupName !== undefined ? undefined : apiCall.groupId,
+            newGroupName: pendingGroupName,
             logoId: apiCall.logoId,
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
@@ -911,10 +1058,9 @@ export function useEditMode({
           break;
 
         case 'createGroup':
-          bulkOperations.push({
-            type: 'createGroup',
-            name: apiCall.name,
-          });
+          // Already collected into groupsToCreate above; emitting a second
+          // createGroup wire op would run it in a later request whose
+          // groupIdMap the channel ops can no longer see.
           break;
 
         case 'deleteChannelGroup':
@@ -935,7 +1081,7 @@ export function useEditMode({
     }
 
     const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
-    return { bulkOperations, groupsToCreate, newGroupNames };
+    return { bulkOperations, groupsToCreate, newGroupNames, unresolvedGroupRefs };
   }, []);
 
   // Validate staged operations without executing
@@ -944,7 +1090,19 @@ export function useEditMode({
       return { passed: true, issues: [] };
     }
 
-    const { bulkOperations, groupsToCreate } = buildBulkOperations(state.stagedOperations);
+    const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
+      buildBulkOperations(state.stagedOperations, state.stagedGroups);
+
+    if (unresolvedGroupRefs.length > 0) {
+      return {
+        passed: false,
+        issues: unresolvedGroupRefs.map((ref) => ({
+          type: 'invalid_operation' as const,
+          severity: 'error' as const,
+          message: `"${ref.description}" targets a channel group (${ref.groupId}) that is not staged in this session.`,
+        })),
+      };
+    }
 
     try {
       const response = await api.bulkCommit({
@@ -969,7 +1127,7 @@ export function useEditMode({
         }],
       };
     }
-  }, [state.isActive, state.stagedOperations, buildBulkOperations]);
+  }, [state.isActive, state.stagedOperations, state.stagedGroups, buildBulkOperations]);
 
   // Commit all staged operations to server
   const commit = useCallback(async (
@@ -1082,7 +1240,29 @@ export function useEditMode({
 
     try {
       // Build bulk operations using helper
-      const { bulkOperations, groupsToCreate } = buildBulkOperations(consolidatedOps);
+      const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
+        buildBulkOperations(consolidatedOps, state.stagedGroups);
+
+      // Refuse to start rather than post a temp group id Dispatcharr will
+      // reject one operation at a time (bead enhancedchannelmanager-udq1j).
+      // Nothing is committed and edit mode is left intact, so the operator's
+      // staged work survives.
+      if (unresolvedGroupRefs.length > 0) {
+        logger.error('[EditMode] Unresolvable staged group references:', unresolvedGroupRefs);
+        result.success = false;
+        result.operationsFailed = unresolvedGroupRefs.length;
+        result.errors.push(...unresolvedGroupRefs.map((ref) => ({
+          operationId: `unresolved-group-${ref.groupId}`,
+          operationType: 'createChannel',
+          error: `Target channel group ${ref.groupId} is no longer staged in this session`,
+          channelName: ref.description,
+        })));
+        onError?.(
+          `Nothing was applied: ${unresolvedGroupRefs.length} change${unresolvedGroupRefs.length !== 1 ? 's' : ''} ` +
+          'target a channel group that is no longer staged. Your changes are still pending.'
+        );
+        return result; // `finally` clears isCommitting
+      }
 
       const totalOps = bulkOperations.length;
       const BATCH_SIZE = 200; // Process in batches of 200 for progress updates
@@ -1148,7 +1328,9 @@ export function useEditMode({
 
       // Step 2: Process other operations in batches
       // Replace temp IDs with real IDs in remaining operations
-      const resolvedOps = otherOps.map(op => {
+      const unresolvedGroupOps: api.BulkCommitError[] = [];
+      const resolvedOps: api.BulkOperation[] = [];
+      for (const op of otherOps) {
         const resolved = { ...op };
         if (resolved.channelId && (resolved.channelId as number) < 0) {
           const realId = tempIdMap.get(resolved.channelId as number);
@@ -1156,8 +1338,36 @@ export function useEditMode({
             resolved.channelId = realId;
           }
         }
-        return resolved;
-      });
+        // A channel moved into a group this batch created carries that group's
+        // temp id. Step 1 has just returned the real ids by name; swap them in
+        // rather than posting the temp id (bead enhancedchannelmanager-udq1j).
+        if (resolved.type === 'updateChannel') {
+          const data = resolved.data as Partial<Channel> | undefined;
+          const stagedGroupId = data?.channel_group_id;
+          if (typeof stagedGroupId === 'number' && stagedGroupId < 0) {
+            const groupName = state.stagedGroups.get(stagedGroupId)?.name;
+            const realGroupId = groupName !== undefined ? newGroupIdMap.get(groupName) : undefined;
+            if (realGroupId === undefined) {
+              // The group creation phase did not produce this group. Drop the
+              // op — sending it would 400 — and report it as a failure.
+              unresolvedGroupOps.push({
+                operationId: `unresolved-group-${stagedGroupId}`,
+                operationType: 'updateChannel',
+                error: `Channel group "${groupName ?? stagedGroupId}" was not created, so this channel was not moved`,
+                channelId: resolved.channelId as number | undefined,
+              });
+              continue;
+            }
+            resolved.data = { ...data, channel_group_id: realGroupId };
+          }
+        }
+        resolvedOps.push(resolved);
+      }
+      if (unresolvedGroupOps.length > 0) {
+        logger.error('[EditMode] Dropped %d operation(s) targeting an uncreated group', unresolvedGroupOps.length);
+        totalFailed += unresolvedGroupOps.length;
+        result.errors.push(...unresolvedGroupOps);
+      }
 
       // Process in batches
       for (let i = 0; i < resolvedOps.length; i += BATCH_SIZE) {
@@ -1226,8 +1436,15 @@ export function useEditMode({
 
       result.updatedChannels = allChannels;
 
-      // Determine if we had any success (partial or complete)
-      const hadSuccess = result.operationsApplied > 0;
+      // Determine if we had any success (partial or complete).
+      //
+      // Groups are created in `groupsToCreate`, which is a phase rather than an
+      // operation, so it contributes nothing to `operationsApplied`. A batch of
+      // NOTHING BUT staged groups — "Create new channel group", Done, Apply All
+      // — therefore looked like a no-op, and edit mode would never stand down
+      // even though the groups really had been created (bead
+      // enhancedchannelmanager-vtapf).
+      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0;
       const hadFailures = result.operationsFailed > 0 || (result.validationIssues && result.validationIssues.length > 0);
 
       // Always update channels if any operations succeeded
@@ -1300,6 +1517,7 @@ export function useEditMode({
   }, [
     state.isActive,
     state.stagedOperations,
+    state.stagedGroups,
     channels,
     onChannelsChange,
     onCommitComplete,

@@ -63,6 +63,18 @@ export type ServerDataKey =
    * had just created.
    */
   | 'channel-groups'
+  /**
+   * The channel list itself (`App.channels`, `GET /api/channels/channels`).
+   *
+   * Same publisher as `channel-groups` and the same reason. Drill run
+   * 2026-08-09-run18 applied a restore that reported "Channels 12 CREATED",
+   * and with the restored group selected the Channel Manager still rendered
+   * `CHANNELS 0` / "Empty" — the group FILTER had refreshed, the channels
+   * behind it had not. Unlike the Streams pane there is no refresh control, so
+   * the only cure was a full page reload, which signs the operator out (bead
+   * enhancedchannelmanager-eelgi).
+   */
+  | 'channels'
   /** `GET /api/backup/saved` — the Saved Backups list. */
   | 'saved-backups';
 

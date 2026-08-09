@@ -100,4 +100,31 @@ describe('useServerDataInvalidation', () => {
   it('is a no-op when nothing is listening', () => {
     expect(() => invalidateServerData('saved-backups')).not.toThrow();
   });
+
+  /**
+   * The channel LIST is a separate key from the channel-GROUP list, and both
+   * have to be published by a restore. Drill run 2026-08-09-run18 applied a
+   * restore that reported "Channels 12 CREATED"; the group filter refreshed
+   * correctly and the pane behind it still read "CHANNELS 0 / Empty", because
+   * only `channel-groups` was ever published (bead
+   * enhancedchannelmanager-eelgi).
+   */
+  it('delivers channels and channel-groups independently', () => {
+    const channelsReload = vi.fn();
+    const groupsReload = vi.fn();
+    render(
+      <>
+        <Subscriber dataKey="channels" reload={channelsReload} />
+        <Subscriber dataKey="channel-groups" reload={groupsReload} />
+      </>,
+    );
+
+    act(() => invalidateServerData('channel-groups'));
+    expect(groupsReload).toHaveBeenCalledTimes(1);
+    expect(channelsReload).not.toHaveBeenCalled();
+
+    act(() => invalidateServerData('channels'));
+    expect(channelsReload).toHaveBeenCalledTimes(1);
+    expect(groupsReload).toHaveBeenCalledTimes(1);
+  });
 });

@@ -77,6 +77,34 @@
   min-width: 0;
 }
 
+/* Mirrors .refresh-streams-btn in StreamsPane.css (bd-eelgi) */
+.refresh-channels-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: var(--radius-md);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.refresh-channels-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  background-color: var(--accent-15);
+}
+
+.refresh-channels-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.refresh-channels-btn .material-icons {
+  font-size: var(--icon-action);
+}
+
 /* `.pane-header h2` is owned by shared/common.css § 14 PANE HEADERS. The
    1.1rem this file declared never rendered: common.css is emitted last
    inside the eager bundle, so its 0.75rem/600 rule has been winning at equal
@@ -3970,6 +3998,14 @@
   font-size: var(--type-body-size);
   line-height: var(--type-body-line-height);
   font-weight: var(--type-body-weight);
+}
+
+/* Why the Move button is disabled (bd-gddai) */
+.move-numbering-blocked {
+  margin: 0.5rem 0 0;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 /* Radio button option group */

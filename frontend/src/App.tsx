@@ -19,7 +19,7 @@ import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
@@ -305,6 +305,9 @@ function App() {
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
+  // Set when a commit does not fully apply, so the exit dialog can say so
+  // instead of closing silently (bead enhancedchannelmanager-udq1j).
+  const [commitFailure, setCommitFailure] = useState<CommitFailure | null>(null);
 
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
@@ -377,6 +380,7 @@ function App() {
     stageDeleteChannel,
     stageDeleteChannelGroup,
     stageRenameChannelGroup,
+    stageCreateGroup,
     summary,
     commit,
     discard,
@@ -538,10 +542,40 @@ function App() {
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
-    await commit((progress) => {
+    const result = await commit((progress) => {
       setCommitProgress(progress);
     }, { continueOnError: true });
     setCommitProgress(null);
+
+    // A commit the server reported as partially applied used to close the
+    // dialog exactly like a clean one, leaving the operator to discover the
+    // missing channel themselves (bead enhancedchannelmanager-udq1j). Hold the
+    // dialog open on the outcome instead.
+    if (result.operationsFailed > 0 || !result.success) {
+      const messages: string[] = [];
+      const seen = new Set<string>();
+      for (const err of result.errors) {
+        const subject = err.channelName || err.streamName || err.entityName;
+        const line = subject ? `${subject}: ${err.error}` : err.error;
+        if (seen.has(line)) continue;
+        seen.add(line);
+        messages.push(line);
+        if (messages.length === 5) break;
+      }
+      for (const issue of result.validationIssues ?? []) {
+        if (seen.has(issue.message)) continue;
+        seen.add(issue.message);
+        messages.push(issue.message);
+        if (messages.length === 5) break;
+      }
+      setCommitFailure({
+        applied: result.operationsApplied,
+        failed: result.operationsFailed,
+        messages,
+      });
+      return;
+    }
+
     setShowExitDialog(false);
     // Clear selection when exiting edit mode
     setSelectedChannelIds(new Set());
@@ -553,6 +587,17 @@ function App() {
       setPendingRouteChange(null);
     }
   }, [commit, clearHistory, pendingRouteChange, setHash]);
+
+  const handleAcknowledgeCommitFailure = useCallback(() => {
+    setCommitFailure(null);
+    setShowExitDialog(false);
+    setSelectedChannelIds(new Set());
+    clearHistory();
+    if (pendingRouteChange) {
+      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
+      setPendingRouteChange(null);
+    }
+  }, [clearHistory, pendingRouteChange, setHash]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -1216,6 +1261,16 @@ function App() {
   // groups from the Settings tab, which this component's copy — the one the
   // Channel Manager group filter renders — cannot see.
   useServerDataInvalidation('channel-groups', loadChannelGroups);
+
+  // And for the channels those groups hold. Refreshing only the filter left an
+  // operator looking at "CHANNELS 0" straight after a restore that created 12
+  // (bead enhancedchannelmanager-eelgi). Skipped while Edit Mode is active: a
+  // refetch mid-session would fight the working copy, and a restore is not
+  // something an operator runs from inside an unsaved edit session.
+  useServerDataInvalidation('channels', () => {
+    if (isEditMode) return;
+    void loadChannels();
+  });
 
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
@@ -2632,6 +2687,8 @@ function App() {
         onKeepEditing={handleKeepEditing}
         isCommitting={isCommitting}
         commitProgress={commitProgress}
+        commitFailure={commitFailure}
+        onAcknowledgeFailure={handleAcknowledgeCommitFailure}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
@@ -2770,6 +2827,7 @@ function App() {
               onStageDeleteChannel={stageDeleteChannel}
               onStageDeleteChannelGroup={stageDeleteChannelGroup}
               onStageRenameChannelGroup={stageRenameChannelGroup}
+              onStageCreateGroup={stageCreateGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
 

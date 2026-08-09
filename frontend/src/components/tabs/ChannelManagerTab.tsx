@@ -88,6 +88,7 @@ export interface ChannelManagerTabProps {
   onStageDeleteChannel: (channelId: number, description: string) => void;
   onStageDeleteChannelGroup: (groupId: number, description: string) => void;
   onStageRenameChannelGroup: (groupId: number, newName: string, description: string) => void;
+  onStageCreateGroup: (name: string) => number;
   onStartBatch: (description: string) => void;
   onEndBatch: () => void;
 
@@ -292,6 +293,7 @@ export function ChannelManagerTab({
   onStageDeleteChannel,
   onStageDeleteChannelGroup,
   onStageRenameChannelGroup,
+  onStageCreateGroup,
   onStartBatch,
   onEndBatch,
 
@@ -596,6 +598,7 @@ export function ChannelManagerTab({
           onStageDeleteChannel={onStageDeleteChannel}
           onStageDeleteChannelGroup={onStageDeleteChannelGroup}
           onStageRenameChannelGroup={onStageRenameChannelGroup}
+          onStageCreateGroup={onStageCreateGroup}
           onStartBatch={onStartBatch}
           onEndBatch={onEndBatch}
           isCommitting={isCommitting}

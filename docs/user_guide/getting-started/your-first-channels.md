@@ -131,9 +131,9 @@ from the provider stream groups you toggled in step 3.
 
 1. Still in Edit Mode, click **Create new channel group** (the folder+
    icon).
-2. Enter a **Group Name** and click **Create Group**. Unlike channel
-   creation, channel groups are created immediately. They aren't part of
-   the staged edit set.
+2. Enter a **Group Name** and click **Create Group**. Like channel
+   creation, this is staged: it shows up in the pending-changes count and
+   nothing reaches Dispatcharr until **Done → Apply All**.
 3. Repeat for each group you need. Set a channel's group from the **Create
    Channel** dialog (step 5) when creating it, or drag an existing channel
    row onto a group's header in the Channels panel to move it afterward.

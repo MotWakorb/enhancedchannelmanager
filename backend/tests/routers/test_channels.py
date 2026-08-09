@@ -1617,6 +1617,128 @@ class TestBulkCommitLogoIndex:
         assert "logo_id" not in mock_client.create_channel.await_args.args[0]
 
 
+class TestBulkCommitStagedGroupIds:
+    """A negative (staging) channel_group_id must never reach Dispatcharr.
+
+    Bead ``enhancedchannelmanager-udq1j``. Drill run 2026-08-09-run18 staged 12
+    channels in one Edit Mode session, one of them into a group that was still
+    PENDING in the same batch. The frontend put that group's negative staging
+    id on the wire verbatim and Dispatcharr answered::
+
+        400 {"channel_group_id": ["Invalid pk \\"-1000\\" - object does not
+             exist."]}
+
+    The frontend now resolves staged groups by name before posting. These tests
+    are the server-side backstop for a client that does not — an older build, a
+    scripted caller, or a future regression — so the failure is named in ECM's
+    own error instead of relayed as an opaque upstream 400, and above all so it
+    is never forwarded as if it were a real group id.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @staticmethod
+    def _mock_client():
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.create_channel.return_value = {"id": 101, "name": "created"}
+        mock_client.update_channel.return_value = {"id": 7}
+        return mock_client
+
+    @pytest.mark.asyncio
+    async def test_create_channel_with_staging_group_id_is_refused(self, async_client):
+        """createChannel carrying a negative groupId fails without calling out."""
+        mock_client = self._mock_client()
+
+        ops = [{
+            "type": "createChannel", "tempId": -1, "name": "TX | Dallas | PBS KERA",
+            "groupId": -1000,
+        }]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 1
+        assert "-1000" in data["errors"][0]["error"]
+        assert "groupsToCreate" in data["errors"][0]["error"]
+        # The point of the guard: nothing was posted upstream.
+        mock_client.create_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_channel_with_staging_group_id_is_refused(self, async_client):
+        """A channel moved into a still-pending group is refused the same way."""
+        mock_client = self._mock_client()
+
+        ops = [{
+            "type": "updateChannel", "channelId": 7,
+            "data": {"channel_group_id": -1000},
+        }]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert data["operationsFailed"] == 1
+        assert "-1000" in data["errors"][0]["error"]
+        mock_client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_new_group_referenced_by_name_still_works(self, async_client):
+        """The supported path: groupsToCreate + newGroupName resolves to a real id."""
+        mock_client = self._mock_client()
+        mock_client.create_channel_group.return_value = {"id": 376, "name": "Drill Locals"}
+
+        body = {
+            "operations": [{
+                "type": "createChannel", "tempId": -1, "name": "TX | Dallas | PBS KERA",
+                "newGroupName": "Drill Locals",
+            }],
+            "groupsToCreate": [{"name": "Drill Locals"}],
+            "continueOnError": True,
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, body)
+
+        assert data["operationsFailed"] == 0
+        assert data["groupIdMap"] == {"Drill Locals": 376}
+        payload = mock_client.create_channel.await_args.args[0]
+        assert payload["channel_group_id"] == 376
+
+    @pytest.mark.asyncio
+    async def test_real_group_id_is_untouched(self, async_client):
+        """A positive group id is forwarded exactly as sent."""
+        mock_client = self._mock_client()
+
+        ops = [{
+            "type": "createChannel", "tempId": -1, "name": "A", "groupId": 376,
+        }]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert data["operationsFailed"] == 0
+        assert mock_client.create_channel.await_args.args[0]["channel_group_id"] == 376
+
+
 class TestBulkCommitPartialSuccess:
     """Tests for partial-success result semantics in _run_bulk_commit (bd-5xciq).
 

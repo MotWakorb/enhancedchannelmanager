@@ -55,6 +55,13 @@ import { SelectionActionBar } from './SelectionActionBar';
 import { resolveChannelArtwork } from './channelRowPresentation';
 import { channelCapabilityTiers } from './channelCapabilities';
 import {
+  DEFAULT_NUMBERING_OPTION,
+  defaultNumberingOption,
+  resolveMoveNumbering,
+  type MoveNumberingResolution,
+  type NumberingOption,
+} from './moveChannelNumbering';
+import {
   UNGROUPED_TARGET_GROUP_NAME,
   findUngroupedTargetGroup,
 } from '../utils/ungroupedTargetGroup';
@@ -111,6 +118,8 @@ interface ChannelsPaneProps {
   onStageDeleteChannel?: (channelId: number, description: string) => void;
   onStageDeleteChannelGroup?: (groupId: number, description: string) => void;
   onStageRenameChannelGroup?: (groupId: number, newName: string, description: string) => void;
+  /** Stage a new channel group; returns its negative temp id (bd-vtapf). */
+  onStageCreateGroup?: (name: string) => number;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -1183,6 +1192,7 @@ export function ChannelsPane({
   onStageDeleteChannel,
   onStageDeleteChannelGroup,
   onStageRenameChannelGroup,
+  onStageCreateGroup,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -1423,7 +1433,8 @@ export function ChannelsPane({
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
   const [renumberSourceGroup, setRenumberSourceGroup] = useState<boolean>(false);
   // Selected numbering option: 'keep' | 'suggested' | 'custom'
-  const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
+  const [selectedNumberingOption, setSelectedNumberingOption] =
+    useState<NumberingOption>(DEFAULT_NUMBERING_OPTION);
 
   // Sort and Renumber modal state
   const sortRenumberModal = useModal();
@@ -2875,23 +2886,52 @@ export function ChannelsPane({
     setCreateGroupShouldMoveChannels(false);  // Reset the flag
   };
 
-  // Handle creating a new channel group
+  /**
+   * Create a channel group from the Channels pane.
+   *
+   * Inside Edit Mode this STAGES the group rather than writing it straight to
+   * Dispatcharr. Writing it immediately put the group outside the session's
+   * ledger entirely: the Exit Edit Mode summary never named it, the undo
+   * counter never moved for it, and Discard could not take it back — while a
+   * duplicate name produced a `400` that the catch below swallowed into a log
+   * line no operator sees (bead enhancedchannelmanager-vtapf).
+   */
   const handleCreateGroup = async () => {
-    if (!newGroupName.trim()) return;
+    const groupName = newGroupName.trim();
+    if (!groupName) return;
 
     setCreatingGroup(true);
     try {
-      const newGroup = await api.createChannelGroup(newGroupName.trim());
-      if (onChannelGroupsChange) {
-        onChannelGroupsChange();
+      let createdGroupId: number;
+      let createdGroupName: string;
+
+      if (isEditMode && onStageCreateGroup) {
+        // `channelGroups` already carries this session's staged groups.
+        const duplicate = channelGroups.find(
+          (g) => g.name.toLowerCase() === groupName.toLowerCase()
+        );
+        if (duplicate) {
+          notifications.error(`A channel group named "${duplicate.name}" already exists.`, 'Create Group');
+          return;
+        }
+        createdGroupId = onStageCreateGroup(groupName);
+        createdGroupName = groupName;
+      } else {
+        const newGroup = await api.createChannelGroup(groupName);
+        createdGroupId = newGroup.id;
+        createdGroupName = newGroup.name;
+        if (onChannelGroupsChange) {
+          onChannelGroupsChange();
+        }
+        // Track the newly created group
+        if (onTrackNewlyCreatedGroup) {
+          onTrackNewlyCreatedGroup(createdGroupId);
+        }
       }
-      // Track the newly created group
-      if (onTrackNewlyCreatedGroup) {
-        onTrackNewlyCreatedGroup(newGroup.id);
-      }
+
       // Auto-select the new group so it appears in the channel list
-      if (!selectedGroups.includes(newGroup.id)) {
-        onSelectedGroupsChange([...selectedGroups, newGroup.id]);
+      if (!selectedGroups.includes(createdGroupId)) {
+        onSelectedGroupsChange([...selectedGroups, createdGroupId]);
       }
 
       // If we have selected channels AND this was triggered from context menu, move them to the new group
@@ -2912,8 +2952,8 @@ export function ChannelsPane({
 
           setCrossGroupMoveData({
             channels: channelsToMove,
-            targetGroupId: newGroup.id,
-            targetGroupName: newGroup.name,
+            targetGroupId: createdGroupId,
+            targetGroupName: createdGroupName,
             sourceGroupId,
             sourceGroupName,
             isTargetAutoSync: false,
@@ -2924,6 +2964,11 @@ export function ChannelsPane({
             sourceGroupHasGaps: false,
             sourceGroupMinChannel: null,
           });
+          setRenumberSourceGroup(false);
+          // With no channels in the destination there is no suggested number,
+          // so the "suggested" radio is not rendered — see bd-gddai.
+          setSelectedNumberingOption(defaultNumberingOption(suggestedChannelNumber));
+          setCustomStartingNumber('');
           crossGroupMoveModal.open();
         }
       }
@@ -2931,6 +2976,10 @@ export function ChannelsPane({
       handleCloseCreateGroupModal();
     } catch (err) {
       logger.error('Failed to create channel group:', err);
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to create channel group',
+        'Create Group'
+      );
     } finally {
       setCreatingGroup(false);
     }
@@ -3947,7 +3996,10 @@ export function ChannelsPane({
         sourceGroupMinChannel,
       });
       setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
-      setSelectedNumberingOption('suggested');  // Default to suggested option
+      // Preselect an option that is actually RENDERED: an empty destination
+      // group has no suggested number, so the suggested radio is absent and
+      // defaulting to it left nothing checked (bd-gddai).
+      setSelectedNumberingOption(defaultNumberingOption(suggestedChannelNumber));
       setCustomStartingNumber('');  // Clear custom number input
       crossGroupMoveModal.open();
 
@@ -4620,27 +4672,32 @@ export function ChannelsPane({
     setCustomStartingNumber('');
   };
 
+  // What the Move button would do with the numbering currently selected.
+  // Drives both `disabled` and the click handler so the two cannot disagree.
+  const moveNumbering: MoveNumberingResolution | null = crossGroupMoveData
+    ? resolveMoveNumbering(
+      selectedNumberingOption,
+      crossGroupMoveData.suggestedChannelNumber,
+      customStartingNumber
+    )
+    : null;
+
   // Handle the Move button click based on selected option
   const handleMoveButtonClick = () => {
-    if (!crossGroupMoveData) return;
+    if (!crossGroupMoveData || !moveNumbering) return;
 
-    switch (selectedNumberingOption) {
-      case 'keep':
-        handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup);
-        break;
-      case 'suggested':
-        if (crossGroupMoveData.suggestedChannelNumber !== null) {
-          handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber, renumberSourceGroup);
-        }
-        break;
-      case 'custom': {
-        const customNum = parseInt(customStartingNumber, 10);
-        if (!isNaN(customNum) && customNum >= 1) {
-          handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
-        }
-        break;
-      }
+    if (!moveNumbering.ok) {
+      // Unreachable while the button is correctly disabled; kept so a future
+      // regression surfaces as a message rather than a dead click.
+      notifications.warning(moveNumbering.reason, 'Move Channel');
+      return;
     }
+
+    handleCrossGroupMoveConfirm(
+      moveNumbering.keepCurrentNumbers,
+      moveNumbering.startingNumber,
+      renumberSourceGroup
+    );
   };
 
   // Compute conflicts for cross-group move based on selected numbering option
@@ -4702,14 +4759,9 @@ export function ChannelsPane({
     return { hasConflicts: conflicts.length > 0, conflicts, startNumber };
   }, [crossGroupMoveData, selectedNumberingOption, customStartingNumber, localChannels]);
 
-  // Check if Move button should be enabled
-  const isMoveButtonEnabled = () => {
-    if (selectedNumberingOption === 'custom') {
-      const customNum = parseInt(customStartingNumber, 10);
-      return !isNaN(customNum) && customNum >= 1;
-    }
-    return true;
-  };
+  // Check if Move button should be enabled. Enabled means "clicking this
+  // performs the move" — never "looks live but no-ops" (bd-gddai).
+  const isMoveButtonEnabled = () => moveNumbering?.ok === true;
 
   // Sort & Renumber handlers
   const handleOpenSortRenumber = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[]) => {
@@ -5461,7 +5513,25 @@ export function ChannelsPane({
 
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2 id="channels-pane-heading">Channels</h2>
+          <h2 id="channels-pane-heading">
+            Channels
+            {/* The Streams pane has always had this; the Channels pane had no
+                equivalent, so a restore that left this pane showing "CHANNELS
+                0" could only be fixed by a full page reload — which signs the
+                operator out (bead enhancedchannelmanager-eelgi). Hidden during
+                Edit Mode: a refetch mid-session fights the working copy. */}
+            {onChannelsChange && !isEditMode && (
+              <button
+                className="refresh-channels-btn"
+                onClick={() => onChannelsChange()}
+                title="Refresh channels from Dispatcharr"
+                disabled={loading}
+                aria-label="Refresh channels from Dispatcharr"
+              >
+                <span className={`material-icons${loading ? ' spinning' : ''}`} aria-hidden="true">sync</span>
+              </button>
+            )}
+          </h2>
           <span className="pane-item-count" aria-label={`${channels.length} channels`}>
             {channels.length}
           </span>
@@ -6302,6 +6372,14 @@ export function ChannelsPane({
                   </div>
                 </label>
               </div>
+
+              {/* Why the Move button is disabled — never leave the operator
+                  guessing at a dead control (bd-gddai). */}
+              {moveNumbering && !moveNumbering.ok && (
+                <p className="move-numbering-blocked" role="status">
+                  {moveNumbering.reason}
+                </p>
+              )}
             </div>
 
             {/* Channel Number Conflict Warning */}

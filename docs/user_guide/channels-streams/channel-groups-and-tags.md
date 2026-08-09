@@ -40,19 +40,12 @@ The classifications are exclusive, so a group counted as Auto Channel is not als
 
 ### Create, rename or delete a group
 
-**Create** is the one action on this page that is *not* staged.
+**Create**, **Rename** and **Delete** are all staged.
 
-1. With Edit Mode on, click **Create new channel group** (the folder icon in the toolbar above the Channels panel).
-2. Enter a name and confirm.
+1. With Edit Mode on, either click **Create new channel group** (the folder icon in the toolbar above the Channels panel) and enter a name, or open an existing group's **Group actions** menu (the ⋮ at the right of the group header) and choose **Rename Group** or **Delete Group**.
+2. **Delete Group** offers **Also delete the N channels**. Leave that unticked and the channels survive: the dialog says they move to *"Default Group"*, and that is where they land.
 
-**Result:** The group is created in Dispatcharr the moment you confirm, and it is ticked in the group filter so it shows up right away. Being inside an Edit Mode session does not stage it: **Cancel** and **Discard** will not remove it. If you created one by mistake, delete it explicitly.
-
-**Rename** and **Delete** are staged.
-
-1. With Edit Mode on, open the group's **Group actions** menu (the ⋮ at the right of the group header) and choose **Rename Group** or **Delete Group**.
-2. **Delete Group** offers **Also delete the N channels**. Leave that unticked and the channels survive: the dialog says they move to *"Ungrouped"*, which is the row the Channels panel labels **Uncategorized**.
-
-**Result:** Both show up in the pending-change count and are only sent to Dispatcharr by **Apply All**. **Delete Group** only appears on manual groups, so you cannot accidentally delete a group your provider is still populating.
+**Result:** All three show up in the pending-change count and the Exit Edit Mode ledger, and are only sent to Dispatcharr on **Apply All**. Each is undoable and discardable like any other staged change, **Create** included: **Cancel** and **Discard** now take a newly created group back with them. A batch containing nothing but staged group creations still commits and exits Edit Mode correctly, rather than reading as a no-op and leaving the session open. **Delete Group** only appears on manual groups, so you cannot accidentally delete a group your provider is still populating.
 
 The **Group actions** menu also holds **Probe Group**, **Sort Streams** and **Sort & Renumber** for the group's channels.
 
@@ -68,6 +61,8 @@ The **Group actions** menu also holds **Probe Group**, **Sort Streams** and **So
 5. Click **Move N Channels**.
 
 **Result:** The move, any shifting of existing channels, and any source-group renumbering are all staged as separate batches, so you can undo them and they only reach Dispatcharr on **Apply All**. Moving into a group flagged **Auto-Sync** raises a warning first, because the next provider sync may undo hand-placed channels there.
+
+**Move a single channel by drag.** With Edit Mode on, dragging one channel row onto a different group's header opens the same dialog, titled **Move Channel to Group**, seeded with just that one channel; steps 3-5 above apply unchanged. The dialog picks its default numbering choice from what the destination group already holds: if the destination has no numbered channels yet, only **Keep current numbers** and **Custom starting number** are offered, since there is nothing to suggest a sequential number from.
 
 ### Reorder groups
 
