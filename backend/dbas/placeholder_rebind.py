@@ -845,10 +845,16 @@ async def _rebind_from_archive(
         # true of the ones that kept their real streams (bead …-daziw). The
         # sentence counts the WIDENED population — every channel left holding a
         # slot that streams nothing, not only the ones this run stranded.
+        # Say WHERE the names are. The note used to end "attach a real stream to
+        # each named channel", which reads as a promise the surrounding text does
+        # not keep: an operator reading `details.restore_report` (drill run
+        # 2026-08-08-run17) found the counters and this sentence and concluded the
+        # names existed only in the container log. They are in the report — the
+        # same recorder writes both — so the note points at the field.
         note = (
             "%d channel(s) are still bound to a stream that cannot play, %d of "
             "which have NO playable stream at all. Attach a real stream to each "
-            "named channel."
+            "channel named in stream_reattach_details."
             % (len(result.still_placeholder), len(result.unplayable))
         )
         if still_referenced:

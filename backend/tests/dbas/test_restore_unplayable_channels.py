@@ -479,3 +479,59 @@ def test_the_recorder_keeps_the_two_counters_independent():
     )
     assert report.channels_needing_stream_reattach == 2
     assert report.channels_with_no_playable_stream == 1
+
+
+@pytest.mark.asyncio
+async def test_the_report_json_names_every_channel_the_note_points_at():
+    """The note's "attach a real stream" instruction is backed by the JSON.
+
+    Drill run 2026-08-08-run17 read `details.restore_report`, saw
+    `channels_with_no_playable_stream` plus a free-text note telling the operator
+    to fix "each named channel", and could not find the names — they looked like
+    they lived only in the container log and the restore-complete modal. The
+    names ARE in the report (`stream_reattach_details`, written by the same
+    recorder as the counters), so the gap was the note not saying where.
+
+    This pins BOTH halves against the serialized payload the task actually
+    stores — `report.model_dump(mode="json")`, exactly what
+    `tasks/dbas_restore.py` puts under `details.restore_report` — so a future
+    change cannot drop the array while leaving the instruction behind.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [{"id": 500, "name": "Obscure Channel", "url": None, "m3u_account": 3}]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 201, "name": "Obscure", "streams": [500]}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    ledger.record_created(EntityType.STREAM, 500, "Obscure Channel")
+    remap = IdRemapTable()
+    remap.add(EntityType.STREAM, 7, 500)
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "Obscure",
+             "streams": [{"id": 7, "name": "Obscure Channel"}]}
+        ],
+    )
+
+    payload = report.model_dump(mode="json")
+
+    assert payload["channels_with_no_playable_stream"] == 1
+    named = [row["name"] for row in payload["stream_reattach_details"]]
+    assert named == ["Obscure"]
+
+    # The note fires, and it points at the field that holds the names rather
+    # than promising "named channel" with no way to find them.
+    note = next(n for n in payload["notes"] if "cannot play" in n)
+    assert "stream_reattach_details" in note

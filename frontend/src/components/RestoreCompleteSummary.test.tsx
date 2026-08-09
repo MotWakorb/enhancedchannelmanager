@@ -380,6 +380,43 @@ describe('RestoreCompleteSummary — credential re-entry', () => {
     expect(screen.getByTestId('credential-reentry-notice').textContent).toContain('1 account');
   });
 
+  it('agrees the verb and pronoun with a single account', () => {
+    // Drill run 2026-08-08-run17 read "1 account need credentials re-entered
+    // before they will work" — the noun inflected, the verb and pronoun did not.
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 1,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain(
+      '1 account needs credentials re-entered before it will work',
+    );
+  });
+
+  it('keeps the plural verb and pronoun for more than one account', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          credentials_needing_reentry: 2,
+          credential_reentry_details: [
+            { entity_type: 'm3u_account', label: 'Infinity', fields: ['password'], destination_id: 3 },
+            { entity_type: 'epg_source', label: 'SD Sports', fields: ['password'], destination_id: 9 },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('credential-reentry-notice').textContent).toContain(
+      '2 accounts need credentials re-entered before they will work',
+    );
+  });
+
   it('warns on the dry-run preview too — the operator can otherwise not tell the artifact variants apart', () => {
     render(
       <RestoreCompleteSummary

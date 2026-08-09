@@ -1,5 +1,5 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -28,6 +28,7 @@ import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
+import { invalidateServerData } from '../../hooks/useServerDataInvalidation';
 import { GuideMigrationModal } from '../GuideMigrationModal';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
@@ -809,6 +810,11 @@ function SDLineupManager({ sourceId }: SDLineupManagerProps) {
   );
 }
 
+/** A source Dispatcharr is still downloading or parsing a guide for. */
+function isDownloadingSource(source: EPGSource): boolean {
+  return source.status === 'fetching' || source.status === 'parsing';
+}
+
 interface EPGManagerTabProps {
   onSourcesChange?: () => void;
   hideEpgUrls?: boolean;
@@ -841,11 +847,75 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     })
   );
 
+  // Sources whose guide download we are waiting on, and what we knew when we
+  // started waiting. A completed download is the one event that has to reach
+  // `App.epgData`, which is otherwise loaded once at app startup (bead
+  // enhancedchannelmanager-3vtim).
+  //
+  // `updatedAt` is the value the row carried at the moment we started watching.
+  // A status test alone is not enough: Dispatcharr has not necessarily flipped
+  // off `success` by the time the first poll after the click lands, so the
+  // STALE success is indistinguishable from a fresh one by status. `updated_at`
+  // tells them apart — measured on the live instance, a refresh bumps it
+  // (created 03:26:26, updated 04:20:22 after a manual refresh).
+  //
+  // No new polling and no refetch-on-focus: this rides polls that already exist
+  // (the standing condition on bead enhancedchannelmanager-5z7c9).
+  const guideDownloadWatchRef = useRef<
+    Map<number, { updatedAt: string | null; sawDownloading: boolean }>
+  >(new Map());
+
+  /** Start waiting for `source` to finish downloading a guide. */
+  const watchGuideDownload = useCallback((source: EPGSource) => {
+    guideDownloadWatchRef.current.set(source.id, {
+      updatedAt: source.updated_at ?? null,
+      sawDownloading: false,
+    });
+  }, []);
+
+  /**
+   * Feed freshly-fetched source rows to the completion detector.
+   *
+   * Hangs off the ROWS rather than off one fetch wrapper, because the per-source
+   * refresh and "Refresh All" each run their own poller and neither goes through
+   * `loadSources`. The first cut put the detection inside `loadSources`, and a
+   * manual refresh of an already-successful source then issued 50 status polls
+   * and never once refetched the guide (live re-drive 2026-08-09).
+   */
+  const noteGuideDownloadProgress = useCallback((rows: EPGSource[]) => {
+    const watches = guideDownloadWatchRef.current;
+    let completed = false;
+    for (const row of rows) {
+      if (isDownloadingSource(row)) {
+        // Adopt a download nobody here started: a scheduled refresh, or one
+        // already running when this tab mounted. Its completion changes the
+        // guide just as much as one the operator clicked.
+        const existing = watches.get(row.id);
+        if (existing) existing.sawDownloading = true;
+        else watches.set(row.id, { updatedAt: row.updated_at ?? null, sawDownloading: true });
+        continue;
+      }
+      const watch = watches.get(row.id);
+      if (!watch) continue;
+      if (row.status !== 'success' && row.status !== 'error') continue;
+      // Still the pre-click reading — Dispatcharr has not picked the job up yet.
+      const isFreshResult =
+        watch.sawDownloading || (row.updated_at ?? null) !== watch.updatedAt;
+      if (!isFreshResult) continue;
+      watches.delete(row.id);
+      // An `error` ends the wait without publishing: a failed download leaves
+      // no new guide rows to go and fetch.
+      if (row.status === 'success') completed = true;
+    }
+    if (completed) invalidateServerData('epg-data');
+  }, []);
+
   const loadSources = useCallback(async () => {
     setLoading(true);
     setSourceLoadState('loading');
     try {
       const data = await api.getEPGSources();
+      noteGuideDownloadProgress(data);
       // Separate standard and dummy EPG sources, sort by priority (descending)
       const standardSources = data
         .filter(s => s.source_type !== 'dummy')
@@ -863,7 +933,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     } finally {
       setLoading(false);
     }
-  }, [notifications]);
+  }, [notifications, noteGuideDownloadProgress]);
 
   useEffect(() => {
     loadSources();
@@ -871,9 +941,7 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
 
   // Poll while any source is in a transitional state (fetching/parsing)
   useEffect(() => {
-    const hasTransitional = [...sources, ...dummySources].some(
-      s => s.status === 'fetching' || s.status === 'parsing'
-    );
+    const hasTransitional = [...sources, ...dummySources].some(isDownloadingSource);
     if (!hasTransitional) return;
     const interval = setInterval(loadSources, 2000);
     const timeout = setTimeout(() => clearInterval(interval), 300000);
@@ -945,6 +1013,9 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
   const handleRefreshSource = async (source: EPGSource) => {
     try {
       await api.refreshEPGSource(source.id);
+      // A re-download replaces this source's guide rows, so its completion is
+      // the same `App.epgData` event a first download is (bead …-3vtim).
+      watchGuideDownload(source);
       // Immediately show we're refreshing by updating local state
       setSources(prev => prev.map(s =>
         s.id === source.id ? { ...s, status: 'fetching' } : s
@@ -952,10 +1023,17 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       // Start polling for status updates every 2 seconds
       const pollInterval = setInterval(async () => {
         const updatedSources = await api.getEPGSources();
-        const updatedSource = updatedSources.find(s => s.id === source.id);
+        noteGuideDownloadProgress(updatedSources);
         setSources(updatedSources.filter(s => s.source_type !== 'dummy').sort((a, b) => b.priority - a.priority));
-        // Stop polling when refresh completes
-        if (updatedSource && (updatedSource.status === 'success' || updatedSource.status === 'error')) {
+        // Stop polling once the download we started has genuinely finished.
+        //
+        // This used to stop on `status === 'success'`, which is the reading
+        // Dispatcharr still returns for the PREVIOUS run in the seconds before it
+        // picks the job up — so the poller quit immediately and never saw the
+        // refresh it was watching (live re-drive 2026-08-09: 65s refresh, zero
+        // guide refetches). The watch is the authority: it clears only on a
+        // result that is demonstrably newer than the one at click time.
+        if (!guideDownloadWatchRef.current.has(source.id)) {
           clearInterval(pollInterval);
         }
       }, 2000);
@@ -981,7 +1059,10 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
     if (editingSource) {
       await api.updateEPGSource(editingSource.id, data);
     } else {
-      await api.createEPGSource(data);
+      const created = await api.createEPGSource(data);
+      // A brand-new source has guide rows coming that `App.epgData` has never
+      // seen (bead enhancedchannelmanager-3vtim).
+      watchGuideDownload(created);
     }
     await loadSources();
     onSourcesChange?.();
@@ -1044,6 +1125,10 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       logger.debug('[EPGManagerTab] Triggering EPG import...');
       await api.triggerEPGImport();
       logger.debug('[EPGManagerTab] EPG import triggered successfully');
+      // Every source about to re-download can change `App.epgData` (bead …-3vtim).
+      for (const s of sources) {
+        if (s.is_active && s.source_type !== 'dummy') watchGuideDownload(s);
+      }
       // Mark all active non-dummy sources as fetching
       setSources(prev => prev.map(s =>
         s.is_active && s.source_type !== 'dummy' ? { ...s, status: 'fetching' } : s
@@ -1051,10 +1136,15 @@ export function EPGManagerTab({ onSourcesChange, hideEpgUrls = false }: EPGManag
       // Start polling for status updates every 2 seconds
       const pollInterval = setInterval(async () => {
         const updatedSources = await api.getEPGSources();
+        noteGuideDownloadProgress(updatedSources);
         const standardSources = updatedSources.filter(s => s.source_type !== 'dummy').sort((a, b) => b.priority - a.priority);
         setSources(standardSources);
-        // Stop polling when all sources are done (no fetching/parsing)
-        const stillRefreshing = standardSources.some(s => s.status === 'fetching' || s.status === 'parsing');
+        // Stop polling when every source is done. Outstanding watches count as
+        // "not done": a source whose status still reads `success` from the
+        // previous run has not started yet, and stopping here would strand it.
+        const stillRefreshing =
+          standardSources.some(isDownloadingSource) ||
+          guideDownloadWatchRef.current.size > 0;
         if (!stillRefreshing) {
           clearInterval(pollInterval);
           setRefreshingAll(false);

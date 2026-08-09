@@ -623,5 +623,5 @@ async def test_resolved_epg_key_survives_the_import_for_the_reattach_pass():
     assert relinked == 1
     assert report.epg_links_unrestored == 0
     client.update_channel.assert_awaited_once_with(
-        dest_channel_id, {"epg_data_id": 9001}
+        dest_channel_id, {"epg_data_id": 9001, "tvg_id": None}
     )

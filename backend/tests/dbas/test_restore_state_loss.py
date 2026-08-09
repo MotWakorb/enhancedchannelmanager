@@ -733,7 +733,9 @@ async def test_epg_links_reattach_by_tvg_id():
         ],
     )
 
-    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    client.update_channel.assert_awaited_once_with(
+        201, {"epg_data_id": 4001, "tvg_id": "fox.news.us"}
+    )
     assert report.epg_links_unrestored == 0
 
 
@@ -809,7 +811,11 @@ async def test_epg_link_reattaches_when_only_the_resolved_natural_key_exists():
     )
 
     assert relinked == 1
-    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    # tvg_id=None IS the archived value here (ECM's own channel PATCH leaves the
+    # field unset), so it is restored verbatim alongside the link — bead …-qka89.
+    client.update_channel.assert_awaited_once_with(
+        201, {"epg_data_id": 4001, "tvg_id": None}
+    )
     assert report.epg_links_unrestored == 0
 
 
@@ -852,7 +858,11 @@ async def test_resolved_natural_key_wins_over_the_channels_own_tvg_id():
         ],
     )
 
-    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4002})
+    # The LINK comes from the resolved key (4002), the channel's advertised
+    # tvg_id from its own archived field — the two are allowed to disagree.
+    client.update_channel.assert_awaited_once_with(
+        201, {"epg_data_id": 4002, "tvg_id": "fox.news.us"}
+    )
 
 
 @pytest.mark.asyncio
@@ -891,9 +901,138 @@ async def test_old_artifact_without_a_resolved_key_still_uses_the_channels_own()
     )
 
     assert relinked == 1
-    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
+    client.update_channel.assert_awaited_once_with(
+        201, {"epg_data_id": 4001, "tvg_id": "fox.news.us"}
+    )
     assert report.epg_links_unrestored == 1
     assert report.epg_link_miss_details[0].name == "CNN"
+
+
+@pytest.mark.asyncio
+async def test_relink_restores_the_channels_own_archived_tvg_id_too():
+    """The relink writes BOTH halves of the guide link (bead …-qka89).
+
+    Drill run 2026-08-08-run17 measured a ``replace`` restore putting the
+    archived ``epg_data_id`` back on a pre-existing channel while the operator's
+    ``tvg_id`` survived::
+
+        archived ch103:  tvg_id='KERA(PBS)(KERA).us'          epg_data_id=3425
+        operator set:    tvg_id='KERA-DT2(HD06)(KERADT2).us'  epg_data_id=3427
+        after replace:   tvg_id='KERA-DT2(HD06)(KERADT2).us'  epg_data_id=3425
+
+    The channel then ADVERTISES one guide row and RESOLVES to another, and any
+    later re-match keyed on ``tvg_id`` silently undoes the restore. The archived
+    value was in the artifact all along — this is a restore-path bug, not a
+    backup gap — so the PATCH carries the channel's own archived ``tvg_id``
+    alongside the resolved ``epg_data_id``.
+
+    The channel's OWN field is restored from the channel's OWN archived field,
+    never from :data:`ARCHIVE_EPG_TVG_ID_KEY`: the two are allowed to disagree
+    (see :func:`dbas.channel_reattach._link_tvg_id`), and the link identity does
+    not overwrite the channel's advertised id.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [
+        {"id": 3425, "tvg_id": "KERA(PBS)(KERA).us", "name": "KERA"},
+    ]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 103, 103)
+
+    relinked = await reattach_epg_links(
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 103,
+                "name": "TX | Dallas | PBS KERA",
+                "tvg_id": "KERA(PBS)(KERA).us",
+                "epg_data_id": 3425,
+                ARCHIVE_EPG_TVG_ID_KEY: "KERA(PBS)(KERA).us",
+            },
+        ],
+        mode=ChannelReattachMode.OVERWRITE,
+        created_source_ids=set(),  # pre-existing channel — the drill's case
+    )
+
+    assert relinked == 1
+    client.update_channel.assert_awaited_once_with(
+        103, {"epg_data_id": 3425, "tvg_id": "KERA(PBS)(KERA).us"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_preserve_still_writes_no_tvg_id_to_a_pre_existing_channel():
+    """PRESERVE is unchanged by the …-qka89 fix: it patches nothing at all."""
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+    from dbas.restore_contracts import ChannelReattachMode
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 3425, "tvg_id": "KERA(PBS)(KERA).us"}]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 103, 103)
+
+    relinked = await reattach_epg_links(
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=[
+            {
+                "id": 103,
+                "name": "TX | Dallas | PBS KERA",
+                "tvg_id": "KERA(PBS)(KERA).us",
+                "epg_data_id": 3425,
+                ARCHIVE_EPG_TVG_ID_KEY: "KERA(PBS)(KERA).us",
+            },
+        ],
+        mode=ChannelReattachMode.PRESERVE,
+        created_source_ids=set(),
+    )
+
+    assert relinked == 0
+    client.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_artifact_without_a_tvg_id_key_patches_only_the_epg_link():
+    """An artifact that carries no ``tvg_id`` key has no archived value to write.
+
+    Writing ``None`` there would be inventing state the backup never recorded,
+    so the PATCH stays exactly what it was before the …-qka89 fix.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY, reattach_epg_links
+
+    client = _client()
+    client.get_epg_data.return_value = [{"id": 4001, "tvg_id": "fox.news.us"}]
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    archive_channel = {
+        "id": 101,
+        "name": "FOX News",
+        "epg_data_id": 2078,
+        ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us",
+    }
+    assert "tvg_id" not in archive_channel
+
+    await reattach_epg_links(
+        created_source_ids=None,
+        client=client,
+        report=report,
+        remap=remap,
+        archive_channels=[archive_channel],
+    )
+
+    client.update_channel.assert_awaited_once_with(201, {"epg_data_id": 4001})
 
 
 # ---------------------------------------------------------------------------

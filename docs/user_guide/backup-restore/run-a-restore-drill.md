@@ -571,11 +571,61 @@ sufficient; refresh it and confirm entries populate. A large XMLTV
 source is still workable: a later drill run measured `UnitedStates.xml.gz`
 (14,668 entries) refreshing in 35 seconds.
 
-**Create a handful of channels through ECM**, in Edit Mode: select
-streams from the group you enabled, use "Create in…" to place them into
-one or two channel groups, then **Done → Apply All**. Nothing reaches
-Dispatcharr until you click **Apply All**. A staged change in Edit Mode
-looks finished but is not yet applied.
+!!! bug "Known defect: EPG picker reports \"No EPG data found\" until a full app reload (`enhancedchannelmanager-3vtim`)"
+    After adding an EPG source that reaches `status=success`, the Edit
+    Channel **EPG Data** picker can report "No EPG data found" for guide
+    rows that demonstrably exist (confirmed on `0.18.1-0050`: 14,663 rows
+    present via the API, including the one searched for, while the
+    picker's search fires zero backend requests). This is a stale
+    client-side cache loaded once at app start, not a query bug.
+    **Workaround:** reload the whole app, sign back in (a full reload
+    drops you to the ECM sign-in screen, per the warning in
+    [Step 6](#step-6-restore)), then search again; the identical search
+    then returns matches.
+
+**Create a handful of channels through ECM**, in Edit Mode. Creating
+channels is a **three-step commit**, not a single action, and nothing
+reaches Dispatcharr until the third step. Confirmed on `0.18.1-0050`:
+
+1. In the **Streams pane**, select streams from the group you enabled,
+   then use the **Create** button or the **Create in…** dropdown in the
+   **Streams pane header** to stage them into one or two channel groups.
+   A native browser `alert` confirms staging: *"Staged N channels for
+   creation! They will be created in Dispatcharr when you click Done."*
+   Dismiss it.
+2. Click **Done**.
+3. An **"Exit Edit Mode"** dialog lists the pending changes. Click
+   **Apply All**.
+
+**Nothing reaches Dispatcharr until step 3.** A staged change in Edit
+Mode looks finished the moment you dismiss the alert in step 1, but it
+is not applied to Dispatcharr until you click **Apply All** in the Exit
+Edit Mode dialog.
+
+!!! warning "Polling Dispatcharr after \"Done\" shows zero channels: that's the undismissed dialog, not a failure"
+    Between clicking **Done** and clicking **Apply All**, Dispatcharr has
+    nothing yet: the Exit Edit Mode dialog itself is what's holding the
+    commit, not a stalled create. Run 17 polled Dispatcharr for 60
+    seconds after "Done" with no channels appearing, and nearly filed
+    this as a bug. Dismiss the Exit Edit Mode dialog with **Apply All**
+    before you go looking for a failure.
+
+!!! note "Use the Streams pane's Create controls, not the Channels pane's `+`"
+    The Channels pane's **+** ("Create new channel") button opens the
+    same create dialog with no selection context, so it always shows
+    "0 streams selected", even when streams are visibly selected in the
+    adjacent Streams pane. That's not a bug and not the control this
+    drill means: for bulk creation from a stream selection, use the
+    **Create** button or **Create in…** dropdown in the **Streams pane
+    header** instead.
+
+!!! tip "Stream search also matches the group name"
+    Searching the Streams pane matches a stream's **group** name as well
+    as its own name. For example, searching `CA |` inside the group "USA
+    | Local PBS" returns every stream in that group, because "Local"
+    contains "ca". Verified this is matching, not a broken filter: a
+    nonsense string returns zero results. Not a bug: just wider matching
+    than you might expect; don't chase it as one.
 
 !!! warning "\"Create in…\" requires a Starting Channel Number, silently"
     The create dialog requires a **Starting Channel Number**. When you
@@ -810,6 +860,13 @@ Step 1.
 
 ## Step 6: Restore
 
+!!! warning "A full browser reload logs you out of ECM"
+    Reloading the ECM tab at any point in this drill returns you to
+    ECM's sign-in screen; you must re-authenticate before you can
+    continue. Confirmed on `0.18.1-0050`. This matters here because
+    later steps in this drill ask you to reload the page. Do not
+    mistake the sign-in screen for a broken session or a lost restore.
+
 **Dispatcharr first-run wizard, again.** Create the superuser with a
 **different** username than the one you used in Step 1 (for example
 `rebuiltadmin` or `secondadmin`, vs. the source's `drilladmin`). Do this
@@ -897,15 +954,25 @@ contaminate each other, or run them sequentially with a `down -v` /
        those builds do not abort a restore because of logo failures shown
        in a preview; the real miss is easy to lose among the invented ones.
 
-4. Click **Apply these changes**. The confirmation dialog requires you to
-   **type the artifact's exact filename** before it will let you
-   proceed; this is a type-to-confirm safety gate, not a broken button.
-   If nothing happens when you click confirm, check that what you typed
-   matches the filename exactly.
+4. Click **Apply these changes**. This opens a second dialog, titled
+   **"Apply DBAS Restore"**, which requires you to **type the artifact's
+   exact filename** (for example `enc.zip`) into a confirm box before its
+   **Apply restore** button enables; this is a type-to-confirm safety
+   gate, not a broken button. If **Apply restore** stays disabled, check
+   that what you typed matches the filename exactly, including extension
+   and case. Confirmed on `0.18.1-0050`.
 5. Read the restore-complete report. Note the outcome (`success`,
    `completed_with_failures`, `partial_failed_rolled_back`, etc.), the
    created/updated/skipped/failed counts per category, and the elapsed
    time.
+
+!!! bug "Known defect: ECM's channel-group list does not refresh itself after a restore"
+    The restore-complete modal says the page will reload automatically
+    once the restore finishes. On `0.18.1-0050` it does not: the
+    CHANNELS panel's group filter can report "No groups match \<name\>"
+    for a group the restore just created, until you reload the page
+    yourself. Not data loss, just a stale client-side list. Reload the
+    page (see the reload/sign-in warning above) and the group appears.
 
 Tip: if you ever want a quick sanity check that the preview logic itself
 is behaving, restore an artifact onto the same instance it came from. It
@@ -950,7 +1017,8 @@ has no credential yet.
 1. Re-enter the provider credential on every M3U account the restore
    report or the post-restore UI names as needing it. Both name the exact
    account and field; see [Improved reporting](#improved-reporting) below.
-2. Refresh that M3U account, and wait for the refresh to complete.
+2. Click **ECM's own Refresh account** control on that M3U account, and
+   wait for the refresh to complete.
 
 That is the whole recovery. When the refresh finishes, ECM re-runs the
 reattach pass over the streams it has just materialized, moves every
@@ -959,18 +1027,33 @@ leftover placeholders and the synthetic `ECM Custom Streams (DBAS
 restore)` account. Only placeholders ECM itself created are touched.
 Measured end to end: 12 channels went from unplayable to all playing after
 the refresh alone, finishing with zero leftover placeholder streams and
-the synthetic account gone.
+the synthetic account gone. Run 17 measured the same mechanism on
+`0.18.1-0050`: *"13 slot(s) rebound across 11 channel(s); 0 channel(s)
+still hold a slot that cannot play."*
+
+!!! danger "It must be ECM's own Refresh account control, not a refresh triggered directly against Dispatcharr"
+    Triggering a refresh straight against Dispatcharr (its own UI, or its
+    API, rather than ECM's **Refresh account** button) does **not** run
+    ECM's placeholder rebind pass, because Dispatcharr never reports that
+    refresh's completion back to ECM in a way the reattach can hang on.
+    Every channel stays unplayable until the **next scheduled M3U
+    refresh**. Run 17 confirmed this the hard way: refreshing through
+    Dispatcharr directly left playback at 0/3 with no rebind, and the
+    identical refresh through ECM's own **Refresh account** button then
+    rebound every slot immediately. Always use ECM's control for the
+    immediate recovery path.
 
 !!! note "Which refresh actions trigger the reattach, and which do not"
-    **Covered:** the **Refresh** action on an individual M3U account, and
-    the scheduled M3U refresh task.
+    **Covered:** the **Refresh account** action on an individual M3U
+    account (in ECM), and the scheduled M3U refresh task.
 
     **Not covered:** a "refresh all accounts" action, and a refresh
-    performed in Dispatcharr's own UI. Neither reports completion back to
-    ECM in a way the reattach can hang on, so an instance that reached
-    real streams by one of those routes heals on the **next scheduled M3U
-    refresh** rather than immediately. For a drill, refresh the individual
-    account so you are measuring the immediate path.
+    performed in Dispatcharr's own UI or API. None of these report
+    completion back to ECM in a way the reattach can hang on, so an
+    instance that reached real streams by one of those routes heals on
+    the **next scheduled M3U refresh** rather than immediately. For a
+    drill, refresh the individual account through ECM so you are
+    measuring the immediate path.
 
 **On builds before `0.18.1-0033`,** step 2 was not enough, and this was
 the part operators would not guess. The reattach pass ran once,
@@ -1055,11 +1138,12 @@ Do not trust the restore-complete report's counts alone. Check, by hand:
      again. If it still fails after the full sequence for your build, that
      is worth filing as a fresh occurrence rather than assuming it away.
 2. **Credentials.** Open the M3U account. On a standard (redacted)
-   artifact, the password field is now correctly **empty**. The
-   `***REDACTED***` sentinel bug is fixed and closed
-   (`enhancedchannelmanager-6pilh`). Empty is the expected, honest state;
-   it still needs the real credential re-entered before the account
-   authenticates (see
+   artifact, the password field is now correctly empty, showing the
+   placeholder **"No stored password — enter it"** (confirmed on <!-- em-dash-ok: verbatim ECM UI placeholder copy -->
+   `0.18.1-0050`). The `***REDACTED***` sentinel bug is fixed and closed
+   (`enhancedchannelmanager-6pilh`). The placeholder is the expected,
+   honest state; it still needs the real credential re-entered before the
+   account authenticates (see
    [Step 6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)).
    On an encrypted artifact with "Include credentials," confirm the
    credential round-tripped: a refresh should succeed immediately, no
@@ -1143,18 +1227,29 @@ deliberately diverge it from the archive before restoring onto it again.
 
 1. **Rename** one archived channel group to a name the archive does not
    contain.
-2. **Delete** a different archived channel group outright. Move its
-   channels out of the group first. Dispatcharr refuses to delete a
-   group that still has channels. Get the order right the first time:
-   run 12 lost a full cycle to this. On `0.18.1-0049` and later this is
-   completable without leaving ECM: an emptied manual group still offers
-   **Group actions → Delete Group**. On `0.18.1-0048` and earlier it is
-   not, because emptying the group removes ECM's own **Group actions**
-   menu (`enhancedchannelmanager-o88e9`); finish the deletion in
+2. **Delete** a different archived channel group outright. **Move its
+   channels out of the group first**: get the order right the first
+   time; run 12 lost a full cycle to this. On `0.18.1-0049` and later
+   this is completable without leaving ECM: an emptied manual group still
+   offers **Group actions → Delete Group**. On `0.18.1-0048` and earlier
+   it is not, because emptying the group removes ECM's own **Group
+   actions** menu (`enhancedchannelmanager-o88e9`); finish the deletion in
    Dispatcharr's own UI on those builds. Either way, ECM only ever offers
    **Delete Group** for a manual group: a provider-backed group is not
    deletable from ECM, empty or not, because the next refresh recreates
    it. Pick a manual group for this step.
+
+   !!! bug "Known defect: Delete Group silently does nothing on a group that still has channels (`enhancedchannelmanager-ayfn9`)"
+       Clicking **Delete Group** on a channel group that still contains
+       channels does not delete it. Dispatcharr rejects the underlying
+       request, ECM does not surface that rejection, and the UI still
+       reports success. The confirm dialog promises the channels move to
+       "Ungrouped"; they are not moved. This is exactly why the step
+       above says to move the channels out *first*: **Delete Group only
+       works on an already-empty group.** If you skip that ordering and
+       the delete appears to succeed but the group and its channels are
+       still there after a refresh, this is why: move/delete the
+       channels first, confirm the group is empty, then delete it.
 3. **Create a name collision**: a channel group whose name matches an
    archived group but is a different object: a different id, holding
    different members.
@@ -1267,6 +1362,14 @@ section is the reference, not the procedure.
     current guide data, logos, and grouping"*, and **overwrite** now
     reads *"Replace their guide data, logos, and grouping with the
     backup's"*.
+
+    In the restore dialog itself, both options sit under the group
+    heading **"Channels that already exist here,"** with **preserve**
+    pre-selected by default; you have to actively choose overwrite.
+    Re-confirmed verbatim on `0.18.1-0050` by run 17. The "and grouping"
+    wording is current, not a leftover from an older build. If you're
+    reading a copy of this article that omits "and grouping" from either
+    option's text, that phrase is stale.
 
     | field | diverged baseline | after **preserve** | after **overwrite** | archive |
     |-|-|-|-|-|

@@ -9,8 +9,9 @@
  * (grandfathered on other deployments) they render — visible, editable — with
  * a deprecation notice and NO new-creation affordance.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useServerDataInvalidation } from '../../hooks/useServerDataInvalidation';
 import { EPGManagerTab, getTiedPriorities } from './EPGManagerTab';
 import type { EPGSource } from '../../types';
 import { HttpError } from '../../services/httpClient';
@@ -260,5 +261,179 @@ describe('EPGManagerTab — priority-tie badge (bead 09x38.15 item 1)', () => {
     expect(tiedARow.querySelector('.priority-tie-badge')).toBeTruthy();
     expect(tiedBRow.querySelector('.priority-tie-badge')).toBeTruthy();
     expect(uniqueRow.querySelector('.priority-tie-badge')).toBeFalsy();
+  });
+});
+
+/**
+ * A completed EPG-source download has to reach `App.epgData` (bead
+ * enhancedchannelmanager-3vtim).
+ *
+ * Drill run 2026-08-08-run17: an operator added an EPG source, watched it reach
+ * `status=success`, opened Edit Channel, typed "KERA" — and got "No EPG data
+ * found" for a guide Dispatcharr held 14,663 rows of. ZERO `/api/epg/*` requests
+ * left the browser for the whole failing attempt: `App.epgData` was still the
+ * empty array loaded at startup, before the source existed. Only a full reload
+ * (which also forced a re-login) made the identical search return 6 matches.
+ *
+ * The publish rides the poll that ALREADY runs while a source is transitional —
+ * no new polling and no refetch-on-focus, which is the standing condition on
+ * bead enhancedchannelmanager-5z7c9.
+ */
+describe('EPGManagerTab — guide-data invalidation (bead 3vtim)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function harness(reload: () => void) {
+    function Harness() {
+      useServerDataInvalidation('epg-data', reload);
+      return <EPGManagerTab />;
+    }
+    return <Harness />;
+  }
+
+  it('publishes epg-data when a downloading source reaches success', async () => {
+    const reload = vi.fn();
+    vi.mocked(api.getEPGSources)
+      .mockResolvedValueOnce([makeSource({ id: 1, name: 'Guru', status: 'fetching' })])
+      .mockResolvedValue([
+        makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T2' }),
+      ]);
+
+    render(harness(reload));
+    await screen.findByText('Guru');
+    expect(reload).not.toHaveBeenCalled();
+
+    // The transitional poll fires and observes the completed download.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it('publishes nothing when every source was already settled', async () => {
+    const reload = vi.fn();
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'success' }),
+    ]);
+
+    render(harness(reload));
+    await screen.findByText('Guru');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Refreshing an EXISTING, already-`success` source (live re-drive 2026-08-09).
+   *
+   * Measured on the patched container: `EPG Guru US` sat at `status='success'`,
+   * the operator hit "Refresh EPG source", and over 6.5 minutes the poll issued
+   * 50x `GET /api/epg/sources` and the guide cache was never refetched —
+   * `[EPG-REFRESH] 'EPG Guru US' refresh complete in 65.1s` came and went with
+   * 0x `GET /api/epg/data`.
+   *
+   * Two independent causes, both fixed here:
+   *
+   *   1. The per-source refresh runs its OWN poller, which never called the
+   *      fetch wrapper the detection lived inside. Detection now hangs off the
+   *      ROWS, so every poller feeds it.
+   *   2. Dispatcharr had not flipped off `success` yet when the first poll
+   *      landed, so a status-only test either fired on the stale success or
+   *      dropped the source from the watch set before the real completion 65s
+   *      later. The watch now remembers `updated_at` from the moment of the
+   *      click, so a stale `success` is not mistaken for a fresh one.
+   */
+  it('publishes when an already-successful source is manually refreshed', async () => {
+    const reload = vi.fn();
+    const settled = makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T1' });
+    vi.mocked(api.getEPGSources).mockResolvedValue([settled]);
+    vi.mocked(api.refreshEPGSource).mockResolvedValue(undefined as never);
+
+    render(harness(reload));
+    await screen.findByText('Guru');
+
+    // Dispatcharr has NOT flipped off `success` yet when the click lands.
+    fireEvent.click(screen.getByLabelText('Refresh EPG source'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(reload).not.toHaveBeenCalled();
+
+    // Dispatcharr picks the job up: fetching, then parsing.
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'fetching', updated_at: 'T1' }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(reload).not.toHaveBeenCalled();
+
+    // 65s later it completes, with a bumped updated_at.
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T2' }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes once, not once per poll, after a completed refresh', async () => {
+    const reload = vi.fn();
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T1' }),
+    ]);
+    vi.mocked(api.refreshEPGSource).mockResolvedValue(undefined as never);
+
+    render(harness(reload));
+    await screen.findByText('Guru');
+    fireEvent.click(screen.getByLabelText('Refresh EPG source'));
+
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T2' }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not publish when a refresh ends in error — no new guide rows exist', async () => {
+    const reload = vi.fn();
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'success', updated_at: 'T1' }),
+    ]);
+    vi.mocked(api.refreshEPGSource).mockResolvedValue(undefined as never);
+
+    render(harness(reload));
+    await screen.findByText('Guru');
+    fireEvent.click(screen.getByLabelText('Refresh EPG source'));
+
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'fetching', updated_at: 'T1' }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    vi.mocked(api.getEPGSources).mockResolvedValue([
+      makeSource({ id: 1, name: 'Guru', status: 'error', updated_at: 'T2' }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+
+    expect(reload).not.toHaveBeenCalled();
   });
 });
