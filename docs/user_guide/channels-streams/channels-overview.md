@@ -13,7 +13,7 @@ Channel Manager is where you build and maintain your channel lineup. Most of wha
 
 ![Channel Manager immediately after entering Edit Mode, showing the new undo/redo/checkpoint/create toolbar and the Done and Cancel buttons](../../images/user_guide/channels-streams/1-edit-mode-toolbar.png)
 
-Keep this in mind for everything below: **Create new channel**, editing a channel inline, dragging a stream onto a channel, and **Delete** from the selection toolbar are all *staged*. They only take effect when you click **Done → Apply All**. **Create new channel group** is not staged. It's created the moment you confirm the dialog, the same as it is outside Edit Mode. The [Bulk Channel Operations](bulk-edit.md) article covers which multi-channel actions are staged and which write to Dispatcharr immediately. That distinction matters even more once you're acting on dozens of channels at once.
+Keep this in mind for everything below: **Create new channel**, **Create new channel group**, editing a channel inline, dragging a stream onto a channel, and **Delete** from the selection toolbar are all *staged*. They only take effect when you click **Done → Apply All**, they count toward the pending-change total, and **Cancel** or **Discard** throws them away like any other staged edit. The [Bulk Channel Operations](bulk-edit.md) article covers which multi-channel actions are staged and which write to Dispatcharr immediately. That distinction matters even more once you're acting on dozens of channels at once.
 
 ### Create a channel (a staged change)
 
@@ -46,7 +46,7 @@ There are two ways to throw away staged work, and they land in the same place:
 
 **Result:** Every staged change is thrown away (the channel you created, the stream you dragged, the edit you typed) as if it never happened. Because nothing was ever sent to Dispatcharr, there is nothing on the Dispatcharr side to undo. Edit Mode turns off and the Channels panel reverts to exactly what it looked like before you opened it.
 
-Discard only affects the *current* Edit Mode session. It cannot undo a batch you already applied with **Apply All**. That batch already reached Dispatcharr. For actions that write to Dispatcharr immediately even while Edit Mode is on (channel group creation, CSV import, merges), see [Bulk Channel Operations](bulk-edit.md). Discard does not touch those either, because they were never staged in the first place.
+Discard only affects the *current* Edit Mode session. It cannot undo a batch you already applied with **Apply All**. That batch already reached Dispatcharr. For actions that write to Dispatcharr immediately even while Edit Mode is on (CSV import, merges), see [Bulk Channel Operations](bulk-edit.md). Discard does not touch those either, because they were never staged in the first place.
 
 ### Undo, redo, and checkpoints within a session
 
