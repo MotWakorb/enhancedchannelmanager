@@ -42,10 +42,9 @@
       other Edit Mode change instead of writing straight to Dispatcharr.
     - **`enhancedchannelmanager-1twap`**: the watch behind the "Guide
       data has not loaded yet" empty state (see [Step
-      2](#step-2-seed-a-small-instance)) now survives navigating away
-      from the EPG Manager tab, so a source that finishes downloading
-      while you are already in Channel Manager still updates the guide
-      picker.
+      2](#step-2-seed-a-small-instance)) now survives leaving EPG
+      Manager, so a source that finishes downloading while you are
+      already in Channel Manager still updates the guide picker.
 
     **What run 18 measured**, on the published `:dev` image for
     `0.18.1-0051` with Dispatcharr pinned to `0.28.2`: both artifact
@@ -571,7 +570,7 @@ sufficient; refresh it and confirm entries populate. A large XMLTV
 source is still workable: a later drill run measured `UnitedStates.xml.gz`
 (14,668 entries) refreshing in 35 seconds.
 
-!!! note "The Edit Channel EPG picker's empty state, and the tab-navigation bug behind an earlier version of it"
+!!! note "The Edit Channel EPG picker's empty state, and the navigation bug behind an earlier version of it"
     If you add an EPG source and open the Edit Channel **EPG Data**
     picker before that source has data, it reads (confirmed verbatim on
     `0.18.1-0051`): "Guide data has not loaded yet — add an EPG source, <!-- em-dash-ok: verbatim ECM UI empty-state copy -->
@@ -583,17 +582,17 @@ source is still workable: a later drill run measured `UnitedStates.xml.gz`
     The real defect (`enhancedchannelmanager-3vtim`, then
     `enhancedchannelmanager-1twap`) was that the picker's snapshot of
     guide data loaded once at app start and never updated, so a source
-    that reached `status=success` **after** you had already navigated
-    away from the EPG Manager tab left the picker stuck on the empty
+    that reached `status=success` **after** you had already left EPG
+    Manager for another destination left the picker stuck on the empty
     state forever, even though the backend held 14,663 rows and the
     picker's own search fired zero requests to go find them. That
     matters here specifically because this drill's own sequence (add the
     EPG source, then go create channels and link them) walks straight
     into it. **Fixed on this branch:** the completion watch moved out of
     EPG Manager's own poller into a module-scope service that keeps
-    running (bounded to five minutes) after you leave the tab, so the
-    picker updates itself once the source's download actually finishes,
-    with no reload required. Until that fix has a build number and a
+    running (bounded to five minutes) after you leave that destination,
+    so the picker updates itself once the source's download actually
+    finishes, with no reload required. Until that fix has a build number and a
     drill round-trip behind it, if the picker still shows the empty
     state after a source you can independently confirm reached
     `status=success`, that is worth filing fresh rather than assuming
