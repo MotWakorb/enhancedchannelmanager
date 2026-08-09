@@ -17,9 +17,9 @@ export type ApiCallSpec =
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; normalize?: boolean }
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; normalize?: boolean }
   | { type: 'deleteChannel'; channelId: number }
-  | { type: 'createGroup'; name: string }
+  | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
   | { type: 'renameChannelGroup'; groupId: number; newName: string };
 
@@ -61,7 +61,21 @@ export interface OperationDetail {
  * Summary of changes for the exit dialog
  */
 export interface EditModeSummary {
+  /**
+   * Number of staged operations. NOT the number the exit dialog quotes — a
+   * staged `createChannel` carrying a `newGroupName` also produces a group,
+   * and a single `updateChannel` can carry several field changes, so the
+   * enumerated lines legitimately outnumber the operations. Use
+   * {@link EditModeSummary.totalChanges} for anything shown to an operator.
+   */
   totalOperations: number;
+  /**
+   * Sum of every enumerated bucket below. This is the number the exit dialog
+   * shows, so the headline and the bulleted list can never disagree — drill
+   * run 2026-08-09-run18 caught "24 pending changes" over lines summing to 26
+   * (bead enhancedchannelmanager-75k49).
+   */
+  totalChanges: number;
   channelsModified: number;
   streamsAdded: number;
   streamsRemoved: number;
@@ -70,6 +84,18 @@ export interface EditModeSummary {
   channelNameChanges: number;
   epgChanges: number;
   gracenoteIdChanges: number;
+  /** `logo_id` set or cleared via Edit Channel. */
+  logoChanges: number;
+  /** `stream_profile_id` set or cleared via Edit Channel. */
+  streamProfileChanges: number;
+  /** `channel_group_id` changed — a cross-group channel move. */
+  groupMoves: number;
+  /**
+   * Catch-all so every staged `updateChannel` contributes at least one line.
+   * A field added to the Edit Channel modal without a bucket here shows up as
+   * "N other channel change" instead of vanishing from the summary.
+   */
+  otherChannelChanges: number;
   newChannels: number;
   deletedChannels: number;
   newGroups: number;
@@ -221,7 +247,12 @@ export interface UseEditModeReturn {
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
   stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, normalize?: boolean) => number; // returns temp ID
   stageDeleteChannel: (channelId: number, description: string) => void;
-  stageCreateGroup: (name: string) => void;
+  /**
+   * Stage a new channel group. Returns the negative temp id the group is known
+   * by until commit, so the caller can select it in the group filter or move
+   * channels into it without waiting for a round trip.
+   */
+  stageCreateGroup: (name: string) => number;
   stageDeleteChannelGroup: (groupId: number, description: string) => void;
   stageRenameChannelGroup: (groupId: number, newName: string, description: string) => void;
   addChannelToWorkingCopy: (channel: Channel) => void; // Add a newly created channel to working copy
@@ -287,4 +318,27 @@ export interface EditModeExitDialogProps {
   onKeepEditing: () => void;
   isCommitting?: boolean;
   commitProgress?: CommitProgress | null;
+  /**
+   * Outcome of the commit the operator just ran, when it did NOT fully
+   * succeed. The dialog stays open on this until it is acknowledged.
+   *
+   * Drill run 2026-08-09-run18 committed a batch the backend reported as
+   * `success=False, applied=11, failed=1`, and the operator was shown nothing
+   * at all — no toast, no banner, no notification — while Edit Mode exited as
+   * if the batch had applied (bead enhancedchannelmanager-udq1j).
+   */
+  commitFailure?: CommitFailure | null;
+  /** Dismiss {@link EditModeExitDialogProps.commitFailure} and close. */
+  onAcknowledgeFailure?: () => void;
+}
+
+/**
+ * A commit that applied some (or none) of its operations, reduced to what the
+ * operator needs to read.
+ */
+export interface CommitFailure {
+  applied: number;
+  failed: number;
+  /** Deduplicated error lines, most useful first. */
+  messages: string[];
 }

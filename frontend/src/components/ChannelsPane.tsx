@@ -111,6 +111,8 @@ interface ChannelsPaneProps {
   onStageDeleteChannel?: (channelId: number, description: string) => void;
   onStageDeleteChannelGroup?: (groupId: number, description: string) => void;
   onStageRenameChannelGroup?: (groupId: number, newName: string, description: string) => void;
+  /** Stage a new channel group; returns its negative temp id (bd-vtapf). */
+  onStageCreateGroup?: (name: string) => number;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -1183,6 +1185,7 @@ export function ChannelsPane({
   onStageDeleteChannel,
   onStageDeleteChannelGroup,
   onStageRenameChannelGroup,
+  onStageCreateGroup,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -2875,23 +2878,52 @@ export function ChannelsPane({
     setCreateGroupShouldMoveChannels(false);  // Reset the flag
   };
 
-  // Handle creating a new channel group
+  /**
+   * Create a channel group from the Channels pane.
+   *
+   * Inside Edit Mode this STAGES the group rather than writing it straight to
+   * Dispatcharr. Writing it immediately put the group outside the session's
+   * ledger entirely: the Exit Edit Mode summary never named it, the undo
+   * counter never moved for it, and Discard could not take it back — while a
+   * duplicate name produced a `400` that the catch below swallowed into a log
+   * line no operator sees (bead enhancedchannelmanager-vtapf).
+   */
   const handleCreateGroup = async () => {
-    if (!newGroupName.trim()) return;
+    const groupName = newGroupName.trim();
+    if (!groupName) return;
 
     setCreatingGroup(true);
     try {
-      const newGroup = await api.createChannelGroup(newGroupName.trim());
-      if (onChannelGroupsChange) {
-        onChannelGroupsChange();
+      let createdGroupId: number;
+      let createdGroupName: string;
+
+      if (isEditMode && onStageCreateGroup) {
+        // `channelGroups` already carries this session's staged groups.
+        const duplicate = channelGroups.find(
+          (g) => g.name.toLowerCase() === groupName.toLowerCase()
+        );
+        if (duplicate) {
+          notifications.error(`A channel group named "${duplicate.name}" already exists.`, 'Create Group');
+          return;
+        }
+        createdGroupId = onStageCreateGroup(groupName);
+        createdGroupName = groupName;
+      } else {
+        const newGroup = await api.createChannelGroup(groupName);
+        createdGroupId = newGroup.id;
+        createdGroupName = newGroup.name;
+        if (onChannelGroupsChange) {
+          onChannelGroupsChange();
+        }
+        // Track the newly created group
+        if (onTrackNewlyCreatedGroup) {
+          onTrackNewlyCreatedGroup(createdGroupId);
+        }
       }
-      // Track the newly created group
-      if (onTrackNewlyCreatedGroup) {
-        onTrackNewlyCreatedGroup(newGroup.id);
-      }
+
       // Auto-select the new group so it appears in the channel list
-      if (!selectedGroups.includes(newGroup.id)) {
-        onSelectedGroupsChange([...selectedGroups, newGroup.id]);
+      if (!selectedGroups.includes(createdGroupId)) {
+        onSelectedGroupsChange([...selectedGroups, createdGroupId]);
       }
 
       // If we have selected channels AND this was triggered from context menu, move them to the new group
@@ -2912,8 +2944,8 @@ export function ChannelsPane({
 
           setCrossGroupMoveData({
             channels: channelsToMove,
-            targetGroupId: newGroup.id,
-            targetGroupName: newGroup.name,
+            targetGroupId: createdGroupId,
+            targetGroupName: createdGroupName,
             sourceGroupId,
             sourceGroupName,
             isTargetAutoSync: false,
@@ -2931,6 +2963,10 @@ export function ChannelsPane({
       handleCloseCreateGroupModal();
     } catch (err) {
       logger.error('Failed to create channel group:', err);
+      notifications.error(
+        err instanceof Error ? err.message : 'Failed to create channel group',
+        'Create Group'
+      );
     } finally {
       setCreatingGroup(false);
     }

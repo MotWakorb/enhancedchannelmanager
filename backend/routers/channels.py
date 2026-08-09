@@ -1674,6 +1674,28 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
             return result["groupIdMap"][new_group_name]
         return group_id
 
+    class UnresolvedGroupError(Exception):
+        """A group id that was never resolved to a real Dispatcharr group.
+
+        Negative ids are the frontend's staging placeholders. Dispatcharr
+        answers one with ``400 {"channel_group_id": ["Invalid pk \\"-1000\\" -
+        object does not exist."]}``, and drill run 2026-08-09-run18 lost a
+        channel to exactly that (bead ``enhancedchannelmanager-udq1j``). The
+        frontend now resolves them by name before posting; this is the
+        backstop for an older or scripted client that does not, so the failure
+        is named in ECM's own error rather than relayed as an opaque upstream
+        400.
+        """
+
+    def reject_unresolved_group(group_id: Optional[int], label: str) -> Optional[int]:
+        """Return ``group_id``, or raise if it is still a staging placeholder."""
+        if group_id is not None and group_id < 0:
+            raise UnresolvedGroupError(
+                f"Channel group {group_id} does not exist. A new group must be sent in "
+                f"groupsToCreate and referenced by name ({label})."
+            )
+        return group_id
+
     try:
         # Phase 0: Pre-validation - check that referenced entities exist
         logger.debug("[CHANNELS-BULK] Phase 0: Starting pre-validation")
@@ -1979,6 +2001,11 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                 if op.type == "updateChannel":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] updateChannel: channel_id=%s, data=%s", idx+1, len(request.operations), channel_id, op.data)
+                    if "channel_group_id" in op.data:
+                        reject_unresolved_group(
+                            op.data["channel_group_id"],
+                            f"updateChannel on channel {channel_id}",
+                        )
                     await client.update_channel(channel_id, op.data)
                     result["operationsApplied"] += 1
 
@@ -2038,7 +2065,10 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                 elif op.type == "createChannel":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createChannel: name='%s', tempId=%s, groupId=%s, newGroupName=%s, normalize=%s", idx+1, len(request.operations), op.name, op.tempId, op.groupId, op.newGroupName, op.normalize)
                     # Resolve group ID
-                    group_id = resolve_group_id(op.groupId, op.newGroupName)
+                    group_id = reject_unresolved_group(
+                        resolve_group_id(op.groupId, op.newGroupName),
+                        f"createChannel '{op.name}'",
+                    )
 
                     # Apply normalization if requested
                     channel_name = op.name
