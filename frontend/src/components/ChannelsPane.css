@@ -3972,6 +3972,14 @@
   font-weight: var(--type-body-weight);
 }
 
+/* Why the Move button is disabled (bd-gddai) */
+.move-numbering-blocked {
+  margin: 0.5rem 0 0;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
 /* Radio button option group */
 .move-option-radio-group {
   display: flex;

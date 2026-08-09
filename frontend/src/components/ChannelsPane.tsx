@@ -55,6 +55,13 @@ import { SelectionActionBar } from './SelectionActionBar';
 import { resolveChannelArtwork } from './channelRowPresentation';
 import { channelCapabilityTiers } from './channelCapabilities';
 import {
+  DEFAULT_NUMBERING_OPTION,
+  defaultNumberingOption,
+  resolveMoveNumbering,
+  type MoveNumberingResolution,
+  type NumberingOption,
+} from './moveChannelNumbering';
+import {
   UNGROUPED_TARGET_GROUP_NAME,
   findUngroupedTargetGroup,
 } from '../utils/ungroupedTargetGroup';
@@ -1426,7 +1433,8 @@ export function ChannelsPane({
   const [customStartingNumber, setCustomStartingNumber] = useState<string>('');
   const [renumberSourceGroup, setRenumberSourceGroup] = useState<boolean>(false);
   // Selected numbering option: 'keep' | 'suggested' | 'custom'
-  const [selectedNumberingOption, setSelectedNumberingOption] = useState<'keep' | 'suggested' | 'custom'>('suggested');
+  const [selectedNumberingOption, setSelectedNumberingOption] =
+    useState<NumberingOption>(DEFAULT_NUMBERING_OPTION);
 
   // Sort and Renumber modal state
   const sortRenumberModal = useModal();
@@ -2956,6 +2964,11 @@ export function ChannelsPane({
             sourceGroupHasGaps: false,
             sourceGroupMinChannel: null,
           });
+          setRenumberSourceGroup(false);
+          // With no channels in the destination there is no suggested number,
+          // so the "suggested" radio is not rendered — see bd-gddai.
+          setSelectedNumberingOption(defaultNumberingOption(suggestedChannelNumber));
+          setCustomStartingNumber('');
           crossGroupMoveModal.open();
         }
       }
@@ -3983,7 +3996,10 @@ export function ChannelsPane({
         sourceGroupMinChannel,
       });
       setRenumberSourceGroup(false);  // Reset the checkbox when showing modal
-      setSelectedNumberingOption('suggested');  // Default to suggested option
+      // Preselect an option that is actually RENDERED: an empty destination
+      // group has no suggested number, so the suggested radio is absent and
+      // defaulting to it left nothing checked (bd-gddai).
+      setSelectedNumberingOption(defaultNumberingOption(suggestedChannelNumber));
       setCustomStartingNumber('');  // Clear custom number input
       crossGroupMoveModal.open();
 
@@ -4656,27 +4672,32 @@ export function ChannelsPane({
     setCustomStartingNumber('');
   };
 
+  // What the Move button would do with the numbering currently selected.
+  // Drives both `disabled` and the click handler so the two cannot disagree.
+  const moveNumbering: MoveNumberingResolution | null = crossGroupMoveData
+    ? resolveMoveNumbering(
+      selectedNumberingOption,
+      crossGroupMoveData.suggestedChannelNumber,
+      customStartingNumber
+    )
+    : null;
+
   // Handle the Move button click based on selected option
   const handleMoveButtonClick = () => {
-    if (!crossGroupMoveData) return;
+    if (!crossGroupMoveData || !moveNumbering) return;
 
-    switch (selectedNumberingOption) {
-      case 'keep':
-        handleCrossGroupMoveConfirm(true, undefined, renumberSourceGroup);
-        break;
-      case 'suggested':
-        if (crossGroupMoveData.suggestedChannelNumber !== null) {
-          handleCrossGroupMoveConfirm(false, crossGroupMoveData.suggestedChannelNumber, renumberSourceGroup);
-        }
-        break;
-      case 'custom': {
-        const customNum = parseInt(customStartingNumber, 10);
-        if (!isNaN(customNum) && customNum >= 1) {
-          handleCrossGroupMoveConfirm(false, customNum, renumberSourceGroup);
-        }
-        break;
-      }
+    if (!moveNumbering.ok) {
+      // Unreachable while the button is correctly disabled; kept so a future
+      // regression surfaces as a message rather than a dead click.
+      notifications.warning(moveNumbering.reason, 'Move Channel');
+      return;
     }
+
+    handleCrossGroupMoveConfirm(
+      moveNumbering.keepCurrentNumbers,
+      moveNumbering.startingNumber,
+      renumberSourceGroup
+    );
   };
 
   // Compute conflicts for cross-group move based on selected numbering option
@@ -4738,14 +4759,9 @@ export function ChannelsPane({
     return { hasConflicts: conflicts.length > 0, conflicts, startNumber };
   }, [crossGroupMoveData, selectedNumberingOption, customStartingNumber, localChannels]);
 
-  // Check if Move button should be enabled
-  const isMoveButtonEnabled = () => {
-    if (selectedNumberingOption === 'custom') {
-      const customNum = parseInt(customStartingNumber, 10);
-      return !isNaN(customNum) && customNum >= 1;
-    }
-    return true;
-  };
+  // Check if Move button should be enabled. Enabled means "clicking this
+  // performs the move" — never "looks live but no-ops" (bd-gddai).
+  const isMoveButtonEnabled = () => moveNumbering?.ok === true;
 
   // Sort & Renumber handlers
   const handleOpenSortRenumber = (groupId: number | 'ungrouped', groupName: string, groupChannels: Channel[]) => {
@@ -6338,6 +6354,14 @@ export function ChannelsPane({
                   </div>
                 </label>
               </div>
+
+              {/* Why the Move button is disabled — never leave the operator
+                  guessing at a dead control (bd-gddai). */}
+              {moveNumbering && !moveNumbering.ok && (
+                <p className="move-numbering-blocked" role="status">
+                  {moveNumbering.reason}
+                </p>
+              )}
             </div>
 
             {/* Channel Number Conflict Warning */}
