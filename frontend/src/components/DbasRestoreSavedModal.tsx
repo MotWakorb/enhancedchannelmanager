@@ -9,6 +9,7 @@ import { useRestoreProgress } from '../hooks/useRestoreProgress';
 import { useNavigateAwayGuard } from '../hooks/useNavigateAwayGuard';
 import * as api from '../services/api';
 import { isTerminalExecutionStatus } from '../utils/taskExecutionStatus';
+import { invalidateServerData } from '../hooks/useServerDataInvalidation';
 import type { ChannelReattachMode, RestoreReport } from '../services/api';
 import './ModalBase.css';
 import './BackupRestoreModal.css';
@@ -162,6 +163,15 @@ export function DbasRestoreSavedModal({
       if (cancelled) return;
       if (report) {
         setRestoreReport(report);
+        // An APPLY creates and renames channel groups that the Channel Manager's
+        // group filter is holding a pre-restore copy of — drill run
+        // 2026-08-08-run17 reported "No groups match Drill17" for groups this
+        // restore had just made, until a full reload (bead
+        // enhancedchannelmanager-3vtim). A dry run changed nothing, so it
+        // publishes nothing.
+        if (!report.is_dry_run) {
+          invalidateServerData('channel-groups');
+        }
         setStep('results');
       } else {
         setError(failMsg || 'Restore failed');

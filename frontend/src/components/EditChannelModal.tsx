@@ -365,6 +365,15 @@ export const EditChannelModal = memo(function EditChannelModal({
     );
   }).sort(bySourcePriority);
 
+  // "No EPG data found" is a claim about the SEARCH; an empty cache is a claim
+  // about the APP. Rendering the first when the second is true is what made
+  // drill run 2026-08-08-run17 read a stale client cache as missing guide data
+  // and go looking in Dispatcharr (bead enhancedchannelmanager-3vtim): the
+  // picker said no rows matched "KERA" while Dispatcharr held 14,663 rows
+  // including it, and not one /api/epg/* request left the browser.
+  const guideDataUnavailable = !epgDataLoading && epgData.length === 0;
+  const guideNotLoadedCopy = 'Guide data has not loaded yet — add an EPG source, or wait for its download to finish.';
+
   const handleSelectTvgIdFromEpg = (epg: { tvg_id: string }) => {
     setTvgId(epg.tvg_id);
     setTvgIdPickerOpen(false);
@@ -544,6 +553,10 @@ export const EditChannelModal = memo(function EditChannelModal({
               <div className="tvg-id-picker-dropdown">
                 {epgDataLoading ? (
                   <div className="epg-dropdown-loading">Loading...</div>
+                ) : guideDataUnavailable ? (
+                  <div className="epg-dropdown-empty" data-testid="tvg-id-picker-no-guide-data">
+                    {guideNotLoadedCopy}
+                  </div>
                 ) : filteredTvgIdEpgData.length === 0 ? (
                   <div className="epg-dropdown-empty">
                     {tvgIdSearch ? 'No EPG data found' : 'Type to search EPG data'}
@@ -728,6 +741,10 @@ export const EditChannelModal = memo(function EditChannelModal({
               <div className="epg-dropdown">
                 {epgDataLoading ? (
                   <div className="epg-dropdown-loading">Loading...</div>
+                ) : guideDataUnavailable ? (
+                  <div className="epg-dropdown-empty" data-testid="epg-picker-no-guide-data">
+                    {guideNotLoadedCopy}
+                  </div>
                 ) : filteredEpgData.length === 0 ? (
                   <div className="epg-dropdown-empty">
                     {epgSearch ? 'No EPG data found' : 'Type to search or scroll to browse'}

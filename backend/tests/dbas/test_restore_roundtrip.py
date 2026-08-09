@@ -1385,7 +1385,10 @@ async def test_epg_link_round_trips_when_the_channel_carries_no_tvg_id(tmp_path)
     assert report.epg_links_unrestored == 0
     patches = [c.args for c in client.update_channel.await_args_list]
     # Relinked to the DESTINATION's row id, not the source's 2078.
-    assert (505, {"epg_data_id": 9001}) in patches
+    # Both halves of the guide link are restored (bead …-qka89): the archived
+    # channel carries tvg_id=None, which is the archived value and is written
+    # verbatim alongside the resolved epg_data_id.
+    assert (505, {"epg_data_id": 9001, "tvg_id": None}) in patches
 
 
 @pytest.mark.asyncio
@@ -1669,8 +1672,8 @@ async def test_overwrite_dry_run_predicts_exactly_what_the_apply_overwrites():
     # ...while the apply relinked both pre-existing channels to the DESTINATION's
     # own guide rows (901/902 are the destination ids, 4001/4002 its EPG rows).
     patches = [c.args for c in apply_client.update_channel.await_args_list]
-    assert (901, {"epg_data_id": 4001}) in patches
-    assert (902, {"epg_data_id": 4002}) in patches
+    assert (901, {"epg_data_id": 4001, "tvg_id": None}) in patches
+    assert (902, {"epg_data_id": 4002, "tvg_id": None}) in patches
 
 
 @pytest.mark.asyncio
@@ -1789,7 +1792,9 @@ async def test_resolved_key_matches_the_destination_case_insensitively(tmp_path)
     )
 
     assert relinked == 1
-    client.update_channel.assert_awaited_once_with(505, {"epg_data_id": 9001})
+    client.update_channel.assert_awaited_once_with(
+        505, {"epg_data_id": 9001, "tvg_id": None}
+    )
 
 
 @pytest.mark.asyncio
@@ -1954,7 +1959,7 @@ async def test_a_mixed_plan_splits_created_from_pre_existing_through_the_registr
     )
     # Only the NEW channel was relinked; 901 was never touched.
     patches = [c.args for c in apply_client.update_channel.await_args_list]
-    assert (902, {"epg_data_id": 4002}) in patches
+    assert (902, {"epg_data_id": 4002, "tvg_id": None}) in patches
     assert not any(args[0] == 901 for args in patches)
 
 
@@ -2077,8 +2082,8 @@ async def test_the_dr_preview_matches_the_dr_apply():
     assert applied.epg_links_unrestored == dry.epg_links_unrestored
     # Both new channels really were relinked to the destination's own rows.
     patches = [c.args for c in apply_client.update_channel.await_args_list]
-    assert (701, {"epg_data_id": 4001}) in patches
-    assert (702, {"epg_data_id": 4002}) in patches
+    assert (701, {"epg_data_id": 4001, "tvg_id": None}) in patches
+    assert (702, {"epg_data_id": 4002, "tvg_id": None}) in patches
 
 
 # ---------------------------------------------------------------------------

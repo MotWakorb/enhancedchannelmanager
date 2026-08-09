@@ -41,10 +41,18 @@ interface CredentialReentryNoticeProps {
 
 /** Plain-language count phrase — singular vs. plural, past vs. future tense. */
 function countCopy(count: number, isDryRun: boolean): string {
-  const noun = count === 1 ? 'account' : 'accounts';
-  return isDryRun
-    ? `${count} ${noun} will need credentials re-entered after this restore`
-    : `${count} ${noun} need credentials re-entered before they will work`;
+  const isOne = count === 1;
+  const noun = isOne ? 'account' : 'accounts';
+  if (isDryRun) {
+    // "will need" is invariant; only the noun inflects.
+    return `${count} ${noun} will need credentials re-entered after this restore`;
+  }
+  // The applied phrasing has a finite verb and a pronoun, and both have to agree
+  // with the subject: "1 account NEED credentials … before THEY will work" was
+  // what a single-account restore rendered (drill run 2026-08-08-run17).
+  const verb = isOne ? 'needs' : 'need';
+  const pronoun = isOne ? 'it' : 'they';
+  return `${count} ${noun} ${verb} credentials re-entered before ${pronoun} will work`;
 }
 
 export function CredentialReentryNotice({ report, mode }: CredentialReentryNoticeProps) {

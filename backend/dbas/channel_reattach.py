@@ -58,6 +58,15 @@ HOW EACH REFERENCE IS RE-DERIVED
   that resolved value and FALLS BACK to the channel's own ``tvg_id``. An OLD
   artifact carries no resolved key, so it behaves exactly as it did before.
 
+  WHAT THE RELINK WRITES (drill run 2026-08-08-run17, bead ``…-qka89``). The
+  PATCH carries the resolved ``epg_data_id`` AND the channel's own archived
+  ``tvg_id``, because restoring only the link left the channel resolving to one
+  guide row while advertising another — see :func:`_relink_payload`.
+  ``tvc_guide_stationid`` is NOT part of this: it is the Gracenote station id,
+  it has no half restored by this pass, and a channel this restore CREATES gets
+  it verbatim from the archive through the channel-create payload. It therefore
+  has no asymmetry to fix here.
+
 * **Profile membership** — from the archived CHANNEL PROFILE rows, whose
   ``channels`` field is Dispatcharr's list of ENABLED channel ids
   (``ChannelProfileSerializer.get_channels`` filters ``enabled=True``). This is
@@ -499,6 +508,40 @@ def _link_tvg_id(archive_channel: dict) -> str:
     return ""
 
 
+def _relink_payload(archive_channel: dict, dest_epg_id: int) -> dict:
+    """The PATCH that restores BOTH halves of a channel's guide link.
+
+    ``epg_data_id`` is the LINK; the channel's own ``tvg_id`` is what the channel
+    ADVERTISES, and downstream M3U/XMLTV output plus any later EPG re-match are
+    keyed on the latter. Restoring only the link leaves the channel internally
+    inconsistent — drill run 2026-08-08-run17 (bead ``…-qka89``) measured a
+    ``replace`` restore putting ``epg_data_id=3425`` back while the operator's
+    ``tvg_id='KERA-DT2(HD06)(KERADT2).us'`` survived, so the channel resolved to
+    one guide row and advertised another. ECM's own Edit Channel modal writes
+    both fields together when an operator picks a guide row; only this path was
+    asymmetric.
+
+    The channel's OWN field is restored from the channel's OWN archived field,
+    NEVER from :data:`ARCHIVE_EPG_TVG_ID_KEY`. The two are allowed to disagree
+    (see :func:`_link_tvg_id`): the resolved key identifies the ROW the operator
+    linked, while ``tvg_id`` is the channel's advertised id, and overwriting one
+    with the other would restore a value the backup never held.
+
+    An artifact with no ``tvg_id`` key at all carries no archived value, so the
+    payload stays link-only rather than inventing a ``None``. A key that is
+    PRESENT is written verbatim — including an empty/``None`` value, which is a
+    real archived state (ECM's channel PATCH leaves ``tvg_id`` unset) and is the
+    same thing the channel CREATE path writes for a channel this restore makes.
+
+    ``tvc_guide_stationid`` is deliberately absent — see the module docstring's
+    "WHAT THE RELINK WRITES" note.
+    """
+    payload: dict = {"epg_data_id": dest_epg_id}
+    if "tvg_id" in archive_channel:
+        payload["tvg_id"] = archive_channel["tvg_id"]
+    return payload
+
+
 async def reattach_epg_links(
     *,
     client: DispatcharrClient,
@@ -645,7 +688,9 @@ async def reattach_epg_links(
             continue
 
         try:
-            await client.update_channel(dest_channel_id, {"epg_data_id": dest_epg_id})
+            await client.update_channel(
+                dest_channel_id, _relink_payload(archive_channel, dest_epg_id)
+            )
         except Exception as exc:  # noqa: BLE001 - per-channel containment
             # TYPE only (PR review W4): an httpx error's str() embeds the
             # request URL. The channel is already named in this line.

@@ -1205,6 +1205,18 @@ function App() {
     }
   };
 
+  // `epgData` is loaded once at init, so an EPG source added afterwards left the
+  // Edit Channel picker reporting "No EPG data found" for guide rows that
+  // demonstrably existed, until a full reload (bead
+  // enhancedchannelmanager-3vtim). EPG Manager publishes when a source finishes
+  // downloading; this is the refetch.
+  useServerDataInvalidation('epg-data', loadEpgData);
+
+  // Same class for the channel-group list: a DBAS restore creates and renames
+  // groups from the Settings tab, which this component's copy — the one the
+  // Channel Manager group filter renders — cannot see.
+  useServerDataInvalidation('channel-groups', loadChannelGroups);
+
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
   const resetStreams = async (_bypassCache: boolean = false) => {

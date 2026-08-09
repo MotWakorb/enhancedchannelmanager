@@ -1734,6 +1734,341 @@ class TestBulkCommitPartialSuccess:
         assert data["partial"] is False
 
 
+class _DispatcharrNonNullGroupError(Exception):
+    """What Dispatcharr 0.28.2 returns for ``channel_group_id: null``.
+
+    Measured against the live drill instance on 2026-08-09::
+
+        PATCH /api/channels/channels/1/ {"channel_group_id": null}
+          -> 400 {"channel_group_id":["This field may not be null."]}
+        PATCH /api/channels/channels/1/ {"channel_group_id": 378}
+          -> 200  (the channel really moved)
+
+    A bare ``AsyncMock`` accepts anything, which is how the first cut of the
+    …-ayfn9 reparent passed every unit test and then 400'd on the very first live
+    Delete Group. Any double standing in for ``update_channel`` in this module
+    enforces the constraint the real API enforces.
+    """
+
+
+def _channel_patch_double(recorder: list | None = None):
+    """An ``update_channel`` double that rejects a null ``channel_group_id``."""
+
+    def _patch(channel_id: int, data: dict):
+        if "channel_group_id" in data and data["channel_group_id"] is None:
+            raise _DispatcharrNonNullGroupError(
+                "Client error '400 Bad Request' for url "
+                "'http://dispatcharr:9191/api/channels/channels/%s/': "
+                '{"channel_group_id":["This field may not be null."]}' % channel_id
+            )
+        if recorder is not None:
+            recorder.append(("patch", channel_id, data))
+        return {"id": channel_id, **data}
+
+    return _patch
+
+
+# Dispatcharr's baseline group, confirmed present exactly once on the live drill
+# instance (`id=1, name='Default Group'`, 378 groups total). The production code
+# resolves it BY NAME, so these fixtures deliberately give it a non-obvious id:
+# a test that passes only because the id happens to be 1 proves nothing.
+_DEFAULT_GROUP = {"id": 42, "name": "Default Group"}
+
+
+class TestBulkCommitDeleteChannelGroup:
+    """deleteChannelGroup reparents before it deletes (bead …-ayfn9).
+
+    Backup/restore drill run 2026-08-08-run17. ECM's Delete Group confirm dialog
+    promises "This group contains 6 channels. The channels will be moved to
+    'Ungrouped'." Edit Mode then issued a BARE delete, which Dispatcharr refuses::
+
+        DELETE /api/channels/groups/377/ -> 400
+        {"error":"Cannot delete group with associated channels"}
+
+    Verified directly on the drill instance: DELETE on the 6-channel group 377
+    returned 400, DELETE on the EMPTY group 378 returned 204. The delete can only
+    ever succeed on an already-empty group, and the reparenting that was supposed
+    to empty it never happened.
+
+    THE SECOND ROUND (live re-drive of the same UI path, 2026-08-09). Reparenting
+    to ``None`` cannot work either: a Dispatcharr channel row REQUIRES a group.
+    "Ungrouped" is a state ECM can READ (the frontend buckets
+    ``channel_group_id === null``) but never one it can WRITE. The move therefore
+    targets Dispatcharr's own baseline group, resolved by NAME.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_jobs(self):
+        from routers import channels as router_module
+
+        router_module._BULK_COMMIT_JOBS.clear()
+        yield
+        router_module._BULK_COMMIT_JOBS.clear()
+
+    @pytest.mark.asyncio
+    async def test_members_are_reparented_to_the_default_group_before_the_delete(
+        self, async_client
+    ):
+        """Members move to a REAL group id, THEN the group is deleted."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+                {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+                {"id": 13, "name": "Elsewhere", "channel_group_id": 999},
+            ],
+            "count": 3,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+
+        calls: list = []
+        mock_client.update_channel.side_effect = _channel_patch_double(calls)
+        mock_client.delete_channel_group.side_effect = (
+            lambda gid: calls.append(("delete", gid, None))
+        )
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert response.status_code == 202
+        assert data["success"] is True
+        assert data["operationsFailed"] == 0
+        # Both members moved to the RESOLVED group id (42, not the literal 1 and
+        # emphatically not None); the outsider was never touched.
+        assert calls == [
+            ("patch", 11, {"channel_group_id": 42}),
+            ("patch", 12, {"channel_group_id": 42}),
+            ("delete", 377, None),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_target_group_is_resolved_by_name_not_by_id(self, async_client):
+        """Nothing may depend on the baseline group's id being 1.
+
+        It is 1 on a fresh 0.28.2 install and on the drill instance, but that is
+        an observation about a default, not a contract.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 11, "name": "PBS 1", "channel_group_id": 377}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [
+            {"id": 1, "name": "Some Operator's Own Group"},
+            {"id": 907, "name": "  default group  "},  # trimmed + case-insensitive
+        ]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["success"] is True
+        mock_client.update_channel.assert_awaited_once_with(11, {"channel_group_id": 907})
+
+    @pytest.mark.asyncio
+    async def test_a_null_channel_group_id_is_never_sent(self, async_client):
+        """The regression guard: the double 400s on null exactly as the API does.
+
+        Without this the previous cut of the fix passed four green unit tests and
+        failed on the first live click.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 11, "name": "PBS 1", "channel_group_id": 377}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["success"] is True
+        for call in mock_client.update_channel.await_args_list:
+            assert call.args[1]["channel_group_id"] is not None
+
+    @pytest.mark.asyncio
+    async def test_no_default_group_fails_the_operation_with_a_usable_message(
+        self, async_client
+    ):
+        """An instance without the baseline group gets a reason, not a null PATCH.
+
+        A channel cannot be left group-less, so there is genuinely nowhere to put
+        these channels. Saying so beats sending a request the API will reject.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 11, "name": "PBS 1", "channel_group_id": 377}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+        ]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["success"] is False
+        assert data["operationsFailed"] == 1
+        message = data["errors"][0]["error"]
+        assert "Default Group" in message
+        assert "1 channel" in message
+        # Nothing was attempted upstream: no null PATCH, no doomed delete.
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deleting_the_default_group_itself_fails_rather_than_no_oping(
+        self, async_client
+    ):
+        """Moving a group's channels INTO that same group empties nothing."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 11, "name": "PBS 1", "channel_group_id": 42}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 42}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["success"] is False
+        assert "Default Group" in data["errors"][0]["error"]
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_group_is_deleted_without_any_patch(self, async_client):
+        """No members means no reparenting — the bare delete was always correct.
+
+        It also means the baseline group need not exist: an empty group deletes
+        cleanly on an instance that has no "Default Group" at all.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 13, "name": "Elsewhere", "channel_group_id": 999}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = []
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 378}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["operationsApplied"] == 1
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_awaited_once_with(378)
+
+    @pytest.mark.asyncio
+    async def test_a_reparent_failure_fails_the_operation_and_skips_the_delete(
+        self, async_client
+    ):
+        """A member that will not move must NOT be followed by a delete.
+
+        Deleting anyway is how a group with channels reached Dispatcharr's 400 in
+        the first place; failing the operation is what puts the reason in front of
+        the operator.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 11, "name": "PBS 1", "channel_group_id": 377}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = Exception("Dispatcharr refused the PATCH")
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert data["success"] is False
+        assert data["operationsFailed"] == 1
+        assert data["errors"][0]["operationType"] == "deleteChannelGroup"
+        mock_client.delete_channel_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_operation_is_never_reported_as_overall_success(
+        self, async_client
+    ):
+        """VISIBILITY half of …-ayfn9: continueOnError must not launder a failure.
+
+        The drill's operator saw "Apply All" report success while an operation had
+        raised, with the only trace a server-side ERROR log. `continueOnError`
+        means "keep going", never "call it a win": a batch with any failed
+        operation reports `success=False`, and `partial` is what distinguishes
+        "some of it landed" from "none of it did".
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+
+        results = iter([{"id": 101, "name": "A"}, Exception("Dispatcharr rejected B")])
+
+        def _create(data):
+            nxt = next(results)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+
+        mock_client.create_channel.side_effect = _create
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "A"},
+            {"type": "createChannel", "tempId": -2, "name": "B"},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert data["operationsApplied"] == 1
+        assert data["operationsFailed"] == 1
+        assert data["success"] is False
+        assert data["partial"] is True
+        assert len(data["errors"]) == 1
+
+
 class TestBulkCommitAsync:
     """Tests for the 202+poll lifecycle of POST /api/channels/bulk-commit
     and its sibling GET /api/channels/bulk-commit/{job_id} (bd-ggxks).

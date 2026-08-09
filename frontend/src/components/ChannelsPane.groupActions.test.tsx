@@ -192,3 +192,62 @@ describe('ChannelsPane group actions menu', () => {
     expect(container.querySelector('.group-menu-btn')).toBeNull();
   });
 });
+
+/**
+ * The Delete Group dialog names the destination it can actually deliver
+ * (bead enhancedchannelmanager-ayfn9, live re-drive 2026-08-09).
+ *
+ * It used to promise "The channels will be moved to 'Ungrouped'". ECM cannot
+ * write that state: a Dispatcharr channel row requires a group, and
+ * `PATCH {"channel_group_id": null}` returns
+ * `400 {"channel_group_id":["This field may not be null."]}` on 0.28.2. The move
+ * targets Dispatcharr's baseline group, resolved by name, so the dialog names
+ * that group — and when it is absent, says the move cannot happen instead of
+ * promising it and failing at Apply All.
+ */
+describe('ChannelsPane Delete Group dialog — destination copy', () => {
+  const POPULATED = { id: MANUAL_GROUP_ID, name: 'Drill17 PBS West', channel_count: 6 };
+
+  async function openDeleteDialog(
+    channelGroupsOverride: ChannelGroup[],
+  ) {
+    const user = userEvent.setup();
+    const { container } = renderPane({
+      channelGroups: channelGroupsOverride,
+      channels: [makeChannel(1, 'Alpha', MANUAL_GROUP_ID)],
+    });
+    await openGroupMenu(container, POPULATED.name);
+    await user.click(screen.getByText('Delete Group'));
+    return document.querySelector('.delete-message') as HTMLElement;
+  }
+
+  it('names the real destination group rather than "Ungrouped"', async () => {
+    const message = await openDeleteDialog([
+      POPULATED,
+      { id: 907, name: 'Default Group', channel_count: 0 },
+    ]);
+
+    expect(message.textContent).toContain('This group contains 6 channels');
+    expect(message.textContent).toContain('will be moved to "Default Group"');
+    expect(message.textContent).not.toContain('Ungrouped');
+  });
+
+  it('resolves the destination by name, not by the id it happens to have', async () => {
+    const message = await openDeleteDialog([
+      POPULATED,
+      { id: 1, name: "Operator's Own Group", channel_count: 0 },
+      { id: 907, name: '  default group  ', channel_count: 0 },
+    ]);
+
+    expect(message.textContent).toContain('will be moved to "  default group  "');
+    expect(message.textContent).not.toContain("Operator's Own Group");
+  });
+
+  it('says the move cannot happen when there is no destination group', async () => {
+    const message = await openDeleteDialog([POPULATED]);
+
+    expect(message.textContent).toContain('ECM cannot move them');
+    expect(message.textContent).toContain('cannot be left without a group');
+    expect(message.textContent).not.toContain('will be moved to');
+  });
+});

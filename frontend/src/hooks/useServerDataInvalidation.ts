@@ -42,6 +42,27 @@ export type ServerDataKey =
   | 'settings'
   /** The logo catalogue behind the Edit Channel picker (`App.logos`). */
   | 'logos'
+  /**
+   * The guide catalogue behind the Edit Channel "EPG Data" picker
+   * (`App.epgData`, `GET /api/epg/data`).
+   *
+   * Published by EPG Manager when a source finishes downloading its guide.
+   * Drill run 2026-08-08-run17 (bead enhancedchannelmanager-3vtim) added a
+   * source, watched it reach `status=success`, and then got "No EPG data found"
+   * for every channel — with ZERO `/api/epg/*` requests leaving the browser,
+   * because `App.epgData` was still the empty array loaded before the source
+   * existed. Only a full reload fixed it.
+   */
+  | 'epg-data'
+  /**
+   * The channel-group list (`App.channelGroups`, `GET /api/channel-groups`).
+   *
+   * Published by the DBAS restore modals: a restore creates and renames groups
+   * that the Channel Manager's group filter is holding a pre-restore copy of.
+   * The same drill reported "No groups match Drill17" for groups the restore
+   * had just created.
+   */
+  | 'channel-groups'
   /** `GET /api/backup/saved` — the Saved Backups list. */
   | 'saved-backups';
 

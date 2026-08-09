@@ -54,6 +54,10 @@ import { MergeChannelsModal } from './MergeChannelsModal';
 import { SelectionActionBar } from './SelectionActionBar';
 import { resolveChannelArtwork } from './channelRowPresentation';
 import { channelCapabilityTiers } from './channelCapabilities';
+import {
+  UNGROUPED_TARGET_GROUP_NAME,
+  findUngroupedTargetGroup,
+} from '../utils/ungroupedTargetGroup';
 import { exportChannelsToCSV, downloadCSVTemplate } from '../services/api';
 import './ChannelsPane.css';
 import './ModalBase.css';
@@ -74,6 +78,7 @@ const GROUP_RENDER_CHUNK_SIZE = 100;
  * Settings sub-pages.
  */
 export const NAVIGATE_TO_ORPHANED_GROUPS_EVENT = 'ecm:navigate-settings-maintenance';
+
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -1335,6 +1340,11 @@ export function ChannelsPane({
   const [groupToDelete, setGroupToDelete] = useState<ChannelGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState(false);
   const [deleteGroupChannels, setDeleteGroupChannels] = useState(false);
+  // Where the confirm dialog can honestly say the channels will land.
+  const ungroupedTargetGroup = useMemo(
+    () => findUngroupedTargetGroup(channelGroups),
+    [channelGroups],
+  );
 
   // Rename group state
   const renameGroupModal = useModal();
@@ -5824,7 +5834,20 @@ export function ChannelsPane({
                   <>
                     <p className="delete-warning">
                       This group contains {groupToDelete.channel_count} channel{groupToDelete.channel_count !== 1 ? 's' : ''}.
-                      {!deleteGroupChannels && ' The channels will be moved to "Ungrouped".'}
+                      {/*
+                        Name the REAL destination. This used to promise
+                        "Ungrouped", which ECM cannot write: a Dispatcharr channel
+                        row requires a group, so the move targets Dispatcharr's
+                        own baseline group (bead enhancedchannelmanager-ayfn9).
+                        When that group is missing there is nowhere to move them
+                        and the delete will fail, so the dialog says that up front
+                        instead of promising it and failing at Apply All.
+                      */}
+                      {!deleteGroupChannels && (
+                        ungroupedTargetGroup
+                          ? ` The channels will be moved to "${ungroupedTargetGroup.name}".`
+                          : ` ECM cannot move them: there is no "${UNGROUPED_TARGET_GROUP_NAME}" to move them to, and a channel cannot be left without a group. Tick the box below, or move the channels yourself first.`
+                      )}
                     </p>
                     <div className="delete-group-option">
                       <label className="delete-channels-checkbox">
