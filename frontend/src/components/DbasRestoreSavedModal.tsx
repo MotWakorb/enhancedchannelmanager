@@ -171,6 +171,12 @@ export function DbasRestoreSavedModal({
         // publishes nothing.
         if (!report.is_dry_run) {
           invalidateServerData('channel-groups');
+          // The groups' CONTENTS are just as stale as the group list: a
+          // restore that created 12 channels still rendered "CHANNELS 0"
+          // behind a correctly-refreshed filter, and the Channels pane has no
+          // refresh control to fix it in place (bead
+          // enhancedchannelmanager-eelgi).
+          invalidateServerData('channels');
         }
         setStep('results');
       } else {

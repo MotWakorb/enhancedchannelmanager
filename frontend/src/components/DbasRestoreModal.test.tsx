@@ -483,4 +483,59 @@ describe('DbasRestoreModal', () => {
     expect(reload).not.toHaveBeenCalled();
     unsubscribe();
   });
+  /**
+   * And the channels those groups hold. Publishing only `channel-groups` left
+   * drill run 2026-08-09-run18 looking at "CHANNELS 0 / Empty" behind a
+   * correctly-refreshed group filter, straight after a restore whose own modal
+   * said "Channels 12 CREATED". The Channels pane has no refresh control, so
+   * the only cure was a full reload — which signs the operator out (bead
+   * enhancedchannelmanager-eelgi).
+   */
+  it('publishes channels after an APPLIED restore', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channels', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{
+        status: 'completed',
+        details: { restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
+      }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    unsubscribe();
+  });
+
+  it('publishes no channels refetch after a DRY RUN', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channels', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+    expect(reload).not.toHaveBeenCalled();
+    unsubscribe();
+  });
 });

@@ -33,6 +33,24 @@ vi.mock('../hooks/useNavigateAwayGuard', () => ({ useNavigateAwayGuard: () => {}
 
 import * as api from '../services/api';
 import { DbasRestoreSavedModal } from './DbasRestoreSavedModal';
+import {
+  useServerDataInvalidation,
+  type ServerDataKey,
+} from '../hooks/useServerDataInvalidation';
+
+/**
+ * Subscribe to an invalidation key outside a component tree. The hook is the
+ * only public subscriber, so a throwaway host registers the listener and
+ * unmounting it unregisters — the real registration path is what runs.
+ */
+function subscribeForTest(key: ServerDataKey, reload: () => void): () => void {
+  function Listener() {
+    useServerDataInvalidation(key, reload);
+    return null;
+  }
+  const host = render(<Listener />);
+  return () => host.unmount();
+}
 
 function view(over: Record<string, unknown> = {}) {
   return {
@@ -331,4 +349,37 @@ describe('DbasRestoreSavedModal', () => {
     expect(notice.textContent).not.toMatch(/back to options/i);
     expect(screen.queryByRole('button', { name: /back to options/i })).toBeNull();
   });
+  /**
+   * A restore run from Saved Backups is the same restore, and leaves the same
+   * two stale copies behind: the channel-GROUP list AND the channels in it.
+   * Publishing only the first left the Channels pane reading "CHANNELS 0"
+   * after a restore that created 12 (beads enhancedchannelmanager-3vtim and
+   * -eelgi).
+   */
+  it.each<ServerDataKey>(['channel-groups', 'channels'])(
+    'publishes %s after an APPLIED restore',
+    async (key) => {
+      const reload = vi.fn();
+      const unsubscribe = subscribeForTest(key, reload);
+
+      (api.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
+        status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+      });
+      (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        history: [{
+          status: 'completed',
+          details: { restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
+        }],
+      });
+      mockView = view({ isComplete: true, status: 'completed' });
+
+      render(<DbasRestoreSavedModal filename={FILENAME} onClose={vi.fn()} />);
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+      await waitFor(() => expect(reload).toHaveBeenCalled());
+      unsubscribe();
+    },
+  );
 });

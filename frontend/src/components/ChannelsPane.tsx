@@ -5513,7 +5513,25 @@ export function ChannelsPane({
 
       <div className={`pane-header ${isEditMode ? 'edit-mode' : ''}`}>
         <div className="pane-header-title">
-          <h2 id="channels-pane-heading">Channels</h2>
+          <h2 id="channels-pane-heading">
+            Channels
+            {/* The Streams pane has always had this; the Channels pane had no
+                equivalent, so a restore that left this pane showing "CHANNELS
+                0" could only be fixed by a full page reload — which signs the
+                operator out (bead enhancedchannelmanager-eelgi). Hidden during
+                Edit Mode: a refetch mid-session fights the working copy. */}
+            {onChannelsChange && !isEditMode && (
+              <button
+                className="refresh-channels-btn"
+                onClick={() => onChannelsChange()}
+                title="Refresh channels from Dispatcharr"
+                disabled={loading}
+                aria-label="Refresh channels from Dispatcharr"
+              >
+                <span className={`material-icons${loading ? ' spinning' : ''}`} aria-hidden="true">sync</span>
+              </button>
+            )}
+          </h2>
           <span className="pane-item-count" aria-label={`${channels.length} channels`}>
             {channels.length}
           </span>

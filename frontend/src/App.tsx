@@ -1262,6 +1262,16 @@ function App() {
   // Channel Manager group filter renders — cannot see.
   useServerDataInvalidation('channel-groups', loadChannelGroups);
 
+  // And for the channels those groups hold. Refreshing only the filter left an
+  // operator looking at "CHANNELS 0" straight after a restore that created 12
+  // (bead enhancedchannelmanager-eelgi). Skipped while Edit Mode is active: a
+  // refetch mid-session would fight the working copy, and a restore is not
+  // something an operator runs from inside an unsaved edit session.
+  useServerDataInvalidation('channels', () => {
+    if (isEditMode) return;
+    void loadChannels();
+  });
+
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
   const resetStreams = async (_bypassCache: boolean = false) => {
