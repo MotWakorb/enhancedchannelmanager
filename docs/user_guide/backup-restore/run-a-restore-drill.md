@@ -6,24 +6,27 @@
 
 !!! danger "Read this before you start"
     This article is maintained against **Dispatcharr `0.28.2`** and **ECM
-    `0.18.1-0051`**. A restore result is only a result for the version it
+    `0.18.1-0052`**. A restore result is only a result for the version it
     was measured on. The newest full round trip is **run 18, measured on
     `0.18.1-0051`**: it drove both artifact variants onto a freshly-wiped
     **hostile** target (different Dispatcharr superuser, different ECM
     admin, decoy user agents deliberately occupying the source's own
     numeric ids), plus the logo-failure round and the populated-target
-    round. Every claim below carries the build it was last confirmed on;
-    where a build isn't named, treat `0.18.1-0051` as the newest build it
-    has actually been checked against. If you are on different versions,
-    re-run the drill and update your own notes rather than trusting a
-    claim past its pin.
+    round. **No full drill round trip has been driven on `0.18.1-0052`
+    yet.** Every claim below carries the build it was last confirmed on;
+    where a build isn't named, treat `0.18.1-0051` as the newest build a
+    full drill run has actually checked it against. If you are on
+    different versions, re-run the drill and update your own notes rather
+    than trusting a claim past its pin.
 
-    **Five fixes have landed since run 18 measured, and none of them has
-    a build number yet or a drill round-trip behind it.** Every one of
-    them corrects behaviour run 18 itself found broken, so this article
-    already describes the fixed shape, not the broken one; read this list
-    as the reason why, and treat these five areas as unverified by a
-    drill until the next run round-trips them:
+    **Seven fixes landed on top of run 18's measurement and now carry a
+    build number, `0.18.1-0052`.** Each corrects behaviour run 18 itself
+    found broken, so this article already describes the fixed shape, not
+    the broken one. Each has been verified end to end through Playwright
+    against a real container, but **none of the seven has a full drill
+    round trip behind it yet**; read this list as the reason why, and
+    treat these seven areas as drill-unverified until the next run
+    round-trips them:
 
     - **`enhancedchannelmanager-eelgi`**: the CHANNELS pane now
       refreshes itself after an applied restore and has gained its own
@@ -32,14 +35,20 @@
     - **`enhancedchannelmanager-gddai`**: the **Move Channel to Group**
       dialog can no longer report its button enabled while a click on it
       does nothing.
-    - **`enhancedchannelmanager-udq1j`** and **`-vtapf`**: Edit Mode now
-      resolves a staged channel group by name instead of by its temporary
-      negative id, so staging a channel into a group that is itself still
-      pending in the same batch no longer drops the channel silently on
-      Apply All; a commit that does not fully apply now holds the Exit
-      Edit Mode dialog open on the failure instead of closing as if it had
-      succeeded; and **Create new channel group** now stages like every
-      other Edit Mode change instead of writing straight to Dispatcharr.
+    - **`enhancedchannelmanager-udq1j`**, **`-vtapf`**, and **`-75k49`**:
+      Edit Mode now resolves a staged channel group by name instead of by
+      its temporary negative id, so staging a channel into a group that
+      is itself still pending in the same batch no longer drops the
+      channel silently on Apply All; a commit that does not fully apply
+      now holds the Exit Edit Mode dialog open on the failure instead of
+      closing as if it had succeeded; **Create new channel group** now
+      stages like every other Edit Mode change instead of writing
+      straight to Dispatcharr; and the Exit Edit Mode summary line is now
+      derived from the same buckets the dialog itself renders, so it can
+      no longer undercount the pending-change total.
+    - **`enhancedchannelmanager-ius9c`**: a batch containing nothing but
+      staged group creations now commits and exits Edit Mode correctly,
+      instead of reading as a no-op and leaving the session stuck open.
     - **`enhancedchannelmanager-1twap`**: the watch behind the "Guide
       data has not loaded yet" empty state (see [Step
       2](#step-2-seed-a-small-instance)) now survives leaving EPG
@@ -588,15 +597,16 @@ source is still workable: a later drill run measured `UnitedStates.xml.gz`
     picker's own search fired zero requests to go find them. That
     matters here specifically because this drill's own sequence (add the
     EPG source, then go create channels and link them) walks straight
-    into it. **Fixed on this branch:** the completion watch moved out of
-    EPG Manager's own poller into a module-scope service that keeps
+    into it. **Fixed as of `0.18.1-0052`:** the completion watch moved out
+    of EPG Manager's own poller into a module-scope service that keeps
     running (bounded to five minutes) after you leave that destination,
     so the picker updates itself once the source's download actually
-    finishes, with no reload required. Until that fix has a build number and a
-    drill round-trip behind it, if the picker still shows the empty
-    state after a source you can independently confirm reached
-    `status=success`, that is worth filing fresh rather than assuming
-    it away.
+    finishes, with no reload required. That fix has been verified through
+    Playwright against a real container, but has **no drill round-trip
+    behind it yet**; if the picker still shows the empty state on
+    `0.18.1-0052` or later, after a source you can independently confirm
+    reached `status=success`, that is worth filing fresh rather than
+    assuming it away.
 
 **Create a handful of channels through ECM**, in Edit Mode. Creating
 channels is a **three-step commit**, not a single action, and nothing
@@ -1026,7 +1036,7 @@ contaminate each other, or run them sequentially with a `down -v` /
    created/updated/skipped/failed counts per category, and the elapsed
    time.
 
-!!! success "Fixed on this branch: the CHANNELS pane refreshes itself after a restore, and gained a manual refresh control"
+!!! success "Fixed as of 0.18.1-0052: the CHANNELS pane refreshes itself after a restore, and gained a manual refresh control"
     An earlier version of this article said the restore-complete modal
     promises an automatic page reload. It does not: run 18 captured the
     modal's full text on `0.18.1-0051` and found no such promise anywhere
@@ -1044,12 +1054,13 @@ contaminate each other, or run them sequentially with a `down -v` /
     full page reload, which also signs you out
     (`enhancedchannelmanager-eelgi`).
 
-    **Fixed on this branch.** An applied restore (never a dry-run
+    **Fixed as of `0.18.1-0052`.** An applied restore (never a dry-run
     preview, which changes nothing) now refreshes the Channels pane
     on its own, and the pane has gained its own **Refresh** control, the
-    same one the Streams pane always had, as a manual fallback. Neither
-    behaviour has a build number or a drill round-trip behind it yet; see
-    the note at the top of this article.
+    same one the Streams pane always had, as a manual fallback. Both are
+    verified through Playwright against a real container, but neither has
+    a full drill round trip behind it yet; see the note at the top of
+    this article.
 
 Tip: if you ever want a quick sanity check that the preview logic itself
 is behaving, restore an artifact onto the same instance it came from. It
