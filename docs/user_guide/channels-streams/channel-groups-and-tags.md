@@ -50,7 +50,7 @@ The classifications are exclusive, so a group counted as Auto Channel is not als
 **Rename** and **Delete** are staged.
 
 1. With Edit Mode on, open the group's **Group actions** menu (the ⋮ at the right of the group header) and choose **Rename Group** or **Delete Group**.
-2. **Delete Group** offers **Also delete the N channels**. Leave that unticked and the channels survive: the dialog says they move to *"Ungrouped"*, which is the row the Channels panel labels **Uncategorized**.
+2. **Delete Group** offers **Also delete the N channels**. Leave that unticked and the channels survive: the dialog says they move to *"Default Group"*, and that is where they land.
 
 **Result:** Both show up in the pending-change count and are only sent to Dispatcharr by **Apply All**. **Delete Group** only appears on manual groups, so you cannot accidentally delete a group your provider is still populating.
 
@@ -68,6 +68,8 @@ The **Group actions** menu also holds **Probe Group**, **Sort Streams** and **So
 5. Click **Move N Channels**.
 
 **Result:** The move, any shifting of existing channels, and any source-group renumbering are all staged as separate batches, so you can undo them and they only reach Dispatcharr on **Apply All**. Moving into a group flagged **Auto-Sync** raises a warning first, because the next provider sync may undo hand-placed channels there.
+
+**Move a single channel by drag.** With Edit Mode on, dragging one channel row onto a different group's header opens the same dialog, titled **Move Channel to Group**, seeded with just that one channel; steps 3-5 above apply unchanged. The dialog picks its default numbering choice from what the destination group already holds: if the destination has no numbered channels yet, only **Keep current numbers** and **Custom starting number** are offered, since there is nothing to suggest a sequential number from.
 
 ### Reorder groups
 

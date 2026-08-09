@@ -6,96 +6,97 @@
 
 !!! danger "Read this before you start"
     This article is maintained against **Dispatcharr `0.28.2`** and **ECM
-    `0.18.1-0049`**. A restore result is only a result for the version it
-    was measured on. The newest full round trip is **run 16, measured on
-    `0.18.1-0047`**: it drove both artifact variants onto a freshly-wiped
-    target, plus the logo-failure round and the populated-target round.
-    Every claim below carries the build it was last confirmed on; where a
-    build isn't named, treat `0.18.1-0047` as the newest build it has
-    actually been checked against. If you are on different versions,
+    `0.18.1-0051`**. A restore result is only a result for the version it
+    was measured on. The newest full round trip is **run 18, measured on
+    `0.18.1-0051`**: it drove both artifact variants onto a freshly-wiped
+    **hostile** target (different Dispatcharr superuser, different ECM
+    admin, decoy user agents deliberately occupying the source's own
+    numeric ids), plus the logo-failure round and the populated-target
+    round. Every claim below carries the build it was last confirmed on;
+    where a build isn't named, treat `0.18.1-0051` as the newest build it
+    has actually been checked against. If you are on different versions,
     re-run the drill and update your own notes rather than trusting a
     claim past its pin.
 
-    **Functional change has landed since run 16 measured.** The pin is two
-    builds newer than the measurement, and both of those builds changed
-    something this article describes:
+    **Five fixes have landed since run 18 measured, and none of them has
+    a build number yet or a drill round-trip behind it.** Every one of
+    them corrects behaviour run 18 itself found broken, so this article
+    already describes the fixed shape, not the broken one; read this list
+    as the reason why, and treat these five areas as unverified by a
+    drill until the next run round-trips them:
 
-    - **`0.18.1-0048`** (`enhancedchannelmanager-bdmby`) changed the
-      restore path itself. A restore that ends `completed_with_failures`
-      no longer publishes `progress.status: "failed"` on
-      `GET /api/tasks/dbas_restore`, and no longer logs
-      `[dbas_restore] Task failed`. Both now derive from the same
-      projection the task-history row uses, so a degraded run reads
-      `completed_with_warnings` on those surfaces too. `failed` is
-      reserved for a restore that rolled back, an orchestration error, or
-      an exception; a cancelled run reads `cancelled`.
-    - **`0.18.1-0049`** (`enhancedchannelmanager-o88e9`) changed the
-      channel-group controls that [Step
-      8](#step-8-restore-onto-a-populated-target)'s construction drives. A
-      channel group with zero members now renders its **Group actions**
-      menu, so it can be renamed and deleted from ECM. **Delete Group** is
-      still offered only for a manual (non-provider) group, exactly as
-      before.
+    - **`enhancedchannelmanager-eelgi`**: the CHANNELS pane now
+      refreshes itself after an applied restore and has gained its own
+      **Refresh** control, which it never had before. See [Step
+      6](#step-6-restore).
+    - **`enhancedchannelmanager-gddai`**: the **Move Channel to Group**
+      dialog can no longer report its button enabled while a click on it
+      does nothing.
+    - **`enhancedchannelmanager-udq1j`** and **`-vtapf`**: Edit Mode now
+      resolves a staged channel group by name instead of by its temporary
+      negative id, so staging a channel into a group that is itself still
+      pending in the same batch no longer drops the channel silently on
+      Apply All; a commit that does not fully apply now holds the Exit
+      Edit Mode dialog open on the failure instead of closing as if it had
+      succeeded; and **Create new channel group** now stages like every
+      other Edit Mode change instead of writing straight to Dispatcharr.
+    - **`enhancedchannelmanager-1twap`**: the watch behind the "Guide
+      data has not loaded yet" empty state (see [Step
+      2](#step-2-seed-a-small-instance)) now survives navigating away
+      from the EPG Manager tab, so a source that finishes downloading
+      while you are already in Channel Manager still updates the guide
+      picker.
 
-    Neither build has had a round trip driven on it. Read the outcomes,
-    per-category counts and inventory results below as `0.18.1-0047`
-    measurements, and read the terminal status and log line a degraded
-    restore publishes as `0.18.1-0048` behavior that run 16 did not see.
-
-    **What run 16 measured**, on the published `:dev` image for
-    `0.18.1-0047` with Dispatcharr pinned to `0.28.2`: both artifact
-    variants reproduced the instance on a freshly-wiped target with
-    **zero inventory-diff findings**.
+    **What run 18 measured**, on the published `:dev` image for
+    `0.18.1-0051` with Dispatcharr pinned to `0.28.2`: both artifact
+    variants reproduced the instance on a freshly-wiped **hostile** target
+    with **zero inventory-diff findings**.
 
     - **Encrypted, with "Include credentials":** `outcome: success`,
       `FAILED: 0` in all 13 categories, inventory diff 0 findings, and
-      playback identical to the pre-backup baseline on the **first**
-      restore, with no recovery pass.
-    - **Standard (redacted):** `outcome: completed_with_failures`
-      (expected, since the artifact carries no credential), `FAILED: 0` in
-      all 13 categories, and both post-restore panels rendered. [Step
-      6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)'s
-      two-step recovery was **sufficient**, with no third restore. After
-      it: zero leftover placeholders, the synthetic account gone,
-      inventory diff 0 findings, playback restored.
+      playback **3/3** on the **first** restore, with no recovery pass.
+    - **Standard (redacted):** recovered in the documented two steps (see
+      [Step
+      6a](#step-6a-if-you-restored-a-standard-redacted-artifact-recover-credentials-before-you-check-playback)),
+      with no third restore needed. The only inventory-diff findings after
+      recovery were the two rows describing a logo this run deliberately
+      blocked itself; nothing else diffed.
     - **The logo-failure round passed all five of its assertions.**
       `logo_misses: 1`, not doubled, named together with its channel;
       nothing rolled back; the instance still played, **including the
       channel whose logo failed**; notification severity `warning`.
-    - **The populated-target round:** `preserve` reported 7 channel-group
-      drifts and moved **none**; the overwrite mode, re-run from an
-      identical baseline, reported the same 7 and moved **all 7**. The
-      drift detail (each channel, its current group, and the archive's
-      group) was visible on the **dry-run preview, before either apply**.
-      `channel_group` skip reasons were `already_exists_name_match` for
-      all 377 pre-existing groups, while channel profiles and stream
-      profiles stayed `already_exists_identical`. Playback was fine after
-      each apply.
+    - **The populated-target round:** `preserve` reported **11**
+      channel-group drifts and moved **none**; the overwrite mode, re-run
+      from an identical baseline, reported the same **11** and moved
+      **all 11**. The drift detail was visible on the **dry-run preview,
+      before either apply**, and the name-collision group reported
+      `already_exists_name_match`. Run 18 completed [Step
+      8](#step-8-restore-onto-a-populated-target)'s construction in full
+      by hand, including the outright group deletion and the name
+      collision, both of which run 16 could not reach because of the
+      empty-group defect `0.18.1-0049` fixed.
+    - **Phase 6c** (the same artifact applied a second time with nothing
+      changed in between) produced an instance identical to the first
+      apply: `outcome: success`, nothing created, everything skipped.
+    - `enhancedchannelmanager-oebpv`, `-6pilh`, `-d0bd3`, `-sdpzy`, and
+      `-cytzj`, plus all four degenerate default-relink-mode
+      configurations (the field absent, `null`, an empty string, and an
+      unrecognised string), were all exercised **and passed**.
 
-    **What run 16 did not exercise**, stated so you do not read coverage
-    into the result above. Four checks were not exercised at all: a
-    channel left stranded by an *earlier* restore being named in the
-    stream-health audit (`enhancedchannelmanager-oebpv`), the backup
-    task's parameter schema (`-sdpzy`), the one-shot encryption transient
-    (`-cytzj`), and the stale-preview modal behaviour (`-zt801`). Inside
-    [Step 8](#step-8-restore-onto-a-populated-target)'s construction, the
-    outright group deletion and the name-collision group were **not
-    completed**: both were blocked by the empty-group defect
-    (`enhancedchannelmanager-o88e9`) that `0.18.1-0049` has since fixed.
-    Run 16 therefore does not prove name-collision handling by
-    construction on its own pin. The newest build on which that was
-    proven by construction stays run 13's `0.18.1-0042`. The
-    `already_exists_name_match` skip reason above was observed another
-    way, on the target's own pre-existing groups, which a populated
-    target name-matches wholesale.
+    **What run 18 did not settle:** `enhancedchannelmanager-zt801` (a
+    previous session's terminal restore-preview payload appearing on
+    first poll after the modal remounts, with **Apply live on the stale
+    panel**) was observed **once** and did not reproduce on an immediate
+    clean repeat. Treat it as open, not fixed. See [Known
+    failures](#known-failures).
 
-    **Re-confirmed live on `0.18.1-0047` by run 16:** a fresh Dispatcharr
+    **Re-confirmed live on `0.18.1-0051` by run 18:** a fresh Dispatcharr
     `0.28.2` shipping exactly 5 stream profiles, 3 user agents and 1 M3U
     account; the System → Users → API & XC key path; `require_auth: true`
     on a brand-new ECM install before any browser opened it; the automatic
     Dispatcharr Connection dialog and its `Connected` test; one small
-    enabled group converging in **1.6 seconds** (96 streams);
-    `UnitedStates.xml.gz` parsing **14,663 entries** in under a minute;
+    enabled group converging in **~14 seconds** (96 streams);
+    `UnitedStates.xml.gz` parsing **14,663 entries** in **~31 seconds**;
     the empty **Starting Channel Number** disabling **Create N Channels**
     with no validation message; and an ECM-uploaded logo landing in
     Dispatcharr's `/data/logos/` while ECM's own `/config/uploads/logos/`
@@ -107,10 +108,9 @@
     drifting from the archive went completely unreported in either relink
     mode, and that a same-named-but-different channel group was adopted
     while the report claimed its contents had been compared. Both are
-    **fixed as of `0.18.1-0041`** and were proven live on a populated
-    target by run 13 (`0.18.1-0042`). Run 16 measured the drift half
-    again on `0.18.1-0047`; it could not rebuild the name collision, as
-    above. See
+    **fixed as of `0.18.1-0041`**, were proven live on a populated target
+    by run 13 (`0.18.1-0042`), and were measured again by run 16 and by
+    run 18. See
     [Known failures](#known-failures) and [Restoring onto a populated
     target](#restoring-onto-a-populated-target) for the full account
     before you conclude your own drill passed.
@@ -571,17 +571,33 @@ sufficient; refresh it and confirm entries populate. A large XMLTV
 source is still workable: a later drill run measured `UnitedStates.xml.gz`
 (14,668 entries) refreshing in 35 seconds.
 
-!!! bug "Known defect: EPG picker reports \"No EPG data found\" until a full app reload (`enhancedchannelmanager-3vtim`)"
-    After adding an EPG source that reaches `status=success`, the Edit
-    Channel **EPG Data** picker can report "No EPG data found" for guide
-    rows that demonstrably exist (confirmed on `0.18.1-0050`: 14,663 rows
-    present via the API, including the one searched for, while the
-    picker's search fires zero backend requests). This is a stale
-    client-side cache loaded once at app start, not a query bug.
-    **Workaround:** reload the whole app, sign back in (a full reload
-    drops you to the ECM sign-in screen, per the warning in
-    [Step 6](#step-6-restore)), then search again; the identical search
-    then returns matches.
+!!! note "The Edit Channel EPG picker's empty state, and the tab-navigation bug behind an earlier version of it"
+    If you add an EPG source and open the Edit Channel **EPG Data**
+    picker before that source has data, it reads (confirmed verbatim on
+    `0.18.1-0051`): "Guide data has not loaded yet — add an EPG source, <!-- em-dash-ok: verbatim ECM UI empty-state copy -->
+    or wait for its download to finish." That string is the intended
+    empty state, not a bug on its own; an earlier build of this article
+    quoted a different, older string ("No EPG data found") that no
+    longer exists in the product.
+
+    The real defect (`enhancedchannelmanager-3vtim`, then
+    `enhancedchannelmanager-1twap`) was that the picker's snapshot of
+    guide data loaded once at app start and never updated, so a source
+    that reached `status=success` **after** you had already navigated
+    away from the EPG Manager tab left the picker stuck on the empty
+    state forever, even though the backend held 14,663 rows and the
+    picker's own search fired zero requests to go find them. That
+    matters here specifically because this drill's own sequence (add the
+    EPG source, then go create channels and link them) walks straight
+    into it. **Fixed on this branch:** the completion watch moved out of
+    EPG Manager's own poller into a module-scope service that keeps
+    running (bounded to five minutes) after you leave the tab, so the
+    picker updates itself once the source's download actually finishes,
+    with no reload required. Until that fix has a build number and a
+    drill round-trip behind it, if the picker still shows the empty
+    state after a source you can independently confirm reached
+    `status=success`, that is worth filing fresh rather than assuming
+    it away.
 
 **Create a handful of channels through ECM**, in Edit Mode. Creating
 channels is a **three-step commit**, not a single action, and nothing
@@ -671,8 +687,47 @@ and most of the logo-restore path goes untested.
 
     curl -X POST http://<dispatcharr-host>:<port>/api/core/streamprofiles/ \
       -H "X-API-Key: <key>" -H "Content-Type: application/json" \
-      -d '{"name": "Run9 Custom Profile", "user_agent": <agent id from above>}'
+      -d '{
+        "name": "Run9 Custom Profile",
+        "user_agent": <agent id from above>,
+        "command": "ffmpeg",
+        "parameters": "-user_agent {userAgent} -i {streamUrl} -c copy -f mpegts pipe:1"
+      }'
     ```
+
+    !!! danger "Do not omit `command` and `parameters`: an empty command makes the profile unrunnable, silently"
+        Run 18 posted the streamprofiles body without `command` or
+        `parameters`, mirroring an earlier version of this article's own
+        example. Dispatcharr accepted it and created the profile anyway,
+        with `command: ''`, `parameters: ''`, and `locked: false`. Nothing
+        in the create response, or anywhere else in Dispatcharr's or ECM's
+        UI, says that an unlocked profile with an empty command cannot
+        play. The stock **Proxy** and **Redirect** profiles also carry an
+        empty command, but they are `locked: true` and Dispatcharr
+        special-cases them; a profile you create yourself does not get
+        that exemption just because its command happens to be empty too.
+
+        The consequence lands on whichever channel you assign the profile
+        to, before you have even taken a backup: that channel cannot play,
+        on the source, full stop. Run 18 assigned its (empty-command)
+        custom profile to the one multi-stream channel its own playback
+        checklist depended on, then spent an entire pass filing a P1
+        against the *restore* path for a channel that was never playable
+        to begin with, including a control experiment that varied slot
+        count but not the stream profile and so could not catch it either.
+        Independent, after-the-fact confirmation from that run's own
+        artifacts: the pre-backup inventory showed the channel on `Run18
+        Custom Profile`, and the archived `stream_profiles.yaml` recorded
+        `command: ''`, `parameters: ''`, `locked: false` for it.
+
+        The `command` and `parameters` above mirror the stock **ffmpeg**
+        profile's own shape; that is a runnable profile, not just a
+        non-empty one. Confirm the profile actually plays on the source
+        (see [Step 7](#step-7-verify)'s playback check) **before** you
+        take the backup. A channel that cannot play on the source cannot
+        play after a restore either, and a drill that only starts checking
+        playback after the restore will misattribute the failure to the
+        restore path every time.
 
     Then, in ECM, open **Edit Channel → STREAM PROFILE** on the channel
     you want to prove the binding on, and select the profile you just
@@ -742,12 +797,18 @@ correctly says a *schedule* cannot carry these options, and the
 `run_parameters` array right next to it is the best available
 documentation of what a manual run accepts.
 
-Take them **in this order**: standard first, encrypted second. Creating
-an encrypted backup leaves the `DBAS Backup` task producing encrypted,
-credential-bearing artifacts for every later run (including scheduled
-ones) until the container restarts (`enhancedchannelmanager-cytzj`). If
-you take the encrypted one first, your "standard" artifact will silently
-come out encrypted too.
+Take them in this order: standard first, encrypted second, matching the
+numbered steps below. **You no longer have to get this order right for
+correctness.** An earlier build left the `DBAS Backup` task producing
+encrypted, credential-bearing artifacts for every later run, including
+scheduled ones, until the container restarted
+(`enhancedchannelmanager-cytzj`); taking the encrypted artifact first
+would silently turn a later "standard" run into an encrypted one too.
+**Fixed, and reconfirmed by run 18 on `0.18.1-0051`:** three backups run
+back to back with no container restart between them came out
+`encrypted=False` → `encrypted=True` → `encrypted=False`. The transient
+really is one-shot; each run now reflects only the options you sent it,
+not what the task last produced.
 
 1. **Standard (redacted):** **Settings → Scheduled Tasks → DBAS Backup →
    Run Now**. Wait for the completion notification.
@@ -966,18 +1027,61 @@ contaminate each other, or run them sequentially with a `down -v` /
    created/updated/skipped/failed counts per category, and the elapsed
    time.
 
-!!! bug "Known defect: ECM's channel-group list does not refresh itself after a restore"
-    The restore-complete modal says the page will reload automatically
-    once the restore finishes. On `0.18.1-0050` it does not: the
-    CHANNELS panel's group filter can report "No groups match \<name\>"
-    for a group the restore just created, until you reload the page
-    yourself. Not data loss, just a stale client-side list. Reload the
-    page (see the reload/sign-in warning above) and the group appears.
+!!! success "Fixed on this branch: the CHANNELS pane refreshes itself after a restore, and gained a manual refresh control"
+    An earlier version of this article said the restore-complete modal
+    promises an automatic page reload. It does not: run 18 captured the
+    modal's full text on `0.18.1-0051` and found no such promise anywhere
+    in it. That claim was never accurate for the DBAS restore path this
+    drill documents.
+
+    What run 18 did find, unprimed, with no reload between the apply and
+    the check: the channel-group **filter** was already fixed (it lists
+    every restored group correctly, including groups the restore just
+    created), but the CHANNELS panel itself stayed on its pre-restore
+    snapshot, reading `Drill Locals 0 Empty` and `CHANNELS 0` immediately
+    after a restore that reported `Channels 12 CREATED`. The Streams pane
+    had its own **Refresh streams** control that fixed that pane in
+    place; the Channels pane had no equivalent, so the only cure was a
+    full page reload, which also signs you out
+    (`enhancedchannelmanager-eelgi`).
+
+    **Fixed on this branch.** An applied restore (never a dry-run
+    preview, which changes nothing) now refreshes the Channels pane
+    on its own, and the pane has gained its own **Refresh** control, the
+    same one the Streams pane always had, as a manual fallback. Neither
+    behaviour has a build number or a drill round-trip behind it yet; see
+    the note at the top of this article.
 
 Tip: if you ever want a quick sanity check that the preview logic itself
 is behaving, restore an artifact onto the same instance it came from. It
 should preview as entirely `already_exists_identical` across every
 category.
+
+!!! info "Restore endpoint, for a scripted caller"
+    [Step 3](#step-3-take-both-backup-artifacts) above names the backup
+    task's own endpoints. The restore side of the API has never been
+    named here, even though this article discusses exactly what a
+    scripted caller sending each of the four degenerate
+    `channel_reattach_mode` values gets back below. Run 18 had to recover
+    this from the browser's own network log rather than from this
+    article.
+
+    `POST /api/backup/restore-dbas?confirm_apply=<bool>&channel_reattach_mode=<mode>`
+
+    - **`confirm_apply`** (query, default `false`): a counts-only dry-run
+      when omitted or `false`; the real apply only when explicitly
+      `true`.
+    - **`channel_reattach_mode`** (query, default `preserve`): `preserve`
+      or `overwrite`; anything else, including an absent value, resolves
+      to `preserve` (see below).
+    - **`file`** (multipart form field, required): the artifact,
+      `file=@<artifact-path>`.
+    - **`passphrase`** (form field, optional): required for an encrypted
+      artifact, omitted for a plain one. Sent as a form field, never a
+      query string, so it never lands in an access log.
+
+    This is the same endpoint ECM's own UI calls, not a separate,
+    undocumented path.
 
 **Relink mode default.** A restore onto a target that already has the
 channels (a second restore, or a restore onto a populated instance)
@@ -1203,7 +1307,8 @@ were fixed in `0.18.1-0041`. Run 12, the run that found them, measured
 the pre-fix behavior on `0.18.1-0040`. Run 13 (`0.18.1-0042`) then ran
 this exact round and confirmed all three fixes live on a populated
 target, closing the gap this step used to describe. Run 16
-(`0.18.1-0047`) ran it again and measured the same behavior. See [Known
+(`0.18.1-0047`) and run 18 (`0.18.1-0051`) each ran it again and measured
+the same behavior. See [Known
 failures](#known-failures) for the beads themselves, and [Restoring onto
 a populated target](#restoring-onto-a-populated-target) for what those
 runs measured. The steps below remain the procedure to reproduce that
@@ -1227,29 +1332,37 @@ deliberately diverge it from the archive before restoring onto it again.
 
 1. **Rename** one archived channel group to a name the archive does not
    contain.
-2. **Delete** a different archived channel group outright. **Move its
-   channels out of the group first**: get the order right the first
-   time; run 12 lost a full cycle to this. On `0.18.1-0049` and later
-   this is completable without leaving ECM: an emptied manual group still
-   offers **Group actions → Delete Group**. On `0.18.1-0048` and earlier
-   it is not, because emptying the group removes ECM's own **Group
-   actions** menu (`enhancedchannelmanager-o88e9`); finish the deletion in
-   Dispatcharr's own UI on those builds. Either way, ECM only ever offers
-   **Delete Group** for a manual group: a provider-backed group is not
-   deletable from ECM, empty or not, because the next refresh recreates
-   it. Pick a manual group for this step.
+2. **Delete** a different archived channel group outright. You do not
+   need to empty it first: **Delete Group reparents the group's member
+   channels and deletes the group in one step** (see the note below).
+   Pick a manual group for this step either way: ECM only ever offers
+   **Delete Group** for a manual group, since a provider-backed group is
+   not deletable from ECM, empty or not, because the next refresh
+   recreates it.
 
-   !!! bug "Known defect: Delete Group silently does nothing on a group that still has channels (`enhancedchannelmanager-ayfn9`)"
-       Clicking **Delete Group** on a channel group that still contains
-       channels does not delete it. Dispatcharr rejects the underlying
-       request, ECM does not surface that rejection, and the UI still
-       reports success. The confirm dialog promises the channels move to
-       "Ungrouped"; they are not moved. This is exactly why the step
-       above says to move the channels out *first*: **Delete Group only
-       works on an already-empty group.** If you skip that ordering and
-       the delete appears to succeed but the group and its channels are
-       still there after a refresh, this is why: move/delete the
-       channels first, confirm the group is empty, then delete it.
+   !!! success "Fixed: Delete Group reparents a non-empty group's channels itself, and the confirm dialog names the real destination (`enhancedchannelmanager-ayfn9`)"
+       An earlier version of this article documented Delete Group as
+       silently doing nothing on a group that still had channels, quoted
+       the confirm dialog as promising the channels move to "Ungrouped",
+       and told you to move the channels out by hand first. Neither is
+       true on `0.18.1-0051`. Confirmed verbatim, via the Edit Mode path
+       this step prescribes:
+
+       > This group contains 8 channels. The channels will be moved to
+       > "Default Group".
+
+       and the product does exactly that: the group is gone, the channel
+       count is unchanged, and every member channel lands in **Default
+       Group**, `success=True, applied=1, failed=0`. Delete Group on a
+       non-empty manual group is a one-click operation; the move-the-
+       channels-out-first detour this article used to describe is not
+       needed.
+
+       **Scoping caveat:** measured only through the Edit Mode path,
+       because that is the path this step prescribes. A separate,
+       non-Edit-Mode Delete Group path exists in ECM and has not been
+       exercised by a drill (`enhancedchannelmanager-auocn`, still open);
+       confirm the same behaviour yourself before relying on it.
 3. **Create a name collision**: a channel group whose name matches an
    archived group but is a different object: a different id, holding
    different members.
@@ -1269,6 +1382,14 @@ deliberately diverge it from the archive before restoring onto it again.
 2. **Reset to the same baseline**: delete the channel groups the restore
    in step 1 created, so the target is back to the diverged state you
    recorded in Construction, step 6.
+
+   !!! warning "Do this before the second run, not after"
+       Step 1's restore ran in `preserve` mode, which recreates the
+       archived group you deleted in Construction but never moves a
+       channel back into it: it comes back **empty**. If you skip this
+       reset, or run it after the second restore instead of before, the
+       second run starts from a different baseline than the first, and
+       the comparison between the two modes proves nothing.
 3. Restore the same artifact again, this time with the overwrite mode.
    Measure again.
 
@@ -1527,7 +1648,7 @@ just the fresh-target items below:
   placeholders bound to no channel, or an empty synthetic account still
   listed, are a finding on that pin or later.
 
-As of ECM `0.18.1-0047` / Dispatcharr `0.28.2`, measured by run 16, a
+As of ECM `0.18.1-0051` / Dispatcharr `0.28.2`, measured by run 18, a
 drill run **can** pass this bar in full: an encrypted artifact with
 "Include credentials" plays correctly on the first restore, ECM-uploaded
 logos and EPG links included, and a genuine non-fatal logo failure (see
@@ -1540,17 +1661,15 @@ channel-group drift, covered above. See [Restoring onto a populated
 target](#restoring-onto-a-populated-target). See the next two sections
 for the complete, current picture.
 
-One item in the Step 8 bullet above carries an older pin than the rest.
-The name-collision group was last proven **by construction** by run 13,
-on `0.18.1-0042`: a second `Drill Movies` group, a different id holding
-different members, reported `already_exists_name_match`. Run 16 could
-not rebuild it on `0.18.1-0047`, because the empty-group defect fixed in
-`0.18.1-0049` (`enhancedchannelmanager-o88e9`) dead-ended that part of
-the construction. Run 16 did observe the same skip reason on all 377
-pre-existing groups, but those were name-matches on groups that were
-already identical, not on a deliberately different object. On
-`0.18.1-0049` and later the construction is completable again, so build
-it and check it yourself.
+The name-collision group in the Step 8 bullet above was last blocked by
+the empty-group defect (`enhancedchannelmanager-o88e9`) that
+`0.18.1-0049` fixed: run 16 could not rebuild it by construction on
+`0.18.1-0047`, and this article used to point you back to run 13's
+`0.18.1-0042` as the newest pin that had. **Run 18 rebuilt it by
+construction on `0.18.1-0051`**, alongside the rest of Step 8's
+construction, and measured the same `already_exists_name_match` skip
+reason on the deliberately-different object it built. Build it and check
+it yourself; there is no longer a reason to expect it to fail.
 
 ---
 
