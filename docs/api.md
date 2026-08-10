@@ -1231,7 +1231,7 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 |-|-|
 | `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). |
 | `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. |
-| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup (no auth required). |
+| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup. Serves an instance that has no user accounts yet, so no credentials are needed there; once the instance holds an operator identity it requires an authenticated human admin, exactly like `POST /api/backup/restore`. |
 | `GET /api/backup/export-sections` | List available YAML export sections. |
 | `POST /api/backup/export` | Export selected sections as a YAML file. |
 | `POST /api/backup/import` | Import from a YAML backup file. |
