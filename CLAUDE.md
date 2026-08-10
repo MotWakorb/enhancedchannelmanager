@@ -188,6 +188,8 @@ dependent frontend is still live.
 
 Follow `docs/shipping.md`. The full PR-driven flow (branch from `origin/dev`, push, open PR via `gh pr create --base dev`, wait for the 5 required checks, then `gh pr merge --merge --delete-branch`) lives in `docs/shipping.md` §6 — do not duplicate it here.
 
+Run `gh pr create` from the checkout being shipped. The local preflight hook resolves the session cwd before Bash runs and cannot follow an inline `cd <other-checkout> && gh pr create ...`; that form is unsupported. Remove the branch worktree and check the branch out in the main checkout before opening its PR.
+
 **Non-negotiable rules:**
 - Work is NOT complete until the PR merges into `dev`
 - NEVER stop before the PR is merged — an open PR is not a shipped change

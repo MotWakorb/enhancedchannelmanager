@@ -1,52 +1,11 @@
-"""Fixture-based self-test for ``.claude/hooks/version-advance-guard.sh``.
+"""Repository-state tests for the version-advance PreToolUse hook.
 
-Bead enhancedchannelmanager-uf2gh (the documentation-only exemption; see the
-provenance chain in the hook's own header for beads w9irb and yxtuz).
-
-This is the first pytest harness for a ``.claude/hooks/*.sh`` wrapper. Bead
-enhancedchannelmanager-yxtuz closed with exactly this as a backlog candidate:
-"No pytest harness exists for .claude/hooks/*.sh (only
-scripts/check_version_advances.py has unit tests, which don't cover the shell
-wrapper) [...] add a lightweight fixture-based self-test for the hook per
-engineering-discipline's 'Enforcement Code Tests Itself' principle, mirroring
-backend/tests/unit/test_check_version_advances.py's approach but invoking the
-.sh directly."
-
-## What is under test
-
-The hook is enforcement code: it returns an allow/deny decision on a ship
-action, so the interesting assertions are about the *deny* side staying intact
-while the new documentation-only exemption is carved out of the *allow* side.
-
-The exemption exists because the hook is the agent-side half of the CI
-build-advance gate, and CI skips that gate on a documentation-only PR
-(``.github/workflows/test.yml`` gates the step on
-``needs.detect.outputs.docs_only != 'true'``). Without the exemption the hook
-was strictly stricter than the rule it mirrors, and forced documentation
-changes to burn build numbers that concurrent branches already held.
-
-## How it is tested
-
-Every case builds a throwaway git checkout shaped like ECM (a
-``frontend/package.json``, a local ``refs/remotes/origin/dev`` baseline, and
-the two real scripts copied in), then runs the real hook against it with a
-real PreToolUse payload on stdin. The scripts are copied rather than
-reimplemented so the test proves the hook drives the same classifier CI does.
-
-No remote is configured, so the hook's best-effort ``git fetch origin dev``
-fails instantly and the suite never touches the network.
-
-Exit-code contract (Claude Code hooks): 0 allows the tool call, 2 blocks it
-and feeds stderr back to the agent.
-
-Output contract, which is why several cases assert on ``stdout`` rather than
-``stderr``: on exit 2 Claude Code ignores stdout and uses stderr as the
-blocking reason, but on exit 0 stderr goes to the hook debug log only and the
-agent never sees it. So an exit-0 message is only actually delivered if it
-appears as JSON on stdout, under ``hookSpecificOutput.additionalContext`` (read
-by Claude) and ``systemMessage`` (read by the operator). Asserting that the
-script wrote to fd 2 would prove the process emitted the text, not that anyone
-receives it, so every exit-0 announcement is pinned on the JSON surface too.
+The outer hook matcher is deliberately broad. Inside the hook, one monotonic
+raw-literal candidate test looks for whitespace-separated ``gh pr create``
+anywhere in the command text. It does not interpret quotes, heredocs, command
+substitutions, or command positions. A literal in inert prose may therefore run
+the repository-state check; no parser may narrow a candidate and silently turn
+the guard off.
 """
 from __future__ import annotations
 
@@ -59,31 +18,29 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-HOOK_PATH = REPO_ROOT / ".claude" / "hooks" / "version-advance-guard.sh"
-
-# Baseline build vs a legitimately advanced one. Shape per docs/versioning.md.
+HOOK_PATH = Path(
+    os.environ.get(
+        "ECM_VERSION_GUARD_HOOK_UNDER_TEST",
+        REPO_ROOT / ".claude" / "hooks" / "version-advance-guard.sh",
+    )
+)
+SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 BASE_VERSION = "0.18.1-0053"
 BUMPED_VERSION = "0.18.1-0054"
-
 ALLOW = 0
 BLOCK = 2
 
-SHIP_COMMAND = "gh pr create --base dev --title t --body b"
-
-
-# ─── Fixture plumbing ──────────────────────────────────────────────────────
-
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
+    result = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
     )
-    assert proc.returncode == 0, f"git {' '.join(args)} failed:\n{proc.stderr}"
-    return proc
+    assert result.returncode == 0, result.stderr
+    return result
 
 
 def _write(repo: Path, rel: str, text: str) -> None:
@@ -92,950 +49,215 @@ def _write(repo: Path, rel: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _package_json(version: str) -> str:
-    return json.dumps({"name": "ecm-frontend", "version": version}, indent=2) + "\n"
+def _package(version: str) -> str:
+    return json.dumps({"name": "ecm-frontend", "version": version}) + "\n"
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A throwaway checkout shaped like ECM, parked on a feature branch."""
     root = tmp_path / "ecm"
     root.mkdir()
     _git(root, "init", "-q", "-b", "dev")
-    _git(root, "config", "user.email", "guard-test@example.invalid")
+    _git(root, "config", "user.email", "guard@example.invalid")
     _git(root, "config", "user.name", "Guard Test")
-
-    # The REAL scripts, not stand-ins: the point of the exemption is that one
-    # definition of "documentation-only" is shared with CI.
     (root / "scripts").mkdir()
     for name in ("check_version_advances.py", "classify_changed_paths.py"):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
-
-    _write(root, "frontend/package.json", _package_json(BASE_VERSION))
-    _write(root, "docs/guide.md", "Baseline documentation.\n")
+    _write(root, "frontend/package.json", _package(BASE_VERSION))
     _write(root, "backend/app.py", "VALUE = 1\n")
-    _write(root, ".beads/issues.jsonl", '{"id": "seed"}\n')
+    _write(root, "docs/guide.md", "Baseline.\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "baseline")
-
-    # Stand in for the remote-tracking baseline without configuring a remote,
-    # so the hook's `git fetch origin dev` fails fast and offline.
     _git(root, "update-ref", "refs/remotes/origin/dev", "HEAD")
     _git(root, "checkout", "-q", "-b", "feature")
     return root
 
 
 def _commit(repo: Path, files: dict[str, str], version: str | None = None) -> None:
-    """Apply a change on the feature branch, optionally bumping the version."""
     if version is not None:
-        _write(repo, "frontend/package.json", _package_json(version))
+        _write(repo, "frontend/package.json", _package(version))
     for rel, text in files.items():
         _write(repo, rel, text)
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "change under test")
+    _git(repo, "commit", "-q", "-m", "change")
 
 
 def _invoke(
     repo: Path,
-    command: str = SHIP_COMMAND,
-    project_dir: Path | None = None,
-    use_env_root: bool = True,
-    path_prepend: Path | None = None,
+    cwd: Path | str | None = None,
+    command: str = "gh pr create --base dev",
 ) -> subprocess.CompletedProcess[str]:
-    """Run the real hook with a real PreToolUse payload on stdin."""
-    payload = json.dumps({"tool_input": {"command": command}})
+    payload = json.dumps(
+        {
+            "cwd": str(repo if cwd is None else cwd),
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+    )
     env = os.environ.copy()
-    env["CLAUDE_PROJECT_DIR"] = str(project_dir if project_dir else repo)
-    if path_prepend is not None:
-        env["PATH"] = f"{path_prepend}{os.pathsep}{env.get('PATH', '')}"
-    if use_env_root:
-        env["ECM_VERSION_GUARD_ROOT"] = str(repo)
-    else:
-        env.pop("ECM_VERSION_GUARD_ROOT", None)
-    # Keep the checker's CI annotation branch out of the assertions.
+    env["CLAUDE_PROJECT_DIR"] = str(REPO_ROOT / "not-the-target-checkout")
     env.pop("GITHUB_ACTIONS", None)
     return subprocess.run(
         ["bash", str(HOOK_PATH)],
         input=payload,
         capture_output=True,
         text=True,
-        cwd=str(repo),
+        cwd=repo,
         env=env,
         timeout=120,
         check=False,
     )
 
 
-def _clobber_classifier(repo: Path, body: str) -> None:
-    (repo / "scripts" / "classify_changed_paths.py").write_text(body, encoding="utf-8")
-
-
-def _advance_baseline(repo: Path, files: dict[str, str]) -> None:
-    """Move `refs/remotes/origin/dev` forward with commits the branch lacks.
-
-    Reproduces the everyday case where `dev` gains commits after a branch is
-    cut. It is what separates the three-dot diff the hook uses from a two-dot
-    one: `origin/dev...HEAD` reports only what the BRANCH changed, while
-    `origin/dev..HEAD` would fold in whatever landed on dev meanwhile.
-    """
-    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-    _git(repo, "checkout", "-q", "-B", "baseline-advance", "refs/remotes/origin/dev")
-    for rel, text in files.items():
-        _write(repo, rel, text)
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "dev moved on after the branch point")
-    _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
-    _git(repo, "checkout", "-q", branch)
-
-
-def _notice(result: subprocess.CompletedProcess[str]) -> dict:
-    """Parse the hook's exit-0 JSON, the only channel the agent actually reads.
-
-    Asserting on stderr proves the process wrote to fd 2. It does NOT prove the
-    message was delivered: exit-0 stderr goes to the hook debug log and Claude
-    never sees it. This reads the delivered surface instead.
-    """
-    assert result.stdout.strip(), (
-        "the hook exited 0 with no JSON on stdout, so nothing it said reaches "
-        f"Claude or the operator. stderr was: {result.stderr}"
-    )
-    payload = json.loads(result.stdout)
-    assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-    # Both surfaces carry the same text: additionalContext reaches Claude,
-    # systemMessage reaches the operator.
-    assert payload["systemMessage"] == payload["hookSpecificOutput"]["additionalContext"]
-    return payload
-
-
 def _delivered(result: subprocess.CompletedProcess[str]) -> str:
-    """The message the agent actually receives on an exit-0 path."""
-    return _notice(result)["hookSpecificOutput"]["additionalContext"]
-
-
-def test_hook_exists() -> None:
-    """Guard against the harness silently testing nothing if the hook moves."""
-    assert HOOK_PATH.is_file(), f"hook not found at {HOOK_PATH}"
-
-
-# ─── The exemption: documentation-only changes need no build ───────────────
-
-
-class TestDocumentationOnlyIsExempt:
-    def test_markdown_only_change_without_bump_is_allowed(self, repo: Path) -> None:
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stderr
-        assert "SKIPPED" in result.stderr
-        assert "docs_only=true" in result.stderr
-        # The whole point: it must not tell a docs PR to bump.
-        assert "BLOCKED" not in result.stderr
-
-    def test_beads_only_change_without_bump_is_allowed(self, repo: Path) -> None:
-        """The live case that surfaced this defect: a .beads/ PII redaction."""
-        _commit(repo, {".beads/issues.jsonl": '{"id": "seed", "email": "[redacted]"}\n'})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stderr
-        assert "SKIPPED" in result.stderr
-
-    def test_skip_is_announced_not_silent(self, repo: Path) -> None:
-        """A silent exit 0 is indistinguishable from a hook that never ran.
-
-        Pinned on the DELIVERED channel. An earlier revision announced the skip
-        on stderr, which on an exit-0 path reaches the debug log and nobody
-        else, so the announcement existed in the process and not in the agent.
-        """
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW
-        delivered = _delivered(result)
-        assert "version-advance-guard:" in delivered
-        assert "no build to advance" in delivered
-        assert "Do NOT bump the version touchpoints" in delivered
-
-    def test_three_dot_diff_ignores_commits_dev_gained_since_the_branch_point(
-        self, repo: Path
-    ) -> None:
-        """`origin/dev...HEAD`, not `origin/dev..HEAD`.
-
-        The branch changes documentation only; `dev` independently gains a code
-        commit afterwards. A two-dot diff would report that code file as part of
-        this change and wrongly block a documentation-only ship. Nothing else in
-        this file distinguishes the two forms, because every other fixture
-        leaves the baseline exactly at the branch point.
-        """
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        _advance_baseline(repo, {"backend/other.py": "OTHER = 2\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in _delivered(result)
-
-    def test_exemption_applies_to_the_cd_target_not_the_project_dir(
-        self, repo: Path, tmp_path: Path
-    ) -> None:
-        """Classification follows the same checkout resolution as the comparison.
-
-        This is the worktree shape from bead enhancedchannelmanager-yxtuz:
-        CLAUDE_PROJECT_DIR points at some other checkout while the ship command
-        runs from the tree being PR'd. Only the correctly resolved tree can
-        produce the skip message, so this pins the two halves together.
-        """
-        decoy = tmp_path / "decoy"
-        decoy.mkdir()
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(
-            repo,
-            command=f"cd {repo} && gh pr create --base dev",
-            project_dir=decoy,
-            use_env_root=False,
-        )
-        assert result.returncode == ALLOW, result.stderr
-        assert "SKIPPED" in result.stderr
-
-
-# ─── The verdict is read by key, not by whole-output equality ──────────────
-
-
-class TestVerdictIsReadByKey:
-    """The classifier's stdout is a key=value set that is expected to GROW.
-
-    Bead enhancedchannelmanager-t4d5w added a `docs_site_affected` line beside
-    `docs_only`. An earlier revision of the hook compared the entire stdout
-    against the literals "docs_only=true" and "docs_only=false", so the moment
-    a second line appeared every invocation matched neither and took the
-    fail-open path: the guard would have warned on every ship while enforcing
-    nothing, silently, because fail-open degradation does not announce itself
-    as a block. Nothing in the rest of this file would have caught that.
-
-    Key order is not part of the contract, so both orders are pinned.
-    """
-
-    TWO_KEYS_DOCS_FIRST = "print('docs_only=true')\nprint('docs_site_affected=false')\n"
-    TWO_KEYS_DOCS_LAST = "print('docs_site_affected=false')\nprint('docs_only=true')\n"
-
-    def test_extra_key_after_docs_only_still_skips(self, repo: Path) -> None:
-        _clobber_classifier(repo, self.TWO_KEYS_DOCS_FIRST)
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in result.stderr
-        assert "WARNING" not in result.stderr
-
-    def test_extra_key_before_docs_only_still_skips(self, repo: Path) -> None:
-        """Guards against depending on docs_only being the first line."""
-        _clobber_classifier(repo, self.TWO_KEYS_DOCS_LAST)
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in result.stderr
-        assert "WARNING" not in result.stderr
-
-    def test_many_extra_keys_still_skip(self, repo: Path) -> None:
-        _clobber_classifier(
-            repo,
-            "print('a=1')\nprint('docs_site_affected=true')\n"
-            "print('docs_only=true')\nprint('z=99')\n",
-        )
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in result.stderr
-
-    def test_extra_keys_do_not_soften_a_false_verdict(self, repo: Path) -> None:
-        """The deny side must survive the extension too, not just the skip."""
-        _clobber_classifier(
-            repo, "print('docs_site_affected=true')\nprint('docs_only=false')\n"
-        )
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_a_key_merely_ENDING_in_docs_only_is_not_the_docs_only_key(
-        self, repo: Path
-    ) -> None:
-        """The value is matched from the START of the line, not mid-line.
-
-        Without the `^` anchor on the extraction, a future or mistaken
-        `not_docs_only=true` line would be read as `docs_only=true` and skip the
-        check on a CODE change. Nothing else in this file fails if the anchor is
-        dropped, because every other fixture's key sits at column zero already.
-        The correct behaviour is fail-open, because this classifier emitted no
-        `docs_only` key at all.
-        """
-        _clobber_classifier(repo, "print('not_docs_only=true')\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        delivered = _delivered(result)
-        assert "WARNING" in delivered
-        assert "no docs_only key" in delivered
-        assert "SKIPPED" not in delivered
-
-    def test_crlf_line_endings_are_tolerated(self, repo: Path) -> None:
-        """A Windows checkout must not degrade the guard into permanent warning."""
-        _clobber_classifier(
-            repo,
-            "import sys\n"
-            "sys.stdout.write('docs_only=true\\r\\ndocs_site_affected=false\\r\\n')\n",
-        )
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in result.stderr
-
-
-# ─── The deny side must survive the exemption ──────────────────────────────
-
-
-class TestCodeChangesStillBlock:
-    def test_code_change_without_bump_still_blocks(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-        assert "SKIPPED" not in result.stderr
-
-    def test_mixed_docs_and_code_change_without_bump_still_blocks(
-        self, repo: Path
-    ) -> None:
-        """One code path in the set defeats the exemption for the whole set."""
-        _commit(
-            repo,
-            {
-                "docs/guide.md": "Reworded documentation.\n",
-                ".beads/issues.jsonl": '{"id": "seed", "note": "touched"}\n',
-                "backend/app.py": "VALUE = 2\n",
-            },
-        )
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-        assert "SKIPPED" not in result.stderr
-
-    def test_code_change_with_bump_is_allowed(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"}, version=BUMPED_VERSION)
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stderr
-        assert "SKIPPED" not in result.stderr
-        assert "build advances" in result.stdout + result.stderr
-
-    def test_a_code_file_RENAMED_to_a_markdown_path_still_blocks(
-        self, repo: Path
-    ) -> None:
-        """Bead enhancedchannelmanager-9ogyd, the agent-side half.
-
-        With rename detection on, `git diff --name-only` prints only the
-        DESTINATION, so moving a test suite to a `.md` path presents a
-        changed-file set of one Markdown file. The classifier would then answer
-        docs_only=true about the wrong question and the guard would wave
-        through a branch that deleted a test suite. `--no-renames` reports the
-        delete alongside the add, so the departed code path forces the code
-        verdict. Mirrors the CI-side fix to the `detect` job's file listing.
-        """
-        _git(repo, "mv", "backend/app.py", "docs/app-notes.md")
-        _git(repo, "commit", "-q", "-m", "move a test suite behind a .md name")
-        # The rename really is detectable, so the fix is doing the work rather
-        # than the fixture failing to reproduce the hazard.
-        detected = _git(
-            repo, "diff", "--name-only", "origin/dev...HEAD"
-        ).stdout.split()
-        assert detected == ["docs/app-notes.md"], detected
-
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_empty_diff_against_baseline_still_blocks(self, repo: Path) -> None:
-        """No changed paths is not documentation. It falls through to the check."""
-        result = _invoke(repo)  # feature branch is identical to origin/dev
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "SKIPPED" not in result.stderr
-
-
-# ─── Classification trouble fails OPEN, and says so ────────────────────────
-
-
-class TestClassificationFailureFailsOpen:
-    """Classification trouble must not wedge shipping, and must not be silent.
-
-    This inverts CI's idiom deliberately. CI fails open toward CODE because its
-    risk is a hollow green required check. The hook cannot make anything merge,
-    only stop an agent from opening a PR, and its header records the standard
-    as "a false block here is a friction bug, not a safety gap" because CI
-    re-enforces the rule server-side. So an unusable classifier exits 0, the
-    same way a missing checker already did.
-
-    The residual cost is real and is pinned here too: while classification is
-    broken the agent-side catch is gone, so every one of these paths must emit
-    a loud WARNING rather than pass quietly. That is asserted on the DELIVERED
-    channel, not on stderr: exit-0 stderr reaches the debug log and nobody
-    else, so a stderr-only assertion would prove the process spoke, not that
-    the agent heard.
-    """
-
-    def _assert_failed_open_loudly(
-        self, result: subprocess.CompletedProcess[str]
-    ) -> None:
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        delivered = _delivered(result)
-        assert "WARNING" in delivered, "a degraded guard must not be silent"
-        assert "version-advance-guard:" in delivered
-        assert "SKIPPED" not in delivered, "this is not a docs-only exemption"
-
-    def test_missing_classifier_fails_open(self, repo: Path) -> None:
-        (repo / "scripts" / "classify_changed_paths.py").unlink()
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-        assert "classifier not found" in result.stderr
-
-    def test_crashing_classifier_fails_open(self, repo: Path) -> None:
-        _clobber_classifier(repo, "import sys\nsys.exit(3)\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-        assert "exited non-zero" in result.stderr
-
-    def test_classifier_syntax_error_fails_open(self, repo: Path) -> None:
-        _clobber_classifier(repo, "def (\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-
-    def test_output_without_the_docs_only_key_fails_open(self, repo: Path) -> None:
-        _clobber_classifier(repo, "print('banana')\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-        assert "no docs_only key" in result.stderr
-
-    def test_other_keys_without_docs_only_fails_open(self, repo: Path) -> None:
-        """A sibling key is not a substitute for the one this hook reads."""
-        _clobber_classifier(repo, "print('docs_site_affected=false')\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-        assert "no docs_only key" in result.stderr
-
-    def test_contradictory_duplicate_keys_fail_open(self, repo: Path) -> None:
-        """Two docs_only lines must not resolve to whichever came first."""
-        _clobber_classifier(
-            repo, "print('docs_only=true')\nprint('docs_only=false')\n"
-        )
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-
-    def test_lookalike_verdict_is_not_read_as_false_and_does_not_block(
-        self, repo: Path
-    ) -> None:
-        """A garbled classifier must not manufacture a block either."""
-        _clobber_classifier(repo, "print('docs_only=true-ish')\n")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-
-    def test_unresolvable_baseline_fails_open(self, repo: Path) -> None:
-        """No origin/dev means no diff to classify, and nothing to compare."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        _git(repo, "update-ref", "-d", "refs/remotes/origin/dev")
-        result = _invoke(repo)
-        self._assert_failed_open_loudly(result)
-        assert "could not diff" in result.stderr
-
-    def test_a_healthy_classifier_saying_false_still_blocks(self, repo: Path) -> None:
-        """The guard is only surrendered on trouble, never on a real verdict."""
-        _clobber_classifier(repo, "print('docs_only=false')\n")
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-
-# ─── Pre-existing behaviour the exemption must not disturb ─────────────────
-
-
-class TestGuardStaysInert:
-    def test_non_ship_command_is_inert(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="ls -la")
-        assert result.returncode == ALLOW
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_quoted_mention_does_not_trigger_the_guard(self, repo: Path) -> None:
-        """Quoted data is not command syntax (engineering-discipline)."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="echo 'gh pr create --base dev'")
-        assert result.returncode == ALLOW
-        assert result.stderr == ""
-
-    def test_release_cut_targeting_main_is_exempt(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="gh pr create --base main")
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        # Exempt, but not silently: same standard as the documentation-only
-        # skip, which this used to contradict by exiting 0 saying nothing.
-        assert "SKIPPED" in _delivered(result)
-
-    def test_release_cut_with_an_equals_sign_base_is_exempt(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="gh pr create --base=main --title t")
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in _delivered(result)
-
-    def test_a_base_branch_merely_STARTING_with_main_is_not_exempt(
-        self, repo: Path
-    ) -> None:
-        """`--base mainline-experiment` is not `--base main`.
-
-        The exemption is for release cuts. A prefix match hands it to any
-        branch whose name happens to begin with those four letters.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="gh pr create --base mainline-experiment")
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_the_string_base_main_inside_the_body_is_not_a_base_flag(
-        self, repo: Path
-    ) -> None:
-        """Quoted data is not command syntax (engineering-discipline).
-
-        A real `--base dev` ship whose body merely QUOTES the characters
-        `--base main` must still be checked. Matching raw command text exempted
-        it, which is the silent direction: the ship proceeds unguarded and
-        nothing says why.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "gh pr create --base dev --title t "
-                "--body 'Release cuts use --base main; this one does not.'"
-            ),
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_a_later_command_mentioning_base_main_does_not_win(
-        self, repo: Path
-    ) -> None:
-        """The FIRST --base is the one belonging to this `gh pr create`."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo, command="gh pr create --base dev && echo done --base main"
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-
-# ─── A mention is not an invocation, and a `;` is not always a separator ───
-
-
-class TestProseIsNotAShipCommand:
-    """Both of these fired the guard live while this change was being written.
-
-    The command-boundary anchor treats every `;` as a command separator, but an
-    English sentence uses them too, and this repository's commit messages and
-    documentation talk about `gh pr create` constantly. The guard exited 0, so
-    nothing broke, but once an exit-0 message actually reaches the agent a
-    false trigger stops being harmless and starts asserting something untrue
-    about a command that is not a ship.
-
-    Every case here asserts total silence on BOTH channels, which is the only
-    thing that distinguishes "correctly inert" from "fired and then shrugged".
-    """
-
-    HEREDOC_COMMIT = """git commit -q -F - <<'EOF'
-docs/shipping.md step 3 ran unconditionally at step 3; gh pr create fires only
-at step 6, so an agent following the document in order had already bumped.
-
-The --base main exemption read raw command text.
-EOF
-"""
-
-    def test_a_heredoc_body_discussing_the_ship_flow_is_inert(
-        self, repo: Path
-    ) -> None:
-        """A heredoc body is data fed to a process, never syntax the shell runs.
-
-        This exact command produced a spurious release-cut SKIPPED notice.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command=self.HEREDOC_COMMIT)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_a_quoted_sentence_with_a_semicolon_is_inert(self, repo: Path) -> None:
-        """`echo 'a; gh pr create'` is one token to the shell, not three."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo, command="echo 'step 3; gh pr create --base main fires at step 6'"
-        )
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_a_real_ship_carrying_a_heredoc_body_still_triggers(
-        self, repo: Path
-    ) -> None:
-        """Stripping heredoc BODIES must not hide an opener's own command.
-
-        The `gh pr create` and its flags sit on the executed side of the text;
-        only the body is dropped. If this ever went inert, the guard would be
-        off for exactly the multi-line ship shape docs/shipping.md recommends.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "gh pr create --base dev --title t --body \"$(cat <<'EOF'\n"
-                "Body text that mentions --base main and a stray ; separator.\n"
-                "EOF\n"
-                ')"'
-            ),
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_a_backslash_quoted_heredoc_delimiter_is_recognised(
-        self, repo: Path
-    ) -> None:
-        r"""`<<\EOF` quotes the delimiter exactly as `<<'EOF'` does.
-
-        Not recognising it left the body in the text, and an apostrophe in that
-        body then made the tokeniser raise, which HARD-BLOCKED an ordinary
-        `git commit`. Same friction class the exemption exists to remove, so
-        the body carries both an apostrophe and the trigger words.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "git commit -F - <<\\EOF\n"
-                "Don't bump yet; gh pr create --base main only fires at step 6.\n"
-                "EOF\n"
-            ),
-        )
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_an_indented_delimiter_does_not_end_a_plain_heredoc_body(
-        self, repo: Path
-    ) -> None:
-        """bash ends a `<<` body only on a line that is EXACTLY the delimiter.
-
-        Accepting an indented one ends the body early and lets the prose after
-        it back into the text, which resurrects the false release-cut notice on
-        a `git commit`.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "git commit -F - <<'EOF'\n"
-                "A quoted sample follows, indented:\n"
-                "    EOF\n"
-                "and then; gh pr create --base main is discussed again.\n"
-                "EOF\n"
-            ),
-        )
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_a_tab_indented_delimiter_does_end_a_dash_heredoc_body(
-        self, repo: Path
-    ) -> None:
-        """`<<-` is the one form that accepts a TAB-indented delimiter."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "git commit -F - <<-'EOF'\n"
-                "\tprose about; gh pr create --base main\n"
-                "\tEOF\n"
-            ),
-        )
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_a_quoted_heredoc_opener_does_not_swallow_a_real_ship(
-        self, repo: Path
-    ) -> None:
-        """A `<<EOF` inside a quoted string is not an opener.
-
-        Treating it as one swallowed every following line, and the line that
-        follows here is a genuine ship that must still be checked.
-        """
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=('echo "the guard strips <<EOF bodies"\ngh pr create --base dev'),
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_the_release_cut_recipe_shape_is_still_exempt(self, repo: Path) -> None:
-        """The `--base main` shape docs/shipping.md actually prescribes."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(
-            repo,
-            command=(
-                "gh pr create --base main --head release/v0.17.0 "
-                '--title "Release v0.17.0" --body "$(cat <<\'EOF\'\n'
-                "## Release v0.17.0\n"
-                "EOF\n"
-                ')"'
-            ),
-        )
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in _delivered(result)
-
-
-# ─── Real ship shapes, including the ones docs/shipping.md prescribes ─────
-
-
-class TestDocumentedShipShapesStillTrigger:
-    """Over-narrowing is the failure mode that matters for a guard.
-
-    An earlier revision required `gh` `pr` `create` to be three consecutive
-    shlex tokens at a "command position" derived from the previous token. That
-    invariant only ever narrowed the cheap first-stage match, which sounds like
-    a safety property and is not one: shlex is a word splitter, so it flattens
-    newlines into ordinary whitespace and only yields `;` or `&&` as tokens when
-    they were space-padded. Every shape below therefore went silently inert,
-    including the two that docs/shipping.md itself prescribes, and silently is
-    the operative word: "not a ship" is decided before any announcement path
-    exists, so nothing was written to any channel.
-
-    Each case is a code change with no version bump, so the correct answer is
-    always BLOCK. An ALLOW here means the guard is off for that shape.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _unbumped_code_change(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-
-    def test_newline_separated_after_git_push(self, repo: Path) -> None:
-        """docs/shipping.md section 6, verbatim shape: push, newline, ship."""
-        result = _invoke(
-            repo,
-            command=(
-                "git push -u origin feat/x\n"
-                "gh pr create --base dev --head feat/x --title t --body b"
-            ),
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_command_substitution_capturing_the_pr_url(self, repo: Path) -> None:
-        """docs/shipping.md post-release step: `PR_URL=$(gh pr create ...)`."""
-        result = _invoke(
-            repo,
-            command='POST_PR_URL=$(gh pr create --base dev --title t --body b)',
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_wrapped_in_a_subshell(self, repo: Path) -> None:
-        result = _invoke(repo, command="(gh pr create --base dev)")
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_semicolon_with_no_surrounding_space(self, repo: Path) -> None:
-        result = _invoke(repo, command="git push;gh pr create --base dev")
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_plain_invocation_control(self, repo: Path) -> None:
-        """The control the four shapes above are compared against."""
-        result = _invoke(repo, command="gh pr create --base dev")
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_a_multi_line_ship_carrying_a_heredoc_body(self, repo: Path) -> None:
-        """Stripping bodies must not strip the invocation that opened one."""
-        result = _invoke(
-            repo,
-            command=(
-                "git push -u origin feat/x\n"
-                "gh pr create --base dev --title t --body \"$(cat <<'EOF'\n"
-                "Summary; and a stray mention of gh pr create --base main.\n"
-                "EOF\n"
-                ')"'
-            ),
-        )
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-
-# ─── Which --base the exemption reads, when several are in play ───────────
-
-
-class TestBaseResolution:
-    @pytest.fixture(autouse=True)
-    def _unbumped_code_change(self, repo: Path) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-
-    def test_a_later_command_cannot_supply_the_base(self, repo: Path) -> None:
-        """Scanning stops at the separator that ends this invocation's args.
-
-        Without that stop the `--base dev` of a following command would be read
-        as this ship's base. Pins the window, which nothing else does.
-        """
-        result = _invoke(repo, command="gh pr create --base main && echo --base dev")
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in _delivered(result)
-
-    def test_a_repeated_base_resolves_the_way_gh_resolves_it(
-        self, repo: Path
-    ) -> None:
-        """gh takes the LAST occurrence, so the guard must not take the first.
-
-        Taking the first exempted a ship that actually targets dev.
-        """
-        result = _invoke(repo, command="gh pr create --base main --base dev")
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_a_quoted_base_value_still_resolves(self, repo: Path) -> None:
-        result = _invoke(repo, command='gh pr create --base "main"')
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in _delivered(result)
-
-    def test_a_title_that_looks_like_a_base_flag_is_a_title(
-        self, repo: Path
-    ) -> None:
-        """The value of a value-taking flag is skipped, never scanned."""
-        result = _invoke(repo, command='gh pr create --title "--base=main"')
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-
-# ─── The hook output contract: exit 0 speaks JSON, exit 2 speaks stderr ────
-
-
-class TestOutputReachesTheAgent:
-    """Exit 0 stderr is invisible to Claude, so exit-0 messages must be JSON.
-
-    The corollary matters just as much: on exit 2 Claude Code IGNORES stdout
-    and reads stderr as the blocking reason, and the docs are explicit that a
-    hook picks one signalling style per invocation. So the block path must stay
-    pure stderr and emit no JSON at all.
-    """
-
-    def test_the_block_path_emits_no_json_and_speaks_on_stderr(
-        self, repo: Path
-    ) -> None:
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-        assert result.stdout == "", "exit 2 ignores stdout; JSON here is noise"
-        assert "BLOCKED by version-advance-guard" in result.stderr
-
-    def test_an_inert_command_says_nothing_on_either_channel(
-        self, repo: Path
-    ) -> None:
-        """The guard runs on EVERY Bash call, so silence stays the default."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, command="git status")
-        assert result.returncode == ALLOW
-        assert result.stdout == ""
-        assert result.stderr == ""
-
-    def test_every_exit_zero_ship_path_delivers_its_message(
-        self, repo: Path
-    ) -> None:
-        """One assertion per exit-0 ship outcome: none may be silent.
-
-        Docs-only skip, release-cut skip, degraded-classifier warning, and a
-        clean pass. Each is a path where the guard did NOT block and therefore
-        must explain itself on the channel the agent reads.
-        """
-        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
-        assert "SKIPPED" in _delivered(_invoke(repo))
-        assert "SKIPPED" in _delivered(
-            _invoke(repo, command="gh pr create --base main")
-        )
-
-        _clobber_classifier(repo, "print('banana')\n")
-        assert "WARNING" in _delivered(_invoke(repo))
-
-    def test_the_passing_path_relays_the_checker_diagnostic(
-        self, repo: Path
-    ) -> None:
-        """The soft CHANGELOG warning lives in that relay and is worth reading."""
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"}, version=BUMPED_VERSION)
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        delivered = _delivered(result)
-        assert "PASSED" in delivered
-        assert "build advances" in delivered
-
-    def test_the_json_survives_a_relayed_message_with_quotes_and_newlines(
-        self, repo: Path
-    ) -> None:
-        """The payload is built by json.dumps, never by string concatenation.
-
-        The relayed checker diagnostic is multi-line free text and can carry
-        quotes and backslashes. Hand-assembled JSON would be malformed here and
-        the entire announcement would be dropped rather than garbled, because
-        an unparseable payload is not partially readable.
-        """
-        (repo / "scripts" / "check_version_advances.py").write_text(
-            'print("build advances\\nquote \\" backslash \\\\ brace }")\n',
-            encoding="utf-8",
-        )
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"}, version=BUMPED_VERSION)
-        result = _invoke(repo)
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        delivered = _delivered(result)
-        assert 'quote " backslash \\ brace }' in delivered
-
-
-# ─── No shell-injection surface from paths or branch names ─────────────────
-
-
-class TestUntrustedInputIsData:
-    def test_a_shell_metacharacter_filename_cannot_execute(
-        self, repo: Path, tmp_path: Path
-    ) -> None:
-        """A changed path is piped to the classifier, never expanded by bash.
-
-        The canary file must not exist afterwards, and the code path must still
-        block, because a `;`-bearing filename is not documentation.
-        """
-        canary = tmp_path / "canary"
-        _commit(repo, {f"backend/a; touch {canary}; b.py": "VALUE = 2\n"})
-        result = _invoke(repo)
-        assert not canary.exists(), "a changed path was evaluated by the shell"
-        assert result.returncode == BLOCK, result.stdout + result.stderr
-
-    def test_a_markdown_path_with_metacharacters_is_still_documentation(
-        self, repo: Path, tmp_path: Path
-    ) -> None:
-        canary = tmp_path / "canary-md"
-        _commit(repo, {f"docs/a; touch {canary}; b.md": "Notes.\n"})
-        result = _invoke(repo)
-        assert not canary.exists(), "a changed path was evaluated by the shell"
-        assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "SKIPPED" in result.stderr
-
-    def test_a_branch_name_with_metacharacters_cannot_execute(
-        self, repo: Path, tmp_path: Path
-    ) -> None:
-        """Branch names never reach the guard's command construction.
-
-        Git forbids spaces in a ref name, so the payload is a bare command
-        substitution resolved through PATH: if any layer of the guard ever
-        evaluated the branch name, ``ecm-guard-canary`` would run and leave
-        its marker behind.
-        """
-        bindir = tmp_path / "bin"
-        bindir.mkdir()
-        canary = tmp_path / "canary-branch"
-        probe = bindir / "ecm-guard-canary"
-        probe.write_text(f"#!/bin/sh\ntouch '{canary}'\n", encoding="utf-8")
-        probe.chmod(0o755)
-
-        _git(repo, "checkout", "-q", "-b", "feat/a$(ecm-guard-canary)b;c|d&e")
-        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
-        result = _invoke(repo, path_prepend=bindir)
-        assert not canary.exists(), "a branch name was evaluated by the shell"
-        assert result.returncode == BLOCK, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["systemMessage"] == payload["hookSpecificOutput"][
+        "additionalContext"
+    ]
+    return payload["systemMessage"]
+
+
+def test_settings_route_all_bash_commands_to_the_raw_candidate_check() -> None:
+    settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    handlers = settings["hooks"]["PreToolUse"][0]["hooks"]
+    assert settings["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
+    assert len(handlers) == 1
+    assert "if" not in handlers[0]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --base dev",
+        "git push\ngh pr create --base dev",
+        "git push;gh pr create --base dev",
+        "(gh pr create --base dev)",
+        "URL=$(gh pr create --base dev)",
+        'URL="$(gh pr create --base dev)"',
+        "echo `gh pr create --base dev`",
+        "git commit -F - <<EOF\n$(gh pr create --base dev)\nEOF",
+        "echo 'an apostrophe does not narrow; gh pr create --base dev'",
+        "git commit -F - <<'EOF'\nprose: gh pr create --base dev\nEOF",
+        "echo 'prose only: gh pr create --base dev'",
+        "(gh pr create)",
+        "URL=$(gh pr create)",
+        "gh pr create; echo done",
+        "gh pr create&&echo done",
+        "gh pr create>pr-url.txt",
+    ],
+)
+def test_any_raw_literal_candidate_runs_the_state_check(
+    repo: Path, command: str
+) -> None:
+    """Executable and inert forms deliberately receive the same treatment."""
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo, command=command)
+    assert result.returncode == BLOCK, command + result.stdout + result.stderr
+    assert "possible PR creation command" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status",
+        "echo gh-pr-create",
+        "echo 'gh pr list'",
+        "echo 'gh  pr'",
+        "echo 'gh pr createfoo'",
+    ],
+)
+def test_candidate_absence_allows_silently(repo: Path, command: str) -> None:
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo, command=command)
+    assert result.returncode == ALLOW
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_inline_cd_does_not_change_the_pre_execution_cwd(repo: Path) -> None:
+    """The literal routes, but state is checked in the supplied session cwd."""
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo, command="cd /somewhere/else && gh pr create --base dev")
+    assert result.returncode == BLOCK
+
+
+def test_code_change_without_bump_blocks(repo: Path) -> None:
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo)
+    assert result.returncode == BLOCK
+    assert result.stdout == ""
+    assert "BLOCKED by version-advance-guard" in result.stderr
+
+
+def test_code_change_with_bump_passes_and_announces(repo: Path) -> None:
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"}, BUMPED_VERSION)
+    result = _invoke(repo)
+    assert result.returncode == ALLOW, result.stderr
+    assert "PASSED" in _delivered(result)
+
+
+@pytest.mark.parametrize("path", ["docs/guide.md", ".beads/issues.jsonl"])
+def test_documentation_change_without_bump_skips(repo: Path, path: str) -> None:
+    _commit(repo, {path: "Changed.\n"})
+    result = _invoke(repo)
+    assert result.returncode == ALLOW, result.stderr
+    delivered = _delivered(result)
+    assert "SKIPPED" in delivered
+    assert "docs_only=true" in delivered
+
+
+def test_rename_from_code_to_markdown_still_blocks(repo: Path) -> None:
+    _git(repo, "mv", "backend/app.py", "docs/archived.md")
+    _git(repo, "commit", "-q", "-m", "rename")
+    result = _invoke(repo)
+    assert result.returncode == BLOCK, result.stdout + result.stderr
+
+
+def test_cwd_is_resolved_to_the_containing_worktree(repo: Path) -> None:
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    nested = repo / "backend" / "nested"
+    nested.mkdir()
+    result = _invoke(repo, cwd=nested)
+    assert result.returncode == BLOCK
+
+
+@pytest.mark.parametrize("cwd", ["", "/definitely/not/a/git/checkout"])
+def test_missing_or_non_git_cwd_fails_open_loudly(repo: Path, cwd: str) -> None:
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo, cwd=cwd)
+    assert result.returncode == ALLOW
+    assert "WARNING" in _delivered(result)
+
+
+def test_classifier_failure_fails_open_loudly(repo: Path) -> None:
+    (repo / "scripts/classify_changed_paths.py").write_text("def (\n")
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo)
+    assert result.returncode == ALLOW
+    assert "WARNING" in _delivered(result)
+
+
+def test_duplicate_docs_only_keys_fail_open(repo: Path) -> None:
+    (repo / "scripts/classify_changed_paths.py").write_text(
+        "print('docs_only=true')\nprint('docs_only=false')\n", encoding="utf-8"
+    )
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+    result = _invoke(repo)
+    assert result.returncode == ALLOW
+    assert "no unique docs_only key" in _delivered(result)
+
+
+def test_release_version_without_build_suffix_passes_via_checker(repo: Path) -> None:
+    """No command-text `--base main` exemption is needed or permitted."""
+    _commit(repo, {"backend/app.py": "VALUE = 2\n"}, "0.18.2")
+    result = _invoke(repo)
+    assert result.returncode == ALLOW, result.stderr
+    assert "PASSED" in _delivered(result)
+
+
+def test_shell_metacharacters_in_changed_path_are_data(repo: Path, tmp_path: Path) -> None:
+    canary = tmp_path / "canary"
+    _commit(repo, {f"backend/a; touch {canary}; b.py": "VALUE = 2\n"})
+    result = _invoke(repo)
+    assert not canary.exists()
+    assert result.returncode == BLOCK

@@ -1,123 +1,25 @@
 #!/usr/bin/env bash
-# PreToolUse guard (bead enhancedchannelmanager-w9irb).
+# PreToolUse guard (beads enhancedchannelmanager-w9irb and
+# enhancedchannelmanager-uf2gh).
 #
-# Blocks a Claude Code *ship* action (`gh pr create`) when the build number in
-# frontend/package.json did not advance past origin/dev — the agent-side half
-# of the build-advance gate (the other half is the CI version-consistency
-# job). This directly addresses THIS session's failure mode: the agent
-# shipping source PRs to dev without bumping the build.
+# The outer matcher is deliberately the broad `Bash` tool matcher. This script
+# performs one monotonic candidate test: whitespace-separated `gh pr create`
+# anywhere in the raw command text. It does not interpret quotes, heredocs,
+# substitutions, tokens, or command positions, and nothing narrows a match.
+# Prose and inert data may therefore run the repository-state check. That
+# accepted false-positive costs friction; the opposite mistake silently removes
+# the guard. Diagnostics say "possible" and never claim the text will execute.
 #
-# Scoped to `gh pr create` ONLY — deliberately NOT `gh pr merge`. The guard
-# checks the LOCAL WORKING TREE's version, which is correct for `create`
-# (the working tree IS the branch being PR'd) but unsound for `merge`: at
-# merge time the working tree may be parked on any branch (often `dev`), so a
-# `gh pr merge <#>` for a PR whose branch DID bump would false-block. Merge is
-# already covered server-side: the CI required-check enforces advancement
-# against the PR head before the merge button works.
+# The hook input's `cwd` is the execution context Claude Code reports. Resolve
+# that directory through Git rather than inferring `cd` or `git -C` from command
+# text. The supported contract is to invoke `gh pr create` from the target
+# checkout/session cwd. An inline `cd elsewhere && gh pr create` has not run yet,
+# so its post-cd directory cannot be resolved from hook input and is unsupported.
 #
-# Matcher is the tool NAME "Bash" (see .claude/settings.json), so this runs on
-# EVERY Bash command. It must be cheap and inert for non-ship commands: it
-# reads the command off stdin, exits 0 immediately unless the command is a
-# real `gh pr create` INVOCATION, and only then runs the shared checker. A
-# command that merely MENTIONS the string (e.g. `echo 'gh pr create'`, a grep,
-# or a doc edit) must NOT trigger.
-#
-# Detection is two-stage, for cost and for correctness respectively.
-#
-#   Stage 1, a cheap anchored grep, is the fast path that every non-ship Bash
-#   command takes. It requires `gh` at a command boundary (start of line, or
-#   after a ; && || | ( { separator) and nothing more. No `gh pr create` text
-#   anywhere means exit 0 without ever starting a python interpreter.
-#
-#   Stage 2 runs only on the handful of commands stage 1 lets through. The
-#   boundary anchor alone is not enough, because a command boundary is not the
-#   only thing a `;` can be: an ordinary English sentence inside a commit
-#   message or a `--body` contains them. Observed live while shipping this very
-#   change, twice, on unrelated `git commit` and `cat >` commands whose heredoc
-#   bodies happened to discuss the ship flow.
-#
-# What stage 2 removes is DATA: heredoc bodies and quoted spans. What it then
-# runs on the remainder is STAGE 1'S OWN REGEX, unchanged. That is the whole
-# design, and the shape it replaced is worth recording because it was wrong in
-# a way that reads as right.
-#
-# The first attempt tokenised with shlex and required `gh` `pr` `create` to be
-# three consecutive tokens at a "command position", derived by looking at the
-# previous token. shlex is a WORD SPLITTER, not a shell grammar: it flattens
-# newlines into ordinary whitespace and yields `;` or `&&` as a token only when
-# they were space-padded. So the previous token of a real ship is a WORD, not a
-# separator, and every one of these went silently inert:
-#     git push -u origin feat<newline>gh pr create --base dev   (previous: feat)
-#     POST_PR_URL=$(gh pr create --base dev ...)                (glued token)
-#     (gh pr create --base dev)                                 (glued token)
-#     git push;gh pr create --base dev                          (glued token)
-# The first two are the recipes docs/shipping.md itself prescribes, at section
-# 6 and at the post-release step. The guard was off for the documented way to
-# ship, and off SILENTLY, because "not a ship" is decided before any announce
-# path exists.
-#
-# The lesson, written down because the invariant that hid it sounded like a
-# safety property: "stage 2 only ever NARROWS stage 1" was true, and useless.
-# For a guard, over-narrowing IS the failure mode. An invariant that constrains
-# only the harmless direction proves nothing about the harmful one. Hence the
-# rule now: stage 2 may delete data from the text, and may not re-implement the
-# decision. Deleting data cannot make a real ship stop matching an anchor it
-# already matched, because a ship's own `gh` never sits inside its own quotes.
-#
-# Block mechanism (per Claude Code hooks docs): exit code 2 blocks the tool
-# call and feeds stderr back to Claude. Exit 0 lets the command proceed.
-#
-# The two exit codes read DIFFERENT channels, which is why this script writes
-# to both. On exit 2, Claude Code ignores stdout entirely and feeds stderr back
-# as the blocking reason. On exit 0, stderr goes to the hook debug log only and
-# Claude never sees it, so a non-blocking message has to travel as JSON on
-# stdout to reach anyone. See emit_notice below.
-#
-# Worktree-aware root resolution (bead enhancedchannelmanager-yxtuz, follow-up
-# to PR #666): CLAUDE_PROJECT_DIR is always the MAIN checkout, even when the
-# `gh pr create` being validated runs from a git worktree on a different,
-# further-advanced branch (e.g. `cd <worktree> && gh pr create ...`). Checking
-# CLAUDE_PROJECT_DIR's version state in that case validates the WRONG
-# checkout and can false-block a legitimately-advanced worktree branch (this
-# happened in PR #666 — the engineer had to bypass via `gh api`; CI's
-# server-side version-consistency job re-enforces the same rule against the
-# actual PR head, so a false block here is a friction bug, not a safety gap).
-#
-# Fixed below by resolving the checkout root to validate from the command
-# itself (a leading `cd <path> &&` or a `git -C <path>` in the `gh pr create`
-# command), with an `ECM_VERSION_GUARD_ROOT` env override for cases the
-# command text can't express. Falls back to the CLAUDE_PROJECT_DIR/script-
-# location default when neither applies, so the plain main-checkout path
-# (no cd, no -C, no override) is byte-for-byte the pre-fix behavior.
+# Exit 2 blocks and speaks on stderr. Exit 0 diagnostics must be JSON because
+# exit-0 stderr reaches only the hook debug log.
 set -uo pipefail
 
-# Project root: Claude Code exports CLAUDE_PROJECT_DIR; fall back to the repo
-# this script lives in (two levels up from .claude/hooks/).
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
-if [[ -z "$PROJECT_DIR" ]]; then
-  PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
-
-# ─── Making an exit-0 diagnostic actually visible ─────────────────────────
-# A guard that degrades has to say so, and on an exit-0 path stderr cannot say
-# it: the hooks contract sends exit-0 stderr to the debug log only, and Claude
-# never sees it. Writing a warning there and calling the residual risk
-# "announced" would be a claim the mechanism does not support.
-#
-# The exit-0 JSON contract has two agent-visible surfaces, and this puts the
-# message on both: `hookSpecificOutput.additionalContext` reaches Claude, and
-# `systemMessage` reaches the operator. The same text still goes to stderr,
-# which is what the debug log and a direct `bash version-advance-guard.sh`
-# invocation show, and what this script's self-test reads.
-#
-# Call this ONLY on a path that then exits 0. The contract is one signalling
-# style per invocation: exit codes alone, or exit 0 plus JSON. The block path
-# at the bottom is therefore pure stderr plus exit 2 and never calls this, so
-# no path that blocks ever prints JSON and the block contract is untouched.
-# Deliberately no `permissionDecision`: this guard announces, it does not vote
-# on permission, so the tool call continues through the normal flow. A python3
-# failure loses the JSON but not the stderr copy, and never the exit status:
-# announcing is not worth wedging a ship over.
 emit_notice() {
   printf '%s\n' "$1" >&2
   ECM_GUARD_NOTICE="$1" python3 -c '
@@ -137,443 +39,92 @@ sys.stdout.write("\n")
 ' 2>/dev/null || true
 }
 
-# Read the tool call JSON from stdin and pull out the Bash command string.
 STDIN_JSON="$(cat)"
-COMMAND="$(printf '%s' "$STDIN_JSON" | python3 -c \
-  'import json,sys
+COMMAND="$(printf '%s' "$STDIN_JSON" | python3 -c '
+import json, sys
 try:
-    d=json.load(sys.stdin)
+    value = (json.load(sys.stdin).get("tool_input") or {}).get("command", "")
 except Exception:
-    print(""); sys.exit(0)
-print((d.get("tool_input") or {}).get("command","") or "")' 2>/dev/null)"
+    value = ""
+print(value if isinstance(value, str) else "")
+' 2>/dev/null)"
 
-# ─── Stage 1: the cheap fast path every other Bash command takes ──────────
-# No `gh pr create` at a command boundary means this is not a ship, and the
-# guard costs one grep. The (^|[;&|({]) anchor requires `gh` to sit at start of
-# line or right after a ; && || | ( or { separator, so `echo 'gh pr create'`
-# (gh preceded by a quote) does not match while `git commit && gh pr create
-# --base dev` does. This stage deliberately OVER-matches; stage 2 narrows it.
-if ! printf '%s' "$COMMAND" | grep -Eq '(^|[;&|({])[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+# One conservative raw-literal test. Do not add a parser or a second-stage
+# exclusion: candidate presence must never be narrowed.
+if ! printf '%s' "$COMMAND" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+create([^[:alnum:]_]|$)'; then
   exit 0
 fi
 
-# ─── Stage 2: what the command actually IS, and what it targets ───────────
-# One parse answers both questions, and it is only reached by a command that
-# already looks like a ship, so its interpreter start-up is off the fast path.
-#
-# `ship=` DELETES DATA AND RE-ASKS STAGE 1. Two kinds of text in a command line
-# are data rather than syntax, and both have been observed carrying the words
-# `gh pr create` past stage 1's anchor:
-#     git commit -F - <<EOF ... ran at step 3; gh pr create fires ... EOF
-#     echo "step 3; gh pr create fires at step 6"
-# So stage 2 removes heredoc BODIES and QUOTED SPANS, then runs stage 1's own
-# regex on what is left. It does not re-derive command position, does not
-# tokenise for this decision, and has no second opinion about what a ship looks
-# like; the anchor that decides is the same one in both stages. Deleting data
-# cannot hide a real ship, because a ship's `gh` is never inside its own quotes
-# or its own heredoc body, and everything around it, including the newline or
-# `;` or `$(` in front of it, survives untouched.
-#
-# Heredoc handling follows bash rather than approximating it, because each
-# approximation was a live failure mode:
-#   * `<<\EOF` is a quoted delimiter exactly like `<<'EOF'`. Missing it left the
-#     body in place, and an apostrophe in that body then made the old shlex
-#     parse raise, which HARD-BLOCKED an ordinary `git commit`.
-#   * a `<<` body ends only on a line that is EXACTLY the delimiter. `<<-` and
-#     only `<<-` also accepts TAB indentation. Accepting any indentation ended
-#     bodies early and let the prose after them back in.
-#   * a `<<EOF` inside a quoted string is not an opener at all, so openers are
-#     looked for in a quote-stripped copy of each line. Otherwise one quoted
-#     mention swallowed every following line, including a real ship.
-#
-# `base=` decides whether the release-cut exemption applies. This one DOES need
-# tokens, because it reads a VALUE: `--base "main"` has to resolve to `main`,
-# which regex on stripped text cannot do. Reading raw text got it wrong twice:
-#   * it over-matched the VALUE. `--base mainline-experiment` begins with
-#     `main`, so a ship to a branch that is not main was exempted.
-#   * it over-matched the CONTEXT. A genuine `--base dev` ship whose --title or
-#     --body merely CONTAINED the characters `--base main` was exempted.
-# Token scanning starts after this invocation's own `create` and stops at the
-# first separator token, so a later `&& echo --base main` cannot reach it. The
-# LAST `--base` inside that window wins, matching gh's own flag semantics, so
-# `--base main --base dev` correctly resolves to `dev` and is not exempted. The
-# value of any other value-taking gh flag is skipped rather than scanned, so a
-# `--title "--base=main"` is a title and not a base.
-#
-# `-B`, gh's short form of --base, is deliberately NOT read as a base; widening
-# the exemption is not this change's job, so a `-B main` release cut
-# false-blocks exactly as before. It is still listed as value-taking so its
-# argument is skipped.
-#
-# shlex only splits, it never evaluates, so `$(...)` and backticks in the
-# command text stay inert data throughout.
-#
-# Fail directions, both chosen to preserve stage 1's verdict rather than
-# silently stand the guard down: only an explicit `ship=false` stands the guard
-# down, so a python3 failure leaves stage 1's verdict in force, and an
-# unparseable command yields no base, so the guard runs the check rather than
-# exempting. check_version_advances.py independently exempts a no-suffix
-# release version, which is the belt-and-suspenders for a release cut whose
-# quoting defeats the tokeniser.
-PARSED="$(printf '%s' "$COMMAND" | python3 -c '
-import re, shlex, sys
-
-# `<<` or `<<-`, then an optionally backslash-escaped or quoted delimiter word.
-HEREDOC = re.compile(r"""<<(-?)[ \t]*\\?(["\x27]?)([A-Za-z_][A-Za-z0-9_]*)\2""")
-
-# A quoted span that both OPENS AND CLOSES within the text given. Deliberately
-# not a shell parser: its only job is to delete data, so an unterminated quote
-# matches nothing and its text is left in place for the anchor to judge.
-QUOTED = re.compile(r"\x27[^\x27]*\x27|\"(?:\\.|[^\"\\])*\"", re.S)
-
-# Stage 1s regex, character for character, in python form.
-SHIP = re.compile(r"(?:^|[;&|({])[ \t]*gh[ \t]+pr[ \t]+create(?:[ \t]|$)", re.M)
-
-# A token that ENDS an invocation`s own argument list.
-SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
-
-# gh pr create flags that take a value. Their argument is skipped, never read,
-# so arbitrary text in a --title or --body can never be mistaken for a flag.
-VALUE_FLAGS = frozenset({
-    "--base", "-B", "--title", "-t", "--body", "-b", "--body-file", "-F",
-    "--head", "-H", "--label", "-l", "--assignee", "-a", "--reviewer", "-r",
-    "--milestone", "-m", "--project", "-p", "--template", "-T",
-})
-
-# `gh` at a command boundary, as the tail of whatever token it was glued to:
-# `$(gh` and `(gh` and `push;gh` all put it at one.
-GH_AT_BOUNDARY = re.compile(r"(?:^|[;&|({])gh$")
-
-
-def openers_on(line):
-    """Heredoc openers this line really starts, in order.
-
-    Matched against the RAW line, then filtered by whether the `<<` itself sits
-    inside a quoted span. Blanking the spans first would be wrong in the common
-    case: the delimiter of `<<\x27EOF\x27` IS a quoted span, so blanking would
-    erase the opener and leave its whole body in the text.
-    """
-    spans = [match.span() for match in QUOTED.finditer(line)]
-    found = []
-    for match in HEREDOC.finditer(line):
-        at = match.start()
-        if any(begin < at < end for begin, end in spans):
-            continue
-        found.append((match.group(1), match.group(3)))
-    return found
-
-
-def strip_heredoc_bodies(text):
-    lines = text.split("\n")
-    kept = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        kept.append(line)
-        index += 1
-        for dash, word in openers_on(line):
-            while index < len(lines):
-                body = lines[index]
-                index += 1
-                if (body.lstrip("\t") if dash else body) == word:
-                    break
-    return "\n".join(kept)
-
-
-raw = sys.stdin.read()
-without_heredocs = strip_heredoc_bodies(raw)
-
-if not SHIP.search(QUOTED.sub(" ", without_heredocs)):
-    print("ship=false")
-    sys.exit(0)
-print("ship=true")
-
+HOOK_CWD="$(printf '%s' "$STDIN_JSON" | python3 -c '
+import json, sys
 try:
-    tokens = shlex.split(without_heredocs, posix=True)
-except ValueError:
-    sys.exit(0)
-
-start = None
-for index in range(2, len(tokens)):
-    if (
-        tokens[index] == "create"
-        and tokens[index - 1] == "pr"
-        and GH_AT_BOUNDARY.search(tokens[index - 2])
-    ):
-        start = index + 1
-        break
-if start is None:
-    sys.exit(0)
-
-base = None
-index = start
-while index < len(tokens):
-    token = tokens[index]
-    if token in SEPARATORS or token.endswith(";"):
-        break
-    if token == "--base":
-        base = tokens[index + 1] if index + 1 < len(tokens) else ""
-        index += 2
-        continue
-    if token.startswith("--base="):
-        base = token[len("--base=") :]
-        index += 1
-        continue
-    if token in VALUE_FLAGS:
-        index += 2
-        continue
-    index += 1
-
-if base is not None:
-    print("base=" + (base.splitlines()[0] if base.splitlines() else ""))
+    value = json.load(sys.stdin).get("cwd", "")
+except Exception:
+    value = ""
+print(value if isinstance(value, str) else "")
 ' 2>/dev/null)"
 
-IS_SHIP="$(printf '%s\n' "$PARSED" | sed -n 's/^ship=\(.*\)$/\1/p')"
-PR_BASE="$(printf '%s\n' "$PARSED" | sed -n 's/^base=\(.*\)$/\1/p')"
-
-if [[ "$IS_SHIP" == "false" ]]; then
-  # A mention, not an invocation. Silent by design: this is the same
-  # non-event as any other Bash command, and announcing it would put a line
-  # about shipping in front of the agent every time a commit message or a
-  # documentation edit discusses the ship flow.
+if [[ -z "$HOOK_CWD" ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but hook input supplied no cwd, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-if [[ "$PR_BASE" == "main" ]]; then
-  # Announced, for the same reason the documentation-only skip below is: a
-  # silent exit 0 is indistinguishable from a hook that never ran.
-  emit_notice "version-advance-guard: SKIPPED the build-advance check. This ship targets --base main, which is a release cut or a hotfix, and a release version legitimately drops its -BUILD suffix, so there is no build number to advance. See docs/shipping.md, Release Workflow (Merging to Main)."
+PROJECT_DIR="$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$PROJECT_DIR" ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but hook cwd is not inside a Git checkout, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
-fi
-
-# ─── Resolve the checkout the ship command actually runs from ─────────────
-# Two ways to point the guard at a non-default checkout, checked in order:
-#   1. ECM_VERSION_GUARD_ROOT env override — wins unconditionally when set.
-#   2. Parse COMMAND for a leading `cd <path> &&` or a `git -C <path>`.
-# Either way, the candidate is only adopted if it resolves to a real
-# directory that looks like an ECM checkout (has scripts/check_version_advances.py).
-# Otherwise PROJECT_DIR stays at its CLAUDE_PROJECT_DIR/script-location
-# default from above — this keeps the normal main-checkout path unchanged.
-RESOLVED_DIR=""
-if [[ -n "${ECM_VERSION_GUARD_ROOT:-}" ]]; then
-  RESOLVED_DIR="$ECM_VERSION_GUARD_ROOT"
-else
-  RESOLVED_DIR="$(printf '%s' "$COMMAND" | python3 -c '
-import re, sys
-cmd = sys.stdin.read()
-# `cd <path> &&` (or start-of-command / after ;&|({) — quoted or bare.
-m = re.search(r"(?:^|[;&|({])\s*cd\s+([\"\x27]?)([^\"\x27;&|]+?)\1\s*(?:&&|;|$)", cmd)
-if m:
-    print(m.group(2).strip())
-    sys.exit(0)
-# `git -C <path>` anywhere in the command.
-m = re.search(r"\bgit\s+-C\s+([\"\x27]?)([^\"\x27\s]+)\1", cmd)
-if m:
-    print(m.group(2).strip())
-    sys.exit(0)
-' 2>/dev/null)"
-fi
-
-if [[ -n "$RESOLVED_DIR" ]]; then
-  # Relative paths resolve against the default PROJECT_DIR (matches the
-  # shell semantics of a bare `cd <relative>` run from that directory).
-  if [[ "$RESOLVED_DIR" != /* ]]; then
-    RESOLVED_DIR="$PROJECT_DIR/$RESOLVED_DIR"
-  fi
-  RESOLVED_DIR="$(cd "$RESOLVED_DIR" 2>/dev/null && pwd)"
-  if [[ -n "$RESOLVED_DIR" && -f "$RESOLVED_DIR/scripts/check_version_advances.py" ]]; then
-    PROJECT_DIR="$RESOLVED_DIR"
-  fi
 fi
 
 CHECKER="$PROJECT_DIR/scripts/check_version_advances.py"
-if [[ ! -f "$CHECKER" ]]; then
-  # Checker missing — do not block a ship on a broken guard; warn only.
-  emit_notice "version-advance-guard: WARNING, $CHECKER not found, so the build-advance check is being skipped. CI still enforces the same rule server-side against the PR head."
+CLASSIFIER="$PROJECT_DIR/scripts/classify_changed_paths.py"
+if [[ ! -f "$CHECKER" || ! -f "$CLASSIFIER" ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but the repository-state checkers were not found under $PROJECT_DIR, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-# One baseline REF for BOTH halves of this guard: the documentation-only
-# classification directly below and the build-advance comparison at the end.
-# A single variable so the two halves can never disagree about WHICH BRANCH the
-# change is measured against.
-#
-# They do not read the same SNAPSHOT of this side, and that is deliberate. The
-# classifier is handed the committed diff `origin/dev...HEAD`, because that is
-# the file set the pull request will contain. check_version_advances.py reads
-# the WORKING TREE's frontend/package.json (see its own usage block: "Compare
-# working-tree frontend/package.json against origin/dev"), because an agent
-# about to run `gh pr create` may not have committed the bump yet. So an
-# uncommitted version bump counts for the comparison and not for the
-# classification. Same ref on both sides; same tree only once the branch is
-# committed, which it is by the time `gh pr create` is a sensible command.
-#
-# Base-branch scoping is deliberately kept in step with CI. The CI advance gate
-# runs only when `github.base_ref == 'dev'` (.github/workflows/test.yml), and
-# this hook reaches this line only for a ship that is not `--base main` (the
-# exemption above). If either side ever grows a third base branch, both must
-# change together or the hook and CI start disagreeing again.
 BASELINE_REF="origin/dev"
-
-# Best-effort refresh of the baseline so we compare against the latest dev.
-# Ignore failures (offline, no remote) — the checker soft-passes if the
-# baseline is unavailable.
 git -C "$PROJECT_DIR" fetch --no-tags --quiet origin dev >/dev/null 2>&1 || true
 
-# ─── Documentation-only exemption (bead enhancedchannelmanager-uf2gh) ─────
-# Third in a chain, and the chain is the useful part of the provenance:
-#   w9irb  created this guard, and already specified "SCOPE using the
-#          EXISTING docs-only classification". Only the CI half of that bead
-#          ever implemented the scoping, which is why this block was missing
-#          rather than deliberately omitted.
-#   yxtuz  narrowed the guard's blast radius once before (worktree-blind root
-#          resolution), and recorded the missing shell self-test that this
-#          change finally adds.
-#   uf2gh  finishes w9irb's scoping on the agent side.
-# CI does not apply the build-advance rule to a documentation-only PR:
-# .github/workflows/test.yml gates its "Verify build number advances past
-# base" step on `needs.detect.outputs.docs_only != 'true'`, because, in that
-# workflow's own words, documentation-only PRs "carry no build to advance".
-# This hook is the agent-side half of that same gate, so without this block it
-# is strictly stricter than the rule it mirrors: it forces a docs change to
-# bump three source version touchpoints it has no business editing, and burns
-# a build number a concurrent branch may already hold.
-#
-# ONE definition of "documentation-only" lives in the repo, and it is
-# scripts/classify_changed_paths.py, the very script the `detect` job calls.
-# Nothing is reimplemented here; this block only decides which file list to
-# hand it and how to read the verdict.
-#
-# FAIL OPEN when classification cannot be performed, exit 0 without blocking.
-# This inverts CI's idiom on purpose, and transplanting CI's `!= 'true'`
-# comparison here would be a bug. CI fails open TOWARD CODE because its risk is
-# a hollow green required check. This hook's risk runs the other way: it cannot
-# make anything merge, only stop an agent from opening a PR, and its own header
-# above records the standard as "a false block here is a friction bug, not a
-# safety gap" precisely because CI re-enforces the same rule server-side against
-# the real PR head. So a broken classifier must not wedge shipping, exactly as a
-# missing checker already does not (the `exit 0` a few lines above).
-#
-# The residual cost of that choice is stated plainly for reviewers: while the
-# classifier is broken, a genuine non-advancing build on a CODE change stops
-# being caught agent-side and is caught only by CI. That residual is only
-# acceptable if it announces itself, so every such path goes through
-# emit_notice, which carries the WARNING on the exit-0 JSON surfaces Claude and
-# the operator actually read. Writing it to stderr alone would have put it in
-# the debug log and nowhere else.
-#
-# The verdict is read BY KEY, not by comparing the classifier's whole stdout.
-# The classifier emits GitHub Actions `key=value` lines and is expected to grow
-# more of them over time (bead enhancedchannelmanager-t4d5w added
-# `docs_site_affected` alongside `docs_only`). An earlier revision of this block
-# compared the entire stdout against the literals "docs_only=true" and
-# "docs_only=false"; the moment a second line appeared, every invocation matched
-# neither, took the fail-open path, and the guard would have warned forever
-# while enforcing nothing. Because it fails open, that break would have been
-# silent-by-degradation rather than a visible block, which is the worse kind.
-# So: extract the value for `docs_only` and ignore every other key.
-#
-# Three outcomes remain. `true` skips the check, `false` runs it, and a missing
-# or unrecognised VALUE FOR THAT KEY is "could not classify" and fails open. An
-# unrecognised value is never quietly read as `false`, which keeps a garbled
-# classifier from manufacturing a block. What is no longer fatal is the mere
-# presence of other keys.
-#
-# The empty changed-file set is deliberately NOT special-cased here. It is piped
-# to the classifier like any other set, and the shared definition answers it
-# (`classify([])` returns not-docs-only), so there is exactly one place in the
-# repo that decides what counts as documentation.
-#
-# The path list is a three-dot diff, which reports what the branch changed since
-# it left the baseline. That is the set GitHub's pull-request files API returns
-# and therefore exactly what the `detect` job classifies. A two-dot diff would
-# wrongly fold in commits made on dev since the branch point, and `git status`
-# would wrongly fold in uncommitted files that the PR will not contain.
-# `--no-renames` is load-bearing, not tidiness (bead
-# enhancedchannelmanager-9ogyd). With rename detection ON, `git diff
-# --name-only` prints only the DESTINATION of a rename, so
-# `git mv backend/tests/unit/test_auth_middleware.py docs/notes.md` presents a
-# changed-file set of exactly one `.md` path. The classifier would then
-# correctly answer docs_only=true about an incorrect question, the guard would
-# skip, and a branch that deleted a test suite would ship as documentation.
-# GitHub's compare and pull-request files APIs have the same blind spot, which
-# is why the CI half of 9ogyd fixes the `detect` job's jq; this is the same
-# defect on the agent side and the two halves belong together. Turning
-# detection off reports a rename as its delete plus its add, so the departed
-# code path is in the set and forces the code verdict.
-#
-# This became load-bearing at exactly the moment docs/shipping.md grew its
-# step 3a carve-out. Until then every pull request carried a version bump, so
-# nothing ever classified documentation-only and the verdict was academic. A
-# carve-out that makes agents genuinely stop bumping is what makes the
-# classifier's answer decide something, and a blind spot in an answer nobody
-# acted on becomes a hole the moment they do.
-#
-# `core.quotePath=false` keeps a non-ASCII documentation filename readable
-# rather than octal-escaped. Git still quotes any path containing a newline
-# regardless of that setting, so a crafted filename cannot forge extra entries
-# in the list. In any case the manipulation only runs one way: an injected path
-# can add a code verdict, never remove one, because docs_only requires EVERY
-# path to be documentation.
-CLASSIFIER="$PROJECT_DIR/scripts/classify_changed_paths.py"
-CLASSIFIER_STDOUT=""
-DOCS_ONLY_VALUE=""
-CLASSIFY_PROBLEM=""
-
-if [[ ! -f "$CLASSIFIER" ]]; then
-  CLASSIFY_PROBLEM="classifier not found at $CLASSIFIER"
-elif ! CHANGED_PATHS="$(git -C "$PROJECT_DIR" -c core.quotePath=false \
-  diff --name-only --no-renames "$BASELINE_REF...HEAD" 2>/dev/null)"; then
-  CLASSIFY_PROBLEM="could not diff ${BASELINE_REF}...HEAD in $PROJECT_DIR"
-# The path list is piped to the classifier on stdin, never expanded by the
-# shell, so a path is data here and can never become command syntax.
-elif ! CLASSIFIER_STDOUT="$(printf '%s\n' "$CHANGED_PATHS" |
-  python3 "$CLASSIFIER" 2>/dev/null)"; then
-  CLASSIFY_PROBLEM="classifier exited non-zero"
-else
-  # Read the `docs_only` value BY KEY out of the key=value lines, ignoring any
-  # other keys. `tr -d '\r'` tolerates CRLF stdout on a Windows checkout. If
-  # the key is absent the value is empty; if it somehow appears twice, the
-  # value is multi-line and matches neither literal below, so a contradictory
-  # classifier lands in "could not classify" rather than picking a winner.
-  DOCS_ONLY_VALUE="$(printf '%s\n' "$CLASSIFIER_STDOUT" | tr -d '\r' |
-    sed -n 's/^docs_only=\(.*\)$/\1/p')"
-  case "$DOCS_ONLY_VALUE" in
-    true | false) ;;
-    "") CLASSIFY_PROBLEM="classifier emitted no docs_only key" ;;
-    *) CLASSIFY_PROBLEM="classifier returned an unrecognised docs_only value" ;;
-  esac
-fi
-
-if [[ -n "$CLASSIFY_PROBLEM" ]]; then
-  emit_notice "version-advance-guard: WARNING, ${CLASSIFY_PROBLEM}. Cannot tell whether this change is documentation-only, so the build-advance check is being skipped rather than risk a false block. CI still enforces the same rule server-side against the PR head. If you are shipping a CODE change, verify the build number advanced by hand: python scripts/check_version_advances.py"
+CHANGED_PATHS="$(git -C "$PROJECT_DIR" -c core.quotePath=false diff \
+  --name-only --no-renames "$BASELINE_REF...HEAD" 2>/dev/null)"
+DIFF_STATUS=$?
+if [[ $DIFF_STATUS -ne 0 ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but could not diff $BASELINE_REF...HEAD, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-if [[ "$DOCS_ONLY_VALUE" == "true" ]]; then
-  # Announce the skip. A silent exit 0 is indistinguishable from a hook that
-  # never ran, which is how a guard quietly rots.
-  emit_notice "version-advance-guard: SKIPPED the build-advance check. Every path changed against ${BASELINE_REF} is documentation or beads data (scripts/classify_changed_paths.py returned docs_only=true), and CI exempts documentation-only PRs from this gate for the same reason: there is no build to advance. Do NOT bump the version touchpoints for this change. See docs/shipping.md step 3."
+CLASSIFIER_STDOUT="$(printf '%s\n' "$CHANGED_PATHS" | python3 "$CLASSIFIER" 2>/dev/null)"
+CLASSIFIER_STATUS=$?
+if [[ $CLASSIFIER_STATUS -ne 0 ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification exited non-zero, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-OUTPUT="$(python3 "$CHECKER" --baseline-ref "$BASELINE_REF" --repo-root "$PROJECT_DIR" 2>&1)"
-RC=$?
+mapfile -t DOCS_ONLY_LINES < <(printf '%s\n' "$CLASSIFIER_STDOUT" | sed -n 's/^docs_only=\(.*\)$/\1/p' | tr -d '\r')
+if [[ ${#DOCS_ONLY_LINES[@]} -ne 1 ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned no unique docs_only key, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
+  exit 0
+fi
 
-if [[ "$RC" -ne 0 ]]; then
-  # BLOCK path. Exit 2 makes stderr the channel Claude reads and makes stdout
-  # the channel it ignores, so this branch writes stderr only and emits no
-  # JSON at all. The checker's own diagnostic (the next-build suggestion, the
-  # soft CHANGELOG warning) is part of the blocking reason and goes first.
-  printf '%s\n' "$OUTPUT" >&2
-  echo "" >&2
-  echo "BLOCKED by version-advance-guard: bump the build number in frontend/package.json (and backend/main.py + backend/routers/backup.py in lockstep) before shipping. See docs/shipping.md step 3." >&2
+case "${DOCS_ONLY_LINES[0]}" in
+  true)
+    emit_notice "version-advance-guard: possible PR creation command detected; SKIPPED the build-advance check because docs_only=true. This change carries no build to advance. Do NOT bump the version touchpoints."
+    exit 0
+    ;;
+  false) ;;
+  *)
+    emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned an unrecognised docs_only value, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
+    exit 0
+    ;;
+esac
+
+CHECK_OUTPUT="$(cd "$PROJECT_DIR" && python3 "$CHECKER" --baseline-ref "$BASELINE_REF" 2>&1)"
+CHECK_STATUS=$?
+if [[ $CHECK_STATUS -ne 0 ]]; then
+  printf '%s\n' "$CHECK_OUTPUT" >&2
+  printf '\nBLOCKED by version-advance-guard: a possible PR creation command was detected, and this checkout has no advancing build number. Bump frontend/package.json (and backend/main.py + backend/routers/backup.py in lockstep) before shipping. See docs/shipping.md step 3.\n' >&2
   exit 2
 fi
 
-# Allowed. The checker's diagnostic still carries the soft CHANGELOG warning,
-# which is only useful if it is read, so it goes out on the exit-0 JSON
-# surfaces rather than to a stderr nobody reads.
-emit_notice "version-advance-guard: build-advance check PASSED.
-${OUTPUT}"
+emit_notice "version-advance-guard: possible PR creation command detected; PASSED the build-advance check. $CHECK_OUTPUT"
 exit 0

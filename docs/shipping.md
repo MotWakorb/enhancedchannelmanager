@@ -129,6 +129,12 @@ gh pr create --base dev --head <feature-or-chore-branch> \
   --title "v0.x.x-xxxx: Brief description" \
   --body "Summary of the change and link to the bead."
 
+# Run `gh pr create` from the checkout being shipped. The local preflight hook
+# resolves the hook input's cwd before Bash executes; an inline
+# `cd <other-checkout> && gh pr create ...` cannot redirect that check and is
+# unsupported. Remove any branch worktree and check the branch out in the main
+# checkout before opening its PR.
+
 # Wait for the 7 required checks AND for the PR to be mergeable.
 # Do NOT use `gh pr checks <#> --watch` here: see "Read the gate, not just
 # the checks" below for why an all-green watch can still be unmergeable.
