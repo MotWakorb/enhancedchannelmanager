@@ -51,7 +51,8 @@ notification controls:
 | **● Offline** | The API returned an error. |
 | **● <status>** | ECM answered with a status other than healthy; the reported status is shown as-is. |
 
-The pill also shows the running ECM version, for example **● Online · v0.18.1**.
+The pill also shows the running ECM version, after the status word
+(**● Online · <version>**).
 The coloured dot repeats what the words already say, so the status is readable
 without relying on colour.
 

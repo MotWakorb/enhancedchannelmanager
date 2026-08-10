@@ -138,7 +138,7 @@ If columns are missing relative to the current code's expectations: Alembic migr
 
 If failure ratio remains > 5% after running the matching diagnosis branch:
 
-- Page the SRE persona via the operator's chosen channel (no rotation defined yet, pages route to `curt@lecaptain.org` until on-call exists).
+- Page the SRE persona via the operator's chosen channel. There is no on-call rotation yet, so pages route to the instance operator directly.
 - Provide: alert start time, branch from diagnosis tree that matched, recovery steps attempted, current `ecm_session_telemetry_writes_total{result="failure"}` 5m rate.
 
 ## Post-incident

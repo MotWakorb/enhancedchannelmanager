@@ -2,7 +2,7 @@
 
 Status: implementation contract for `enhancedchannelmanager-2896r.1`
 
-Visual reference: [ECM Operator Workspace mockup v16](https://ecm-operator-workspace.curt347145.chatgpt.site/?view=channels), source commit `48353d703b9c1b6ba2e33ea2b9f9bce05cf6412c`
+Visual reference: ECM Operator Workspace mockup v16 (privately hosted, link held by the PO), source commit `48353d703b9c1b6ba2e33ea2b9f9bce05cf6412c`
 
 Target viewports: 1920×1080 and 1280×720
 

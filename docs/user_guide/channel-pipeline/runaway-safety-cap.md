@@ -49,10 +49,9 @@ specific reason and understand the risk.
 > automated MCP client) that tries to change the cap is rejected. The
 > Settings UI shows the inputs as read-only for non-admins.
 
-## Older versions
+## If you set the cap by hand
 
-Before this control existed, the only way to change the cap was to hand-edit
-`max_auto_created_channels_per_run` in `/config/settings.json` and restart ECM.
-That is no longer necessary. Use **Settings → Channel Pipeline** instead. (The
-underlying settings key is unchanged, so an install that previously set it by
-hand keeps its value and now shows it in the UI.)
+The cap is stored as `max_auto_created_channels_per_run` in
+`/config/settings.json`. You do not need to edit that file: use
+**Settings → Channel Pipeline** instead. An install that had the key set by
+hand keeps its value, and the UI shows it.
