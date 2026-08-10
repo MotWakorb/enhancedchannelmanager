@@ -490,6 +490,12 @@ const FREEZE_ANIMATION = `
  *     `enhancedchannelmanager-0zq1p`). The measured element's ink, by contrast,
  *     really is inside every group in the chain, so it carries the full
  *     product.
+ *   - a `background-image` anywhere in the chain means the site is NOT
+ *     MEASURED. It cannot be reduced to one colour, so a canvas fed only the
+ *     `backgroundColor` layers would describe a surface that is not on screen.
+ *     `contrast-aa` skips such sites; this throws, which is the same refusal
+ *     in a function whose caller has already asserted the selector must be
+ *     measured.
  *
  * The core is duplicated rather than imported because a `page.evaluate` body is
  * serialised and re-parsed in the browser: it cannot reach a module import, and
@@ -561,6 +567,25 @@ async function measureCompositedContrast(page: Page, selector: string) {
       chain.push({ colour: style.backgroundColor, opacity: Number.isFinite(opacity) ? opacity : 1 })
       if (node === document.documentElement) break
     }
+    // REFUSE TO MEASURE rather than measure the wrong surface. A
+    // `background-image` cannot be reduced to one colour, so only the
+    // `backgroundColor` layers would reach the canvas and the ratio would
+    // describe a surface that is not on screen. If that surface happens to
+    // clear 4.5 the test passes and certifies a genuine contrast failure as
+    // good, which is the exact failure class this function was rewritten to
+    // eliminate. `e2e/contrast-aa.spec.ts` skips such sites for the same
+    // reason; here there is no allowlist to route them to, and the caller has
+    // asserted this selector must be measured, so the honest answer is to say
+    // the measurement could not be taken. Latent today (all gradients in the
+    // tree are on leaf elements, never ancestors of measured text) and
+    // deliberately guarded before that stops being true.
+    if (gradient) {
+      throw new Error(
+        `${evaluatedSelector}: a background-image in the ancestor chain cannot be reduced to one ` +
+          `colour, so no contrast measurement was taken. Found on ${gradient}`,
+      )
+    }
+
     const layers: Array<{ colour: string; groupAlpha: number }> = new Array(chain.length)
     let selfOpacity = 1
     for (let i = chain.length - 1; i >= 0; i -= 1) {
@@ -603,11 +628,6 @@ async function measureCompositedContrast(page: Page, selector: string) {
       foreground: hex(foreground),
       declaredColor,
       background: hex(background),
-      // A gradient anywhere in the chain cannot be reduced to one colour, so
-      // `background` is the solid layers only and the ratio is not the whole
-      // story. Reported rather than swallowed; `contrast-aa` skips such sites
-      // outright for the same reason.
-      backgroundGradient: gradient,
       opacity: Math.round(selfOpacity * 1000) / 1000,
       ratio: Math.round(((Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
         / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)) * 100) / 100,
