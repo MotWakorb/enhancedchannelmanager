@@ -442,53 +442,203 @@ function requestOwner(normalizedKey: string): PeriodicRequestPolicy['owner'] | n
   return intendedPeriodicRequests[normalizedKey]?.owner ?? null
 }
 
-async function computedTextContrast(page: Page, selector: string) {
+/**
+ * Freeze every transition and animation before measuring a colour.
+ *
+ * Both contrast tests below flip `data-theme` on `<html>` and measure straight
+ * afterwards, and theme tokens are animated: an element caught inside a
+ * `background-color` transition reports a colour that is on its way somewhere
+ * and that no user is ever asked to read. `e2e/contrast-aa.spec.ts` shipped an
+ * allowlist entry off exactly that mistake. `.failed-streams-alert` measured
+ * 4.40 light and 3.72 high-contrast 180ms after a theme switch, and 4.75 at
+ * rest; that guard added this same override in response.
+ *
+ * `!important` because route chunk stylesheets are appended to <head> AFTER
+ * this tag on first visit, so ordinary specificity would let them win.
+ */
+const FREEZE_ANIMATION = `
+*, *::before, *::after {
+  transition: none !important;
+  animation: none !important;
+}`
+
+/**
+ * True composited contrast for one element. NOTHING HERE PARSES A COLOUR.
+ *
+ * The previous implementation grepped `/[\d.]+/g` out of the computed value and
+ * read the captures as 0-255 channels. Chrome serialises `color-mix(in srgb,
+ * ...)` as `color(srgb 0.96 0.96 0.96 / 0.94)`, so that resolver read a
+ * near-WHITE surface as very nearly BLACK. Every assertion it made over a
+ * `color-mix` surface was therefore meaningless in either direction, and the app
+ * paints `color-mix` on the primary rail, the dashboard card glyphs and the
+ * selected nav states. Repairing the regex only defers the problem to the next colour
+ * syntax CSS ships (`lab()`, `oklch()`, relative colours), so this measures the
+ * way `e2e/contrast-aa.spec.ts` does instead: paint the stacking chain into a
+ * 1x1 canvas and read the pixel back, letting the engine that painted the page
+ * resolve the syntax and do the alpha arithmetic. Bead
+ * `enhancedchannelmanager-pbkwo`.
+ *
+ * The model is deliberately identical to `contrast-aa`'s, including the two
+ * things that guard learned the hard way:
+ *
+ *   - `accepts()` uses TWO sentinels. `fillStyle` silently KEEPS ITS PREVIOUS
+ *     VALUE on an unparseable string, so a single assignment cannot tell
+ *     "accepted" from "ignored".
+ *   - group `opacity` accumulates from the ROOT DOWN. The alpha a node's
+ *     background is painted at is the product of its own `opacity` and its
+ *     ANCESTORS', never its descendants' (bead
+ *     `enhancedchannelmanager-0zq1p`). The measured element's ink, by contrast,
+ *     really is inside every group in the chain, so it carries the full
+ *     product.
+ *
+ * The core is duplicated rather than imported because a `page.evaluate` body is
+ * serialised and re-parsed in the browser: it cannot reach a module import, and
+ * `contrast-aa` runs its copy inside one whole-page evaluate over thousands of
+ * nodes rather than per element. Any change to the model belongs in both.
+ *
+ * WHAT THE SWAP ACTUALLY MOVED, measured rather than assumed: both resolvers
+ * were run over the same DOM in the same page, 132 measurements across both
+ * tests, both viewports, three themes and both states. 42 moved, all of them by
+ * 0.01-0.15, and NONE of them because of `color-mix`: every computed background
+ * in every ancestor chain these selectors walk is plain `rgb()` or `rgba()`
+ * today, so the mis-parse really was latent here, exactly as `contrast-aa`'s
+ * header note claimed. What moved instead is precision. The canvas composites at
+ * the compositor's 8-bit depth, so `rgba(16,185,129,.12)` over `#252530` reads
+ * the #263a3e that is painted rather than the fractional rgb(39,59,62) a float
+ * blend carries. No verdict changed; every listed selector still clears 4.5 with
+ * room. Latent is not the same as harmless. The app paints `color-mix` on the
+ * primary rail, the selected nav states and the dashboard card glyphs, so the
+ * trap was one selector away.
+ */
+async function measureCompositedContrast(page: Page, selector: string) {
   return page.locator(selector).first().evaluate((element, evaluatedSelector) => {
-    type Rgba = { r: number; g: number; b: number; a: number }
-    const parse = (value: string): Rgba => {
-      // Detached/non-painting ancestors can report an empty computed
-      // background during a concurrent React commit; it is equivalent to a
-      // transparent paint layer, not an unsupported foreground color.
-      if (value === '' || value === 'transparent') return { r: 0, g: 0, b: 0, a: 0 }
-      const channels = value.match(/[\d.]+/g)?.map(Number) ?? []
-      if (channels.length < 3) throw new Error(`Unsupported computed color: ${value}`)
-      return { r: channels[0], g: channels[1], b: channels[2], a: channels[3] ?? 1 }
+    const canvas = document.createElement('canvas')
+    canvas.width = 1
+    canvas.height = 1
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+
+    const accepts = (value: string) => {
+      ctx.fillStyle = '#010203'
+      ctx.fillStyle = value
+      const first = ctx.fillStyle
+      ctx.fillStyle = '#040506'
+      ctx.fillStyle = value
+      return first === ctx.fillStyle
     }
-    const blend = (foreground: Rgba, background: Rgba): Rgba => {
-      const alpha = foreground.a + background.a * (1 - foreground.a)
-      if (alpha === 0) return { r: 0, g: 0, b: 0, a: 0 }
-      return {
-        r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
-        g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
-        b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
-        a: alpha,
+    const read = () => {
+      const data = ctx.getImageData(0, 0, 1, 1).data
+      return { r: data[0], g: data[1], b: data[2] }
+    }
+    type Channels = { r: number; g: number; b: number }
+    const linear = (channel: number) => {
+      const value = channel / 255
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    }
+    const luminance = (colour: Channels) =>
+      0.2126 * linear(colour.r) + 0.7152 * linear(colour.g) + 0.0722 * linear(colour.b)
+    const hex = (colour: Channels) =>
+      `#${[colour.r, colour.g, colour.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`
+
+    // A React commit can detach the matched node between the locator resolving
+    // and this body running, and `getComputedStyle` on a node outside the
+    // document returns an EMPTY declaration, every property the empty string.
+    // Reading '' as a colour is precisely the confidently-wrong number this
+    // function exists to stop producing, so say so and let the caller re-read.
+    if (!element.isConnected || getComputedStyle(element).color === '') {
+      return { detached: true as const, selector: evaluatedSelector }
+    }
+
+    // Collect upward, the only direction the DOM offers, then accumulate the
+    // group alphas downward from the root.
+    const chain: Array<{ colour: string; opacity: number }> = []
+    let gradient: string | null = null
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node)
+      const opacity = Number.parseFloat(style.opacity)
+      if (!gradient && style.backgroundImage && style.backgroundImage !== 'none') {
+        gradient = `${node.tagName.toLowerCase()}: ${style.backgroundImage.slice(0, 48)}`
       }
+      chain.push({ colour: style.backgroundColor, opacity: Number.isFinite(opacity) ? opacity : 1 })
+      if (node === document.documentElement) break
     }
-    const layers: Rgba[] = []
-    for (let current: Element | null = element; current; current = current.parentElement) {
-      layers.push(parse(getComputedStyle(current).backgroundColor))
+    const layers: Array<{ colour: string; groupAlpha: number }> = new Array(chain.length)
+    let selfOpacity = 1
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      selfOpacity *= chain[i].opacity
+      layers[i] = { colour: chain[i].colour, groupAlpha: selfOpacity }
     }
-    let background: Rgba = { r: 255, g: 255, b: 255, a: 1 }
-    for (const layer of layers.reverse()) background = blend(layer, background)
-    const foreground = blend(parse(getComputedStyle(element).color), background)
-    const luminance = (color: Rgba) => {
-      const linear = [color.r, color.g, color.b].map((channel) => {
-        const value = channel / 255
-        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
-      })
-      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    // The CSS initial canvas surface. `html`/`body` paint over it on every
+    // route here, so it only shows through where nothing paints at all.
+    ctx.globalAlpha = 1
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 1, 1)
+    for (let i = layers.length - 1; i >= 0; i -= 1) {
+      const { colour, groupAlpha } = layers[i]
+      // Detached/non-painting ancestors can report an empty computed background
+      // during a concurrent React commit; that is a transparent paint layer,
+      // not an unsupported colour. Painting `transparent` is a no-op either way.
+      if (colour === '' || colour === 'transparent') continue
+      if (!accepts(colour)) throw new Error(`Unsupported computed background: ${colour}`)
+      ctx.globalAlpha = groupAlpha
+      ctx.fillStyle = colour
+      ctx.fillRect(0, 0, 1, 1)
     }
+    ctx.globalAlpha = 1
+    const background = read()
+
+    const declaredColor = getComputedStyle(element).color
+    if (!accepts(declaredColor)) throw new Error(`Unsupported computed color: ${declaredColor}`)
+    ctx.globalAlpha = selfOpacity
+    ctx.fillStyle = declaredColor
+    ctx.fillRect(0, 0, 1, 1)
+    ctx.globalAlpha = 1
+    const foreground = read()
+
     const foregroundLuminance = luminance(foreground)
     const backgroundLuminance = luminance(background)
     return {
+      detached: false as const,
       selector: evaluatedSelector,
-      foreground: getComputedStyle(element).color,
-      background: `rgb(${background.r} ${background.g} ${background.b})`,
-      ratio: (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
-        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05),
+      foreground: hex(foreground),
+      declaredColor,
+      background: hex(background),
+      // A gradient anywhere in the chain cannot be reduced to one colour, so
+      // `background` is the solid layers only and the ratio is not the whole
+      // story. Reported rather than swallowed; `contrast-aa` skips such sites
+      // outright for the same reason.
+      backgroundGradient: gradient,
+      opacity: Math.round(selfOpacity * 1000) / 1000,
+      ratio: Math.round(((Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)) * 100) / 100,
       text: element.textContent?.trim() ?? '',
     }
   }, selector)
+}
+
+/**
+ * `measureCompositedContrast`, re-read until the element presents a resolved
+ * computed style.
+ *
+ * Not defensive padding: caught in the field on the very first full-file run of
+ * this change, `--workers=2`, Channel Manager at 1920x1080: the locator
+ * matched, React re-committed the group list, and the evaluate landed on a node
+ * that was no longer in the document. The measurement that would have been
+ * reported is black-on-black. A re-read is correct because the locator is
+ * re-resolved on every attempt, so the retry measures the element that replaced
+ * it rather than the corpse of the one that went away.
+ */
+async function computedTextContrast(page: Page, selector: string) {
+  const attempts = 10
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const reading = await measureCompositedContrast(page, selector)
+    if (!reading.detached) return reading
+    await page.waitForTimeout(100)
+  }
+  throw new Error(
+    `${selector} never presented a resolved computed style in ${attempts} reads: it was detached ` +
+      'from the document on every attempt, so no contrast measurement was taken.',
+  )
 }
 
 async function expectSettledRoute(page: Page, consumer: RouteConsumer) {
@@ -1108,6 +1258,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
       await dismissFirstRunPromptIfPresent(page)
       await page.getByRole('link', { name: 'Channel Manager' }).click()
       await expectSettledRoute(page, routeConsumers[1])
+      // Applied once, before any theme flip: a colour caught mid-transition is
+      // not a state anybody is asked to read (see FREEZE_ANIMATION).
+      await page.addStyleTag({ content: FREEZE_ANIMATION })
 
       const states = [
         {
@@ -1281,6 +1434,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 108
           await expect(page.locator('.dashboard-card-error')).toHaveCount(1)
           await expect(page.locator('.header-update-available')).toHaveCount(0)
         }
+        // Re-applied per state, not once per test: the partial-failure arm
+        // reloads the page, which discards the previous tag (see
+        // FREEZE_ANIMATION).
+        await page.addStyleTag({ content: FREEZE_ANIMATION })
 
         for (const theme of ['dark', 'light', 'high-contrast'] as const) {
           await page.evaluate((selectedTheme) => {
