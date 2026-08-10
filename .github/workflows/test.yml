@@ -169,6 +169,16 @@ jobs:
           git fetch --no-tags origin "$BASE_REF"
           python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
 
+      # ─── PII ratchet (bead enhancedchannelmanager-il1xz) ─────────────────
+      - name: Check for new personal identifiers (ratchet)
+        id: pii_ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          python3 scripts/check_pii.py --base-ref "origin/$BASE_REF"
+
       # ─── Published user-guide site build (beads pb2s4, t4d5w) ───────────
       # `mkdocs build --strict` used to run only on a push to dev, in
       # docs-pages.yml, AFTER the merge. A broken site therefore merged green
@@ -212,12 +222,14 @@ jobs:
         env:
           DOCS_CHECK: ${{ steps.docs_check.outcome }}
           EM_DASH: ${{ steps.em_dash_ratchet.outcome }}
+          PII_RATCHET: ${{ steps.pii_ratchet.outcome }}
           SITE_BUILD: ${{ steps.site_build.outcome }}
         run: |
           {
             echo "### Operator Docs"
             echo "- \`npm run docs:check\` (links, terminology, screenshots): ${DOCS_CHECK:-did not run}"
             echo "- em-dash ratchet (pull requests only): ${EM_DASH:-did not run}"
+            echo "- personal-identifier ratchet (pull requests only): ${PII_RATCHET:-did not run}"
             echo "- \`mkdocs build --strict\` on the published user-guide site: ${SITE_BUILD:-did not run}"
           } >> "$GITHUB_STEP_SUMMARY"
 
