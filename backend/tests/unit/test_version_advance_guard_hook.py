@@ -699,6 +699,86 @@ EOF
         assert result.returncode == BLOCK, result.stdout + result.stderr
         assert "BLOCKED by version-advance-guard" in result.stderr
 
+    def test_a_backslash_quoted_heredoc_delimiter_is_recognised(
+        self, repo: Path
+    ) -> None:
+        r"""`<<\EOF` quotes the delimiter exactly as `<<'EOF'` does.
+
+        Not recognising it left the body in the text, and an apostrophe in that
+        body then made the tokeniser raise, which HARD-BLOCKED an ordinary
+        `git commit`. Same friction class the exemption exists to remove, so
+        the body carries both an apostrophe and the trigger words.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "git commit -F - <<\\EOF\n"
+                "Don't bump yet; gh pr create --base main only fires at step 6.\n"
+                "EOF\n"
+            ),
+        )
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_an_indented_delimiter_does_not_end_a_plain_heredoc_body(
+        self, repo: Path
+    ) -> None:
+        """bash ends a `<<` body only on a line that is EXACTLY the delimiter.
+
+        Accepting an indented one ends the body early and lets the prose after
+        it back into the text, which resurrects the false release-cut notice on
+        a `git commit`.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "git commit -F - <<'EOF'\n"
+                "A quoted sample follows, indented:\n"
+                "    EOF\n"
+                "and then; gh pr create --base main is discussed again.\n"
+                "EOF\n"
+            ),
+        )
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_a_tab_indented_delimiter_does_end_a_dash_heredoc_body(
+        self, repo: Path
+    ) -> None:
+        """`<<-` is the one form that accepts a TAB-indented delimiter."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "git commit -F - <<-'EOF'\n"
+                "\tprose about; gh pr create --base main\n"
+                "\tEOF\n"
+            ),
+        )
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_a_quoted_heredoc_opener_does_not_swallow_a_real_ship(
+        self, repo: Path
+    ) -> None:
+        """A `<<EOF` inside a quoted string is not an opener.
+
+        Treating it as one swallowed every following line, and the line that
+        follows here is a genuine ship that must still be checked.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=('echo "the guard strips <<EOF bodies"\ngh pr create --base dev'),
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
     def test_the_release_cut_recipe_shape_is_still_exempt(self, repo: Path) -> None:
         """The `--base main` shape docs/shipping.md actually prescribes."""
         _commit(repo, {"backend/app.py": "VALUE = 2\n"})
@@ -714,6 +794,118 @@ EOF
         )
         assert result.returncode == ALLOW, result.stdout + result.stderr
         assert "SKIPPED" in _delivered(result)
+
+
+# ─── Real ship shapes, including the ones docs/shipping.md prescribes ─────
+
+
+class TestDocumentedShipShapesStillTrigger:
+    """Over-narrowing is the failure mode that matters for a guard.
+
+    An earlier revision required `gh` `pr` `create` to be three consecutive
+    shlex tokens at a "command position" derived from the previous token. That
+    invariant only ever narrowed the cheap first-stage match, which sounds like
+    a safety property and is not one: shlex is a word splitter, so it flattens
+    newlines into ordinary whitespace and only yields `;` or `&&` as tokens when
+    they were space-padded. Every shape below therefore went silently inert,
+    including the two that docs/shipping.md itself prescribes, and silently is
+    the operative word: "not a ship" is decided before any announcement path
+    exists, so nothing was written to any channel.
+
+    Each case is a code change with no version bump, so the correct answer is
+    always BLOCK. An ALLOW here means the guard is off for that shape.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _unbumped_code_change(self, repo: Path) -> None:
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+
+    def test_newline_separated_after_git_push(self, repo: Path) -> None:
+        """docs/shipping.md section 6, verbatim shape: push, newline, ship."""
+        result = _invoke(
+            repo,
+            command=(
+                "git push -u origin feat/x\n"
+                "gh pr create --base dev --head feat/x --title t --body b"
+            ),
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_command_substitution_capturing_the_pr_url(self, repo: Path) -> None:
+        """docs/shipping.md post-release step: `PR_URL=$(gh pr create ...)`."""
+        result = _invoke(
+            repo,
+            command='POST_PR_URL=$(gh pr create --base dev --title t --body b)',
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_wrapped_in_a_subshell(self, repo: Path) -> None:
+        result = _invoke(repo, command="(gh pr create --base dev)")
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_semicolon_with_no_surrounding_space(self, repo: Path) -> None:
+        result = _invoke(repo, command="git push;gh pr create --base dev")
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_plain_invocation_control(self, repo: Path) -> None:
+        """The control the four shapes above are compared against."""
+        result = _invoke(repo, command="gh pr create --base dev")
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_a_multi_line_ship_carrying_a_heredoc_body(self, repo: Path) -> None:
+        """Stripping bodies must not strip the invocation that opened one."""
+        result = _invoke(
+            repo,
+            command=(
+                "git push -u origin feat/x\n"
+                "gh pr create --base dev --title t --body \"$(cat <<'EOF'\n"
+                "Summary; and a stray mention of gh pr create --base main.\n"
+                "EOF\n"
+                ')"'
+            ),
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+
+# ─── Which --base the exemption reads, when several are in play ───────────
+
+
+class TestBaseResolution:
+    @pytest.fixture(autouse=True)
+    def _unbumped_code_change(self, repo: Path) -> None:
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+
+    def test_a_later_command_cannot_supply_the_base(self, repo: Path) -> None:
+        """Scanning stops at the separator that ends this invocation's args.
+
+        Without that stop the `--base dev` of a following command would be read
+        as this ship's base. Pins the window, which nothing else does.
+        """
+        result = _invoke(repo, command="gh pr create --base main && echo --base dev")
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert "SKIPPED" in _delivered(result)
+
+    def test_a_repeated_base_resolves_the_way_gh_resolves_it(
+        self, repo: Path
+    ) -> None:
+        """gh takes the LAST occurrence, so the guard must not take the first.
+
+        Taking the first exempted a ship that actually targets dev.
+        """
+        result = _invoke(repo, command="gh pr create --base main --base dev")
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+    def test_a_quoted_base_value_still_resolves(self, repo: Path) -> None:
+        result = _invoke(repo, command='gh pr create --base "main"')
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert "SKIPPED" in _delivered(result)
+
+    def test_a_title_that_looks_like_a_base_flag_is_a_title(
+        self, repo: Path
+    ) -> None:
+        """The value of a value-taking flag is skipped, never scanned."""
+        result = _invoke(repo, command='gh pr create --title "--base=main"')
+        assert result.returncode == BLOCK, result.stdout + result.stderr
 
 
 # ─── The hook output contract: exit 0 speaks JSON, exit 2 speaks stderr ────

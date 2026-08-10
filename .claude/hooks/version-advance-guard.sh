@@ -29,20 +29,40 @@
 #   after a ; && || | ( { separator) and nothing more. No `gh pr create` text
 #   anywhere means exit 0 without ever starting a python interpreter.
 #
-#   Stage 2 only runs on the handful of commands stage 1 lets through, and is
-#   the authoritative one. The boundary anchor alone is not enough, because a
-#   command boundary is not the only thing a `;` can be: an ordinary English
-#   sentence inside a commit message or a `--body` contains them. Observed
-#   live while shipping this very change, twice, on two unrelated `git commit`
-#   and `cat >` commands whose HEREDOC bodies happened to discuss the ship
-#   flow. Stage 2 therefore drops heredoc bodies (their content is data fed to
-#   a process, never syntax the shell runs) and then tokenises what is left
-#   with shlex, requiring `gh` `pr` `create` to survive as three consecutive
-#   TOKENS at a command position. A quoted span collapses to a single token,
-#   so `echo "step 3; gh pr create"` cannot reach the guard.
+#   Stage 2 runs only on the handful of commands stage 1 lets through. The
+#   boundary anchor alone is not enough, because a command boundary is not the
+#   only thing a `;` can be: an ordinary English sentence inside a commit
+#   message or a `--body` contains them. Observed live while shipping this very
+#   change, twice, on unrelated `git commit` and `cat >` commands whose heredoc
+#   bodies happened to discuss the ship flow.
 #
-# Stage 2 only ever narrows stage 1, and when it cannot parse the command at
-# all it defers to stage 1's verdict rather than silently standing down.
+# What stage 2 removes is DATA: heredoc bodies and quoted spans. What it then
+# runs on the remainder is STAGE 1'S OWN REGEX, unchanged. That is the whole
+# design, and the shape it replaced is worth recording because it was wrong in
+# a way that reads as right.
+#
+# The first attempt tokenised with shlex and required `gh` `pr` `create` to be
+# three consecutive tokens at a "command position", derived by looking at the
+# previous token. shlex is a WORD SPLITTER, not a shell grammar: it flattens
+# newlines into ordinary whitespace and yields `;` or `&&` as a token only when
+# they were space-padded. So the previous token of a real ship is a WORD, not a
+# separator, and every one of these went silently inert:
+#     git push -u origin feat<newline>gh pr create --base dev   (previous: feat)
+#     POST_PR_URL=$(gh pr create --base dev ...)                (glued token)
+#     (gh pr create --base dev)                                 (glued token)
+#     git push;gh pr create --base dev                          (glued token)
+# The first two are the recipes docs/shipping.md itself prescribes, at section
+# 6 and at the post-release step. The guard was off for the documented way to
+# ship, and off SILENTLY, because "not a ship" is decided before any announce
+# path exists.
+#
+# The lesson, written down because the invariant that hid it sounded like a
+# safety property: "stage 2 only ever NARROWS stage 1" was true, and useless.
+# For a guard, over-narrowing IS the failure mode. An invariant that constrains
+# only the harmless direction proves nothing about the harmful one. Hence the
+# rule now: stage 2 may delete data from the text, and may not re-implement the
+# decision. Deleting data cannot make a real ship stop matching an anchor it
+# already matched, because a ship's own `gh` never sits inside its own quotes.
 #
 # Block mechanism (per Claude Code hooks docs): exit code 2 blocks the tool
 # call and feeds stderr back to Claude. Exit 0 lets the command proceed.
@@ -141,44 +161,106 @@ fi
 # One parse answers both questions, and it is only reached by a command that
 # already looks like a ship, so its interpreter start-up is off the fast path.
 #
-# `ship=` decides whether this is an INVOCATION or a mention. Stage 1's anchor
-# is not sufficient on its own, because a `;` is a sentence separator as often
-# as a command separator. Both of the following are prose, and both matched
-# stage 1 live while this change was being written:
-#     git commit -F - <<'EOF' ... ran at step 3; gh pr create fires ... EOF
+# `ship=` DELETES DATA AND RE-ASKS STAGE 1. Two kinds of text in a command line
+# are data rather than syntax, and both have been observed carrying the words
+# `gh pr create` past stage 1's anchor:
+#     git commit -F - <<EOF ... ran at step 3; gh pr create fires ... EOF
 #     echo "step 3; gh pr create fires at step 6"
-# So stage 2 first drops every heredoc BODY (its content is data handed to a
-# process, never syntax the shell executes), then tokenises what remains with
-# shlex and requires `gh` `pr` `create` to survive as three consecutive TOKENS
-# at a command position. A quoted span becomes one token, so a `gh pr create`
-# inside it can never be three. A real ship keeps its heredoc OPENER and its
-# `gh` on the executed side of the text, so stripping bodies cannot hide one.
+# So stage 2 removes heredoc BODIES and QUOTED SPANS, then runs stage 1's own
+# regex on what is left. It does not re-derive command position, does not
+# tokenise for this decision, and has no second opinion about what a ship looks
+# like; the anchor that decides is the same one in both stages. Deleting data
+# cannot hide a real ship, because a ship's `gh` is never inside its own quotes
+# or its own heredoc body, and everything around it, including the newline or
+# `;` or `$(` in front of it, survives untouched.
 #
-# `base=` decides whether the release-cut exemption applies, read off the same
-# tokens rather than by pattern-matching raw text, which got it wrong twice:
+# Heredoc handling follows bash rather than approximating it, because each
+# approximation was a live failure mode:
+#   * `<<\EOF` is a quoted delimiter exactly like `<<'EOF'`. Missing it left the
+#     body in place, and an apostrophe in that body then made the old shlex
+#     parse raise, which HARD-BLOCKED an ordinary `git commit`.
+#   * a `<<` body ends only on a line that is EXACTLY the delimiter. `<<-` and
+#     only `<<-` also accepts TAB indentation. Accepting any indentation ended
+#     bodies early and let the prose after them back in.
+#   * a `<<EOF` inside a quoted string is not an opener at all, so openers are
+#     looked for in a quote-stripped copy of each line. Otherwise one quoted
+#     mention swallowed every following line, including a real ship.
+#
+# `base=` decides whether the release-cut exemption applies. This one DOES need
+# tokens, because it reads a VALUE: `--base "main"` has to resolve to `main`,
+# which regex on stripped text cannot do. Reading raw text got it wrong twice:
 #   * it over-matched the VALUE. `--base mainline-experiment` begins with
 #     `main`, so a ship to a branch that is not main was exempted.
 #   * it over-matched the CONTEXT. A genuine `--base dev` ship whose --title or
-#     --body merely CONTAINED the characters `--base main` was exempted,
-#     silently. Same "quoted data is not command syntax" class as above.
-# The FIRST --base after `create` wins: that is the one belonging to this
-# invocation, whatever a later `&& echo ...` on the line may contain. `-B`,
-# gh's short form, is deliberately NOT read; widening the exemption is not this
-# change's job, so a `-B main` release cut false-blocks exactly as before.
+#     --body merely CONTAINED the characters `--base main` was exempted.
+# Token scanning starts after this invocation's own `create` and stops at the
+# first separator token, so a later `&& echo --base main` cannot reach it. The
+# LAST `--base` inside that window wins, matching gh's own flag semantics, so
+# `--base main --base dev` correctly resolves to `dev` and is not exempted. The
+# value of any other value-taking gh flag is skipped rather than scanned, so a
+# `--title "--base=main"` is a title and not a base.
+#
+# `-B`, gh's short form of --base, is deliberately NOT read as a base; widening
+# the exemption is not this change's job, so a `-B main` release cut
+# false-blocks exactly as before. It is still listed as value-taking so its
+# argument is skipped.
 #
 # shlex only splits, it never evaluates, so `$(...)` and backticks in the
 # command text stay inert data throughout.
 #
 # Fail directions, both chosen to preserve stage 1's verdict rather than
-# silently stand the guard down: an unparseable command yields no `ship=` line
-# at all and the guard proceeds (only an explicit `ship=false` stands down),
-# and it yields no base, so the guard runs the check rather than exempting.
-# check_version_advances.py independently exempts a no-suffix release version,
-# which is the belt-and-suspenders for a release cut whose quoting defeats us.
+# silently stand the guard down: only an explicit `ship=false` stands the guard
+# down, so a python3 failure leaves stage 1's verdict in force, and an
+# unparseable command yields no base, so the guard runs the check rather than
+# exempting. check_version_advances.py independently exempts a no-suffix
+# release version, which is the belt-and-suspenders for a release cut whose
+# quoting defeats the tokeniser.
 PARSED="$(printf '%s' "$COMMAND" | python3 -c '
 import re, shlex, sys
 
-HEREDOC = re.compile(r"""<<-?\s*(["\x27]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+# `<<` or `<<-`, then an optionally backslash-escaped or quoted delimiter word.
+HEREDOC = re.compile(r"""<<(-?)[ \t]*\\?(["\x27]?)([A-Za-z_][A-Za-z0-9_]*)\2""")
+
+# A quoted span that both OPENS AND CLOSES within the text given. Deliberately
+# not a shell parser: its only job is to delete data, so an unterminated quote
+# matches nothing and its text is left in place for the anchor to judge.
+QUOTED = re.compile(r"\x27[^\x27]*\x27|\"(?:\\.|[^\"\\])*\"", re.S)
+
+# Stage 1s regex, character for character, in python form.
+SHIP = re.compile(r"(?:^|[;&|({])[ \t]*gh[ \t]+pr[ \t]+create(?:[ \t]|$)", re.M)
+
+# A token that ENDS an invocation`s own argument list.
+SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+
+# gh pr create flags that take a value. Their argument is skipped, never read,
+# so arbitrary text in a --title or --body can never be mistaken for a flag.
+VALUE_FLAGS = frozenset({
+    "--base", "-B", "--title", "-t", "--body", "-b", "--body-file", "-F",
+    "--head", "-H", "--label", "-l", "--assignee", "-a", "--reviewer", "-r",
+    "--milestone", "-m", "--project", "-p", "--template", "-T",
+})
+
+# `gh` at a command boundary, as the tail of whatever token it was glued to:
+# `$(gh` and `(gh` and `push;gh` all put it at one.
+GH_AT_BOUNDARY = re.compile(r"(?:^|[;&|({])gh$")
+
+
+def openers_on(line):
+    """Heredoc openers this line really starts, in order.
+
+    Matched against the RAW line, then filtered by whether the `<<` itself sits
+    inside a quoted span. Blanking the spans first would be wrong in the common
+    case: the delimiter of `<<\x27EOF\x27` IS a quoted span, so blanking would
+    erase the opener and leave its whole body in the text.
+    """
+    spans = [match.span() for match in QUOTED.finditer(line)]
+    found = []
+    for match in HEREDOC.finditer(line):
+        at = match.start()
+        if any(begin < at < end for begin, end in spans):
+            continue
+        found.append((match.group(1), match.group(3)))
+    return found
 
 
 def strip_heredoc_bodies(text):
@@ -189,46 +271,61 @@ def strip_heredoc_bodies(text):
         line = lines[index]
         kept.append(line)
         index += 1
-        for _quote, word in HEREDOC.findall(line):
+        for dash, word in openers_on(line):
             while index < len(lines):
                 body = lines[index]
                 index += 1
-                if body.strip() == word:
+                if (body.lstrip("\t") if dash else body) == word:
                     break
     return "\n".join(kept)
 
 
-def command_position(tokens, index):
-    if index == 0:
-        return True
-    previous = tokens[index - 1]
-    return previous in (";", "&&", "||", "|", "&", "(", "{") or previous.endswith(";")
+raw = sys.stdin.read()
+without_heredocs = strip_heredoc_bodies(raw)
 
+if not SHIP.search(QUOTED.sub(" ", without_heredocs)):
+    print("ship=false")
+    sys.exit(0)
+print("ship=true")
 
-cleaned = strip_heredoc_bodies(sys.stdin.read())
 try:
-    tokens = shlex.split(cleaned, posix=True)
+    tokens = shlex.split(without_heredocs, posix=True)
 except ValueError:
     sys.exit(0)
 
-for index in range(len(tokens) - 2):
-    if tokens[index : index + 3] != ["gh", "pr", "create"]:
+start = None
+for index in range(2, len(tokens)):
+    if (
+        tokens[index] == "create"
+        and tokens[index - 1] == "pr"
+        and GH_AT_BOUNDARY.search(tokens[index - 2])
+    ):
+        start = index + 1
+        break
+if start is None:
+    sys.exit(0)
+
+base = None
+index = start
+while index < len(tokens):
+    token = tokens[index]
+    if token in SEPARATORS or token.endswith(";"):
+        break
+    if token == "--base":
+        base = tokens[index + 1] if index + 1 < len(tokens) else ""
+        index += 2
         continue
-    if not command_position(tokens, index):
+    if token.startswith("--base="):
+        base = token[len("--base=") :]
+        index += 1
         continue
-    print("ship=true")
-    rest = tokens[index + 3 :]
-    for offset, token in enumerate(rest):
-        if token == "--base":
-            if offset + 1 < len(rest):
-                print("base=" + rest[offset + 1].splitlines()[0])
-            break
-        if token.startswith("--base="):
-            print("base=" + token[len("--base=") :].splitlines()[0])
-            break
-    break
-else:
-    print("ship=false")
+    if token in VALUE_FLAGS:
+        index += 2
+        continue
+    index += 1
+
+if base is not None:
+    print("base=" + (base.splitlines()[0] if base.splitlines() else ""))
 ' 2>/dev/null)"
 
 IS_SHIP="$(printf '%s\n' "$PARSED" | sed -n 's/^ship=\(.*\)$/\1/p')"

@@ -29,22 +29,22 @@ bd update <id> --description "Detailed description of changes made"
 
 #### 3a. First decide whether this change gets a version bump at all
 
-**Not every change does.** A documentation-only change carries no build to advance, and bumping it burns a build number that a concurrent branch may already hold. Run this **before you edit any version literal**:
+**Not every change does.** A documentation-only change carries no build to advance, and bumping it burns a build number that a concurrent branch may already hold.
 
-```bash
-git fetch origin
-git diff --name-only origin/dev...HEAD | python3 scripts/classify_changed_paths.py
-```
+The rule is mechanical and you can apply it from what you edited, without running anything:
 
-| Verdict | What to do |
+| Every file you changed | What to do |
 | --- | --- |
-| `docs_only=true` | **Skip the rest of step 3 entirely.** Do not touch the three touchpoints. Go straight to step 4. |
-| `docs_only=false` | Bump all three, as described in 3b below. |
+| ends in `.md`, or lives under `.beads/` | **Do not bump.** Skip 3b entirely, leave all three touchpoints untouched, and go to step 4. |
+| anything else is in the set | Bump all three, per 3b below. |
 
-Two things make this easy to get wrong, so both are stated plainly:
+**"Documentation-only" is not a judgement call.** `scripts/classify_changed_paths.py` is the arbiter, and one source file anywhere in the set makes the whole change code, no matter how small.
 
-- **Run the classifier before you edit anything, not after.** The verdict is computed from the changed-path set, and a version touchpoint is a source file. Bump first and the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict flips to `docs_only=false`, and the bump justifies itself. That circularity is exactly how 15 of 40 consecutive merged PRs ended up carrying a version bump for a change that was nothing but Markdown.
-- **"Documentation-only" is not a judgement call.** It is whatever `scripts/classify_changed_paths.py` says, and its rule is that *every* changed path ends in `.md` or lives under `.beads/`. One source file anywhere in the diff makes the whole change code, no matter how small.
+**You cannot run that arbiter yet, and that is deliberate.** It reads the branch's committed diff against `origin/dev`, and at this step the branch does not exist: it is created and committed in [step 6](#6-commit-and-open-the-pr). Run it there and nowhere else. Running it here returns `docs_only=false` for *every* change, because the diff is empty and an empty changed-file set is classified as code. That answer looks like a verdict and is not one, and acting on it would bump every documentation PR exactly as the pre-carve-out document did.
+
+So the mechanical confirmation happens at **[step 6a](#6a-confirm-the-bump-decision-before-opening-the-pr)**, after the commit and before `gh pr create`. It is a checkpoint that can send you back here, not a formality.
+
+> **Why the order matters.** A version touchpoint is a source file. If you bump first and classify afterwards, the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict is `docs_only=false`, and the bump has justified itself. Nothing downstream ever contradicts you, because by then the change really is a code change. That self-justifying loop is how 15 of 40 consecutive merged PRs carried a version bump for changes that were nothing but Markdown.
 
 Nothing downstream will ask a documentation-only PR for a bump. `.github/workflows/test.yml` gates its build-advance step on `needs.detect.outputs.docs_only != 'true'`, and `.claude/hooks/version-advance-guard.sh` skips the same check on the same verdict from the same script, announcing that it skipped. The `Version Consistency` required check still runs and still passes: it proves the three touchpoints **agree with each other**, and leaving all three untouched keeps them agreeing.
 
@@ -93,10 +93,36 @@ Each of those 7 names is emitted by exactly one job, on every PR. If you ever se
 git fetch origin
 git checkout -b <feature-or-chore-branch> origin/dev
 
-# Stage and commit only changed files
-git add frontend/package.json backend/main.py backend/routers/
+# Stage and commit only changed files.
+#   Stage the files this change actually touched, whatever they are.
+git add <the files you changed>
+#   CODE CHANGE ONLY: add the three version touchpoints bumped in step 3b.
+#   A documentation-only change bumped nothing, so it stages nothing here;
+#   adding these paths with no bump in them stages an empty change and the
+#   commit fails.
+git add frontend/package.json backend/main.py backend/routers/backup.py
 git commit -m "v0.x.x-xxxx: Brief description"
+#   Documentation-only commits carry no version, so their subject names the
+#   change instead: `docs: brief description`.
+```
 
+#### 6a. Confirm the bump decision, before opening the PR
+
+This is the **only** place the classifier has real input: the branch exists and the change is committed, so `origin/dev...HEAD` is exactly the file set the pull request will contain. Step 3a decided from the rule; this proves it.
+
+```bash
+git fetch origin
+git diff --name-only --no-renames origin/dev...HEAD | python3 scripts/classify_changed_paths.py
+```
+
+| Verdict | What it means |
+| --- | --- |
+| `docs_only=true` | No bump was needed and none is present. Go on to `gh pr create`; the ship guard will announce that it skipped the build-advance check. |
+| `docs_only=false` | This change needs a bump. If step 3b was skipped, go back and do it now: bump the three touchpoints, `git add` them, `git commit --amend --no-edit`, and re-run the command above. |
+
+`--no-renames` is not optional here. Without it `git diff --name-only` prints only the *destination* of a rename, so moving a source file to a `.md` path presents a changed-file set that is entirely Markdown. It is the flag `.claude/hooks/version-advance-guard.sh` uses for the same reason.
+
+```bash
 # Push and open the PR
 git push -u origin <feature-or-chore-branch>
 gh pr create --base dev --head <feature-or-chore-branch> \
