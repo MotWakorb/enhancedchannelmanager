@@ -20,6 +20,9 @@ the bottom, which read the real workflow files on purpose.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -456,6 +459,218 @@ class TestWorkflowContract:
             "every PR with no admin bypass. See bead "
             "enhancedchannelmanager-t4d5w."
         )
+
+
+# --- Rename sources reach the classifier ------------------------------------
+
+
+# Every workflow carrying a `detect` job that feeds this classifier. All three
+# build their changed-file set from the same GitHub APIs, so all three have to
+# ask for both sides of a rename.
+DETECT_WORKFLOWS = ("test.yml", "build.yml", "docs-pages.yml")
+
+# `--jq '<expression>'` as the detect step spells it. The expressions never
+# contain a single quote, so a non-greedy character class is enough and no
+# shell parser is needed.
+_JQ_ARGUMENT = re.compile(r"--jq\s+'([^']*)'")
+
+# Recorded from the real GitHub API for commit b47ced96 of this repository,
+# via `gh api repos/MotWakorb/enhancedchannelmanager/commits/b47ced96`. Entries
+# are verbatim, reduced to the three fields the detect step can read and to
+# three of the commit's 18 entries: the renamed one plus one either side of it,
+# enough to prove the expression handles a mixed set.
+#
+# That commit is the evidence in bead enhancedchannelmanager-9ogyd:
+# `git diff --name-only b47ced96^...b47ced96` lists 18 paths and the same
+# command with `--no-renames` lists 19. The path only the second spelling shows
+# is the `previous_filename` below.
+RECORDED_RENAME_COMMIT_FILES = [
+    {"filename": "CHANGELOG.md", "status": "modified"},
+    {"filename": "backend/routers/backup.py", "status": "modified"},
+    {
+        "filename": "frontend/src/components/settings/OutboundPolicyCard.css",
+        "previous_filename": (
+            "frontend/src/components/settings/SecuritySettingsSection.css"
+        ),
+        "status": "renamed",
+    },
+]
+RECORDED_RENAME_SOURCE = (
+    "frontend/src/components/settings/SecuritySettingsSection.css"
+)
+
+# The attack from bead enhancedchannelmanager-9ogyd, in the shape the
+# pull-request files API returns it. One entry, one `.md` destination, and a
+# deleted authentication test hiding in `previous_filename`.
+RENAME_INTO_MARKDOWN_FILES = [
+    {
+        "filename": "docs/legacy_auth_test_notes.md",
+        "previous_filename": "backend/tests/unit/test_auth_middleware.py",
+        "status": "renamed",
+    },
+]
+
+JQ = shutil.which("jq")
+requires_jq = pytest.mark.skipif(
+    JQ is None,
+    reason=(
+        "the jq binary is not installed. The dependency-free half of this "
+        "guard, test_every_detect_workflow_asks_for_rename_sources, still "
+        "runs and still fails if the expression drops previous_filename."
+    ),
+)
+
+
+def _classify_step_run(workflow_name: str) -> str:
+    """The shell body of the `detect` job's `classify` step, verbatim."""
+    path = TestWorkflowContract.WORKFLOW_DIR / workflow_name
+    job = (TestWorkflowContract._load_workflow(path).get("jobs") or {}).get("detect")
+    assert job, f"{workflow_name} no longer has a `detect` job"
+    for step in job.get("steps") or []:
+        if (step or {}).get("id") == "classify":
+            return step.get("run") or ""
+    raise AssertionError(f"{workflow_name}:detect has no step with id `classify`")
+
+
+def _jq_expressions(workflow_name: str) -> list[str]:
+    expressions = _JQ_ARGUMENT.findall(_classify_step_run(workflow_name))
+    assert expressions, (
+        f"{workflow_name}:detect no longer passes `--jq` to `gh api`. If the "
+        f"changed-file set is now built some other way, this guard has to be "
+        f"rewritten against it rather than deleted. See bead "
+        f"enhancedchannelmanager-9ogyd."
+    )
+    return expressions
+
+
+def _array_shaped(expressions: list[str]) -> str:
+    """The expression for `pulls/N/files`, which returns a bare array."""
+    matches = [e for e in expressions if not e.lstrip().startswith(".files")]
+    assert len(matches) == 1, f"expected one array-shaped expression, got {matches}"
+    return matches[0]
+
+
+def _compare_shaped(expressions: list[str]) -> str:
+    """The expression for the compare API, which nests the list under `files`."""
+    matches = [e for e in expressions if e.lstrip().startswith(".files")]
+    assert len(matches) == 1, f"expected one compare-shaped expression, got {matches}"
+    return matches[0]
+
+
+def _run_jq(expression: str, payload) -> list[str]:
+    """Apply the workflow's real jq expression to a payload, as CI would.
+
+    Returns the raw stdout lines, blank ones included, because whether the
+    expression can emit a blank line is itself part of the contract.
+    """
+    result = subprocess.run(
+        [JQ, "-r", expression],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"jq rejected the workflow's own expression {expression!r}: "
+        f"{result.stderr.strip()}"
+    )
+    return result.stdout.splitlines()
+
+
+class TestRenameSourcesReachTheClassifier:
+    """A rename shows CI only its destination unless the workflow asks for more.
+
+    `git diff --name-only` with default rename detection prints the
+    destination and drops the source, and the pull-request and compare APIs
+    have the same shape: the source lives in `previous_filename`, which
+    `.[].filename` discards. So `git mv
+    backend/tests/unit/test_auth_middleware.py docs/legacy_auth_test_notes.md`
+    reached the classifier as one `.md` path, classified documentation-only,
+    and every required status check passed having executed nothing. Branch
+    protection on `dev` requires no reviews, so those green checks were the
+    entire gate. See bead enhancedchannelmanager-9ogyd.
+    """
+
+    @pytest.mark.parametrize("workflow", DETECT_WORKFLOWS)
+    def test_every_detect_workflow_asks_for_rename_sources(self, workflow):
+        """Dependency-free half of the guard: it cannot skip, ever."""
+        for expression in _jq_expressions(workflow):
+            assert "previous_filename" in expression, (
+                f"{workflow}:detect builds its changed-file set with "
+                f"{expression!r}, which sees only the DESTINATION of a "
+                f"renamed file. The source path is dropped, so a rename into "
+                f"a `.md` path classifies documentation-only and every gate "
+                f"reading that verdict no-ops green over deleted code. "
+                f"See bead enhancedchannelmanager-9ogyd."
+            )
+
+    @requires_jq
+    def test_rename_into_markdown_classifies_as_code(self, script):
+        """The regression guard, end to end through the workflow's own jq."""
+        paths = _run_jq(
+            _array_shaped(_jq_expressions("test.yml")), RENAME_INTO_MARKDOWN_FILES
+        )
+        docs_only, code_paths = script.classify(paths)
+        assert docs_only is False, (
+            f"a rename of a test file into a `.md` path classified "
+            f"documentation-only from {paths}. Six of the seven required "
+            f"checks gate every step on that verdict."
+        )
+        assert "backend/tests/unit/test_auth_middleware.py" in code_paths
+
+    @requires_jq
+    def test_recorded_rename_commit_yields_both_sides(self):
+        """Real recorded payload, not a hand-guessed shape."""
+        for expression, payload in (
+            (
+                _array_shaped(_jq_expressions("test.yml")),
+                RECORDED_RENAME_COMMIT_FILES,
+            ),
+            (
+                _compare_shaped(_jq_expressions("test.yml")),
+                {"files": RECORDED_RENAME_COMMIT_FILES},
+            ),
+        ):
+            paths = _run_jq(expression, payload)
+            assert RECORDED_RENAME_SOURCE in paths, (
+                f"{expression!r} dropped the rename source recorded on commit "
+                f"b47ced96: {paths}"
+            )
+            assert (
+                "frontend/src/components/settings/OutboundPolicyCard.css" in paths
+            )
+
+    @requires_jq
+    @pytest.mark.parametrize("workflow", DETECT_WORKFLOWS)
+    def test_no_blank_lines_for_ordinary_changes(self, workflow):
+        """`// empty` must emit nothing, not an empty line, when unrenamed.
+
+        The classifier ignores blank lines, so a stray one is harmless today.
+        Pinning it keeps a future spelling such as `.previous_filename // ""`
+        from quietly padding the file and from being copied somewhere that
+        does not tolerate it.
+        """
+        plain = [
+            {"filename": "backend/main.py", "status": "modified"},
+            {"filename": "CHANGELOG.md", "previous_filename": None},
+        ]
+        for expression in _jq_expressions(workflow):
+            payload = (
+                {"files": plain} if expression.lstrip().startswith(".files") else plain
+            )
+            paths = _run_jq(expression, payload)
+            assert paths == ["backend/main.py", "CHANGELOG.md"], (
+                f"{workflow} expression {expression!r} produced {paths!r}"
+            )
+
+    @requires_jq
+    def test_compare_expression_tolerates_a_payload_with_no_files_key(self):
+        """`gh api --paginate` can hand the compare expression a page with no
+        `files` key. The `?` must keep absorbing that instead of failing the
+        step, since a failed classifier leaves the set empty."""
+        for workflow in ("test.yml", "build.yml", "docs-pages.yml"):
+            expression = _compare_shaped(_jq_expressions(workflow))
+            assert _run_jq(expression, {}) == []
 
 
 # --- The published user-guide site has one path definition ------------------

@@ -81,10 +81,20 @@ jobs:
 
           : > changed_files.txt
 
+          # BOTH SIDES OF A RENAME (bead enhancedchannelmanager-9ogyd).
+          # `.filename` alone is the DESTINATION only. A renamed file's
+          # source path is carried in `previous_filename` and was thrown
+          # away, so `git mv backend/tests/unit/test_auth_middleware.py
+          # docs/legacy_notes.md` presented as a single `.md` path and
+          # classified documentation-only. Every required check then went
+          # green having executed nothing, and `dev` requires no reviews.
+          # `// empty` emits nothing (not a blank line) for the ordinary
+          # non-rename case, and the classifier ignores blank lines anyway.
+          # Duplicate paths are harmless: the verdict is an all/any test.
           case "$EVENT_NAME" in
             pull_request)
               gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-                --jq '.[].filename' > changed_files.txt \
+                --jq '.[] | .filename, (.previous_filename // empty)' > changed_files.txt \
                 || { echo "::warning::could not list PR files"; : > changed_files.txt; }
               ;;
             push)
@@ -92,7 +102,7 @@ jobs:
                 echo "::warning::no usable before-SHA on this push"
               else
                 gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                  --jq '.files[]?.filename' > changed_files.txt \
+                  --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
                   || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
               fi
               ;;

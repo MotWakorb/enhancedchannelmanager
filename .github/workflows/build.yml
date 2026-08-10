@@ -66,10 +66,16 @@ jobs:
 
           : > changed_files.txt
 
+          # Both sides of a rename, exactly as in test.yml's detect job.
+          # See bead enhancedchannelmanager-9ogyd for why `.filename` alone
+          # is not the changed-path set: it is the rename DESTINATION only,
+          # and the source in `previous_filename` was discarded. This job
+          # gates the two `CodeQL Analysis` required contexts, so it carried
+          # the same hole.
           case "$EVENT_NAME" in
             pull_request)
               gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-                --jq '.[].filename' > changed_files.txt \
+                --jq '.[] | .filename, (.previous_filename // empty)' > changed_files.txt \
                 || { echo "::warning::could not list PR files"; : > changed_files.txt; }
               ;;
             push)
@@ -77,7 +83,7 @@ jobs:
                 echo "::warning::no usable before-SHA on this push"
               else
                 gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                  --jq '.files[]?.filename' > changed_files.txt \
+                  --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
                   || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
               fi
               ;;
