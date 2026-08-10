@@ -48,13 +48,31 @@
    title is now 13px, so the same string needs 132 x 13/16 = 107px. 110px
    rounded, giving 878px, rounded to 880. Measured at 1600 and 1280: every
    header label still fits its own column (widest is "Last Updated" at 94px
-   in a 160px box). */
+   in a 160px box).
+
+   The Actions column then went 120px -> 144px, so the fixed columns are 664px
+   and the min-width 904px. `.action-btn` is `flex-shrink: 0` as of bead
+   enhancedchannelmanager-xh33o, which means the actions no longer squeeze to
+   fit: at 36px per button (32px box + the row's 4px gap) less one trailing
+   gap, 120px held three and this row carries four (Toggle, Refresh, Edit and
+   the overflow kebab). A fourth in a 120px track overflows a container that
+   `.epg-source-row > div` gives `overflow: hidden`, which clips a control
+   rather than shrinking it.
+
+   144px, NOT the 140px that exactly fits. 140px is four 32px boxes and three
+   4px gaps with 0.00px left over, so the row is correct today and clips the
+   moment anyone adds a fifth control -- the failure `flex-shrink: 0` exists to
+   make visible, arriving as an invisible one. 144px is the same 4px trailing
+   slack `.account-actions` has in M3U's 180px track, so the two rows fail the
+   same way at the same distance from full instead of one of them sitting
+   exactly on the edge. "Last Updated" at 94px is still the widest header
+   label and still fits its own 160px column. */
 .epg-sources-list .list-header {
-  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 144px;
   gap: 1rem;
   padding: 0.75rem 1rem;
   align-items: center;
-  min-width: 880px;
+  min-width: 904px;
   white-space: nowrap;
 }
 
@@ -72,7 +90,7 @@
 
 .epg-source-row {
   display: grid;
-  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 144px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
@@ -81,7 +99,7 @@
   transition: background-color 0.15s;
   /* Kept in lockstep with `.epg-sources-list .list-header` above — the two
      have to scroll as one. */
-  min-width: 880px;
+  min-width: 904px;
 }
 
 .epg-source-row:last-child {

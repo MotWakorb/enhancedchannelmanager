@@ -138,6 +138,37 @@ function M3UAccountRow({
   const totalGroupCount = account.channel_groups.length;
   const autoSyncGroupCount = account.channel_groups.filter(g => g.auto_channel_sync).length;
 
+  // Per-account setup actions, collapsed into the row's kebab so the visible
+  // action buttons fit the 180px actions column at their declared 32px box
+  // (bead enhancedchannelmanager-xh33o). Refresh VOD is XtreamCodes-only, so
+  // it is filtered out rather than shown disabled for other account types.
+  const rowMenuItems: OverflowMenuItem[] = [
+    ...(account.account_type === 'XC'
+      ? [{
+          label: isRefreshingVod ? 'Refreshing VOD...' : 'Refresh VOD',
+          icon: isRefreshingVod ? 'sync' : 'video_library',
+          onClick: () => onRefreshVod(account),
+          disabled: !account.is_active || isRefreshingVod || account.locked,
+          title: 'Refresh VOD content',
+        }]
+      : []),
+    {
+      label: 'Manage Groups',
+      icon: 'folder',
+      onClick: () => onManageGroups(account),
+    },
+    {
+      label: 'Manage Account Profiles',
+      icon: 'account_circle',
+      onClick: () => onManageProfiles(account),
+    },
+    {
+      label: 'Manage Filters',
+      icon: 'filter_alt',
+      onClick: () => onManageFilters(account),
+    },
+  ];
+
   return (
     <div className={`m3u-account-row ${!account.is_active ? 'inactive' : ''}`}>
       <div className={`account-status ${getStatusClass(account.status)}`} title={account.last_message || ''}>
@@ -247,6 +278,13 @@ function M3UAccountRow({
         <span className="updated-time">{formatDateTime(account.updated_at)}</span>
       </div>
 
+      {/* Four primary actions plus the kebab is exactly what the 180px actions
+          column holds at the declared 32px box (bead
+          enhancedchannelmanager-xh33o). The setup actions below it are the
+          ones an operator reaches for once per account rather than per
+          refresh, which is the split docs/css_guidelines.md
+          § "Collapse-to-kebab" describes. Refresh VOD is XC-only and lives in
+          the kebab, so the visible count does not vary by account type. */}
       <div className="account-actions">
         <button
           className={`action-btn toggle ${account.is_active ? 'active' : ''}`}
@@ -268,43 +306,6 @@ function M3UAccountRow({
         >
           <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
-        {account.account_type === 'XC' && (
-          <button
-            className="action-btn"
-            onClick={() => onRefreshVod(account)}
-            title="Refresh VOD"
-            aria-label="Refresh VOD content"
-            disabled={!account.is_active || isRefreshingVod || account.locked}
-          >
-            <span className={`material-icons ${isRefreshingVod ? 'spinning' : ''}`} aria-hidden="true">
-              {isRefreshingVod ? 'sync' : 'video_library'}
-            </span>
-          </button>
-        )}
-        <button
-          className="action-btn"
-          onClick={() => onManageGroups(account)}
-          title="Manage Groups"
-          aria-label="Manage Groups"
-        >
-          <span className="material-icons" aria-hidden="true">folder</span>
-        </button>
-        <button
-          className="action-btn"
-          onClick={() => onManageProfiles(account)}
-          title="Manage Account Profiles"
-          aria-label="Manage Account Profiles"
-        >
-          <span className="material-icons" aria-hidden="true">account_circle</span>
-        </button>
-        <button
-          className="action-btn"
-          onClick={() => onManageFilters(account)}
-          title="Manage Filters"
-          aria-label="Manage Filters"
-        >
-          <span className="material-icons" aria-hidden="true">filter_alt</span>
-        </button>
         <button
           className="action-btn"
           onClick={() => onEdit(account)}
@@ -323,6 +324,7 @@ function M3UAccountRow({
         >
           <span className="material-icons" aria-hidden="true">delete</span>
         </button>
+        <OverflowMenu items={rowMenuItems} label={`More actions for ${account.name}`} />
       </div>
     </div>
   );

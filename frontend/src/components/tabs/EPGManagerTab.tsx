@@ -26,6 +26,8 @@ import { ModalOverlay } from '../ModalOverlay';
 import { PageHeader } from '../PageHeader';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
+import { OverflowMenu } from '../OverflowMenu';
+import type { OverflowMenuItem } from '../OverflowMenu';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import {
@@ -135,6 +137,24 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
 
   const programCount = getProgramCount(source.last_message);
 
+  // Per-source actions collapsed into the row's kebab so the visible buttons
+  // fit the actions column at their declared 32px box
+  // (bead enhancedchannelmanager-xh33o).
+  const rowMenuItems: OverflowMenuItem[] = [
+    ...(source.url && !hideEpgUrls
+      ? [{
+          label: 'Copy URL',
+          icon: 'content_copy',
+          onClick: () => { navigator.clipboard.writeText(source.url!); },
+        }]
+      : []),
+    {
+      label: 'Delete',
+      icon: 'delete',
+      onClick: () => onDelete(source),
+    },
+  ];
+
   const getSourceTypeLabel = (type: EPGSourceType) => {
     switch (type) {
       case 'xmltv': return 'XMLTV';
@@ -199,19 +219,12 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         <span className="updated-time">{formatDateTime(source.updated_at)}</span>
       </div>
 
+      {/* Three primary actions plus the kebab, which is what the actions
+          column holds at the declared 32px box (bead
+          enhancedchannelmanager-xh33o). Copy URL is conditional on the source
+          having a URL and on the hide-URLs setting; putting it in the kebab
+          keeps the visible count fixed at three whatever those resolve to. */}
       <div className="source-actions">
-        {source.url && !hideEpgUrls && (
-          <button
-            className="action-btn"
-            onClick={() => {
-              navigator.clipboard.writeText(source.url!);
-            }}
-            title="Copy URL"
-            aria-label="Copy URL"
-          >
-            <span className="material-icons" aria-hidden="true">content_copy</span>
-          </button>
-        )}
         <button
           className={`action-btn toggle ${source.is_active ? 'active' : ''}`}
           onClick={() => onToggleActive(source)}
@@ -240,14 +253,7 @@ function SortableEPGSourceRow({ source, onEdit, onDelete, onRefresh, onToggleAct
         >
           <span className="material-icons" aria-hidden="true">edit</span>
         </button>
-        <button
-          className="action-btn delete"
-          onClick={() => onDelete(source)}
-          title="Delete"
-          aria-label="Delete EPG source"
-        >
-          <span className="material-icons" aria-hidden="true">delete</span>
-        </button>
+        <OverflowMenu items={rowMenuItems} label={`More actions for ${source.name}`} />
       </div>
     </div>
   );

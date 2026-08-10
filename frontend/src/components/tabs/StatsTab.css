@@ -358,36 +358,63 @@
   gap: 0.75rem;
 }
 
-/* Scoped to the page root. `.section-title` is a name several other chunks also
-   render: `<h3 className="section-title">` in RuleBuilder.tsx (Pipeline) and
-   `<h4 className="section-title">` in ScheduleEditor.tsx, plus the scoped
-   `.rule-section .section-title` and `.schedule-editor .parameters-section
-   .section-title` written for them. Declared bare in the Stats lazy chunk, this
-   rule reached all of those for the rest of the session once Stats had been
-   visited, and supplied whatever their own scoped rules left unset
-   (bead enhancedchannelmanager-6z299.2). Stats' own titles — including
-   PopularityPanel's and WatchHistoryPanel's, which render inside `.stats-tab` —
-   still match. `:where()` keeps this at (0,1,0), so the already-scoped rules
-   still win by specificity exactly as they do today.
+/* StatsTab's own four dividers ("Active Channels", "Recent Events", "Top
+   Watched Channels", "Bandwidth Usage"). They are tracked uppercase captions
+   over a hairline rule, the `.list-header` idiom rather than a card title, and
+   they take the MICRO role: a documented deviation from "all panel titles take
+   the section role" (PO decision 3, bead enhancedchannelmanager-6z299), made
+   because at 14px/600/uppercase they were off-scale in both directions, too
+   big for a caption and too shouty for a heading.
 
-   MICRO, not SECTION — a documented deviation from "all panel titles take the
-   section role" (PO decision 3, bead enhancedchannelmanager-6z299). This rule
-   dresses StatsTab's own four dividers ("Active Channels", "Recent Events",
-   "Top Watched Channels", "Bandwidth Usage") as tracked uppercase captions
-   over a hairline rule. That is the `.list-header` idiom, not a card title:
-   at 14px/600/uppercase it was off-scale in both directions, too big for a
-   caption and too shouty for a heading. Micro keeps its character and puts it
-   on the scale. The six panels below carry their own (0,2,0) `.section-title`
-   rules on the section role and are unaffected by the size and weight here —
-   see the note on `text-transform` in each of them
-   (bead enhancedchannelmanager-6z299.4). */
-:where(.stats-tab) .section-title {
+   THE NAME. This was `:where(.stats-tab) .section-title` and the markup said
+   `class="section-title"`, so one class name carried two different things:
+   this 10px/700/uppercase/0.8px caption and the 15px/600 section-role heading
+   that nine other files render, including seven Stats panels sitting on the
+   same page. Scoping (bead enhancedchannelmanager-6z299.2) stopped the leak
+   but left the collision, and a reader could not tell from the markup which of
+   the two a given `.section-title` was. The caption half is renamed to
+   `.panel-caption`, which describes what it is and collides with nothing; the
+   section-role heading keeps `.section-title` everywhere, including the seven
+   panels that render inside `.stats-tab` and carry their own (0,2,0) rules.
+   The `:where()` page scope is KEPT even though the new name collides with
+   nothing today: it costs zero specificity, and the guideline is about the
+   name someone adds tomorrow. */
+:where(.stats-tab) .panel-caption {
   font-size: var(--type-micro-size);
   font-weight: var(--type-micro-weight);
   letter-spacing: var(--type-micro-tracking);
   text-transform: uppercase;
   color: var(--text-secondary);
   margin: 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+/* THE DIVIDER IS NOT PART OF THE CAPTION, and splitting it out is the whole
+   reason this second rule exists.
+
+   The rule above used to be `:where(.stats-tab) .section-title` and its body
+   covered NINE properties, not the four the rename was about. At (0,1,0) it
+   lost font-size, font-weight, letter-spacing, text-transform, colour and
+   margin to the seven panels' (0,2,0) rules, but it WON `padding-bottom` and
+   `border-bottom`, because not one of those seven declares either
+   (BandwidthPanel, EnhancedStatsPanel, PopularityPanel, WatchHistoryPanel,
+   UserStatsPanel, ProvidersPanel, ProviderStreamUsagePanel: checked, zero of
+   seven). So the hairline under every Stats section heading was being drawn by
+   the caption rule, and renaming that rule alone took it away from all seven:
+   measured 8px -> 0px padding-bottom, 1px solid -> none, 28.5px -> 19.5px
+   heading height, identically on all seven.
+
+   That is the defect docs/css_guidelines.md § "Partial redeclaration" names,
+   and its closing line is the rule that was missed here: scope every property
+   the collision covers, not just the ones you came for. So the two properties
+   the collision actually covered stay behind on the original selector, at the
+   original specificity, with the original match set. The seven headings are
+   render-identical to before the rename; the caption keeps its own copy above
+   because it needs the same divider and no longer matches this selector.
+
+   Bead enhancedchannelmanager-lriss. */
+:where(.stats-tab) .section-title {
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--border-primary);
 }
@@ -1137,7 +1164,7 @@
   margin-bottom: 0.75rem;
 }
 
-.top-watched-header .section-title {
+:where(.stats-tab) .top-watched-header .panel-caption {
   margin-bottom: 0;
 }
 

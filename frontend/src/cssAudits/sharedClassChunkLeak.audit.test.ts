@@ -264,10 +264,12 @@ function reachStatic(root: string): Set<string> {
  * The model was validated against a real build: it reproduces every chunk in
  * dist/assets/*.css, including the four shared-across-lazy-roots chunks
  * (DenseToolbar, OverflowMenu, GroupMultiSelectDropdown, StickySectionNav),
- * and the two CSS files it reports as unreachable from the entry
- * (ChannelDetail.css, DummyEPGChannelPicker.css -- their components are
- * imported by nothing) are correspondingly absent from every built chunk.
- * Unreachable files are skipped: nothing loads them, so they cannot leak.
+ * and the CSS file it reports as unreachable from the entry
+ * (DummyEPGChannelPicker.css -- its component is reached only from the dev
+ * harness) is correspondingly absent from every built chunk. Unreachable
+ * files are skipped: nothing loads them, so they cannot leak.
+ * ChannelDetail.css was the other one; its component was imported by nothing
+ * at all and both files were deleted (bead enhancedchannelmanager-albfq).
  */
 function deriveChunks(): Map<string, string> {
   const universe = new Set<string>();
@@ -602,7 +604,11 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
   // § 27 FILTER BAR absorbs the whole Journal/M3U-Changes header block.
   { selector: '.filter-select', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:111 | M3UChangesTab.css:160 | StreamsPane.css:194 — divergent width; § 4.3 flags the StreamsPane copy for verification' },
   { selector: '.filter-select .custom-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:116 | M3UChangesTab.css:165' },
-  { selector: '.filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:96 | M3UChangesTab.css:153' },
+  // The unconditional `.filters-bar` pair is retired: neither tab rendered the
+  // class, so both copies were deleted outright rather than scoped, and the
+  // real owner `.watch-history-panel .filters-bar` now writes out the
+  // flex-shrink it was borrowing (bead enhancedchannelmanager-albfq). The two
+  // narrow-viewport copies below are still declared and stay baselined.
   // StatsTab's copy is gone (bead enhancedchannelmanager-wjbwr): StatsTab.tsx
   // rendered no `.header-actions` element at all — its Refresh button reaches
   // PageHeader's `.header-actions` through `RouteHeaderSlot name="primary-action"`
@@ -612,9 +618,9 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
   { selector: '.header-left', chunks: ['JournalTab', 'M3UChangesTab', 'StatsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'StatsTab.css:33 | JournalTab.css:26 | M3UChangesTab.css:34 — divergent row-gap' },
   { selector: '.header-stats', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:41 | M3UChangesTab.css:49' },
   { selector: '@media (max-width: 600px) :: .filter-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:483 | M3UChangesTab.css:527' },
-  { selector: '@media (max-width: 600px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:475 | M3UChangesTab.css:523' },
+  { selector: '@media (max-width: 600px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:571 | M3UChangesTab.css:587' },
   { selector: '@media (max-width: 600px) :: .header-actions', chunks: ['JournalTab', 'LogoManagerTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:471 | M3UChangesTab.css:511 | LogoManagerTab.css:456' },
-  { selector: '@media (max-width: 768px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:455 | M3UChangesTab.css:495' },
+  { selector: '@media (max-width: 768px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:551 | M3UChangesTab.css:559' },
   // § 28 METRIC TILE absorbs Pipeline's and Stats' shared tile.
   { selector: '.stat-item', chunks: ['ChannelPipelineTab', 'StatsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'ChannelPipelineTab.css:48 | StatsTab.css:507' },
   // § 4.4 rogue-duplicate deletions.

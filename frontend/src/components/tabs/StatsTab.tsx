@@ -1039,7 +1039,7 @@ export function StatsTab() {
         {/* Active Channels */}
         {activeChannels > 0 && (
           <div className="active-channels" id="stats-section-active-channels">
-            <h3 className="section-title">Active Channels</h3>
+            <h3 className="panel-caption">Active Channels</h3>
 
             {channelStats?.channels?.map((channel) => {
               // Try to look up channel name from ECM's channel data by UUID
@@ -1694,7 +1694,7 @@ export function StatsTab() {
         {streamingEvents.length > 0 && (
           <div className="events-section" id="stats-section-recent-events">
             <div className="events-header">
-              <h3 className="section-title">Recent Events</h3>
+              <h3 className="panel-caption">Recent Events</h3>
               <div className="events-filter">
                 <CustomSelect
                   value={eventFilter}
@@ -1743,7 +1743,7 @@ export function StatsTab() {
         {topWatchedChannels.length > 0 && (
           <div className="top-watched-section" id="stats-section-top-watched">
             <div className="top-watched-header">
-              <h3 className="section-title">Top Watched Channels</h3>
+              <h3 className="panel-caption">Top Watched Channels</h3>
               <div className="top-watched-toggle">
                 <button
                   className={`toggle-btn ${topWatchedSortBy === 'views' ? 'active' : ''}`}
@@ -1786,7 +1786,7 @@ export function StatsTab() {
         {/* Bandwidth Usage Summary */}
         {bandwidthStats && (
           <div className="bandwidth-section" id="stats-section-bandwidth-usage">
-            <h3 className="section-title">Bandwidth Usage</h3>
+            <h3 className="panel-caption">Bandwidth Usage</h3>
             <div className="bandwidth-summary">
               <div className="bandwidth-stat">
                 <span className="bandwidth-label">Today</span>

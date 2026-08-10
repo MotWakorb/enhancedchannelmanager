@@ -4,12 +4,35 @@
   position: relative;
 }
 
-/* Bell button */
+/* Bell button.
+   The 28x28 box and the zero padding used to live in App.css as
+   `.header .notification-bell`, on the reasoning that NotificationCenter was
+   a shared component rendered at its own comfortable size elsewhere and only
+   the top bar wanted it compact. There is no elsewhere: App.tsx:2667 is the
+   component's only render site, so the "compact" size was the only size that
+   has ever drawn. Moved here verbatim, which makes it render-neutral
+   (measured 28x28 box / 20px glyph before and after, 45px header band
+   unmoved). `--header-control-height` is declared on `.app` in App.css and
+   inherits down to that one render site; it is the same token every other
+   control in `.header-actions` is pinned to, so the bell stays in lockstep
+   with them rather than carrying a literal 28.
+
+   The `28px` fallback is what makes "the component owns its chrome" true
+   rather than nearly true. The token lives on `.app`, not `:root`, so a
+   render outside that subtree resolves the var to nothing and the box falls
+   back to `width: auto` on a padding-0 button, i.e. a bell collapsed to its
+   glyph. There is no such render site today; the fallback means adding one
+   cannot silently produce that. It is a floor, not a second source of truth:
+   inside `.app` the token always wins, so the two can only disagree where the
+   token does not reach.
+   Bead enhancedchannelmanager-eae0g. */
 .notification-bell {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0.5rem;
+  width: var(--header-control-height, 28px);
+  height: var(--header-control-height, 28px);
+  padding: 0;
   border-radius: var(--radius-lg);
   color: var(--text-secondary);
   position: relative;
@@ -35,37 +58,36 @@
    e2e/frozen-chrome.spec.ts). Same call, same reason, as `.user-menu-icon` in
    bead 7bsxj.
 
-   THIS RULE HAS NEVER RENDERED. It said 24px and the bell has always drawn at
-   20px, because App.css `.header .notification-bell .material-icons` is (0,3,0)
-   and wins — not the index.css base-rule tie bead 3vjk2 describes, which is
-   what bead 9bpkk predicted; the shadow here comes from a MORE specific rule,
-   not a less specific one. 24 -> 20 is therefore render-neutral by
-   construction (measured: 20px before and after, all six viewport x theme
-   passes). It is made anyway so the component stops declaring a size it does
-   not have, and so the value survives if that App.css override is ever
-   removed. Bead enhancedchannelmanager-9bpkk. */
+   Bead 9bpkk brought this rule from 24px to 20px so the component stopped
+   declaring a size it did not have; App.css `.header .notification-bell
+   .material-icons` was the (0,3,0) rule that had been winning. That override
+   is now deleted and this rule is what draws, which is exactly the case 9bpkk
+   said the 20 was written for (bead enhancedchannelmanager-eae0g). */
 .notification-bell .material-icons {
   font-size: 20px;
 }
 
 /* Badge — chrome on the bell, not panel content, so a literal like the glyph
-   above rather than --type-badge-*. Also never rendered at the 11px it
-   declared: App.css `.header .notification-badge` (0,2,0) resizes the whole
-   pill for the 28px button and sets 10px. 11 -> 10 aligns the component with
-   what draws and is render-neutral (measured 10px/600, 15x15 box, unmoved at
-   both viewports in all three themes) — which is why the ratio
-   e2e/contrast-aa.spec.ts FORCE_RENDERs for this selector needed no
-   re-baselining. Weight stays 600: App.css sets no weight, so 600 IS the
-   rendered value, and it is the legibility of a two-digit count in a 15px
-   pill. Bead enhancedchannelmanager-9bpkk. */
+   above rather than --type-badge-*. Bead 9bpkk already aligned the font-size
+   here with what drew (11 -> 10); the geometry did not follow, so this rule
+   still described an 18x18 inset pill that nothing rendered. App.css
+   `.header .notification-badge` (0,2,0) was sizing the whole pill for the
+   28px button and outdenting it past the button's corner, because on a 28px
+   button an inset badge covers the bell glyph. That override is deleted and
+   its six values are folded in here verbatim, so the component owns its own
+   chrome and the pill is render-neutral: measured 15x15, 10px/600, offset
+   -2px/-2px from the bell's top-right corner, before and after. The ratio
+   e2e/contrast-aa.spec.ts FORCE_RENDERs for this selector is unaffected, as
+   neither the fill nor the text colour moves.
+   Bead enhancedchannelmanager-eae0g. */
 .notification-badge {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
   background-color: var(--error);
   color: white;
   font-size: 10px;

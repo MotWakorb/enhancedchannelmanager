@@ -144,13 +144,13 @@
   letter-spacing: 0.03em;
 }
 
-/* Filters Bar */
-.filters-bar {
-  display: flex;
-  gap: 0.75rem;
-  flex-shrink: 0;
-  align-items: center;
-}
+/* Filters Bar.
+   `.filters-bar` was declared bare here and this tab does not render it: its
+   filter row is `.filters-summary-row` (M3UChangesTab.tsx:296). The only
+   element carrying the class in the tree is WatchHistoryPanel.tsx:145, so
+   this rule was dead here and reached that panel across the chunk boundary
+   instead. Deleted; `.watch-history-panel .filters-bar` now writes out the
+   `flex-shrink` it was borrowing (bead enhancedchannelmanager-albfq). */
 
 .filter-select {
   flex: 0 0 auto;
