@@ -389,33 +389,17 @@
   border: 0;
 }
 
-/* NotificationCenter and UserMenu are shared components rendered at their own
-   comfortable size elsewhere; only the top bar wants them compact, so these
-   overrides are scoped to .header rather than pushed into
-   NotificationCenter.css / UserMenu.css. The bell (40px) and the user-menu
-   trigger (42px) were the two children that set the old 75px row height. */
-.header .notification-bell {
-  width: var(--header-control-height);
-  height: var(--header-control-height);
-  padding: 0;
-}
-
-.header .notification-bell .material-icons {
-  font-size: 20px;
-}
-
-/* The badge outdents past the smaller button's corner instead of sitting
-   inside it — on a 28px button an inset badge would cover the bell glyph. */
-.header .notification-badge {
-  top: -2px;
-  right: -2px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 8px;
-  font-size: 10px;
-}
-
+/* UserMenu is a shared component rendered at its own comfortable size
+   elsewhere; only the top bar wants it compact, so these overrides are scoped
+   to .header rather than pushed into UserMenu.css. The user-menu trigger
+   (42px) and the notification bell (40px) were the two children that set the
+   old 75px row height.
+   The three `.header .notification-*` overrides that used to sit here are
+   gone. They rested on the same "rendered at its own comfortable size
+   elsewhere" claim, and for NotificationCenter that elsewhere does not exist:
+   App.tsx:2667 is its only render site. Their values moved verbatim into
+   NotificationCenter.css so the component owns its own chrome
+   (bead enhancedchannelmanager-eae0g). */
 .header .user-menu-trigger {
   height: var(--header-control-height);
   gap: 0.2rem;
