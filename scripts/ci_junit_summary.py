@@ -17,20 +17,35 @@ actually did. For the three jobs that produce a JUnit report, this script turns
 that report into a test count, so the line carries evidence rather than a
 claim. It changes no conclusion and gates nothing.
 
+## The summary must not repeat the lie it exists to expose
+
+Callers run this under `if: always()` so the line appears on a failed run too,
+which is exactly when knowing the count matters. But `always()` also fires
+when the suite never ran at all, because an earlier step in the same job
+failed first. Printing "ran the backend pytest suite" there would be the same
+class of untruth this whole change exists to close, one layer down.
+
+So `--outcome` takes the GitHub `steps.<id>.outcome` of the step that does the
+work. An empty value means the step never executed, and the line says so. The
+flag defaults to empty, which understates rather than overstates: a caller
+that forgets it gets "did NOT run", never a false claim that it did.
+
 ## Never fails the job
 
 A summary writer that can fail turns a passing suite into a red check for a
-cosmetic reason. Every error path here degrades to a line that says the count
-was unavailable, and the script exits 0 unconditionally. Callers should still
-run it under `if: always()` so the summary appears on a failed run too, which
-is exactly when knowing the count matters.
+cosmetic reason. Every error path in `read_counts` degrades to a line saying
+the count was unavailable, and `main` returns 0 on every path it reaches.
+Argparse is the one exception: a malformed invocation exits 2 before `main`
+runs. That is a wiring bug, not a runtime condition, and callers pass
+`continue-on-error: true` so even that cannot redden a required check.
 
 ## Usage
 
     python scripts/ci_junit_summary.py \
         --label "Backend Tests" \
         --ran "ran the backend pytest suite" \
-        --junit backend/junit.xml
+        --junit backend/junit.xml \
+        --outcome "${{ steps.pytest.outcome }}"
 """
 from __future__ import annotations
 
@@ -75,14 +90,32 @@ def read_counts(junit_path: Path) -> dict[str, int] | None:
     return counts
 
 
-def format_line(label: str, ran: str, counts: dict[str, int] | None) -> str:
-    """Build the single Markdown line the job appends to the step summary."""
+def format_line(
+    label: str,
+    ran: str,
+    counts: dict[str, int] | None,
+    outcome: str = "",
+) -> str:
+    """Build the single Markdown line the job appends to the step summary.
+
+    `outcome` is the GitHub `steps.<id>.outcome` of the step that does the
+    work. Empty or `skipped` means it never executed, so the line reports
+    that rather than claiming work that did not happen.
+    """
+    normalised = (outcome or "").strip().lower()
+    if normalised in ("", "skipped"):
+        return f"**{label}**: did NOT run ({ran} was skipped or never reached)."
+
+    trailer = "" if normalised == "success" else f" The step reported {normalised}."
     if counts is None:
-        return f"**{label}**: {ran} (test count unavailable: no readable JUnit report)."
+        return (
+            f"**{label}**: {ran} (test count unavailable: no readable JUnit "
+            f"report).{trailer}"
+        )
     detail = f"{counts['tests']} tests, {counts['failures']} failed, {counts['errors']} errored"
     if counts["skipped"]:
         detail += f", {counts['skipped']} skipped"
-    return f"**{label}**: {ran}. {detail}."
+    return f"**{label}**: {ran}. {detail}.{trailer}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,9 +132,17 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Path to the JUnit XML report produced by the run.",
     )
+    parser.add_argument(
+        "--outcome",
+        default="",
+        help=(
+            "GitHub steps.<id>.outcome of the step that does the work. Empty "
+            "means the step never executed, and the line will say so."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    print(format_line(args.label, args.ran, read_counts(args.junit)))
+    print(format_line(args.label, args.ran, read_counts(args.junit), args.outcome))
     return 0
 
 

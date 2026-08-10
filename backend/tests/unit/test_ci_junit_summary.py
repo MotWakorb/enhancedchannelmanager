@@ -109,12 +109,13 @@ class TestReadCounts:
         assert counts["failures"] == 0
 
 
+PASSED = {"tests": 2147, "failures": 0, "errors": 0, "skipped": 0}
+
+
 class TestFormatLine:
     def test_reports_the_counts(self, script):
         line = script.format_line(
-            "Backend Tests",
-            "ran the backend pytest suite",
-            {"tests": 2147, "failures": 0, "errors": 0, "skipped": 0},
+            "Backend Tests", "ran the backend pytest suite", PASSED, "success"
         )
         assert line == (
             "**Backend Tests**: ran the backend pytest suite. "
@@ -126,11 +127,14 @@ class TestFormatLine:
             "Backend Tests",
             "ran it",
             {"tests": 10, "failures": 0, "errors": 0, "skipped": 2},
+            "success",
         )
         assert "2 skipped" in with_skips
 
     def test_says_so_when_the_count_is_unavailable(self, script):
-        line = script.format_line("Frontend Tests", "ran the vitest suite", None)
+        line = script.format_line(
+            "Frontend Tests", "ran the vitest suite", None, "success"
+        )
         assert "test count unavailable" in line
         # The claim about what ran must survive even without evidence for it.
         assert "ran the vitest suite" in line
@@ -138,16 +142,56 @@ class TestFormatLine:
     def test_line_is_a_single_line(self, script):
         """The caller appends it to $GITHUB_STEP_SUMMARY with `>>`."""
         line = script.format_line(
-            "MCP Server Tests",
-            "ran the mcp-server pytest suite",
-            {"tests": 1, "failures": 0, "errors": 0, "skipped": 0},
+            "MCP Server Tests", "ran the mcp-server pytest suite", PASSED, "success"
         )
         assert "\n" not in line
 
     def test_no_em_dash_in_the_rendered_line(self, script):
         """docs/style_guide.md bans the em-dash in prose this project emits."""
-        line = script.format_line("Backend Tests", "ran it", None)
+        line = script.format_line("Backend Tests", "ran it", None, "success")
         assert "—" not in line
+
+
+class TestOutcomeHonesty:
+    """The summary must not claim work that never happened.
+
+    The caller runs under `if: always()`, which also fires when an earlier
+    step in the job failed and the work step was never reached. Reporting
+    "ran the backend pytest suite" there would be the same untruth this whole
+    change exists to close, one layer down.
+    """
+
+    @pytest.mark.parametrize("outcome", ["", "   ", "skipped", "SKIPPED"])
+    def test_an_unreached_step_is_reported_as_not_run(self, script, outcome):
+        line = script.format_line(
+            "Backend Tests", "ran the backend pytest suite", PASSED, outcome
+        )
+        assert "did NOT run" in line
+        assert "2147" not in line, (
+            "a stale JUnit report from an earlier run must not be presented "
+            "as this run's evidence when the step never executed."
+        )
+
+    def test_omitting_the_outcome_understates_rather_than_overstates(self, script):
+        """A caller that forgets the flag gets 'did NOT run', never a false
+        claim that the suite ran. The safe default is the pessimistic one."""
+        line = script.format_line("Backend Tests", "ran the suite", PASSED)
+        assert "did NOT run" in line
+
+    def test_a_failed_step_still_reports_its_counts_and_says_it_failed(self, script):
+        line = script.format_line(
+            "Backend Tests",
+            "ran the backend pytest suite",
+            {"tests": 2147, "failures": 3, "errors": 0, "skipped": 0},
+            "failure",
+        )
+        assert "2147 tests, 3 failed" in line
+        assert "reported failure" in line
+
+    def test_outcome_is_case_insensitive(self, script):
+        line = script.format_line("Backend Tests", "ran it", PASSED, "Success")
+        assert "did NOT run" not in line
+        assert "reported" not in line
 
 
 def _run_cli(args):
@@ -171,6 +215,8 @@ class TestCommandLine:
                 "ran the backend pytest suite",
                 "--junit",
                 str(report),
+                "--outcome",
+                "success",
             ]
         )
         assert result.returncode == 0
@@ -188,6 +234,8 @@ class TestCommandLine:
                 "ran the backend pytest suite",
                 "--junit",
                 str(tmp_path / "absent.xml"),
+                "--outcome",
+                "success",
             ]
         )
         assert result.returncode == 0
@@ -198,7 +246,24 @@ class TestCommandLine:
         directory = tmp_path / "junit.xml"
         directory.mkdir()
         result = _run_cli(
-            ["--label", "L", "--ran", "ran it", "--junit", str(directory)]
+            [
+                "--label", "L", "--ran", "ran it",
+                "--junit", str(directory), "--outcome", "success",
+            ]
         )
         assert result.returncode == 0
         assert "test count unavailable" in result.stdout
+
+    def test_empty_outcome_reports_did_not_run(self, tmp_path):
+        """The `if: always()` case where the work step was never reached."""
+        report = tmp_path / "junit.xml"
+        report.write_text(PYTEST_REPORT, encoding="utf-8")
+        result = _run_cli(
+            [
+                "--label", "Backend Tests", "--ran", "ran the suite",
+                "--junit", str(report), "--outcome", "",
+            ]
+        )
+        assert result.returncode == 0
+        assert "did NOT run" in result.stdout
+        assert "2147" not in result.stdout

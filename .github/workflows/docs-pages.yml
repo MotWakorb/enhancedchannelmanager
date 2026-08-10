@@ -28,7 +28,7 @@ jobs:
   # Mirrors the `detect` job in test.yml and build.yml, and calls the same
   # classifier, so the site's path list has exactly one definition.
   detect:
-    name: Detect Changed Paths
+    name: Detect Changed Paths (Docs Site)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
       docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Only scripts/classify_changed_paths.py is needed; the changed-file
           # set comes from the compare API, not from git history.
@@ -81,10 +81,22 @@ jobs:
 
   build:
     needs: [detect]
-    # `!= 'false'` on purpose: an absent or empty output rebuilds the site.
-    # The dangerous direction here is a wrongly-skipped build that leaves the
-    # published site stale behind merged content.
-    if: needs.detect.outputs.docs_site_affected != 'false'
+    # Two guards, and both directions matter.
+    #
+    # `!= 'false'` covers an absent or empty output: the site rebuilds unless
+    # the classifier positively said it need not.
+    #
+    # `!cancelled()` covers a `detect` job that FAILED. A job-level `if:` with
+    # no status function carries an implicit `success()` over its `needs`, so
+    # without this a failed `detect` would skip `build`, skip `deploy`, and
+    # leave the published site silently behind merged content until the next
+    # site-affecting push happened to heal it. That is the direction this
+    # output is designed to fail away from. Same reasoning, same shape as
+    # `codeql-analysis` in build.yml, which carries `!cancelled()` for the
+    # mirror-image reason.
+    if: >-
+      !cancelled()
+      && needs.detect.outputs.docs_site_affected != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

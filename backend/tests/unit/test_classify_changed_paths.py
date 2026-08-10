@@ -332,6 +332,20 @@ class TestWorkflowContract:
     WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
     @staticmethod
+    def _workflow_files() -> list[Path]:
+        """Every workflow file, both spellings.
+
+        GitHub accepts `.yaml` as readily as `.yml`. Globbing only `*.yml`
+        would make a `.yaml` workflow invisible to every assertion in this
+        class, including the one that forbids a second emitter of a required
+        context, so the guard would pass while the defect it exists to catch
+        was present."""
+        directory = TestWorkflowContract.WORKFLOW_DIR
+        return sorted(
+            list(directory.glob("*.yml")) + list(directory.glob("*.yaml"))
+        )
+
+    @staticmethod
     def _load_workflow(path: Path) -> dict:
         import yaml
 
@@ -371,7 +385,7 @@ class TestWorkflowContract:
         the sentinel workflow used to provide. Every such job either has no
         `if:` at all or guards only against cancellation, and gates its real
         work at the STEP level instead."""
-        for path in sorted(self.WORKFLOW_DIR.glob("*.yml")):
+        for path in self._workflow_files():
             jobs = self._load_workflow(path).get("jobs") or {}
             for job_id, job in jobs.items():
                 job = job or {}
@@ -398,7 +412,7 @@ class TestWorkflowContract:
 
     def test_each_required_context_has_exactly_one_emitting_job(self):
         emitters: dict[str, list[str]] = {name: [] for name in self.REQUIRED_CONTEXTS}
-        for path in sorted(self.WORKFLOW_DIR.glob("*.yml")):
+        for path in self._workflow_files():
             jobs = self._load_workflow(path).get("jobs") or {}
             for job_id, job in jobs.items():
                 display_name = (job or {}).get("name", job_id)
@@ -429,7 +443,7 @@ class TestWorkflowContract:
             "CodeQL Analysis": "build.yml:codeql-analysis",
         }
         found: dict[str, str] = {}
-        for path in sorted(self.WORKFLOW_DIR.glob("*.yml")):
+        for path in self._workflow_files():
             jobs = self._load_workflow(path).get("jobs") or {}
             for job_id, job in jobs.items():
                 display_name = (job or {}).get("name", job_id)
@@ -502,6 +516,16 @@ class TestDocsSiteWorkflowContract:
             "`== 'true'` fails closed, and the failure mode is a published "
             "site silently stale behind merged content."
         )
+        assert "!cancelled()" in condition, (
+            "docs-pages.yml:build must carry `!cancelled()`. A job-level "
+            "`if:` with no status function implies `success()` over its "
+            "`needs`, so without it a FAILED `detect` skips the build, skips "
+            "the deploy, and leaves the published site silently behind "
+            "merged content until some later push heals it. `!= 'false'` "
+            "only covers an absent or empty output from a job that "
+            "SUCCEEDED. build.yml:codeql-analysis carries `!cancelled()` for "
+            "the mirror-image reason."
+        )
 
     def test_every_published_nav_target_is_a_recognised_site_path(self, script):
         """The invariant that keeps the site from going stale after a merge.
@@ -572,32 +596,83 @@ class TestOperatorDocsRunsTheSiteBuild:
         return (workflow.get("jobs") or {}).get("operator-docs") or {}
 
     @staticmethod
-    def _invoked_commands(job: dict) -> list[str]:
-        """Every command line in the job, with comments and echoes of them
-        excluded.
+    def _step_running(job: dict, prefix: str) -> dict | None:
+        """The step whose `run:` actually invokes a command starting `prefix`.
 
-        Matching the raw `run:` text would let a comment mentioning the
-        command, or an `echo` describing it in the step summary, satisfy an
-        assertion that the command actually runs. Both are present in this
-        job, so the distinction is not hypothetical."""
-        commands = []
+        Matching the raw `run:` text of the whole job would let a comment
+        mentioning the command, or an `echo` naming it in the step summary,
+        satisfy an assertion that the command runs. Both are present in this
+        job, so the distinction is not hypothetical. Comment lines are
+        dropped and the command must START the line."""
         for step in job.get("steps") or []:
             for line in str(step.get("run", "")).splitlines():
                 stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    commands.append(stripped)
-        return commands
+                if stripped.startswith("#"):
+                    continue
+                if stripped.startswith(prefix):
+                    return step
+        return None
 
-    def test_job_runs_mkdocs_strict(self):
-        commands = self._invoked_commands(self._operator_docs_job())
-        assert any(
-            command.startswith("mkdocs build") and "--strict" in command
-            for command in commands
-        ), (
+    def _assert_step_can_fail_the_job(self, step: dict, description: str) -> None:
+        """A step that cannot fail the job is a check that verifies nothing.
+
+        Finding the command in the file is not enough. `continue-on-error:
+        true` swallows its failure, and an `if:` that never evaluates true
+        stops it running at all. Either produces a permanently green
+        `Operator Docs` that never checks anything, which is the same defect
+        this whole change exists to close, one layer down."""
+        assert step.get("continue-on-error") is not True, (
+            f"the {description} step carries `continue-on-error: true`. Its "
+            f"failure would be swallowed and `Operator Docs` would report "
+            f"success having verified nothing. That is exactly the "
+            f"hollow-pass defect bead enhancedchannelmanager-t4d5w exists to "
+            f"close, reintroduced at the step level."
+        )
+        assert "if" not in step, (
+            f"the {description} step gained an `if:` condition. A condition "
+            f"that evaluates false silently turns `Operator Docs` into a job "
+            f"that runs nothing and passes. If the step genuinely needs a "
+            f"gate, pin the exact condition in this test rather than "
+            f"loosening the assertion."
+        )
+
+    def test_job_runs_mkdocs_strict_and_that_step_can_fail_the_job(self):
+        step = self._step_running(self._operator_docs_job(), "mkdocs build")
+        assert step is not None and "--strict" in str(step.get("run")), (
             "the Operator Docs job no longer builds the published site with "
             "--strict. Without it a broken user-guide link merges green and "
             "surfaces as a failed Pages deploy on dev. See beads "
             "enhancedchannelmanager-pb2s4 and enhancedchannelmanager-t4d5w."
+        )
+        self._assert_step_can_fail_the_job(step, "mkdocs build --strict")
+
+    def test_job_runs_docs_check_and_that_step_can_fail_the_job(self):
+        step = self._step_running(self._operator_docs_job(), "npm run docs:check")
+        assert step is not None, (
+            "the Operator Docs job no longer runs `npm run docs:check`, "
+            "which validates links, terminology and screenshot dimensions."
+        )
+        self._assert_step_can_fail_the_job(step, "npm run docs:check")
+
+    def test_em_dash_ratchet_carries_its_exact_condition(self):
+        """This step legitimately has a gate, so pin the gate rather than
+        assert its absence.
+
+        The ratchet diffs against the pull request's merge base. On a push to
+        dev there is no base ref to diff, so it runs on pull requests only.
+        Any OTHER condition is a silent narrowing of the guard."""
+        step = self._step_running(
+            self._operator_docs_job(), "python3 scripts/check_em_dashes.py"
+        )
+        assert step is not None, "the em-dash ratchet step is gone."
+        assert step.get("if") == "github.event_name == 'pull_request'", (
+            f"the em-dash ratchet's condition changed to {step.get('if')!r}. "
+            f"It must stay exactly `github.event_name == 'pull_request'`: any "
+            f"narrower condition silently reduces what the ratchet covers."
+        )
+        assert step.get("continue-on-error") is not True, (
+            "the em-dash ratchet carries `continue-on-error: true`, so new "
+            "em-dashes would no longer fail the pull request."
         )
 
     def test_job_stays_ungated(self):
@@ -613,4 +688,8 @@ class TestOperatorDocsRunsTheSiteBuild:
             "the Operator Docs job gained a `needs:` dependency. It runs "
             "unconditionally on purpose so it cannot be skipped by an "
             "upstream failure."
+        )
+        assert job.get("continue-on-error") is not True, (
+            "the Operator Docs job carries `continue-on-error: true`, so "
+            "nothing it checks can fail a pull request."
         )

@@ -556,10 +556,18 @@ Backend Tests: documentation-only change, no backend source changed, the pytest 
 ```
 
 The summary changes no conclusion and gates nothing; it makes the rollup
-readable without opening each job log. `ci_junit_summary.py` exits 0 on every
-path, including a missing or unparseable report: it runs inside required
-contexts, and a cosmetic summary writer must never be the reason a passing
-suite reports red.
+readable without opening each job log.
+
+Two properties keep it from becoming a second source of untruth. Each line
+reports the real `steps.<id>.outcome` of the step that does the work, so a job
+that died at lint does not claim vitest ran; an outcome that is empty because
+the step was never reached renders as `did not run`. And every summary step
+carries `continue-on-error: true`, because it runs inside required contexts
+and a cosmetic writer must never be the reason a passing suite reports red.
+`ci_junit_summary.py` returns 0 on every runtime path, including a missing or
+unparseable report. Argparse is the one exception: a malformed invocation
+exits 2 before the script's own code runs, which is a wiring bug rather than a
+runtime condition, and `continue-on-error` absorbs it either way.
 
 `mkdocs build --strict` runs on every pull request as a step in the
 **Operator Docs** job (bead `enhancedchannelmanager-pb2s4`). It used to run
@@ -569,6 +577,15 @@ disjoint from `npm run docs:check`: pb2s4 records a broken link that the
 first passed and the second caught. `Operator Docs` is deliberately ungated
 and deliberately **not** a required context, so adding the step changes no
 branch-protection surface.
+
+**That last point bounds what this buys.** Because `Operator Docs` is not
+required, a broken site build does **not** block the merge. It turns the PR's
+`mergeStateStatus` to `UNSTABLE` and stays there. The enforcement is the
+shipper reading the rollup and refusing to merge past it, per
+`docs/shipping.md` section "When `UNSTABLE` is the terminal state" - not
+branch protection. Making it required is a Phase 2 branch-protection change
+and is deliberately out of scope: a required name that fails to appear on a
+PR wedges that PR permanently, and `enforce_admins` is true on `dev`.
 
 ## Container Freshness Check
 

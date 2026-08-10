@@ -202,6 +202,7 @@ jobs:
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
+        id: analyze
         if: needs.detect.outputs.docs_only != 'true'
         uses: github/codeql-action/analyze@v4
         with:
@@ -215,6 +216,7 @@ jobs:
       # CodeQL setup, so we enforce delta-zero in the workflow itself and
       # make this job a required status check.
       - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
+        id: delta_zero
         if: needs.detect.outputs.docs_only != 'true' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -371,14 +373,21 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           LANGUAGE: ${{ matrix.language }}
+          ANALYZE: ${{ steps.analyze.outcome }}
+          DELTA_ZERO: ${{ steps.delta_zero.outcome }}
         run: |
-          line="**CodeQL Analysis (${LANGUAGE})**: ran the security-and-quality analysis."
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            line="$line The delta-zero HIGH/CRITICAL alert gate ran."
-          else
-            line="$line The delta-zero alert gate is pull-request-only and did not apply to this event."
-          fi
-          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          # A failed analysis stops the delta-zero gate from running at all,
+          # so each half reports its own outcome instead of one line claiming
+          # both happened.
+          {
+            echo "**CodeQL Analysis (${LANGUAGE})**:"
+            echo "- security-and-quality analysis: ${ANALYZE:-did not run}"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "- delta-zero HIGH/CRITICAL alert gate: ${DELTA_ZERO:-did not run}"
+            else
+              echo "- delta-zero alert gate: pull-request-only, does not apply to this event"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # IaC Security Scanning
   # NOT a required context; may skip at the job level (see security-scan-frontend).
