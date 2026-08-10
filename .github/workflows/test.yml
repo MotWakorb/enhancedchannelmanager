@@ -130,6 +130,7 @@ jobs:
         with:
           node-version: '22'
       - name: Check links, terminology, and screenshots
+        id: docs_check
         run: npm run docs:check
 
       # ─── Em-dash ratchet (bead enhancedchannelmanager-3tflw) ─────────────
@@ -150,12 +151,65 @@ jobs:
       # Pull requests only: on a push to dev/main the merge commit's content
       # was already checked on the PR, and there is no base ref to diff.
       - name: Check for new em-dashes (ratchet)
+        id: em_dash_ratchet
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git fetch --no-tags origin "$BASE_REF"
           python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
+
+      # ─── Published user-guide site build (beads pb2s4, t4d5w) ───────────
+      # `mkdocs build --strict` used to run only on a push to dev, in
+      # docs-pages.yml, AFTER the merge. A broken site therefore merged green
+      # and surfaced as a failed deploy on dev. Bead pb2s4 records a broken
+      # link that `npm run docs:check` passed and this build failed: the two
+      # check DISJOINT things, so this is additive, not redundant.
+      #
+      # It lives here rather than in a job of its own because the Operator
+      # Docs job is the one job that already runs on every event with no
+      # gating, and adding a job would put a new name on the checks list.
+      # Ungated on purpose: a link into the user guide can break from a page
+      # anywhere in the tree, so the classifier's site-path list is the wrong
+      # filter for the PR-time build.
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: docs/requirements-docs.txt
+
+      - name: Install docs site dependencies
+        run: pip install -r docs/requirements-docs.txt
+
+      - name: Build the published user-guide site (strict)
+        id: site_build
+        # --strict turns mkdocs warnings (broken internal links, missing nav
+        # targets, unreadable pages) into a non-zero exit.
+        run: mkdocs build --strict --site-dir _site
+
+      # Reports each step's real `outcome`, never a blanket claim that all
+      # three ran. Under `if: always()` this step also fires when an earlier
+      # step failed and the later ones never executed; an unset outcome
+      # renders as "did not run". A summary that overstates what happened
+      # would be the same defect this change exists to close.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always()
+        env:
+          DOCS_CHECK: ${{ steps.docs_check.outcome }}
+          EM_DASH: ${{ steps.em_dash_ratchet.outcome }}
+          SITE_BUILD: ${{ steps.site_build.outcome }}
+        run: |
+          {
+            echo "### Operator Docs"
+            echo "- \`npm run docs:check\` (links, terminology, screenshots): ${DOCS_CHECK:-did not run}"
+            echo "- em-dash ratchet (pull requests only): ${EM_DASH:-did not run}"
+            echo "- \`mkdocs build --strict\` on the published user-guide site: ${SITE_BUILD:-did not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── Backend tests ────────────────────────────────────────────────────
   # REQUIRED CONTEXT. Always runs; the steps below are gated. See the
@@ -173,6 +227,11 @@ jobs:
           echo "The backend suite has no changed Python to exercise, so this"
           echo "check passes without running it. Any change under backend/"
           echo "runs the full suite below."
+          # The check name says "Backend Tests" either way. Say in the run
+          # summary which of the two things actually happened, so a reader of
+          # the rollup does not have to open the job log to find out.
+          echo "**Backend Tests**: documentation-only change, no backend source changed, the pytest suite was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
         if: needs.detect.outputs.docs_only != 'true'
@@ -220,6 +279,7 @@ jobs:
           python -c "import sqlite3; sqlite3.connect('/tmp/ecm-test.db').close()"
 
       - name: Run pytest
+        id: pytest
         if: needs.detect.outputs.docs_only != 'true'
         working-directory: backend
         env:
@@ -249,6 +309,23 @@ jobs:
             --ignore=tests/performance \
             -m "not slow" --tb=short --no-header -p no:warnings \
             --junitxml=junit.xml
+
+      # `always()` so the count still lands when the suite failed; that is
+      # exactly when a reader wants to know how much actually ran.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_only != 'true'
+        env:
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+        run: |
+          python3 scripts/ci_junit_summary.py \
+            --label "Backend Tests" \
+            --ran "ran the backend pytest suite" \
+            --junit backend/junit.xml \
+            --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload backend coverage artifact
         if: always() && needs.detect.outputs.docs_only != 'true'
@@ -302,6 +379,8 @@ jobs:
           echo "No file outside '**.md' / '.beads/**' changed on this event."
           echo "The mcp-server suite has no changed Python to exercise, so"
           echo "this check passes without running it."
+          echo "**MCP Server Tests**: documentation-only change, no mcp-server source changed, the pytest suite was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
         if: needs.detect.outputs.docs_only != 'true'
@@ -326,6 +405,7 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run pytest
+        id: pytest
         if: needs.detect.outputs.docs_only != 'true'
         working-directory: mcp-server
         run: |
@@ -346,6 +426,21 @@ jobs:
             --tb=short --no-header -p no:warnings \
             --cov=. --cov-config=.coveragerc --cov-fail-under=26 \
             --junitxml=junit.xml
+
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_only != 'true'
+        env:
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+        run: |
+          python3 scripts/ci_junit_summary.py \
+            --label "MCP Server Tests" \
+            --ran "ran the mcp-server pytest suite" \
+            --junit mcp-server/junit.xml \
+            --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mcp-server coverage artifact
         if: always() && needs.detect.outputs.docs_only != 'true'
@@ -387,6 +482,8 @@ jobs:
           echo "No file outside '**.md' / '.beads/**' changed on this event."
           echo "There is no changed TypeScript to lint, typecheck or test, so"
           echo "this check passes without running the suite."
+          echo "**Frontend Tests**: documentation-only change, no frontend source changed, lint, typecheck and vitest were NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
         if: needs.detect.outputs.docs_only != 'true'
@@ -409,6 +506,7 @@ jobs:
         run: npm ci
 
       - name: Lint (full repo, blocking)
+        id: lint
         if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: |
@@ -418,11 +516,13 @@ jobs:
           npm run lint
 
       - name: Typecheck
+        id: typecheck
         if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: npm run typecheck
 
       - name: Unit tests with coverage (blocking)
+        id: vitest
         if: needs.detect.outputs.docs_only != 'true'
         working-directory: frontend
         run: |
@@ -442,6 +542,30 @@ jobs:
             --reporter=default \
             --reporter=junit \
             --outputFile.junit=./junit.xml
+
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_only != 'true'
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          VITEST: ${{ steps.vitest.outcome }}
+        run: |
+          # Three separately-failing gates, so three separate outcomes. Lint
+          # runs first: when it fails, typecheck and vitest never execute,
+          # and a single line claiming all three ran would be false.
+          {
+            python3 scripts/ci_junit_summary.py \
+              --label "Frontend Tests" \
+              --ran "ran the vitest suite" \
+              --junit frontend/junit.xml \
+              --outcome "$VITEST"
+            echo "- lint: ${LINT:-did not run}"
+            echo "- typecheck: ${TYPECHECK:-did not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
         if: always() && needs.detect.outputs.docs_only != 'true'
@@ -500,6 +624,7 @@ jobs:
           python-version: '3.12'
 
       - name: Verify version touchpoints agree
+        id: consistency
         run: python scripts/check_version_consistency.py
 
       # ─── Build-number ADVANCE gate (bead enhancedchannelmanager-w9irb) ──
@@ -522,6 +647,7 @@ jobs:
       # The CHANGELOG [Unreleased] check inside the script is SOFT: it emits a
       # ::warning:: annotation and never fails the job.
       - name: Verify build number advances past base (PRs to dev only)
+        id: advance_gate
         if: >-
           needs.detect.outputs.docs_only != 'true'
           && github.event_name == 'pull_request'
@@ -530,6 +656,36 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           python scripts/check_version_advances.py \
             --baseline-ref "origin/${{ github.base_ref }}"
+
+      # This is the one required check whose two halves can disagree about
+      # whether they ran, so the summary states each half separately.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always()
+        env:
+          DOCS_ONLY: ${{ needs.detect.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          CONSISTENCY: ${{ steps.consistency.outcome }}
+          ADVANCE: ${{ steps.advance_gate.outcome }}
+        run: |
+          # The consistency half runs unconditionally but can still be
+          # unreached if checkout or setup-python failed, so it reports its
+          # own outcome too rather than being asserted.
+          {
+            echo "**Version Consistency**:"
+            echo "- three version touchpoints agree: ${CONSISTENCY:-did not run}"
+            if [ "$EVENT_NAME" != "pull_request" ] || [ "$BASE_REF" != "dev" ]; then
+              echo "- build-number advance gate: does not apply to this event"
+            elif [ "$DOCS_ONLY" = "true" ]; then
+              echo "- build-number advance gate: NOT run (documentation-only change)"
+            else
+              echo "- build-number advance gate: ${ADVANCE:-did not run}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── Fake-test guard (bd-ulp7q.9) ────────────────────────────────────────
   # Fails the PR if `assert True` (Python) or `expect(true).toBe(true)`
@@ -809,16 +965,20 @@ jobs:
           echo "No file outside '**.md' / '.beads/**' changed on this event."
           echo "Neither backend/ nor .semgrep.yml changed, so this check"
           echo "passes without running the scan."
+          echo "**Semgrep Lint**: documentation-only change, no backend source changed, the scan was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
         if: needs.detect.outputs.docs_only != 'true'
         uses: actions/checkout@v6
 
       - name: Validate Semgrep rule config
+        id: validate
         if: needs.detect.outputs.docs_only != 'true'
         run: semgrep --validate --config .semgrep.yml
 
       - name: Run Semgrep rule self-test
+        id: self_test
         if: needs.detect.outputs.docs_only != 'true'
         # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
         # the live .semgrep.yml so the test locks the rule's accept/reject
@@ -830,8 +990,30 @@ jobs:
             .semgrep/tests/no-bare-re-on-dynamic-pattern.py
 
       - name: Run Semgrep against backend/
+        id: scan
         if: needs.detect.outputs.docs_only != 'true'
         run: |
           # --error flag exits non-zero on any finding. The rule is
           # severity: ERROR so any hit blocks the job.
           semgrep --config .semgrep.yml --error backend/
+
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_only != 'true'
+        env:
+          VALIDATE: ${{ steps.validate.outcome }}
+          SELF_TEST: ${{ steps.self_test.outcome }}
+          SCAN: ${{ steps.scan.outcome }}
+        run: |
+          # Three sequential gates. A failed config validation stops the other
+          # two from executing, so each reports its own outcome rather than
+          # one line claiming all three ran.
+          {
+            echo "**Semgrep Lint**:"
+            echo "- validate .semgrep.yml: ${VALIDATE:-did not run}"
+            echo "- rule self-test: ${SELF_TEST:-did not run}"
+            echo "- scan backend/: ${SCAN:-did not run}"
+          } >> "$GITHUB_STEP_SUMMARY"

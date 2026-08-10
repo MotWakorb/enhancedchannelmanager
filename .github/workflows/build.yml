@@ -179,6 +179,11 @@ jobs:
           echo "No file outside '**.md' / '.beads/**' changed on this event."
           echo "CodeQL has no changed ${{ matrix.language }} source to scan,"
           echo "so this check passes without running the analysis."
+          # The check name is the same whether the analysis ran or not. Say
+          # which happened in the run summary so the rollup is readable
+          # without opening the job log. See bead enhancedchannelmanager-t4d5w.
+          echo "**CodeQL Analysis (${{ matrix.language }})**: documentation-only change, no ${{ matrix.language }} source changed, the analysis and the delta-zero alert gate were NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
         if: needs.detect.outputs.docs_only != 'true'
@@ -197,6 +202,7 @@ jobs:
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
+        id: analyze
         if: needs.detect.outputs.docs_only != 'true'
         uses: github/codeql-action/analyze@v4
         with:
@@ -210,6 +216,7 @@ jobs:
       # CodeQL setup, so we enforce delta-zero in the workflow itself and
       # make this job a required status check.
       - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
+        id: delta_zero
         if: needs.detect.outputs.docs_only != 'true' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -354,6 +361,33 @@ jobs:
           fi
 
           echo "Delta-zero check passed: 0 open HIGH/CRITICAL alerts on ref=$REF (language=${LANGUAGE})"
+
+      # Separate step because the delta-zero script above exits early on its
+      # clean fast path, so a trailing line inside it would not always run.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_only != 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LANGUAGE: ${{ matrix.language }}
+          ANALYZE: ${{ steps.analyze.outcome }}
+          DELTA_ZERO: ${{ steps.delta_zero.outcome }}
+        run: |
+          # A failed analysis stops the delta-zero gate from running at all,
+          # so each half reports its own outcome instead of one line claiming
+          # both happened.
+          {
+            echo "**CodeQL Analysis (${LANGUAGE})**:"
+            echo "- security-and-quality analysis: ${ANALYZE:-did not run}"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "- delta-zero HIGH/CRITICAL alert gate: ${DELTA_ZERO:-did not run}"
+            else
+              echo "- delta-zero alert gate: pull-request-only, does not apply to this event"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # IaC Security Scanning
   # NOT a required context; may skip at the job level (see security-scan-frontend).
