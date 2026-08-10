@@ -3,8 +3,8 @@
 The whole page polls on a timer you control from a **refresh interval**
 control in the toolbar: **Manual**, **10 seconds**, **30 seconds**,
 **1 minute**, or **5 minutes**. Polling pauses automatically whenever the
-browser tab is hidden, so leaving a Stats tab open in the background doesn't
-keep hitting the API while nobody's looking at it.
+browser tab is hidden, so leaving Stats open in a background browser tab
+doesn't keep hitting the API while nobody's looking at it.
 
 ## Start here: per-panel walkthroughs
 
