@@ -169,8 +169,11 @@ jobs:
           git fetch --no-tags origin "$BASE_REF"
           python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
 
-      # ─── PII ratchet (bead enhancedchannelmanager-il1xz) ─────────────────
-      - name: Check for new personal identifiers (ratchet)
+      # ─── PII + ECM credential ratchet ────────────────────────────────────
+      # This added-lines guard covers personal identifiers (il1xz) and ECM's
+      # application-specific credential shapes (h9av3). It cannot see history;
+      # a green run means only that this change adds no finding.
+      - name: Check for new personal identifiers and ECM credentials (ratchet)
         id: pii_ratchet
         if: github.event_name == 'pull_request'
         env:
@@ -202,6 +205,31 @@ jobs:
       - name: Install docs site dependencies
         run: pip install -r docs/requirements-docs.txt
 
+      # General/provider-shaped layer. The committed baseline contains hashes,
+      # never values, and was audited before commit. ECM-specific credential
+      # shapes remain the preceding guard's responsibility.
+      - name: Install detect-secrets (pinned)
+        if: github.event_name == 'pull_request'
+        run: python3 -m pip install --quiet detect-secrets==1.5.0
+
+      - name: Check for new generic secrets (ratchet)
+        id: secrets_ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          if git cat-file -e "origin/$BASE_REF:scripts/check_secrets.py"; then
+            git show "origin/$BASE_REF:scripts/check_secrets.py" \
+              > "$RUNNER_TEMP/check_secrets.py"
+            python3 "$RUNNER_TEMP/check_secrets.py" \
+              --repo-root "$GITHUB_WORKSPACE" --base-ref "origin/$BASE_REF"
+          else
+            # One-time bootstrap: the base predates the helper. The candidate
+            # baseline must exactly equal a fresh scan of that base tree.
+            python3 scripts/check_secrets.py --base-ref "origin/$BASE_REF"
+          fi
+
       - name: Build the published user-guide site (strict)
         id: site_build
         # --strict turns mkdocs warnings (broken internal links, missing nav
@@ -223,13 +251,15 @@ jobs:
           DOCS_CHECK: ${{ steps.docs_check.outcome }}
           EM_DASH: ${{ steps.em_dash_ratchet.outcome }}
           PII_RATCHET: ${{ steps.pii_ratchet.outcome }}
+          SECRETS_RATCHET: ${{ steps.secrets_ratchet.outcome }}
           SITE_BUILD: ${{ steps.site_build.outcome }}
         run: |
           {
             echo "### Operator Docs"
             echo "- \`npm run docs:check\` (links, terminology, screenshots): ${DOCS_CHECK:-did not run}"
             echo "- em-dash ratchet (pull requests only): ${EM_DASH:-did not run}"
-            echo "- personal-identifier ratchet (pull requests only): ${PII_RATCHET:-did not run}"
+            echo "- personal-identifier and ECM-credential ratchet (pull requests only): ${PII_RATCHET:-did not run}"
+            echo "- generic detect-secrets ratchet (pull requests only): ${SECRETS_RATCHET:-did not run}"
             echo "- \`mkdocs build --strict\` on the published user-guide site: ${SITE_BUILD:-did not run}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -276,6 +306,7 @@ jobs:
           # Belt-and-suspenders: these are in requirements.txt already, but
           # pin them here so the CI command is self-documenting.
           pip install pytest pytest-asyncio pytest-cov httpx
+          pip install detect-secrets==1.5.0
 
       - name: Verify required test deps are importable (bd-s8kq3)
         if: needs.detect.outputs.docs_only != 'true'
