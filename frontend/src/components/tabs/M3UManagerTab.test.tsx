@@ -215,8 +215,17 @@ describe('M3UManagerTab', () => {
     });
   });
 
+  // Refresh VOD moved from a visible row button into the row's overflow kebab
+  // in bead enhancedchannelmanager-xh33o: the eight-button row did not fit its
+  // 180px actions column, and `.action-btn` is now `flex-shrink: 0`, so a
+  // button that does not fit is clipped rather than squeezed. Opening the
+  // kebab is therefore part of reaching the action, which is what these
+  // assertions now walk.
   describe('Refresh VOD (bead hq3de.d)', () => {
-    it('shows the Refresh VOD action only for XtreamCodes accounts', async () => {
+    const openRowMenu = (accountName: string) =>
+      fireEvent.click(screen.getByRole('button', { name: `More actions for ${accountName}` }));
+
+    it('offers Refresh VOD only in an XtreamCodes account row menu', async () => {
       vi.mocked(api.getM3UAccounts).mockResolvedValue([
         makeAccount({ id: 1, name: 'Standard Playlist', account_type: 'STD' }),
         makeAccount({ id: 2, name: 'Xtream Account', account_type: 'XC' }),
@@ -226,7 +235,29 @@ describe('M3UManagerTab', () => {
       renderWithProviders(<M3UManagerTab />);
       await waitFor(() => expect(screen.getByText('Xtream Account')).toBeInTheDocument());
 
-      expect(screen.getAllByLabelText('Refresh VOD content')).toHaveLength(1);
+      openRowMenu('Standard Playlist');
+      expect(screen.queryByRole('menuitem', { name: /refresh vod/i })).not.toBeInTheDocument();
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+
+      openRowMenu('Xtream Account');
+      expect(screen.getAllByRole('menuitem', { name: /refresh vod/i })).toHaveLength(1);
+    });
+
+    it('keeps Refresh VOD out of the row until the kebab is opened', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([
+        makeAccount({ id: 2, name: 'Xtream Account', account_type: 'XC' }),
+      ]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Xtream Account')).toBeInTheDocument());
+
+      expect(screen.queryByRole('menuitem', { name: /refresh vod/i })).not.toBeInTheDocument();
+      // The four actions that stay visible are what the column holds.
+      expect(screen.getByLabelText('Disable account')).toBeInTheDocument();
+      expect(screen.getByLabelText('Refresh account')).toBeInTheDocument();
+      expect(screen.getByLabelText('Edit account')).toBeInTheDocument();
+      expect(screen.getByLabelText('Delete account')).toBeInTheDocument();
     });
 
     it('calls refreshM3UVod for the clicked XC account', async () => {
@@ -239,7 +270,8 @@ describe('M3UManagerTab', () => {
       renderWithProviders(<M3UManagerTab />);
       await waitFor(() => expect(screen.getByText('Xtream Account')).toBeInTheDocument());
 
-      fireEvent.click(screen.getByLabelText('Refresh VOD content'));
+      openRowMenu('Xtream Account');
+      fireEvent.click(screen.getByRole('menuitem', { name: /refresh vod/i }));
 
       await waitFor(() => {
         expect(api.refreshM3UVod).toHaveBeenCalledWith(2);
@@ -255,7 +287,31 @@ describe('M3UManagerTab', () => {
       renderWithProviders(<M3UManagerTab />);
       await waitFor(() => expect(screen.getByText('Xtream Account')).toBeInTheDocument());
 
-      expect(screen.getByLabelText('Refresh VOD content')).toBeDisabled();
+      openRowMenu('Xtream Account');
+      expect(screen.getByRole('menuitem', { name: /refresh vod/i })).toBeDisabled();
+    });
+  });
+
+  // Bead enhancedchannelmanager-xh33o. The per-row setup actions moved into
+  // the row kebab so the visible buttons fit the 180px actions column at the
+  // 32px box `.action-btn` declares.
+  describe('Row overflow kebab (bead enhancedchannelmanager-xh33o)', () => {
+    it('holds the three per-account setup actions and closes on selection', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount()]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+      await waitFor(() => expect(screen.getByText('Standard Playlist')).toBeInTheDocument());
+
+      expect(screen.queryByRole('menuitem', { name: /manage groups/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for Standard Playlist' }));
+      expect(screen.getByRole('menuitem', { name: /manage groups/i })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /manage account profiles/i })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /manage filters/i })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('menuitem', { name: /manage groups/i }));
+      expect(screen.queryByRole('menuitem', { name: /manage groups/i })).not.toBeInTheDocument();
     });
   });
 

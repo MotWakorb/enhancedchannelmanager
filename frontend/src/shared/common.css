@@ -1542,12 +1542,30 @@
    different size from every existing one. The three copies are deleted and
    their geometry is the canonical one, which is why M3U, EPG and Logo row
    heights do not move (PO decision, bead enhancedchannelmanager-6z299). */
+
+/* `flex-shrink: 0` makes that 32px a real number rather than a starting
+   offer. Every consumer puts these in a flex row inside a fixed grid track,
+   and a row with more buttons than the track holds was silently squeezing
+   them: M3U's eight-button account row measured 19x32 in its 180px track and
+   EPG's five-button source row 20.81x32 in its 120px one, both far below the
+   WCAG 2.5.8 24px target and both a lie about the box this rule declares.
+
+   ON ITS OWN THIS PROPERTY MAKES THINGS WORSE, so it does not ship on its
+   own. `.m3u-accounts-list` sets `overflow: hidden` and `.epg-source-row > div`
+   does too, so an unshrinkable row wider than its track is not squashed, it is
+   CLIPPED, and the clipped buttons are unreachable rather than merely small.
+   The other half is capacity: each row's action set is trimmed to what its
+   track actually holds, with the rest moved into the shared `OverflowMenu`
+   kebab per docs/css_guidelines.md § "Collapse-to-kebab". Capacity is
+   36px per button (32px box + the rows' 4px gap) less one trailing gap, so
+   180px holds 5 and 140px holds 4. Bead enhancedchannelmanager-xh33o. */
 .action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
+  flex-shrink: 0;
   padding: 0;
   background: none;
   border: none;
