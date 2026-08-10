@@ -63,8 +63,14 @@ jobs:
             if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
               echo "::warning::no usable before-SHA on this push"
             else
+              # Both sides of a rename, exactly as in test.yml's detect job
+              # (bead enhancedchannelmanager-9ogyd). This job emits no
+              # required context, but the same omission bites the other way
+              # here: moving a page OUT of docs/user_guide/ shows only the
+              # destination, so the site would not rebuild and the published
+              # page would linger after the source was gone.
               gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                --jq '.files[]?.filename' > changed_files.txt \
+                --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
                 || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
             fi
           else
