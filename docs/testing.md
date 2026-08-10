@@ -316,6 +316,20 @@ cd frontend && npx vite --config vite.harness.config.ts
 Baseline artefact:
 `frontend/src/devHarness/baseline/modal-typography.baseline.json`.
 
+**Every capture is animation-frozen, and captures made before that was true
+have untrustworthy GEOMETRY.** `ModalBase.css` opens each dialog with
+`modal-container-slide-in` (0.2s, `scale(0.98)` to `scale(1)`), and a capture
+taken mid-flight multiplies every box in the dialog by a run-dependent scale
+factor. Measured on bead `enhancedchannelmanager-iotbh`: one unfrozen run
+reported the 32px close button at seven different sizes across the 81 dialogs,
+and a change that could only shrink type by 0.33px moved 214 of 281 boxes by 1
+to 11px. The script now suppresses animations and transitions before it
+measures, with no flag to turn that off, and stamps `animationsFrozen: true`
+into the payload. A capture without that field predates the fix. Two
+consecutive frozen runs over an unchanged tree now move 0 of 411 geometry rows.
+Typography rows were never affected, since `font-size` and `font-weight` are
+not scaled by a transform.
+
 **It is not in the production bundle, and cannot be.** `vite.config.ts` has a
 single entry (`index.html`); the harness is built only by the separate
 `vite.harness.config.ts` into the gitignored `.modal-harness-dist/`.
