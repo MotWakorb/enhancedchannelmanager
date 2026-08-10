@@ -39,9 +39,9 @@ The image is read through the registry's config blob
 (`docker buildx imagetools inspect`), which does not download layers.
 Pass `--pull` for the heavier form used by the restore drill's image
 gate: remove the local tag, pull it fresh, and read the marker out of the
-pulled image. See `docs/user_guide/backup-restore/run-a-restore-drill.md`
-("Confirm the image you are about to measure") for that idiom, and
-`docs/shipping.md` section 6 for where this script sits in the flow.
+pulled image. See `docs/shipping.md` section 6, "Confirm the image
+published" ("prove the image before you trust it"), for that idiom and
+for where this script sits in the flow.
 
 ## Refs it needs
 
