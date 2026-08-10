@@ -21,6 +21,8 @@ The canonical version string lives in [`frontend/package.json`](../frontend/pack
 
 The version literal is hand-edited in **three** files. All three must move in lockstep on every bump. CI enforces this via `.github/workflows/test.yml` → `version-consistency` job, which runs [`scripts/check_version_consistency.py`](../scripts/check_version_consistency.py) and fails the PR on divergence.
 
+**Lockstep governs how you bump, not whether you bump.** A documentation-only change gets **no** bump at all: it carries no build to advance, and taking a build number a concurrent branch already holds is pure conflict. Decide which case you are in with [`docs/shipping.md`](shipping.md#3-increment-the-version) → step 3a, which runs [`scripts/classify_changed_paths.py`](../scripts/classify_changed_paths.py) over the changed paths; a change is documentation-only when every changed path ends in `.md` or lives under `.beads/`. Leaving all three touchpoints untouched keeps them agreeing, so the `version-consistency` job passes on a documentation-only PR exactly as it does on a bumped one.
+
 | File | Line shape | Read by | Why it exists |
 | --- | --- | --- | --- |
 | [`frontend/package.json`](../frontend/package.json) | `"version": "X.Y.Z-NNNN"` | `build.yml` (`jq -r .version` → `ECM_VERSION` build-arg → `/api/version` env, UI header status pill, Docker label) | Canonical source. Baked into the image. |

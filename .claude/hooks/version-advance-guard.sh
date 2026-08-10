@@ -25,8 +25,13 @@
 # argument to some other command does not fire the guard.
 #
 # Block mechanism (per Claude Code hooks docs): exit code 2 blocks the tool
-# call and feeds stderr back to Claude. Exit 0 lets the command proceed; any
-# stderr (e.g. the soft CHANGELOG warning) is shown but does not block.
+# call and feeds stderr back to Claude. Exit 0 lets the command proceed.
+#
+# The two exit codes read DIFFERENT channels, which is why this script writes
+# to both. On exit 2, Claude Code ignores stdout entirely and feeds stderr back
+# as the blocking reason. On exit 0, stderr goes to the hook debug log only and
+# Claude never sees it, so a non-blocking message has to travel as JSON on
+# stdout to reach anyone. See emit_notice below.
 #
 # Worktree-aware root resolution (bead enhancedchannelmanager-yxtuz, follow-up
 # to PR #666): CLAUDE_PROJECT_DIR is always the MAIN checkout, even when the
@@ -53,6 +58,45 @@ if [[ -z "$PROJECT_DIR" ]]; then
   PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 
+# ─── Making an exit-0 diagnostic actually visible ─────────────────────────
+# A guard that degrades has to say so, and on an exit-0 path stderr cannot say
+# it: the hooks contract sends exit-0 stderr to the debug log only, and Claude
+# never sees it. Writing a warning there and calling the residual risk
+# "announced" would be a claim the mechanism does not support.
+#
+# The exit-0 JSON contract has two agent-visible surfaces, and this puts the
+# message on both: `hookSpecificOutput.additionalContext` reaches Claude, and
+# `systemMessage` reaches the operator. The same text still goes to stderr,
+# which is what the debug log and a direct `bash version-advance-guard.sh`
+# invocation show, and what this script's self-test reads.
+#
+# Call this ONLY on a path that then exits 0. The contract is one signalling
+# style per invocation: exit codes alone, or exit 0 plus JSON. The block path
+# at the bottom is therefore pure stderr plus exit 2 and never calls this, so
+# no path that blocks ever prints JSON and the block contract is untouched.
+# Deliberately no `permissionDecision`: this guard announces, it does not vote
+# on permission, so the tool call continues through the normal flow. A python3
+# failure loses the JSON but not the stderr copy, and never the exit status:
+# announcing is not worth wedging a ship over.
+emit_notice() {
+  printf '%s\n' "$1" >&2
+  ECM_GUARD_NOTICE="$1" python3 -c '
+import json, os, sys
+message = os.environ.get("ECM_GUARD_NOTICE", "")
+json.dump(
+    {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": message,
+        },
+        "systemMessage": message,
+    },
+    sys.stdout,
+)
+sys.stdout.write("\n")
+' 2>/dev/null || true
+}
+
 # Read the tool call JSON from stdin and pull out the Bash command string.
 STDIN_JSON="$(cat)"
 COMMAND="$(printf '%s' "$STDIN_JSON" | python3 -c \
@@ -77,7 +121,51 @@ fi
 # does not apply there (the version legitimately drops its -BUILD suffix).
 # Skip if the create command explicitly targets main. (The checker also
 # exempts no-suffix versions, so this is belt-and-suspenders.)
-if printf '%s' "$COMMAND" | grep -Eq -- '--base[[:space:]=]+main'; then
+#
+# The base is read by TOKENISING the invocation, not by pattern-matching the
+# raw command text, because a raw match got this wrong in two directions:
+#   * it over-matched the VALUE. `--base mainline-experiment` begins with
+#     `main`, so a ship to a branch that is not main was exempted.
+#   * it over-matched the CONTEXT. A genuine `--base dev` ship whose --title
+#     or --body merely CONTAINED the characters `--base main` was exempted,
+#     silently, which is the "quoted data is not command syntax" false-positive
+#     class. shlex keeps a quoted body as one token, so a `--base` inside it is
+#     never mistaken for a flag. shlex only splits; it never evaluates, so a
+#     `$(...)` or backtick in the command text stays inert data.
+# The FIRST --base wins: that is the one belonging to this `gh pr create`,
+# whatever a later `&& echo ...` in the same line may contain.
+#
+# `-B`, gh's short form of --base, is deliberately NOT read. Widening the
+# exemption is not this change's job, and a `-B main` release cut false-blocks
+# exactly as it did before rather than newly slipping through.
+#
+# If the command cannot be tokenised at all (unbalanced quotes), the base comes
+# back empty and the guard simply runs the check, which is the safe direction:
+# CI re-enforces the rule server-side either way.
+PR_BASE="$(printf '%s' "$COMMAND" | python3 -c '
+import re, shlex, sys
+cmd = sys.stdin.read()
+m = re.search(r"(?:^|[;&|({])\s*(gh\s+pr\s+create(?:\s|$))", cmd)
+if not m:
+    sys.exit(0)
+try:
+    tokens = shlex.split(cmd[m.start(1):], posix=True)
+except ValueError:
+    sys.exit(0)
+for index, token in enumerate(tokens):
+    if token == "--base":
+        if index + 1 < len(tokens):
+            print(tokens[index + 1])
+        break
+    if token.startswith("--base="):
+        print(token[len("--base=") :])
+        break
+' 2>/dev/null)"
+
+if [[ "$PR_BASE" == "main" ]]; then
+  # Announced, for the same reason the documentation-only skip below is: a
+  # silent exit 0 is indistinguishable from a hook that never ran.
+  emit_notice "version-advance-guard: SKIPPED the build-advance check. This ship targets --base main, which is a release cut or a hotfix, and a release version legitimately drops its -BUILD suffix, so there is no build number to advance. See docs/shipping.md, Release Workflow (Merging to Main)."
   exit 0
 fi
 
@@ -124,14 +212,24 @@ fi
 CHECKER="$PROJECT_DIR/scripts/check_version_advances.py"
 if [[ ! -f "$CHECKER" ]]; then
   # Checker missing — do not block a ship on a broken guard; warn only.
-  echo "version-advance-guard: $CHECKER not found; skipping build-advance check." >&2
+  emit_notice "version-advance-guard: WARNING, $CHECKER not found, so the build-advance check is being skipped. CI still enforces the same rule server-side against the PR head."
   exit 0
 fi
 
-# One baseline for BOTH halves of this guard: the documentation-only
+# One baseline REF for BOTH halves of this guard: the documentation-only
 # classification directly below and the build-advance comparison at the end.
-# A single variable so the two halves can never disagree about what the change
-# is being measured against.
+# A single variable so the two halves can never disagree about WHICH BRANCH the
+# change is measured against.
+#
+# They do not read the same SNAPSHOT of this side, and that is deliberate. The
+# classifier is handed the committed diff `origin/dev...HEAD`, because that is
+# the file set the pull request will contain. check_version_advances.py reads
+# the WORKING TREE's frontend/package.json (see its own usage block: "Compare
+# working-tree frontend/package.json against origin/dev"), because an agent
+# about to run `gh pr create` may not have committed the bump yet. So an
+# uncommitted version bump counts for the comparison and not for the
+# classification. Same ref on both sides; same tree only once the branch is
+# committed, which it is by the time `gh pr create` is a sensible command.
 #
 # Base-branch scoping is deliberately kept in step with CI. The CI advance gate
 # runs only when `github.base_ref == 'dev'` (.github/workflows/test.yml), and
@@ -181,9 +279,11 @@ git -C "$PROJECT_DIR" fetch --no-tags --quiet origin dev >/dev/null 2>&1 || true
 #
 # The residual cost of that choice is stated plainly for reviewers: while the
 # classifier is broken, a genuine non-advancing build on a CODE change stops
-# being caught agent-side and is caught only by CI. Every such path therefore
-# prints a loud WARNING naming the reason, so a degraded guard is visible rather
-# than silent.
+# being caught agent-side and is caught only by CI. That residual is only
+# acceptable if it announces itself, so every such path goes through
+# emit_notice, which carries the WARNING on the exit-0 JSON surfaces Claude and
+# the operator actually read. Writing it to stderr alone would have put it in
+# the debug log and nowhere else.
 #
 # The verdict is read BY KEY, not by comparing the classifier's whole stdout.
 # The classifier emits GitHub Actions `key=value` lines and is expected to grow
@@ -249,28 +349,34 @@ else
 fi
 
 if [[ -n "$CLASSIFY_PROBLEM" ]]; then
-  echo "version-advance-guard: WARNING, ${CLASSIFY_PROBLEM}. Cannot tell whether this change is documentation-only, so the build-advance check is being skipped rather than risk a false block. CI still enforces the same rule server-side against the PR head. If you are shipping a CODE change, verify the build number advanced by hand: python scripts/check_version_advances.py" >&2
+  emit_notice "version-advance-guard: WARNING, ${CLASSIFY_PROBLEM}. Cannot tell whether this change is documentation-only, so the build-advance check is being skipped rather than risk a false block. CI still enforces the same rule server-side against the PR head. If you are shipping a CODE change, verify the build number advanced by hand: python scripts/check_version_advances.py"
   exit 0
 fi
 
 if [[ "$DOCS_ONLY_VALUE" == "true" ]]; then
   # Announce the skip. A silent exit 0 is indistinguishable from a hook that
   # never ran, which is how a guard quietly rots.
-  echo "version-advance-guard: SKIPPED the build-advance check. Every path changed against ${BASELINE_REF} is documentation or beads data (scripts/classify_changed_paths.py returned docs_only=true), and CI exempts documentation-only PRs from this gate for the same reason: there is no build to advance. Do NOT bump the version touchpoints for this change." >&2
+  emit_notice "version-advance-guard: SKIPPED the build-advance check. Every path changed against ${BASELINE_REF} is documentation or beads data (scripts/classify_changed_paths.py returned docs_only=true), and CI exempts documentation-only PRs from this gate for the same reason: there is no build to advance. Do NOT bump the version touchpoints for this change. See docs/shipping.md step 3."
   exit 0
 fi
 
 OUTPUT="$(python3 "$CHECKER" --baseline-ref "$BASELINE_REF" --repo-root "$PROJECT_DIR" 2>&1)"
 RC=$?
 
-# Relay the checker's diagnostic (includes the next-build suggestion on fail
-# and the soft CHANGELOG warning) to stderr so Claude sees it either way.
-printf '%s\n' "$OUTPUT" >&2
-
 if [[ "$RC" -ne 0 ]]; then
+  # BLOCK path. Exit 2 makes stderr the channel Claude reads and makes stdout
+  # the channel it ignores, so this branch writes stderr only and emits no
+  # JSON at all. The checker's own diagnostic (the next-build suggestion, the
+  # soft CHANGELOG warning) is part of the blocking reason and goes first.
+  printf '%s\n' "$OUTPUT" >&2
   echo "" >&2
   echo "BLOCKED by version-advance-guard: bump the build number in frontend/package.json (and backend/main.py + backend/routers/backup.py in lockstep) before shipping. See docs/shipping.md step 3." >&2
   exit 2
 fi
 
+# Allowed. The checker's diagnostic still carries the soft CHANGELOG warning,
+# which is only useful if it is read, so it goes out on the exit-0 JSON
+# surfaces rather than to a stderr nobody reads.
+emit_notice "version-advance-guard: build-advance check PASSED.
+${OUTPUT}"
 exit 0

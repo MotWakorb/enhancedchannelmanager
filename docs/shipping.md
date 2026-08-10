@@ -27,6 +27,31 @@ bd update <id> --description "Detailed description of changes made"
 
 ### 3. Increment the Version
 
+#### 3a. First decide whether this change gets a version bump at all
+
+**Not every change does.** A documentation-only change carries no build to advance, and bumping it burns a build number that a concurrent branch may already hold. Run this **before you edit any version literal**:
+
+```bash
+git fetch origin
+git diff --name-only origin/dev...HEAD | python3 scripts/classify_changed_paths.py
+```
+
+| Verdict | What to do |
+| --- | --- |
+| `docs_only=true` | **Skip the rest of step 3 entirely.** Do not touch the three touchpoints. Go straight to step 4. |
+| `docs_only=false` | Bump all three, as described in 3b below. |
+
+Two things make this easy to get wrong, so both are stated plainly:
+
+- **Run the classifier before you edit anything, not after.** The verdict is computed from the changed-path set, and a version touchpoint is a source file. Bump first and the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict flips to `docs_only=false`, and the bump justifies itself. That circularity is exactly how 15 of 40 consecutive merged PRs ended up carrying a version bump for a change that was nothing but Markdown.
+- **"Documentation-only" is not a judgement call.** It is whatever `scripts/classify_changed_paths.py` says, and its rule is that *every* changed path ends in `.md` or lives under `.beads/`. One source file anywhere in the diff makes the whole change code, no matter how small.
+
+Nothing downstream will ask a documentation-only PR for a bump. `.github/workflows/test.yml` gates its build-advance step on `needs.detect.outputs.docs_only != 'true'`, and `.claude/hooks/version-advance-guard.sh` skips the same check on the same verdict from the same script, announcing that it skipped. The `Version Consistency` required check still runs and still passes: it proves the three touchpoints **agree with each other**, and leaving all three untouched keeps them agreeing.
+
+If the hook announces a skip and you bump anyway, you have re-created the defect this carve-out exists to remove.
+
+#### 3b. Bump the three touchpoints (code changes only)
+
 The version literal is hand-edited in **three** files, and all three must move in lockstep. See [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. CI enforces this via the `version-consistency` job (`scripts/check_version_consistency.py`) and fails the PR on divergence.
 
 | File | Identifier to change |

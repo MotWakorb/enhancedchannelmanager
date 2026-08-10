@@ -38,6 +38,15 @@ fails instantly and the suite never touches the network.
 
 Exit-code contract (Claude Code hooks): 0 allows the tool call, 2 blocks it
 and feeds stderr back to the agent.
+
+Output contract, which is why several cases assert on ``stdout`` rather than
+``stderr``: on exit 2 Claude Code ignores stdout and uses stderr as the
+blocking reason, but on exit 0 stderr goes to the hook debug log only and the
+agent never sees it. So an exit-0 message is only actually delivered if it
+appears as JSON on stdout, under ``hookSpecificOutput.additionalContext`` (read
+by Claude) and ``systemMessage`` (read by the operator). Asserting that the
+script wrote to fd 2 would prove the process emitted the text, not that anyone
+receives it, so every exit-0 announcement is pinned on the JSON surface too.
 """
 from __future__ import annotations
 
@@ -161,6 +170,48 @@ def _clobber_classifier(repo: Path, body: str) -> None:
     (repo / "scripts" / "classify_changed_paths.py").write_text(body, encoding="utf-8")
 
 
+def _advance_baseline(repo: Path, files: dict[str, str]) -> None:
+    """Move `refs/remotes/origin/dev` forward with commits the branch lacks.
+
+    Reproduces the everyday case where `dev` gains commits after a branch is
+    cut. It is what separates the three-dot diff the hook uses from a two-dot
+    one: `origin/dev...HEAD` reports only what the BRANCH changed, while
+    `origin/dev..HEAD` would fold in whatever landed on dev meanwhile.
+    """
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", "-B", "baseline-advance", "refs/remotes/origin/dev")
+    for rel, text in files.items():
+        _write(repo, rel, text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "dev moved on after the branch point")
+    _git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    _git(repo, "checkout", "-q", branch)
+
+
+def _notice(result: subprocess.CompletedProcess[str]) -> dict:
+    """Parse the hook's exit-0 JSON, the only channel the agent actually reads.
+
+    Asserting on stderr proves the process wrote to fd 2. It does NOT prove the
+    message was delivered: exit-0 stderr goes to the hook debug log and Claude
+    never sees it. This reads the delivered surface instead.
+    """
+    assert result.stdout.strip(), (
+        "the hook exited 0 with no JSON on stdout, so nothing it said reaches "
+        f"Claude or the operator. stderr was: {result.stderr}"
+    )
+    payload = json.loads(result.stdout)
+    assert payload["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    # Both surfaces carry the same text: additionalContext reaches Claude,
+    # systemMessage reaches the operator.
+    assert payload["systemMessage"] == payload["hookSpecificOutput"]["additionalContext"]
+    return payload
+
+
+def _delivered(result: subprocess.CompletedProcess[str]) -> str:
+    """The message the agent actually receives on an exit-0 path."""
+    return _notice(result)["hookSpecificOutput"]["additionalContext"]
+
+
 def test_hook_exists() -> None:
     """Guard against the harness silently testing nothing if the hook moves."""
     assert HOOK_PATH.is_file(), f"hook not found at {HOOK_PATH}"
@@ -187,12 +238,36 @@ class TestDocumentationOnlyIsExempt:
         assert "SKIPPED" in result.stderr
 
     def test_skip_is_announced_not_silent(self, repo: Path) -> None:
-        """A silent exit 0 is indistinguishable from a hook that never ran."""
+        """A silent exit 0 is indistinguishable from a hook that never ran.
+
+        Pinned on the DELIVERED channel. An earlier revision announced the skip
+        on stderr, which on an exit-0 path reaches the debug log and nobody
+        else, so the announcement existed in the process and not in the agent.
+        """
         _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
         result = _invoke(repo)
         assert result.returncode == ALLOW
-        assert "version-advance-guard:" in result.stderr
-        assert "no build to advance" in result.stderr
+        delivered = _delivered(result)
+        assert "version-advance-guard:" in delivered
+        assert "no build to advance" in delivered
+        assert "Do NOT bump the version touchpoints" in delivered
+
+    def test_three_dot_diff_ignores_commits_dev_gained_since_the_branch_point(
+        self, repo: Path
+    ) -> None:
+        """`origin/dev...HEAD`, not `origin/dev..HEAD`.
+
+        The branch changes documentation only; `dev` independently gains a code
+        commit afterwards. A two-dot diff would report that code file as part of
+        this change and wrongly block a documentation-only ship. Nothing else in
+        this file distinguishes the two forms, because every other fixture
+        leaves the baseline exactly at the branch point.
+        """
+        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
+        _advance_baseline(repo, {"backend/other.py": "OTHER = 2\n"})
+        result = _invoke(repo)
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert "SKIPPED" in _delivered(result)
 
     def test_exemption_applies_to_the_cd_target_not_the_project_dir(
         self, repo: Path, tmp_path: Path
@@ -275,6 +350,27 @@ class TestVerdictIsReadByKey:
         assert result.returncode == BLOCK, result.stdout + result.stderr
         assert "BLOCKED by version-advance-guard" in result.stderr
 
+    def test_a_key_merely_ENDING_in_docs_only_is_not_the_docs_only_key(
+        self, repo: Path
+    ) -> None:
+        """The value is matched from the START of the line, not mid-line.
+
+        Without the `^` anchor on the extraction, a future or mistaken
+        `not_docs_only=true` line would be read as `docs_only=true` and skip the
+        check on a CODE change. Nothing else in this file fails if the anchor is
+        dropped, because every other fixture's key sits at column zero already.
+        The correct behaviour is fail-open, because this classifier emitted no
+        `docs_only` key at all.
+        """
+        _clobber_classifier(repo, "print('not_docs_only=true')\n")
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo)
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        delivered = _delivered(result)
+        assert "WARNING" in delivered
+        assert "no docs_only key" in delivered
+        assert "SKIPPED" not in delivered
+
     def test_crlf_line_endings_are_tolerated(self, repo: Path) -> None:
         """A Windows checkout must not degrade the guard into permanent warning."""
         _clobber_classifier(
@@ -330,7 +426,7 @@ class TestCodeChangesStillBlock:
         assert "SKIPPED" not in result.stderr
 
 
-# ─── Classification trouble fails CLOSED ───────────────────────────────────
+# ─── Classification trouble fails OPEN, and says so ────────────────────────
 
 
 class TestClassificationFailureFailsOpen:
@@ -345,16 +441,20 @@ class TestClassificationFailureFailsOpen:
 
     The residual cost is real and is pinned here too: while classification is
     broken the agent-side catch is gone, so every one of these paths must emit
-    a loud WARNING rather than pass quietly.
+    a loud WARNING rather than pass quietly. That is asserted on the DELIVERED
+    channel, not on stderr: exit-0 stderr reaches the debug log and nobody
+    else, so a stderr-only assertion would prove the process spoke, not that
+    the agent heard.
     """
 
     def _assert_failed_open_loudly(
         self, result: subprocess.CompletedProcess[str]
     ) -> None:
         assert result.returncode == ALLOW, result.stdout + result.stderr
-        assert "WARNING" in result.stderr, "a degraded guard must not be silent"
-        assert "version-advance-guard:" in result.stderr
-        assert "SKIPPED" not in result.stderr, "this is not a docs-only exemption"
+        delivered = _delivered(result)
+        assert "WARNING" in delivered, "a degraded guard must not be silent"
+        assert "version-advance-guard:" in delivered
+        assert "SKIPPED" not in delivered, "this is not a docs-only exemption"
 
     def test_missing_classifier_fails_open(self, repo: Path) -> None:
         (repo / "scripts" / "classify_changed_paths.py").unlink()
@@ -447,8 +547,141 @@ class TestGuardStaysInert:
     def test_release_cut_targeting_main_is_exempt(self, repo: Path) -> None:
         _commit(repo, {"backend/app.py": "VALUE = 2\n"})
         result = _invoke(repo, command="gh pr create --base main")
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        # Exempt, but not silently: same standard as the documentation-only
+        # skip, which this used to contradict by exiting 0 saying nothing.
+        assert "SKIPPED" in _delivered(result)
+
+    def test_release_cut_with_an_equals_sign_base_is_exempt(self, repo: Path) -> None:
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo, command="gh pr create --base=main --title t")
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert "SKIPPED" in _delivered(result)
+
+    def test_a_base_branch_merely_STARTING_with_main_is_not_exempt(
+        self, repo: Path
+    ) -> None:
+        """`--base mainline-experiment` is not `--base main`.
+
+        The exemption is for release cuts. A prefix match hands it to any
+        branch whose name happens to begin with those four letters.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo, command="gh pr create --base mainline-experiment")
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
+    def test_the_string_base_main_inside_the_body_is_not_a_base_flag(
+        self, repo: Path
+    ) -> None:
+        """Quoted data is not command syntax (engineering-discipline).
+
+        A real `--base dev` ship whose body merely QUOTES the characters
+        `--base main` must still be checked. Matching raw command text exempted
+        it, which is the silent direction: the ship proceeds unguarded and
+        nothing says why.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "gh pr create --base dev --title t "
+                "--body 'Release cuts use --base main; this one does not.'"
+            ),
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
+    def test_a_later_command_mentioning_base_main_does_not_win(
+        self, repo: Path
+    ) -> None:
+        """The FIRST --base is the one belonging to this `gh pr create`."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo, command="gh pr create --base dev && echo done --base main"
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+
+
+# ─── The hook output contract: exit 0 speaks JSON, exit 2 speaks stderr ────
+
+
+class TestOutputReachesTheAgent:
+    """Exit 0 stderr is invisible to Claude, so exit-0 messages must be JSON.
+
+    The corollary matters just as much: on exit 2 Claude Code IGNORES stdout
+    and reads stderr as the blocking reason, and the docs are explicit that a
+    hook picks one signalling style per invocation. So the block path must stay
+    pure stderr and emit no JSON at all.
+    """
+
+    def test_the_block_path_emits_no_json_and_speaks_on_stderr(
+        self, repo: Path
+    ) -> None:
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo)
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert result.stdout == "", "exit 2 ignores stdout; JSON here is noise"
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
+    def test_an_inert_command_says_nothing_on_either_channel(
+        self, repo: Path
+    ) -> None:
+        """The guard runs on EVERY Bash call, so silence stays the default."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo, command="git status")
         assert result.returncode == ALLOW
+        assert result.stdout == ""
         assert result.stderr == ""
+
+    def test_every_exit_zero_ship_path_delivers_its_message(
+        self, repo: Path
+    ) -> None:
+        """One assertion per exit-0 ship outcome: none may be silent.
+
+        Docs-only skip, release-cut skip, degraded-classifier warning, and a
+        clean pass. Each is a path where the guard did NOT block and therefore
+        must explain itself on the channel the agent reads.
+        """
+        _commit(repo, {"docs/guide.md": "Reworded documentation.\n"})
+        assert "SKIPPED" in _delivered(_invoke(repo))
+        assert "SKIPPED" in _delivered(
+            _invoke(repo, command="gh pr create --base main")
+        )
+
+        _clobber_classifier(repo, "print('banana')\n")
+        assert "WARNING" in _delivered(_invoke(repo))
+
+    def test_the_passing_path_relays_the_checker_diagnostic(
+        self, repo: Path
+    ) -> None:
+        """The soft CHANGELOG warning lives in that relay and is worth reading."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"}, version=BUMPED_VERSION)
+        result = _invoke(repo)
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        delivered = _delivered(result)
+        assert "PASSED" in delivered
+        assert "build advances" in delivered
+
+    def test_the_json_survives_a_relayed_message_with_quotes_and_newlines(
+        self, repo: Path
+    ) -> None:
+        """The payload is built by json.dumps, never by string concatenation.
+
+        The relayed checker diagnostic is multi-line free text and can carry
+        quotes and backslashes. Hand-assembled JSON would be malformed here and
+        the entire announcement would be dropped rather than garbled, because
+        an unparseable payload is not partially readable.
+        """
+        (repo / "scripts" / "check_version_advances.py").write_text(
+            'print("build advances\\nquote \\" backslash \\\\ brace }")\n',
+            encoding="utf-8",
+        )
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"}, version=BUMPED_VERSION)
+        result = _invoke(repo)
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        delivered = _delivered(result)
+        assert 'quote " backslash \\ brace }' in delivered
 
 
 # ─── No shell-injection surface from paths or branch names ─────────────────
