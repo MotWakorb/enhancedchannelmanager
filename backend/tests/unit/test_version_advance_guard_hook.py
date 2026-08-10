@@ -419,6 +419,32 @@ class TestCodeChangesStillBlock:
         assert "SKIPPED" not in result.stderr
         assert "build advances" in result.stdout + result.stderr
 
+    def test_a_code_file_RENAMED_to_a_markdown_path_still_blocks(
+        self, repo: Path
+    ) -> None:
+        """Bead enhancedchannelmanager-9ogyd, the agent-side half.
+
+        With rename detection on, `git diff --name-only` prints only the
+        DESTINATION, so moving a test suite to a `.md` path presents a
+        changed-file set of one Markdown file. The classifier would then answer
+        docs_only=true about the wrong question and the guard would wave
+        through a branch that deleted a test suite. `--no-renames` reports the
+        delete alongside the add, so the departed code path forces the code
+        verdict. Mirrors the CI-side fix to the `detect` job's file listing.
+        """
+        _git(repo, "mv", "backend/app.py", "docs/app-notes.md")
+        _git(repo, "commit", "-q", "-m", "move a test suite behind a .md name")
+        # The rename really is detectable, so the fix is doing the work rather
+        # than the fixture failing to reproduce the hazard.
+        detected = _git(
+            repo, "diff", "--name-only", "origin/dev...HEAD"
+        ).stdout.split()
+        assert detected == ["docs/app-notes.md"], detected
+
+        result = _invoke(repo)
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
     def test_empty_diff_against_baseline_still_blocks(self, repo: Path) -> None:
         """No changed paths is not documentation. It falls through to the check."""
         result = _invoke(repo)  # feature branch is identical to origin/dev
@@ -601,6 +627,93 @@ class TestGuardStaysInert:
             repo, command="gh pr create --base dev && echo done --base main"
         )
         assert result.returncode == BLOCK, result.stdout + result.stderr
+
+
+# ─── A mention is not an invocation, and a `;` is not always a separator ───
+
+
+class TestProseIsNotAShipCommand:
+    """Both of these fired the guard live while this change was being written.
+
+    The command-boundary anchor treats every `;` as a command separator, but an
+    English sentence uses them too, and this repository's commit messages and
+    documentation talk about `gh pr create` constantly. The guard exited 0, so
+    nothing broke, but once an exit-0 message actually reaches the agent a
+    false trigger stops being harmless and starts asserting something untrue
+    about a command that is not a ship.
+
+    Every case here asserts total silence on BOTH channels, which is the only
+    thing that distinguishes "correctly inert" from "fired and then shrugged".
+    """
+
+    HEREDOC_COMMIT = """git commit -q -F - <<'EOF'
+docs/shipping.md step 3 ran unconditionally at step 3; gh pr create fires only
+at step 6, so an agent following the document in order had already bumped.
+
+The --base main exemption read raw command text.
+EOF
+"""
+
+    def test_a_heredoc_body_discussing_the_ship_flow_is_inert(
+        self, repo: Path
+    ) -> None:
+        """A heredoc body is data fed to a process, never syntax the shell runs.
+
+        This exact command produced a spurious release-cut SKIPPED notice.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(repo, command=self.HEREDOC_COMMIT)
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_a_quoted_sentence_with_a_semicolon_is_inert(self, repo: Path) -> None:
+        """`echo 'a; gh pr create'` is one token to the shell, not three."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo, command="echo 'step 3; gh pr create --base main fires at step 6'"
+        )
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert result.stdout == ""
+        assert result.stderr == ""
+
+    def test_a_real_ship_carrying_a_heredoc_body_still_triggers(
+        self, repo: Path
+    ) -> None:
+        """Stripping heredoc BODIES must not hide an opener's own command.
+
+        The `gh pr create` and its flags sit on the executed side of the text;
+        only the body is dropped. If this ever went inert, the guard would be
+        off for exactly the multi-line ship shape docs/shipping.md recommends.
+        """
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "gh pr create --base dev --title t --body \"$(cat <<'EOF'\n"
+                "Body text that mentions --base main and a stray ; separator.\n"
+                "EOF\n"
+                ')"'
+            ),
+        )
+        assert result.returncode == BLOCK, result.stdout + result.stderr
+        assert "BLOCKED by version-advance-guard" in result.stderr
+
+    def test_the_release_cut_recipe_shape_is_still_exempt(self, repo: Path) -> None:
+        """The `--base main` shape docs/shipping.md actually prescribes."""
+        _commit(repo, {"backend/app.py": "VALUE = 2\n"})
+        result = _invoke(
+            repo,
+            command=(
+                "gh pr create --base main --head release/v0.17.0 "
+                '--title "Release v0.17.0" --body "$(cat <<\'EOF\'\n'
+                "## Release v0.17.0\n"
+                "EOF\n"
+                ')"'
+            ),
+        )
+        assert result.returncode == ALLOW, result.stdout + result.stderr
+        assert "SKIPPED" in _delivered(result)
 
 
 # ─── The hook output contract: exit 0 speaks JSON, exit 2 speaks stderr ────

@@ -20,9 +20,29 @@
 # reads the command off stdin, exits 0 immediately unless the command is a
 # real `gh pr create` INVOCATION, and only then runs the shared checker. A
 # command that merely MENTIONS the string (e.g. `echo 'gh pr create'`, a grep,
-# or a doc edit) must NOT trigger — the matcher is anchored to a command
-# boundary (start of line or after ; && || | ( {) so the text appearing as an
-# argument to some other command does not fire the guard.
+# or a doc edit) must NOT trigger.
+#
+# Detection is two-stage, for cost and for correctness respectively.
+#
+#   Stage 1, a cheap anchored grep, is the fast path that every non-ship Bash
+#   command takes. It requires `gh` at a command boundary (start of line, or
+#   after a ; && || | ( { separator) and nothing more. No `gh pr create` text
+#   anywhere means exit 0 without ever starting a python interpreter.
+#
+#   Stage 2 only runs on the handful of commands stage 1 lets through, and is
+#   the authoritative one. The boundary anchor alone is not enough, because a
+#   command boundary is not the only thing a `;` can be: an ordinary English
+#   sentence inside a commit message or a `--body` contains them. Observed
+#   live while shipping this very change, twice, on two unrelated `git commit`
+#   and `cat >` commands whose HEREDOC bodies happened to discuss the ship
+#   flow. Stage 2 therefore drops heredoc bodies (their content is data fed to
+#   a process, never syntax the shell runs) and then tokenises what is left
+#   with shlex, requiring `gh` `pr` `create` to survive as three consecutive
+#   TOKENS at a command position. A quoted span collapses to a single token,
+#   so `echo "step 3; gh pr create"` cannot reach the guard.
+#
+# Stage 2 only ever narrows stage 1, and when it cannot parse the command at
+# all it defers to stage 1's verdict rather than silently standing down.
 #
 # Block mechanism (per Claude Code hooks docs): exit code 2 blocks the tool
 # call and feeds stderr back to Claude. Exit 0 lets the command proceed.
@@ -107,60 +127,120 @@ except Exception:
     print(""); sys.exit(0)
 print((d.get("tool_input") or {}).get("command","") or "")' 2>/dev/null)"
 
-# Not a real `gh pr create` invocation? Do nothing — never interfere with
-# normal git/bash, and never fire on a command that merely mentions the string
-# (echo/grep/doc-edit). The leading (^|[;&|({]) anchor requires `gh` to sit at
-# a command boundary — start of the line, or right after a ; && || | ( or {
-# separator — so `echo 'gh pr create'` (gh preceded by a quote/word) does NOT
-# match, while `git commit && gh pr create --base dev` does.
+# ─── Stage 1: the cheap fast path every other Bash command takes ──────────
+# No `gh pr create` at a command boundary means this is not a ship, and the
+# guard costs one grep. The (^|[;&|({]) anchor requires `gh` to sit at start of
+# line or right after a ; && || | ( or { separator, so `echo 'gh pr create'`
+# (gh preceded by a quote) does not match while `git commit && gh pr create
+# --base dev` does. This stage deliberately OVER-matches; stage 2 narrows it.
 if ! printf '%s' "$COMMAND" | grep -Eq '(^|[;&|({])[[:space:]]*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
   exit 0
 fi
 
-# Release-cut / hotfix `gh pr create` targets main — the build-advance rule
-# does not apply there (the version legitimately drops its -BUILD suffix).
-# Skip if the create command explicitly targets main. (The checker also
-# exempts no-suffix versions, so this is belt-and-suspenders.)
+# ─── Stage 2: what the command actually IS, and what it targets ───────────
+# One parse answers both questions, and it is only reached by a command that
+# already looks like a ship, so its interpreter start-up is off the fast path.
 #
-# The base is read by TOKENISING the invocation, not by pattern-matching the
-# raw command text, because a raw match got this wrong in two directions:
+# `ship=` decides whether this is an INVOCATION or a mention. Stage 1's anchor
+# is not sufficient on its own, because a `;` is a sentence separator as often
+# as a command separator. Both of the following are prose, and both matched
+# stage 1 live while this change was being written:
+#     git commit -F - <<'EOF' ... ran at step 3; gh pr create fires ... EOF
+#     echo "step 3; gh pr create fires at step 6"
+# So stage 2 first drops every heredoc BODY (its content is data handed to a
+# process, never syntax the shell executes), then tokenises what remains with
+# shlex and requires `gh` `pr` `create` to survive as three consecutive TOKENS
+# at a command position. A quoted span becomes one token, so a `gh pr create`
+# inside it can never be three. A real ship keeps its heredoc OPENER and its
+# `gh` on the executed side of the text, so stripping bodies cannot hide one.
+#
+# `base=` decides whether the release-cut exemption applies, read off the same
+# tokens rather than by pattern-matching raw text, which got it wrong twice:
 #   * it over-matched the VALUE. `--base mainline-experiment` begins with
 #     `main`, so a ship to a branch that is not main was exempted.
-#   * it over-matched the CONTEXT. A genuine `--base dev` ship whose --title
-#     or --body merely CONTAINED the characters `--base main` was exempted,
-#     silently, which is the "quoted data is not command syntax" false-positive
-#     class. shlex keeps a quoted body as one token, so a `--base` inside it is
-#     never mistaken for a flag. shlex only splits; it never evaluates, so a
-#     `$(...)` or backtick in the command text stays inert data.
-# The FIRST --base wins: that is the one belonging to this `gh pr create`,
-# whatever a later `&& echo ...` in the same line may contain.
+#   * it over-matched the CONTEXT. A genuine `--base dev` ship whose --title or
+#     --body merely CONTAINED the characters `--base main` was exempted,
+#     silently. Same "quoted data is not command syntax" class as above.
+# The FIRST --base after `create` wins: that is the one belonging to this
+# invocation, whatever a later `&& echo ...` on the line may contain. `-B`,
+# gh's short form, is deliberately NOT read; widening the exemption is not this
+# change's job, so a `-B main` release cut false-blocks exactly as before.
 #
-# `-B`, gh's short form of --base, is deliberately NOT read. Widening the
-# exemption is not this change's job, and a `-B main` release cut false-blocks
-# exactly as it did before rather than newly slipping through.
+# shlex only splits, it never evaluates, so `$(...)` and backticks in the
+# command text stay inert data throughout.
 #
-# If the command cannot be tokenised at all (unbalanced quotes), the base comes
-# back empty and the guard simply runs the check, which is the safe direction:
-# CI re-enforces the rule server-side either way.
-PR_BASE="$(printf '%s' "$COMMAND" | python3 -c '
+# Fail directions, both chosen to preserve stage 1's verdict rather than
+# silently stand the guard down: an unparseable command yields no `ship=` line
+# at all and the guard proceeds (only an explicit `ship=false` stands down),
+# and it yields no base, so the guard runs the check rather than exempting.
+# check_version_advances.py independently exempts a no-suffix release version,
+# which is the belt-and-suspenders for a release cut whose quoting defeats us.
+PARSED="$(printf '%s' "$COMMAND" | python3 -c '
 import re, shlex, sys
-cmd = sys.stdin.read()
-m = re.search(r"(?:^|[;&|({])\s*(gh\s+pr\s+create(?:\s|$))", cmd)
-if not m:
-    sys.exit(0)
+
+HEREDOC = re.compile(r"""<<-?\s*(["\x27]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+
+
+def strip_heredoc_bodies(text):
+    lines = text.split("\n")
+    kept = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        kept.append(line)
+        index += 1
+        for _quote, word in HEREDOC.findall(line):
+            while index < len(lines):
+                body = lines[index]
+                index += 1
+                if body.strip() == word:
+                    break
+    return "\n".join(kept)
+
+
+def command_position(tokens, index):
+    if index == 0:
+        return True
+    previous = tokens[index - 1]
+    return previous in (";", "&&", "||", "|", "&", "(", "{") or previous.endswith(";")
+
+
+cleaned = strip_heredoc_bodies(sys.stdin.read())
 try:
-    tokens = shlex.split(cmd[m.start(1):], posix=True)
+    tokens = shlex.split(cleaned, posix=True)
 except ValueError:
     sys.exit(0)
-for index, token in enumerate(tokens):
-    if token == "--base":
-        if index + 1 < len(tokens):
-            print(tokens[index + 1])
-        break
-    if token.startswith("--base="):
-        print(token[len("--base=") :])
-        break
+
+for index in range(len(tokens) - 2):
+    if tokens[index : index + 3] != ["gh", "pr", "create"]:
+        continue
+    if not command_position(tokens, index):
+        continue
+    print("ship=true")
+    rest = tokens[index + 3 :]
+    for offset, token in enumerate(rest):
+        if token == "--base":
+            if offset + 1 < len(rest):
+                print("base=" + rest[offset + 1].splitlines()[0])
+            break
+        if token.startswith("--base="):
+            print("base=" + token[len("--base=") :].splitlines()[0])
+            break
+    break
+else:
+    print("ship=false")
 ' 2>/dev/null)"
+
+IS_SHIP="$(printf '%s\n' "$PARSED" | sed -n 's/^ship=\(.*\)$/\1/p')"
+PR_BASE="$(printf '%s\n' "$PARSED" | sed -n 's/^base=\(.*\)$/\1/p')"
+
+if [[ "$IS_SHIP" == "false" ]]; then
+  # A mention, not an invocation. Silent by design: this is the same
+  # non-event as any other Bash command, and announcing it would put a line
+  # about shipping in front of the agent every time a commit message or a
+  # documentation edit discusses the ship flow.
+  exit 0
+fi
 
 if [[ "$PR_BASE" == "main" ]]; then
   # Announced, for the same reason the documentation-only skip below is: a
@@ -312,6 +392,26 @@ git -C "$PROJECT_DIR" fetch --no-tags --quiet origin dev >/dev/null 2>&1 || true
 # and therefore exactly what the `detect` job classifies. A two-dot diff would
 # wrongly fold in commits made on dev since the branch point, and `git status`
 # would wrongly fold in uncommitted files that the PR will not contain.
+# `--no-renames` is load-bearing, not tidiness (bead
+# enhancedchannelmanager-9ogyd). With rename detection ON, `git diff
+# --name-only` prints only the DESTINATION of a rename, so
+# `git mv backend/tests/unit/test_auth_middleware.py docs/notes.md` presents a
+# changed-file set of exactly one `.md` path. The classifier would then
+# correctly answer docs_only=true about an incorrect question, the guard would
+# skip, and a branch that deleted a test suite would ship as documentation.
+# GitHub's compare and pull-request files APIs have the same blind spot, which
+# is why the CI half of 9ogyd fixes the `detect` job's jq; this is the same
+# defect on the agent side and the two halves belong together. Turning
+# detection off reports a rename as its delete plus its add, so the departed
+# code path is in the set and forces the code verdict.
+#
+# This became load-bearing at exactly the moment docs/shipping.md grew its
+# step 3a carve-out. Until then every pull request carried a version bump, so
+# nothing ever classified documentation-only and the verdict was academic. A
+# carve-out that makes agents genuinely stop bumping is what makes the
+# classifier's answer decide something, and a blind spot in an answer nobody
+# acted on becomes a hole the moment they do.
+#
 # `core.quotePath=false` keeps a non-ASCII documentation filename readable
 # rather than octal-escaped. Git still quotes any path containing a newline
 # regardless of that setting, so a crafted filename cannot forge extra entries
@@ -326,7 +426,7 @@ CLASSIFY_PROBLEM=""
 if [[ ! -f "$CLASSIFIER" ]]; then
   CLASSIFY_PROBLEM="classifier not found at $CLASSIFIER"
 elif ! CHANGED_PATHS="$(git -C "$PROJECT_DIR" -c core.quotePath=false \
-  diff --name-only "$BASELINE_REF...HEAD" 2>/dev/null)"; then
+  diff --name-only --no-renames "$BASELINE_REF...HEAD" 2>/dev/null)"; then
   CLASSIFY_PROBLEM="could not diff ${BASELINE_REF}...HEAD in $PROJECT_DIR"
 # The path list is piped to the classifier on stdin, never expanded by the
 # shell, so a path is data here and can never become command syntax.
