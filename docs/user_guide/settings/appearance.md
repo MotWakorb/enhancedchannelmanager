@@ -71,6 +71,14 @@ across providers either way.
 **Result:** Clicking "Open in VLC" or previewing a stream in the browser
 now follows the selected behavior.
 
+If **Open in VLC Behavior** relies on the `vlc://` protocol and your OS
+doesn't already have a handler registered for it, the same VLC Integration
+section offers a platform setup script: a PowerShell script with registry
+setup for Windows, a shell script that creates a `.desktop` file for
+`xdg-open` on Linux, and a shell script that creates an AppleScript handler
+on macOS. Download the one matching your OS and run it once; after that,
+`vlc://` links open VLC directly.
+
 ### Clear old toast notifications
 
 1. Go to **Settings → Appearance**.

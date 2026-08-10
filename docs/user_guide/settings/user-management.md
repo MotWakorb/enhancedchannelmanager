@@ -42,6 +42,10 @@ permissions change on their next request.
 in, but their account (and any history tied to it) is preserved. Use
 **Delete** instead only if you actually want the account gone.
 
+You can't deactivate or delete the account you're currently signed in with.
+ECM disables both actions on your own row so you can't accidentally lock
+yourself out.
+
 ## Going deeper
 
 - [Authentication](authentication.md): enabling local authentication, which User Management account creation depends on.

@@ -1,4 +1,4 @@
-# Stats v2 history cutover (v0.17.0)
+# Stats v2 history cutover
 
 > **TL;DR:** Stats v2 metrics begin on the day you deploy v0.17.0.
 > History from before that point is not reconstructable into the new

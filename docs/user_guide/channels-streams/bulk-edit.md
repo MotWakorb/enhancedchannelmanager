@@ -17,7 +17,7 @@ These actions fall into two groups, verified directly against this build:
 | **Delete** (bulk toolbar): its own confirmation dialog says *"Changes can be undone while in edit mode."* | **Merge**: via either the toolbar's **Merge** button or **Find Duplicates**' merge action |
 | **Assign EPG** (bulk EPG matching), **Fetch Gracenote IDs** | **Import Channels from CSV** |
 
-**Create new channel group** used to belong in the right-hand column; it is staged now, alongside every other Edit Mode toolbar action. See [Channel Manager](channels-overview.md).
+**Create new channel group** is staged, alongside every other Edit Mode toolbar action. See [Channel Manager](channels-overview.md).
 
 The right-hand column is not covered by **Cancel** or **Discard**. If you merge two channels or import a CSV by mistake, Edit Mode's undo stack has nothing to give back. You're correcting the result directly in Channel Manager (or Dispatcharr), not reverting a stage. Keep this table in mind through the rest of this page.
 

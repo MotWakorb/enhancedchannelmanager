@@ -82,6 +82,38 @@ against live streams, nothing written), **Import**, **Export**, and
 you, or run through the rule analyzer; see [Debugging
 rules](debugging-rules.md#bundle-mode)).
 
+**Export** downloads every rule as a YAML file; **Import** takes that file
+back and creates matching rules. Use this for backing up your rule set
+outside ECM, checking it into version control, or copying a tuned rule set
+to another instance.
+
+### What happens to channels a rule stops matching
+
+A rule's Output & Run tab includes **Orphan Cleanup**: what to do with
+channels the rule previously created once its conditions no longer match the
+streams that created them.
+
+| Option | Behavior |
+|-|-|
+| **Delete** | Remove the orphaned channels entirely. |
+| **Move to Uncategorized** | Move them out of managed groups instead of deleting them. |
+| **Delete & Cleanup Groups** | Delete the channels, then remove any group left empty as a result. |
+| **None** | Leave orphaned channels exactly where they are; skip reconciliation. |
+
+**Result:** this runs as part of the rule's own execution, not as a separate
+step. [Bulk-edit multiple rules](bulk-rule-settings.md) can set the same
+choice across several rules at once via **Apply orphan cleanup**.
+
+### Exclude streams before any rule ever sees them
+
+**Settings → Channel Pipeline** (the same admin-only page that hosts the
+[Runaway Safety Cap](runaway-safety-cap.md)) also has a **Global Exclusion
+Filters** section: an **M3U Group Dropdown** to choose which M3U groups are
+even eligible for rule evaluation, and **Exclusion Patterns**, regex
+patterns that exclude matching streams before any rule runs. Both apply
+globally, across every rule, so you don't have to repeat the same exclusion
+condition inside each rule you write.
+
 ## Going deeper
 
 - [Build conditions and actions](conditions-and-actions.md): the condition

@@ -72,7 +72,6 @@ nav:
   - Home: index.md
   - User Guide: user_guide/index.md
   - Operator Workspace: user_guide/operator-workspace.md
-  - Retained Task Reference: user_guide/legacy-task-reference.md
   - Getting Started:
       - user_guide/getting-started/index.md
       - Install ECM: user_guide/getting-started/installation.md
@@ -87,6 +86,7 @@ nav:
       - Stream Deduplication: user_guide/channels-streams/stream-dedup.md
       - Streams: user_guide/channels-streams/streams-overview.md
       - Assign Streams to Channels: user_guide/channels-streams/assign-streams-to-channels.md
+      - Preview Streams and Channels: user_guide/channels-streams/stream-preview.md
       - Channel Groups and Tags: user_guide/channels-streams/channel-groups-and-tags.md
       - Find Out What Changed on a Channel: user_guide/channels-streams/the-journal.md
       - Put Logos on Channels: user_guide/channels-streams/logos.md
@@ -158,7 +158,6 @@ nav:
       - Configure Cloud Destinations: user_guide/backup-restore/configure-cloud-destinations.md
       - Cross-Instance Sync: user_guide/backup-restore/cross-instance-sync.md
       - Migrate to a New Install: user_guide/backup-restore/migrate-to-a-new-install.md
-      - Run a Restore Drill: user_guide/backup-restore/run-a-restore-drill.md
       - Troubleshoot a Restore: user_guide/backup-restore/troubleshoot-restore.md
   - Settings:
       - user_guide/settings/index.md
