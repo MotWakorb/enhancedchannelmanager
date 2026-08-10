@@ -1747,6 +1747,16 @@
    the weight it was authored with. This rule is also the OUTER half of a nested
    pair — `.checkbox-option label` below sizes the caption inside it — so it is
    converted first. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
+/* Checkbox and radio rows are now symmetric. 87o0c kept a checkbox-only
+   `flex-wrap: wrap` + `padding: 0.5rem 0` block here and called the asymmetry
+   deliberate; it was neither load-bearing nor wanted. The wrap was dead at
+   every render site and actively harmful at the one exception, which had to
+   override it back to `nowrap`, and the padding was the padding-increment
+   anti-pattern docs/css_guidelines.md argues against: the WCAG 24px pointer
+   target is already carried by the `label:has(input)` floor in index.css, so
+   the padding only made checkbox rows 35.5px against the radios' 24px. Block
+   deleted, rows measured at 24px each afterwards
+   (bead enhancedchannelmanager-4nn2o, reversing enhancedchannelmanager-87o0c). */
 .checkbox-option,
 .radio-option {
   display: flex;
@@ -1755,15 +1765,6 @@
   cursor: pointer;
   color: var(--button-text);
   font-size: var(--type-body-size);
-}
-
-/* Checkbox-only half of the same fold: StreamsPane's copy declared these two
-   and its radio copy did not, so only checkbox rows wrapped and carried
-   vertical padding. Kept asymmetric on purpose — matching the radios would be
-   a visible change, not a reconciliation (bead enhancedchannelmanager-87o0c). */
-.checkbox-option {
-  flex-wrap: wrap;
-  padding: 0.5rem 0;
 }
 
 .checkbox-option input,
