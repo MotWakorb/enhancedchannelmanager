@@ -113,12 +113,21 @@
   margin-top: 4px;
 }
 
-/* Filters */
+/* Filters.
+   `flex-shrink: 0` is written out here rather than inherited. This panel is
+   the only element in the tree carrying `.filters-bar`, but the property was
+   arriving from bare `.filters-bar` rules in JournalTab.css and
+   M3UChangesTab.css, which are lazy chunks appended after this one and do not
+   render the class at all. Whether the row could be squeezed by a tall table
+   beside it therefore depended on which tabs the session had visited. Those
+   two rules are deleted and the declaration lives with its real owner
+   (bead enhancedchannelmanager-albfq). */
 .watch-history-panel .filters-bar {
   display: flex;
   gap: 16px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+  flex-shrink: 0;
   align-items: flex-end;
 }
 
