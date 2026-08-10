@@ -15,7 +15,7 @@ This section is **referenced** by every other section. Every "going deeper" or "
 | [Common Issues](common-issues.md) | Top failure modes by category (connection, Channel Pipeline, normalization, EPG, restore), with the first-three-things-to-check for each. |
 | [Read the Logs](read-the-logs.md) | Where ECM logs to, what severity levels mean, how to grep effectively, the `[SAFE_REGEX]` and other tagged messages an operator might encounter. Cross-references the `logs` skill. |
 | [UI Banners and Warnings](ui-banners-and-warnings.md) | Catalogue of the warning banners ECM may surface and what each one means. |
-| [Gather Support Information](gather-support-information.md) | What to capture before asking for help: version (`docs/versioning.md` for context), recent journal entries, relevant log slice, Dispatcharr version, browser if it's a UI bug. Focused on making the support loop short. |
+| [Gather Support Information](gather-support-information.md) | What to capture before asking for help: version ([`docs/versioning.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/versioning.md) for context), recent journal entries, relevant log slice, Dispatcharr version, browser if it's a UI bug. Focused on making the support loop short. |
 | [Escalation Paths](escalation-paths.md) | Where to ask for help: Discord, GitHub issues, and (for self-hosted operators with on-call) the runbooks tree. |
 | [Recovery Patterns](recovery-patterns.md) | "I made a change I want to undo": the journal, undo/redo, restore from backup, when to use which. |
 

@@ -1,7 +1,7 @@
 # MCP Integration: Claude AI Connection Reference
 
-> **Status:** Current as of v0.17.1. MCP authenticates with a static API key via
-> the `?api_key=` path. (The OAuth 2.1 "Custom Connector" offering was retired.)
+> **Status:** MCP authenticates with a static API key via the `?api_key=`
+> path. (The OAuth 2.1 "Custom Connector" offering was retired.)
 
 This is the full operator reference for connecting Claude to ECM via the Model
 Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration)
@@ -408,6 +408,6 @@ unchanged.
   Server static-key baseline and `settings.json` credential schema.
 - **README**: [MCP Server (Claude Integration)](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration),
   covering quick-start setup and the "choose your method" overview table.
-- **Retired OAuth offering**: `docs/security/threat_model_mcp_oauth.md`
+- **Retired OAuth offering**: [`docs/security/threat_model_mcp_oauth.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_mcp_oauth.md)
   (Superseded): history of the OAuth 2.1 "Custom Connector" offering that was
   retired, and whose code was removed from the tree in v0.17.3.

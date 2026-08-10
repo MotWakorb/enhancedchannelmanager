@@ -1,7 +1,5 @@
 # Migrate to a New Install
 
-> **Status:** Shipped in v0.18.0.
-
 ---
 
 ## Overview
@@ -14,47 +12,36 @@ This walkthrough assumes:
 - You want to carry your M3U/EPG credentials (if so, you need the encrypted backup path).
 
 !!! danger "Read this before you migrate"
-    Written for ECM `0.18.1-0040` / Dispatcharr `0.28.2`. A restored
+    Written for ECM `0.18.1` / Dispatcharr `0.28.2`. A restored
     lineup genuinely **plays**, confirmed by fetching real media bytes,
     not just checking a URL is set. One thing still needs your attention
     on every migration:
 
     - **A standard (redacted) backup needs a recovery sequence** before
       playback works: re-enter credentials, then refresh the M3U account.
-      As of `0.18.1-0033` those two steps are the whole recovery; on
-      earlier builds a third step (re-running the restore) was also
-      required. See Step 6.
+      Those two steps are the whole recovery. See Step 6.
 
-    EPG links round-trip correctly as of the round-trip drill's most
-    recent measurement (9 of 9 seeded links survived on `0.18.1-0035`,
-    on both artifact variants); this article previously said the
-    opposite. See Step 7 and [Run a restore drill](run-a-restore-drill.md)
-    for the full findings, including the exact version pin each claim was
-    measured on.
+    EPG links round-trip correctly (9 of 9 seeded links survived on
+    `0.18.1`, on both artifact variants). See Step 7 below to verify
+    this on your own install.
 
 ---
 
 ## ECM-uploaded logos and this migration
 
 !!! success "Uploaded logos are included in the backup and restore intact"
-    As of `0.18.1-0024`, a logo uploaded through ECM's own Logo Manager
-    has its image bytes archived in the backup and restores intact on the
-    new install. No manual steps are needed for these logos.
+    A logo uploaded through ECM's own Logo Manager has its image bytes
+    archived in the backup and restores intact on the new install. No
+    manual steps are needed for these logos.
 
     Logos assigned from a remote http(s) URL (auto-assigned from an M3U
-    or EPG feed) were always handled differently: they are not stored in
-    the artifact, and restore by re-fetching the same URL on the new
+    or EPG feed) are handled differently: they are not stored in the
+    artifact, and restore by re-fetching the same URL on the new
     install.
 
     If a logo still fails to restore for some other reason, that failure
-    is counted and named in the restore report. It no longer aborts or
-    rolls back the rest of the migration.
-
-    **On builds before `0.18.1-0024`:** none of this applied. The backup
-    did not archive uploaded-logo bytes at all, and a logo miss aborted
-    and rolled back the entire migration. If you are migrating from an
-    install running an older build, upgrade to `0.18.1-0024` or later
-    before you rely on this section.
+    is counted and named in the restore report. It does not abort or
+    roll back the rest of the migration.
 
 ---
 
@@ -67,8 +54,7 @@ Take a **manual encrypted backup** so credentials travel with the artifact. If y
     every later run of that task on this install, including the standard
     **Run Now** path and every unattended scheduled run, produces an
     **encrypted, credential-bearing artifact** instead of the default
-    redacted one, until ECM's container restarts
-    (`enhancedchannelmanager-cytzj`). If you want both a standard artifact
+    redacted one, until ECM's container restarts. If you want both a standard artifact
     for your records and an encrypted one for the migration, take the
     standard backup **before** you create any encrypted backup.
 
@@ -139,27 +125,18 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
 
 ### What to watch for
 
-!!! success "You no longer need to match the old admin's username"
-    As of `0.18.1-0023`, the new Dispatcharr's superuser can have a
-    **different** username than the old install's admin.
-    `enhancedchannelmanager-y65si` (the defect that used to abort and
-    roll back the entire restore at the `user` category on a username
-    mismatch) is fixed and closed. Name the new install's superuser
-    whatever you want at Dispatcharr's own first-run wizard; you no
-    longer have to reproduce the old install's admin username to avoid a
-    failed migration.
+!!! success "You do not need to match the old admin's username"
+    The new Dispatcharr's superuser can have a **different** username
+    than the old install's admin. Name the new install's superuser
+    whatever you want at Dispatcharr's own first-run wizard.
 
-- **Logo bytes now restore correctly**, including logos uploaded through
+- **Logo bytes restore correctly**, including logos uploaded through
   ECM's own Logo Manager. A round-trip drill measured 10 of 11 logos
-  sha256-identical to source (`enhancedchannelmanager-dfkbn`, the
-  logo-loss part of this defect is fixed). See
+  sha256-identical to source. See
   [ECM-uploaded logos and this migration](#ecm-uploaded-logos-and-this-migration)
-  for what's archived and what isn't. On builds before `0.18.1-0032` the
-  dry-run preview also reported every URL-restorable logo as failed even
-  when it would restore fine on apply (`enhancedchannelmanager-dgnms`);
-  as of `0.18.1-0032` the preview's logo counts match what the apply
-  does. Either way, verify logos on the new install directly rather than
-  trusting a count.
+  for what's archived and what isn't. The dry-run preview's logo counts
+  match what the apply does. Either way, verify logos on the new install
+  directly rather than trusting a count.
 
 ---
 
@@ -167,16 +144,12 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
 
 If you used a standard (unencrypted) backup, M3U account passwords, EPG passwords, and similar credentials were redacted. On the new install:
 
-!!! success "The password field is honestly empty now"
+!!! success "The password field is empty after a redacted restore"
     After a redacted restore, the M3U account's password field is
-    correctly **empty**. The old bug, where the field showed the literal
-    string `***REDACTED***` and presented as configured when it wasn't,
-    is fixed and closed (`enhancedchannelmanager-6pilh`). An empty field
-    was always the honest state to show; it still needs the real
-    credential entered before the account will authenticate, same as
-    before.
+    correctly **empty**. This is expected; it still needs the real
+    credential entered before the account will authenticate.
 
-!!! success "Two steps, as of `0.18.1-0033`: re-enter the credential, then refresh"
+!!! success "Two steps: re-enter the credential, then refresh"
     A redacted restore leaves every channel on a placeholder stream,
     because the M3U account had no credential at the moment the restore
     tried to attach real streams. The recovery is:
@@ -195,13 +168,6 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
     scheduled refresh instead of immediately. If you used one of those and
     channels are still on placeholders, refresh the individual account.
 
-    **On builds before `0.18.1-0033`** there was a mandatory third step:
-    **run the restore again, from the same artifact**. The reattach pass
-    ran only once, during the restore itself, and never re-ran on its own,
-    so a later refresh added the real streams *beside* the placeholders
-    and rebound nothing. If you are migrating onto an older build, do that
-    third step after the refresh.
-
 1. Go to **Settings → M3U Accounts**.
 2. Edit each M3U account and enter the real password. The restore report
    and the post-restore UI both name the exact account and field that
@@ -210,18 +176,13 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
 3. Go to **Settings → EPG Sources**.
 4. Edit each EPG source and re-enter the password (if applicable).
 5. Refresh the M3U account (**Save & Refresh**). Confirm real streams
-   populate. Channel-group selection now survives the restore as-is
-   (`enhancedchannelmanager-dfkbn`: a round-trip drill measured this
-   preserved exactly, unlike an earlier pin where it always reverted to
-   zero enabled groups). If the account instead shows `No streams
-   returned from Xtream Codes provider` with `0 / N` groups enabled, that
-   specifically means no groups are enabled yet, not a provider outage;
-   enable your groups and refresh again.
-6. Check that your channels now play. The completed refresh in step 5 is
-   what reattaches them to the real streams. On a build before
-   `0.18.1-0033`, go back to **Settings → Backup & Restore → Restore DBAS
-   Backup** and run the same restore again from the same artifact; see
-   the callout above.
+   populate. Channel-group selection survives the restore as-is (a
+   round-trip drill measured this preserved exactly). If the account
+   instead shows `No streams returned from Xtream Codes provider` with
+   `0 / N` groups enabled, that specifically means no groups are enabled
+   yet, not a provider outage; enable your groups and refresh again.
+6. Check that your channels play. The completed refresh in step 5 is
+   what reattaches them to the real streams.
 7. Run an EPG refresh to populate guide data.
 
 If you used an encrypted backup with **Include credentials**, none of this
@@ -253,28 +214,20 @@ After the restore:
 
    If you used an encrypted backup with **Include credentials**, expect
    this to pass on the first restore. If you used a standard (redacted)
-   backup, expect it to pass only after you completed the **full** Step 6
-   sequence: on `0.18.1-0033` and later, that is the credential re-entry
-   plus the M3U refresh; on an earlier build it also includes running the
-   restore a second time.
+   backup, expect it to pass only after you completed the full Step 6
+   sequence: the credential re-entry plus the M3U refresh.
 
 !!! success "EPG links survive a migration"
-    A round-trip drill measured this directly on `0.18.1-0035`: all 9
+    A round-trip drill measured this directly on `0.18.1`: all 9
     seeded EPG links survived, on both artifact variants, with the
     restore's own `epg_links_unrestored` at `0` and no channels named in
-    `epg_link_miss_details` (`enhancedchannelmanager-dfkbn`). This
-    article previously said every linked channel loses its EPG link on
-    every migration; that was wrong for this build.
+    `epg_link_miss_details`.
 
     If you ever do see a channel lose its EPG link, the restore report
     names exactly which ones in `epg_link_miss_details`, and the
     post-restore UI surfaces the same list. Re-link those channels by
     hand, or re-run EPG auto-match; see
     [Match channels to EPG data](../epg/channel-to-epg-matching.md).
-
-    See [Run a restore drill](run-a-restore-drill.md) for the full
-    accounting of what a clean round trip does and does not currently
-    reproduce.
 
 ---
 
@@ -298,7 +251,7 @@ For a hard failure on a fresh install (rollback incomplete, instance in a bad st
 
 ## Alternative: Cross-instance sync for ongoing DR
 
-If your goal is ongoing DR (keeping a standby always in sync with your primary), consider [Cross-Instance Sync](cross-instance-sync.md) (v0.18.1) instead of, or in addition to, manual migration. Sync is not a backup and does not produce a restorable archive, but it keeps a second Dispatcharr instance continuously tracking the primary's configuration.
+If your goal is ongoing DR (keeping a standby always in sync with your primary), consider [Cross-Instance Sync](cross-instance-sync.md) instead of, or in addition to, manual migration. Sync is not a backup and does not produce a restorable archive, but it keeps a second Dispatcharr instance continuously tracking the primary's configuration.
 
 The recommended pattern for a DR setup:
 1. Migrate the initial configuration to the standby via an encrypted backup restore (this article).

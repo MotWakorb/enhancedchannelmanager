@@ -26,7 +26,6 @@ DNS-rebinding is mitigated by resolving the endpoint hostname before connecting 
 
 ## S3 and S3-compatible (MinIO, Backblaze B2)
 
-**Status: Shipped (v0.18.0)**
 
 The S3 adapter supports AWS S3, MinIO, and Backblaze B2. Any service that implements the S3 API is supported via a custom endpoint URL.
 
@@ -65,7 +64,6 @@ On the next scheduled backup, ECM uploads the artifact to this bucket and verifi
 
 ## WebDAV
 
-**Status: Shipped (v0.18.0)**
 
 The WebDAV adapter works with any RFC 4918 WebDAV server: Nextcloud, ownCloud, Apache `mod_dav`, `rclone serve webdav`, a NAS's built-in WebDAV service, and others.
 
@@ -102,7 +100,6 @@ The WebDAV adapter works with any RFC 4918 WebDAV server: Nextcloud, ownCloud, A
 
 ## Google Drive
 
-**Status: Shipped (v0.18.0)**
 
 The Google Drive adapter uses service account (app-only) authentication.
 

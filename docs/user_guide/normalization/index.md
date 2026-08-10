@@ -4,7 +4,7 @@ Normalization rewrites the raw name a provider puts on a stream into the name yo
 
 ## Section purpose
 
-Show operators how to author normalization rules in the **Settings → Channel Normalization** UI, how to use the **Test Rules** preview before saving, and how to run the **Apply to existing channels** one-time bulk rewrite when the rule set changes. Defer to the existing `docs/normalization.md` for the technical reference (parity contract, policy, SLO-5, regex sandboxing).
+Show operators how to author normalization rules in the **Settings → Channel Normalization** UI, how to use the **Test Rules** preview before saving, and how to run the **Apply to existing channels** one-time bulk rewrite when the rule set changes. Defer to the existing [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md) for the technical reference (parity contract, policy, SLO-5, regex sandboxing).
 
 ## Articles
 

@@ -18,7 +18,7 @@ curl http://<host>:6100/api/health
 ```
 
 ```json
-{"status":"healthy","service":"enhanced-channel-manager","version":"0.18.1-0005","release_channel":"dev","git_commit":"33042bfd75292b5047f4b61acba67b998f2a782d"}
+{"status":"healthy","service":"enhanced-channel-manager","version":"0.18.1-0005","release_channel":"dev","git_commit":"a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"}
 ```
 
 Quote what `/api/health` returns. Prefer it over the header pill: if you have

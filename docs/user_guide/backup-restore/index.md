@@ -16,7 +16,6 @@ The UX label for this feature is **Backup & Restore**. The internal acronym DBAS
 | Upload backups to S3, WebDAV, or Google Drive | [Configure cloud destinations](configure-cloud-destinations.md) |
 | Diagnose a failed restore | [Troubleshoot a restore](troubleshoot-restore.md) |
 | Keep a standby instance automatically in sync | [Cross-Instance Sync](cross-instance-sync.md) |
-| Prove the apply path actually works on my versions | [Run a restore drill](run-a-restore-drill.md) |
 
 ---
 
@@ -31,7 +30,6 @@ The UX label for this feature is **Backup & Restore**. The internal acronym DBAS
 | [Configure Cloud Destinations](configure-cloud-destinations.md) | Per-provider setup: S3/S3-compatible (shipped), WebDAV (shipped), Google Drive (shipped), OneDrive (deferred), Dropbox (deferred). |
 | [Troubleshoot a Restore](troubleshoot-restore.md) | Failure modes, log patterns, rollback-incomplete recovery, logo misses. |
 | [Migrate to a New Install](migrate-to-a-new-install.md) | End-to-end migration: backup on old install, install on new host, restore, verify. |
-| [Run a Restore Drill](run-a-restore-drill.md) | Disposable-stack procedure to prove the apply path end-to-end on your own versions; current known failures and required workarounds. |
 | [Cross-Instance Sync](cross-instance-sync.md) | One-way A→B config replication for DR standbys and multi-instance setups. |
 
 ---

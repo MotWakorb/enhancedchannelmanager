@@ -139,10 +139,10 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--commit <sha>` | Verify a specific commit instead of `HEAD`. |
-| `--pull` | Read the marker by dropping and re-pulling the tag (the heavier image gate the restore drill uses) instead of reading the registry config blob. |
+| `--pull` | Read the marker by dropping and re-pulling the tag, the heavier check, instead of reading the registry config blob. |
 | `--skip-workflow` / `--skip-image` | Run only one of the two checks. |
 
-The same "prove the image before you trust it" discipline applies before a restore drill; see [Confirm the image you are about to measure](user_guide/backup-restore/run-a-restore-drill.md#step-0-confirm-the-image-you-are-about-to-measure).
+The same "prove the image before you trust it" discipline applies to any other manual image check you run: drop the local tag, pull it fresh, and read the version markers baked into the image before trusting it, the same way `--pull` above does.
 
 ### 7. File Beads for Remaining Work
 

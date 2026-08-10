@@ -97,7 +97,7 @@ The point of the telemetry is that the maintainer, or you as the operator, can a
 
 - **"Did the last deploy introduce a crash?"**: `rate(ecm_client_errors_total{release="current-build"}[5m])` spiking after a deploy is a strong signal.
 - **"Are my users on a stale bundle?"**: `sum by (release) (ecm_client_errors_total)` with one label spiking on `release != current` means browsers are running an old cached bundle.
-- **"How many of my users hit errors this month?"**: SLO-6 (see `docs/sre/slos.md`) gives an error-free session rate.
+- **"How many of my users hit errors this month?"**: SLO-6 (see [`docs/sre/slos.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md)) gives an error-free session rate.
 
 Without this signal, the only way to find out ECM crashed was to notice the UI was broken and file a bug. With it, you can notice from `/metrics` before the report reaches you.
 

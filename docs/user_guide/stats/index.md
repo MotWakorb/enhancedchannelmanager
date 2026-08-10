@@ -1,5 +1,11 @@
 # Stats
 
+The whole page polls on a timer you control from a **refresh interval**
+control in the toolbar: **Manual**, **10 seconds**, **30 seconds**,
+**1 minute**, or **5 minutes**. Polling pauses automatically whenever the
+browser tab is hidden, so leaving Stats open in a background browser tab
+doesn't keep hitting the API while nobody's looking at it.
+
 ## Start here: per-panel walkthroughs
 
 The Stats page is a stack of independent panels. Each walkthrough below
@@ -17,9 +23,9 @@ what it displays:
 | Is a specific provider degrading, or how much of its catalog do I use? | [Providers](providers.md) |
 | What does this specific number mean? | [Metric glossary](metric-glossary.md) |
 
-## Stats v2 (v0.17.0)
+## Stats v2
 
-ECM v0.17.0 introduced the Stats v2 feature set: a new data pipeline (`session_telemetry`) that powers the Users panel and Providers panel on the Stats page.
+The Stats v2 feature set is a data pipeline (`session_telemetry`) that powers the Users panel and Providers panel on the Stats page.
 
 ### Users panel
 
@@ -57,7 +63,7 @@ This section documents the Stats page for operators:
 | `users-panel.md` | Operator guide to the Users panel (admin-only). |
 | `providers.md` | The admin-only Providers telemetry panel (buffering, watch time, top channels, bitrate, per provider) and the non-admin Provider Stream Usage catalog table. |
 | `interpretation-guide.md` | "What does it mean when X is Y?" (common patterns and what they indicate). |
-| `stats-vs-slos.md` | How the operator-facing Stats relate to the SRE-facing SLOs in `docs/sre/slos.md`. |
+| `stats-vs-slos.md` | How the operator-facing Stats relate to the SRE-facing SLOs in [`docs/sre/slos.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/sre/slos.md). |
 
 ## Going deeper
 

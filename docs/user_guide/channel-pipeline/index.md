@@ -13,11 +13,11 @@ Cover the Channel Pipeline page end-to-end: how rules are structured, what condi
 | [Test a Rule (Dry Run)](test-a-rule.md) | The per-rule dry-run ("Test") workflow: what it checks, how to read the result, and how it differs from the rule analyzer and a live Run. |
 | [Bulk-Edit Multiple Rules](bulk-rule-settings.md) | Selecting multiple rules and applying a setting change to all of them at once via Bulk edit. |
 | [Duplicate a Rule](clone-a-rule.md) | Duplicating a rule as a starting point: the Copy is created disabled so you can review before enabling it. |
-| [Event Sync Quick Start](event-sync-quickstart.md) | Getting from the Channel Pipeline page to a first Event Sync preview; defers to `docs/event_sync.md` for the full guide. |
+| [Event Sync Quick Start](event-sync-quickstart.md) | Getting from the Channel Pipeline page to a first Event Sync preview; defers to [`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md) for the full guide. |
 | [Channel Sort vs. Channel Numbering](sort-vs-numbering.md) | Why "Channel Sort" doesn't renumber channels by itself, the `channel_number: auto` gotcha that silently skips rule-level renumbering, and why `sort_group` is the action built for "keep my channels alphabetically numbered." |
 | [Runaway Safety Cap](runaway-safety-cap.md) | The per-run channel cap (the GH #473 safety valve): why a run gets "capped", that the Channel Pipeline is idempotent so you can just re-run, and how to view/raise/disable the cap (and its sibling log-entries cap) from **Settings → Channel Pipeline** (admin-only). |
 | [Debugging Rules](debugging-rules.md) | How to diagnose "my rule didn't fire" using the rule analyzer: the 7 finding codes in plain language with worked examples, how to run the analyzer (API direct call, debug-bundle upload, `/analyze-rules` agent command), and when to use the analyzer vs. the per-rule dry-run preview. |
-| [Fuzzy Matching for Local / OTA Channels](fuzzy-locals-matching.md) | Scored fuzzy matching for OTA / Local channels: when to use it, how to preview before writing, the callsign safety gate, and the dry-run / rollback guarantees (v0.17.3-0006). |
+| [Fuzzy Matching for Local / OTA Channels](fuzzy-locals-matching.md) | Scored fuzzy matching for OTA / Local channels: when to use it, how to preview before writing, the callsign safety gate, and the dry-run / rollback guarantees. |
 
 ## Going deeper (for now)
 

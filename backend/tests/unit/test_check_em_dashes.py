@@ -32,6 +32,15 @@ EM = "—"  # EM DASH, the only character this guard rejects.
 EN = "–"  # EN DASH, explicitly allowed.
 ARROW = "→"  # RIGHTWARDS ARROW, explicitly allowed.
 
+# Real-file regression fixture for TestRealFiles below. Chosen for a dense
+# mix of en-dashes and arrows with zero em-dashes, so it exercises the
+# allowed-character path hard. If this path is deleted or edited to lose
+# either character, TestRealFiles will fail loudly (FileNotFoundError or
+# the fixture-assumption assert) instead of silently going stale. Pick a
+# different stable, long-lived doc with the same property rather than
+# deleting the coverage.
+REAL_FILE_FIXTURE = REPO_ROOT / "docs/security/threat_model_dbas_import.md"
+
 
 def _load_script_module():
     """Load check_em_dashes.py as an ad-hoc module (it is not a package)."""
@@ -231,12 +240,12 @@ class TestKindFor:
 
 
 class TestRealFiles:
-    def test_restore_drill_article_is_clean(self, script):
-        """The drill article is dense in en-dashes and arrows and has zero
-        em-dashes. If the scanner ever flags it, the allowed-character
-        handling has regressed.
+    def test_dbas_import_threat_model_is_clean(self, script):
+        """REAL_FILE_FIXTURE (the DBAS import threat model) is dense in
+        en-dashes and arrows and has zero em-dashes. If the scanner ever
+        flags it, the allowed-character handling has regressed.
         """
-        target = REPO_ROOT / "docs/user_guide/backup-restore/run-a-restore-drill.md"
+        target = REAL_FILE_FIXTURE
         text = target.read_text(encoding="utf-8")
         assert EN in text and ARROW in text, "fixture assumption changed"
         assert script.scan_text(target.name, text, "markdown") == []

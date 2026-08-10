@@ -93,7 +93,7 @@ step. A bookmarked `#settings/lookup-tables` link resolves to General.
 |-|-|-|
 | [General Settings](general-settings.md) | Connections | Dispatcharr connection, stats polling, timezone, logging, debug bundle. |
 | [Channel Defaults](channel-defaults.md) | Channel Processing | Naming, timezone, channel profiles, EPG matching, dedup, Smart Sort. |
-| [Channel Normalization](channel-normalization.md) | Channel Processing | The two Settings-level normalization toggles; defers to `docs/normalization.md` for rule authoring. |
+| [Channel Normalization](channel-normalization.md) | Channel Processing | The two Settings-level normalization toggles; defers to [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md) for rule authoring. |
 | [Tags](tags.md) | Channel Processing | Managing the built-in tag vocabularies normalization rules match against. |
 | [M3U Change Digest](m3u-digest.md) | Notifications & Reports | Turning on and scoping the M3U change digest email/Discord report. |
 | [Scheduled Tasks](scheduled-tasks.md) | Upkeep | Running, editing, and reading the history of any of ECM's 17 scheduled tasks. |
