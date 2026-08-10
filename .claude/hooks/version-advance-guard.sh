@@ -128,12 +128,139 @@ if [[ ! -f "$CHECKER" ]]; then
   exit 0
 fi
 
+# One baseline for BOTH halves of this guard: the documentation-only
+# classification directly below and the build-advance comparison at the end.
+# A single variable so the two halves can never disagree about what the change
+# is being measured against.
+#
+# Base-branch scoping is deliberately kept in step with CI. The CI advance gate
+# runs only when `github.base_ref == 'dev'` (.github/workflows/test.yml), and
+# this hook reaches this line only for a ship that is not `--base main` (the
+# exemption above). If either side ever grows a third base branch, both must
+# change together or the hook and CI start disagreeing again.
+BASELINE_REF="origin/dev"
+
 # Best-effort refresh of the baseline so we compare against the latest dev.
 # Ignore failures (offline, no remote) — the checker soft-passes if the
 # baseline is unavailable.
 git -C "$PROJECT_DIR" fetch --no-tags --quiet origin dev >/dev/null 2>&1 || true
 
-OUTPUT="$(python3 "$CHECKER" --baseline-ref origin/dev --repo-root "$PROJECT_DIR" 2>&1)"
+# ─── Documentation-only exemption (bead enhancedchannelmanager-uf2gh) ─────
+# Third in a chain, and the chain is the useful part of the provenance:
+#   w9irb  created this guard, and already specified "SCOPE using the
+#          EXISTING docs-only classification". Only the CI half of that bead
+#          ever implemented the scoping, which is why this block was missing
+#          rather than deliberately omitted.
+#   yxtuz  narrowed the guard's blast radius once before (worktree-blind root
+#          resolution), and recorded the missing shell self-test that this
+#          change finally adds.
+#   uf2gh  finishes w9irb's scoping on the agent side.
+# CI does not apply the build-advance rule to a documentation-only PR:
+# .github/workflows/test.yml gates its "Verify build number advances past
+# base" step on `needs.detect.outputs.docs_only != 'true'`, because, in that
+# workflow's own words, documentation-only PRs "carry no build to advance".
+# This hook is the agent-side half of that same gate, so without this block it
+# is strictly stricter than the rule it mirrors: it forces a docs change to
+# bump three source version touchpoints it has no business editing, and burns
+# a build number a concurrent branch may already hold.
+#
+# ONE definition of "documentation-only" lives in the repo, and it is
+# scripts/classify_changed_paths.py, the very script the `detect` job calls.
+# Nothing is reimplemented here; this block only decides which file list to
+# hand it and how to read the verdict.
+#
+# FAIL OPEN when classification cannot be performed, exit 0 without blocking.
+# This inverts CI's idiom on purpose, and transplanting CI's `!= 'true'`
+# comparison here would be a bug. CI fails open TOWARD CODE because its risk is
+# a hollow green required check. This hook's risk runs the other way: it cannot
+# make anything merge, only stop an agent from opening a PR, and its own header
+# above records the standard as "a false block here is a friction bug, not a
+# safety gap" precisely because CI re-enforces the same rule server-side against
+# the real PR head. So a broken classifier must not wedge shipping, exactly as a
+# missing checker already does not (the `exit 0` a few lines above).
+#
+# The residual cost of that choice is stated plainly for reviewers: while the
+# classifier is broken, a genuine non-advancing build on a CODE change stops
+# being caught agent-side and is caught only by CI. Every such path therefore
+# prints a loud WARNING naming the reason, so a degraded guard is visible rather
+# than silent.
+#
+# The verdict is read BY KEY, not by comparing the classifier's whole stdout.
+# The classifier emits GitHub Actions `key=value` lines and is expected to grow
+# more of them over time (bead enhancedchannelmanager-t4d5w added
+# `docs_site_affected` alongside `docs_only`). An earlier revision of this block
+# compared the entire stdout against the literals "docs_only=true" and
+# "docs_only=false"; the moment a second line appeared, every invocation matched
+# neither, took the fail-open path, and the guard would have warned forever
+# while enforcing nothing. Because it fails open, that break would have been
+# silent-by-degradation rather than a visible block, which is the worse kind.
+# So: extract the value for `docs_only` and ignore every other key.
+#
+# Three outcomes remain. `true` skips the check, `false` runs it, and a missing
+# or unrecognised VALUE FOR THAT KEY is "could not classify" and fails open. An
+# unrecognised value is never quietly read as `false`, which keeps a garbled
+# classifier from manufacturing a block. What is no longer fatal is the mere
+# presence of other keys.
+#
+# The empty changed-file set is deliberately NOT special-cased here. It is piped
+# to the classifier like any other set, and the shared definition answers it
+# (`classify([])` returns not-docs-only), so there is exactly one place in the
+# repo that decides what counts as documentation.
+#
+# The path list is a three-dot diff, which reports what the branch changed since
+# it left the baseline. That is the set GitHub's pull-request files API returns
+# and therefore exactly what the `detect` job classifies. A two-dot diff would
+# wrongly fold in commits made on dev since the branch point, and `git status`
+# would wrongly fold in uncommitted files that the PR will not contain.
+# `core.quotePath=false` keeps a non-ASCII documentation filename readable
+# rather than octal-escaped. Git still quotes any path containing a newline
+# regardless of that setting, so a crafted filename cannot forge extra entries
+# in the list. In any case the manipulation only runs one way: an injected path
+# can add a code verdict, never remove one, because docs_only requires EVERY
+# path to be documentation.
+CLASSIFIER="$PROJECT_DIR/scripts/classify_changed_paths.py"
+CLASSIFIER_STDOUT=""
+DOCS_ONLY_VALUE=""
+CLASSIFY_PROBLEM=""
+
+if [[ ! -f "$CLASSIFIER" ]]; then
+  CLASSIFY_PROBLEM="classifier not found at $CLASSIFIER"
+elif ! CHANGED_PATHS="$(git -C "$PROJECT_DIR" -c core.quotePath=false \
+  diff --name-only "$BASELINE_REF...HEAD" 2>/dev/null)"; then
+  CLASSIFY_PROBLEM="could not diff ${BASELINE_REF}...HEAD in $PROJECT_DIR"
+# The path list is piped to the classifier on stdin, never expanded by the
+# shell, so a path is data here and can never become command syntax.
+elif ! CLASSIFIER_STDOUT="$(printf '%s\n' "$CHANGED_PATHS" |
+  python3 "$CLASSIFIER" 2>/dev/null)"; then
+  CLASSIFY_PROBLEM="classifier exited non-zero"
+else
+  # Read the `docs_only` value BY KEY out of the key=value lines, ignoring any
+  # other keys. `tr -d '\r'` tolerates CRLF stdout on a Windows checkout. If
+  # the key is absent the value is empty; if it somehow appears twice, the
+  # value is multi-line and matches neither literal below, so a contradictory
+  # classifier lands in "could not classify" rather than picking a winner.
+  DOCS_ONLY_VALUE="$(printf '%s\n' "$CLASSIFIER_STDOUT" | tr -d '\r' |
+    sed -n 's/^docs_only=\(.*\)$/\1/p')"
+  case "$DOCS_ONLY_VALUE" in
+    true | false) ;;
+    "") CLASSIFY_PROBLEM="classifier emitted no docs_only key" ;;
+    *) CLASSIFY_PROBLEM="classifier returned an unrecognised docs_only value" ;;
+  esac
+fi
+
+if [[ -n "$CLASSIFY_PROBLEM" ]]; then
+  echo "version-advance-guard: WARNING, ${CLASSIFY_PROBLEM}. Cannot tell whether this change is documentation-only, so the build-advance check is being skipped rather than risk a false block. CI still enforces the same rule server-side against the PR head. If you are shipping a CODE change, verify the build number advanced by hand: python scripts/check_version_advances.py" >&2
+  exit 0
+fi
+
+if [[ "$DOCS_ONLY_VALUE" == "true" ]]; then
+  # Announce the skip. A silent exit 0 is indistinguishable from a hook that
+  # never ran, which is how a guard quietly rots.
+  echo "version-advance-guard: SKIPPED the build-advance check. Every path changed against ${BASELINE_REF} is documentation or beads data (scripts/classify_changed_paths.py returned docs_only=true), and CI exempts documentation-only PRs from this gate for the same reason: there is no build to advance. Do NOT bump the version touchpoints for this change." >&2
+  exit 0
+fi
+
+OUTPUT="$(python3 "$CHECKER" --baseline-ref "$BASELINE_REF" --repo-root "$PROJECT_DIR" 2>&1)"
 RC=$?
 
 # Relay the checker's diagnostic (includes the next-build suggestion on fail
