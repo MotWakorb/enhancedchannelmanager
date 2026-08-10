@@ -35,9 +35,14 @@
  *    calls a near-white surface near-BLACK. Both mistakes are live in this
  *    repo's history: the first under-read the sticky-nav pill backdrop as
  *    #f0f0ff instead of the #e7e8f7 that is actually painted (reporting 3.96
- *    where the truth is 3.68), and the second is still latent in
- *    `computedTextContrast` in `operator-shell.spec.ts`, harmless only because
- *    none of its listed selectors currently sits under a `color-mix` layer.
+ *    where the truth is 3.68), and the second sat latent in
+ *    `computedTextContrast` in `operator-shell.spec.ts` until bead
+ *    `enhancedchannelmanager-pbkwo` replaced it with this technique. That
+ *    function now carries its own copy of the core below. A `page.evaluate`
+ *    body is serialised into the browser and cannot reach a module import, and
+ *    this file runs its copy inside ONE whole-page evaluate over thousands of
+ *    nodes rather than per element, so the two cannot share one definition.
+ *    A change to the model belongs in both.
  *    So no colour is parsed here at all. Each one is handed to a 1x1 canvas and
  *    the pixel is read back, which means the engine that painted the page is
  *    the thing that resolves the syntax — `color()`, `oklch()`, `color-mix()`,

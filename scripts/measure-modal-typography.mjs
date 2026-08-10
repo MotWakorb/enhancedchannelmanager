@@ -42,6 +42,27 @@
  * (`tag.class.class`). Element-by-element records would balloon the artefact
  * and churn on list length; signatures are what a CSS change actually moves,
  * and they diff cleanly: "`.modal-title` was 17.6px/600, now 15px/600".
+ *
+ * WHY EVERY CAPTURE IS ANIMATION-FROZEN
+ * ------------------------------------
+ * `ModalBase.css` opens every dialog with `modal-container-slide-in`: 0.2s,
+ * `translateY(-20px) scale(0.98)` -> `translateY(0) scale(1)`. A capture taken
+ * while that is still running multiplies EVERY box in the dialog by a
+ * run-dependent scale factor, so the geometry arm reports phantom movement in
+ * both directions on any change at all. Measured on bead
+ * `enhancedchannelmanager-iotbh`: in a single unfrozen run the 32px close
+ * button reported seven distinct sizes across the 81 dialogs (31.6, 31.74,
+ * 31.8, 31.85, 31.9, 31.99 and 32.0), and a change that could only shrink type
+ * by 0.33px moved 214 of 281 boxes by 1-11px.
+ *
+ * So this script freezes animations and transitions before it measures, on
+ * every dialog, with no flag to turn it off: there is no question this
+ * instrument answers that wants a mid-flight box. `.modal-container` declares
+ * no `transform` of its own, so suppressing the animation leaves it at exactly
+ * the resting state the keyframe was travelling to. TYPOGRAPHY rows were never
+ * affected, because `font-size`/`weight`/`family` are not scaled by a transform.
+ * Comparisons this instrument produced before the freeze therefore remain valid
+ * on the typography arm; only the geometry arm was untrustworthy.
  */
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -107,6 +128,49 @@ async function waitForServer(url, timeoutMs = 30_000) {
     await new Promise((r) => setTimeout(r, 250))
   }
   throw new Error(`harness preview server did not come up at ${url}`)
+}
+
+/**
+ * Suppress every animation and transition, so a box is measured at rest.
+ *
+ * Same override, and the same `!important` reasoning, as `FREEZE_ANIMATION` in
+ * `e2e/contrast-aa.spec.ts`: the harness's route chunk stylesheets land in
+ * <head> after this tag, so ordinary specificity would let them win. It is
+ * repeated here rather than imported because that constant lives inside a
+ * Playwright TypeScript spec that this plain-ESM script cannot load.
+ */
+const FREEZE_ANIMATION = `
+*, *::before, *::after {
+  transition: none !important;
+  animation: none !important;
+}`
+
+/**
+ * Freeze, then wait for the page to actually be at rest before measuring.
+ *
+ * The style tag alone is enough for the slide-in, because dropping `animation`
+ * reverts `.modal-container` to its declared (untransformed) style
+ * immediately. The two extra steps cover the rest: `getAnimations()` catches
+ * anything script-driven that the stylesheet override cannot stop (the Web
+ * Animations API ignores CSS `animation: none`), and the double
+ * `requestAnimationFrame` lets the resulting style change reach layout, so
+ * `getBoundingClientRect` reads the post-freeze box rather than the one being
+ * left behind.
+ */
+async function freezeAndSettle(page) {
+  await page.addStyleTag({ content: FREEZE_ANIMATION })
+  await page.evaluate(async () => {
+    for (const animation of document.getAnimations()) {
+      try {
+        animation.finish()
+      } catch {
+        /* an infinite animation cannot be finished; cancelling is enough */
+        animation.cancel()
+      }
+    }
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  })
 }
 
 /**
@@ -298,6 +362,7 @@ async function main() {
         continue
       }
 
+      await freezeAndSettle(page)
       const measured = await page.evaluate(COLLECT)
       results[entry.id] = {
         status: harnessStatus.status,
@@ -317,6 +382,9 @@ async function main() {
       capturedAt: new Date().toISOString(),
       viewport: VIEWPORT,
       theme: 'dark (app default)',
+      // Absent on any capture predating bead `enhancedchannelmanager-iotbh`,
+      // which is exactly how you tell whether a file's geometry can be trusted.
+      animationsFrozen: true,
       counts: {
         filesMatchingDialogMarkers: meta.discoveredFiles.length,
         cataloguedDialogs: meta.catalog.length,
