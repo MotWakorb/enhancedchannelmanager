@@ -52,6 +52,8 @@ interface AuthContextState {
   logout: () => Promise<void>;
   // Refresh current user data
   refreshUser: () => Promise<void>;
+  // Re-read the server's auth configuration (see refreshAuthStatus below)
+  refreshAuthStatus: () => Promise<void>;
 }
 
 // Create context with undefined default
@@ -168,6 +170,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
+  // Re-read the server's auth configuration.
+  //
+  // The mount effect above fetches /api/auth/status exactly once, so anything
+  // that changes the server's answer mid-session leaves `authStatus` stale.
+  // First-run setup is exactly such an event: POST /api/auth/setup creates the
+  // operator row but does not persist `setup_complete` (bead
+  // enhancedchannelmanager-qg14z), and GET /api/auth/status is what repairs the
+  // flag. Callers that change auth state must therefore re-read it rather than
+  // trust the value cached at mount (bead enhancedchannelmanager-lf29s).
+  //
+  // Failures deliberately leave the previous status in place, matching
+  // refreshUser(): a transient network error should not change what the app
+  // believes about the server's auth configuration.
+  const refreshAuthStatus = useCallback(async () => {
+    try {
+      const status = await getAuthStatus();
+      setAuthStatus(status);
+    } catch {
+      // Keep the cached status; see comment above.
+    }
+  }, []);
+
   // Reschedule the proactive refresh timer after ANY successful token
   // refresh — proactive (our timer below) or reactive (httpClient's
   // 401-retry path) — so the timer always tracks the newest token.
@@ -207,6 +231,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     loginWithDispatcharr,
     logout,
     refreshUser,
+    refreshAuthStatus,
   };
 
   return (

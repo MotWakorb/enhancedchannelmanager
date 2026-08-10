@@ -598,10 +598,20 @@ class TestRestoreInitialIdentityGate:
     ):
         """The legitimate first-run restore path: the operator has signed in.
 
-        After ``POST /api/auth/setup`` the browser is sent to the login page and
-        the Settings modal's "restore from backup" button then carries the
-        ``access_token`` cookie, so the admin branch is the flow real operators
-        take.
+        ``POST /api/auth/setup`` issues no session cookie, so this branch is
+        reached only after the operator has been through the login page. What
+        sends them there is ``ProtectedRoute.handleSetupComplete`` re-reading
+        ``GET /api/auth/status`` when the setup wizard finishes: the status
+        cached at mount still says ``setup_complete`` is False, because setup
+        does not persist the flag (bead enhancedchannelmanager-qg14z).
+
+        That re-read is part of this bead's fix. Until it existed the frontend
+        rendered the app on the stale status with no session, and the Settings
+        modal's "restore from backup" button called this endpoint anonymously
+        and took the 403 above. A page reload hid it, because the reload's own
+        status call repairs the flag. Both the failure and the fix were
+        reproduced in a browser against a disposable instance with no reload
+        between finishing setup and clicking restore.
         """
         self._seed_user(test_session)
         backup = _make_backup_zip()
