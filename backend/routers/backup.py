@@ -23,12 +23,19 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
+from auth.dependencies import (
+    get_current_user,
+    get_token_from_request,
+    is_mcp_service_principal,
+)
+from auth.settings import get_auth_settings
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
@@ -51,6 +58,7 @@ from models import (
     TaskSchedule,
     TagGroup,
     Tag,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +90,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0053"
+APP_VERSION = "0.18.1-0054"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2193,11 +2201,119 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
     }
 
 
-@router.post("/restore-initial")
-async def restore_backup_initial(file: UploadFile = File(...)):
-    """Restore from backup during initial setup (no auth required).
+# ---------------------------------------------------------------------------
+# restore-initial identity gate (bead enhancedchannelmanager-lf29s)
+#
+# POST /api/backup/restore-initial has to be reachable before any credentials
+# exist — that is its entire purpose — but it rewrites journal.db wholesale,
+# and journal.db holds the ``users`` table. Its historical guard was
+# ``settings.is_configured()``, which answers "does a Dispatcharr URL and
+# credential exist?". That is a Dispatcharr-configuration question standing in
+# for an authentication question, and the two are unrelated: any instance whose
+# Dispatcharr connection was not yet configured accepted an anonymous ZIP that
+# replaced every admin password hash and the tls/ directory.
+#
+# The gate below keys on INSTANCE STATE (does a user row exist?) rather than on
+# ``auth_settings.setup_complete``. POST /api/auth/setup never persists that
+# flag (bead enhancedchannelmanager-qg14z), so it is still False on exactly the
+# instances that already hold an admin account; a setup_complete-only gate
+# would be a no-op precisely where the hole is. For the same reason the gate
+# cannot delegate to ``auth.dependencies.require_admin_if_enabled``, which
+# short-circuits to "anonymous is fine" whenever setup_complete is False.
+# ---------------------------------------------------------------------------
 
-    Only works when the app is not yet configured (first-run state).
+_INITIAL_RESTORE_DENIED_DETAIL = (
+    "This instance already has an operator account. Sign in as an admin and use "
+    "/api/backup/restore instead."
+)
+
+
+def _instance_has_operator_identity(session: Session) -> bool:
+    """Report whether the instance holds an identity a restore would overwrite.
+
+    A user row is the primary signal: it becomes true the instant
+    ``/api/auth/setup`` creates the first admin, regardless of qg14z.
+    ``setup_complete`` is OR'd in as a second, independent signal so an
+    instance that lost its user rows but kept its auth settings is still
+    treated as owned. Fails closed if the users table cannot be read.
+    """
+    try:
+        if session.query(User).count() > 0:
+            return True
+    except Exception as e:
+        logger.warning(
+            "[BACKUP] Could not read the users table for the initial-restore gate, "
+            "treating the instance as owned: %s",
+            e,
+        )
+        return True
+
+    return bool(get_auth_settings().setup_complete)
+
+
+async def _caller_is_human_admin(request: Request, session: Session) -> bool:
+    """Resolve the caller to a human admin without consulting ``setup_complete``.
+
+    Mirrors ``RequireHumanAdminIfEnabled`` (used by POST /api/backup/restore)
+    in rejecting the static MCP service principal — restore rewrites the
+    settings blob wholesale, so it must be driven by an operator (bead 6n76m).
+    Any token that fails validation makes the caller anonymous, never admin.
+    """
+    if not get_token_from_request(request):
+        return False
+
+    try:
+        user = await get_current_user(request, session)
+    except HTTPException:
+        return False
+
+    return bool(user.is_admin) and not is_mcp_service_principal(user)
+
+
+async def _guard_initial_restore(request: Request, session: Session) -> None:
+    """Refuse the anonymous first-run restore once the instance has an owner."""
+    if not _instance_has_operator_identity(session):
+        # Genuine first run — nothing exists to protect, and serving this case
+        # is the endpoint's reason to exist (fresh container, or a
+        # disaster-recovery rebuild sitting empty waiting for its restore).
+        return
+
+    if not get_auth_settings().require_auth:
+        # The operator turned authentication off. RequireAdminIfEnabled already
+        # serves anonymous callers on such an instance, so POST
+        # /api/backup/restore, GET /api/backup/create and POST /api/settings are
+        # equally open; refusing only here would break the operator's own
+        # restore without closing anything. Tracked as bead
+        # enhancedchannelmanager-jy006.
+        logger.warning(
+            "[BACKUP] Serving an anonymous initial restore over an existing "
+            "operator identity because require_auth is disabled"
+        )
+        return
+
+    if await _caller_is_human_admin(request, session):
+        return
+
+    logger.warning(
+        "[BACKUP] Refused initial restore: instance already has an operator "
+        "identity and the caller is not an authenticated admin"
+    )
+    raise HTTPException(status_code=403, detail=_INITIAL_RESTORE_DENIED_DETAIL)
+
+
+@router.post("/restore-initial")
+async def restore_backup_initial(
+    request: Request,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    """Restore from backup during initial setup.
+
+    Serves the first-run case, where no credentials exist yet. Refused once the
+    instance is Dispatcharr-configured, and — independently of that — refused
+    for anyone but an authenticated human admin once the instance holds an
+    operator identity. See ``_guard_initial_restore`` and bead
+    enhancedchannelmanager-lf29s.
     """
     settings = get_settings()
     if settings.is_configured():
@@ -2205,6 +2321,8 @@ async def restore_backup_initial(file: UploadFile = File(...)):
             status_code=403,
             detail="App is already configured. Use /api/backup/restore instead.",
         )
+
+    await _guard_initial_restore(request, session)
 
     logger.info("[BACKUP] Initial restore requested, filename=%s", file.filename)
 

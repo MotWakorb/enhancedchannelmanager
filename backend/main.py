@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0053",
+    version="0.18.1-0054",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -510,8 +510,23 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
-    # Initial setup (only works when no config exists)
-    "/api/backup/restore-initial",
+    # NOTE: /api/backup/restore-initial was listed here until bead
+    # enhancedchannelmanager-lf29s. It rewrites journal.db wholesale — the
+    # users table, admin password hashes included — and carried no auth
+    # dependency of its own, so the exemption made an unauthenticated instance
+    # takeover reachable on any instance whose Dispatcharr connection was not
+    # yet configured. It is deliberately NOT exempt now:
+    #   * first-run reachability is unaffected. This middleware only enforces
+    #     when ``require_auth and setup_complete`` are both true, and a genuine
+    #     first run has setup_complete False, so it never engages there.
+    #   * the endpoint's real gate lives in the handler
+    #     (``routers.backup._guard_initial_restore``), which inspects instance
+    #     state — does a user row exist? — instead of trusting setup_complete,
+    #     a flag POST /api/auth/setup never persists (bead
+    #     enhancedchannelmanager-qg14z).
+    # Removing the exemption therefore adds no new refusal; it turns an
+    # anonymous multipart upload away before FastAPI spools an
+    # attacker-controlled ZIP to disk.
     # OpenAPI docs
     "/api/docs",
     "/api/redoc",
