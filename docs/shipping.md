@@ -78,15 +78,17 @@ gh pr create --base dev --head <feature-or-chore-branch> \
   --title "v0.x.x-xxxx: Brief description" \
   --body "Summary of the change and link to the bead."
 
-# Wait for the 7 required checks to pass:
-#   - Backend Tests
-#   - Frontend Tests
-#   - MCP Server Tests
-#   - CodeQL Analysis (python)
-#   - CodeQL Analysis (javascript-typescript)
-#   - Semgrep Lint
-#   - Version Consistency
-gh pr checks <#> --watch
+# Wait for the 7 required checks AND for the PR to be mergeable.
+# Do NOT use `gh pr checks <#> --watch` here: see "Read the gate, not just
+# the checks" below for why an all-green watch can still be unmergeable.
+gh pr view <#> --json statusCheckRollup,mergeable,mergeStateStatus --jq '
+  (.statusCheckRollup[]
+    | select((.name // .context) as $n
+        | ["Backend Tests","Frontend Tests","MCP Server Tests",
+           "CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)",
+           "Semgrep Lint","Version Consistency"] | index($n))
+    | "  \(.name // .context): \(.conclusion // .state // "PENDING")"),
+  "  mergeable=\(.mergeable)  mergeStateStatus=\(.mergeStateStatus)"'
 
 # Merge with a merge commit (NOT --squash, NOT --rebase) per ADR-004 —
 # preserves per-commit bisection/forensics into dev.
@@ -101,6 +103,33 @@ git status  # MUST show "up to date with origin"
 ```
 
 The required check names above are pulled from `gh api /repos/MotWakorb/enhancedchannelmanager/branches/dev/protection | jq '.required_status_checks.contexts'`. If branch protection changes, update this list.
+
+#### Read the gate, not just the checks
+
+`gh pr checks <#> --watch` reports **check conclusions and nothing else**. It has no view of whether the branch actually merges, so a PR whose seven required checks are all green can still be sitting on a merge conflict, and the watch will report green right up to the moment `gh pr merge` refuses. That blind spot nearly landed a conflicted merge on 2026-08-10.
+
+Re-run the `gh pr view` command above until all three conditions hold:
+
+1. **Seven context lines appear.** Exactly seven, one per required name. A name that never appears is worse than a failing one: branch protection waits forever for a context no job emits, and `enforce_admins=true` means nobody can bypass it. If a required name is missing, stop and fix the workflow that should emit it, rather than waiting.
+2. **Every one reads `SUCCESS`.** `PENDING`, `QUEUED` or `IN_PROGRESS` means keep polling. `FAILURE` means fix the branch. `SKIPPED` on a required context is a red flag, not a pass: GitHub counts a skipped job as satisfying the check, so a `SKIPPED` required context means a job skipped itself instead of gating its steps.
+3. **`mergeStateStatus` is `CLEAN`.**
+
+| `mergeStateStatus` | What it means | What to do |
+| --- | --- | --- |
+| `CLEAN` | Required checks green, no conflict. | Merge. |
+| `UNSTABLE` | A non-required check is failing; the required seven are green. | Read the failing check, then decide. |
+| `BLOCKED` | A required check is failing, missing, or a review is outstanding. | Do not merge. Find which one. |
+| `DIRTY` | Merge conflict with the base branch. | `git fetch origin && git merge origin/dev`, resolve, push. |
+| `BEHIND` | The branch is behind the base and the base requires up-to-date branches. | Update the branch from `origin/dev`. |
+| `UNKNOWN` | GitHub has not finished computing mergeability. | Poll again; it resolves within seconds. |
+
+`mergeable` carries the same signal in coarser form (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`). It is worth printing alongside `mergeStateStatus` because it settles first after a push, so it is the earlier warning of a conflict.
+
+#### What a green check actually ran
+
+Six of the seven required checks gate their real work on `scripts/classify_changed_paths.py`: on a documentation-only change they pass without running a suite. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened, for example `Backend Tests: documentation-only change, no backend source changed, the pytest suite was NOT run.` versus `Backend Tests: ran the backend pytest suite. 2147 tests, 0 failed, 0 errored.`
+
+Read that summary before treating a green rollup as proof the suite passed. `gh run view <run-id>` links it, or open the run in the browser.
 
 #### Confirm the image published
 

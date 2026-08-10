@@ -1,15 +1,18 @@
 name: Docs — Build & Deploy to Pages
 
+# The `paths:` filter that used to sit on the push trigger is gone. It carried
+# a second copy of "what the published site is built from", which drifted from
+# the copy nothing else could see. That list now lives in
+# scripts/classify_changed_paths.py as the `docs_site_affected` verdict, and
+# the `build` job below gates on it. See bead enhancedchannelmanager-t4d5w.
+#
+# Neither job here emits a branch-protection required status check, so gating
+# at the JOB level is safe. Do not copy this shape into test.yml or build.yml:
+# there, a skipped job satisfies a required check without running anything.
+
 on:
   push:
     branches: [dev]
-    paths:
-      - 'docs/user_guide/**'
-      - 'docs/images/user_guide/**'
-      - 'docs/index.md'
-      - 'mkdocs.yml'
-      - 'docs/requirements-docs.txt'
-      - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -22,7 +25,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Mirrors the `detect` job in test.yml and build.yml, and calls the same
+  # classifier, so the site's path list has exactly one definition.
+  detect:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Only scripts/classify_changed_paths.py is needed; the changed-file
+          # set comes from the compare API, not from git history.
+          fetch-depth: 1
+
+      - name: Classify the changed file set
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          # No `set -e`: a classifier that dies must not silently stop the
+          # site from rebuilding. Every failure path below leaves
+          # changed_files.txt empty, and an empty set classifies as
+          # site-affecting, so the build still runs.
+          set -uo pipefail
+
+          : > changed_files.txt
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              echo "::warning::no usable before-SHA on this push"
+            else
+              gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                --jq '.files[]?.filename' > changed_files.txt \
+                || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+            fi
+          else
+            # workflow_dispatch is a deliberate manual rebuild request.
+            echo "Event $EVENT_NAME carries no diff; rebuilding the site."
+          fi
+
+          echo "Changed paths:"
+          cat changed_files.txt
+
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          echo "verdict: ${verdict:-<empty, the site will rebuild>}"
+          echo "$verdict" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: [detect]
+    # `!= 'false'` on purpose: an absent or empty output rebuilds the site.
+    # The dangerous direction here is a wrongly-skipped build that leaves the
+    # published site stale behind merged content.
+    if: needs.detect.outputs.docs_site_affected != 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +100,8 @@ jobs:
           path: _site
 
   deploy:
+    # Skips automatically when `build` skips, so a non-site change deploys
+    # nothing and the last published site stands.
     needs: build
     runs-on: ubuntu-latest
     environment:

@@ -515,6 +515,61 @@ real work runs. Classifying code as documentation is the dangerous direction,
 because it turns a required check green without running the work it is named
 for. Classifying documentation as code only costs runner minutes.
 
+### The second verdict: `docs_site_affected`
+
+The same classifier emits a second, independent output. `docs_site_affected`
+is true when a changed path is one the published user-guide site is built
+from: anything under `docs/user_guide/` or `docs/images/user_guide/`, plus
+`docs/index.md`, `mkdocs.yml`, `docs/requirements-docs.txt`, and
+`.github/workflows/docs-pages.yml`. That list used to live in the `paths:`
+filter of `docs-pages.yml`, where nothing could see it drift out of step with
+the mkdocs nav. It lives in the classifier now, and `docs-pages.yml` reads it.
+
+The two verdicts are independent, and all four combinations occur: editing
+`docs/user_guide/index.md` is documentation-only **and** site-affecting,
+editing `docs/shipping.md` is documentation-only and **not** site-affecting,
+editing `mkdocs.yml` is neither documentation-only nor exempt from the site
+build, and editing `backend/main.py` is neither.
+
+`docs_site_affected` fails open in the **opposite** direction, to `true`. Its
+dangerous verdict is a wrong `false`, which skips the rebuild and leaves the
+published site stale behind merged content, so `docs-pages.yml` gates on
+`!= 'false'`. A test derives the check from `mkdocs.yml` itself: every page in
+the nav must be a path the classifier recognises, so adding a published page
+outside the known prefixes fails the pull request rather than quietly
+disabling its deploy.
+
+### What a green required check actually ran
+
+Because six of the seven required checks gate their real work on
+`docs_only`, the check **name** is the same whether a suite ran or not.
+`Backend Tests` reads as "the backend tests ran" either way.
+
+So every required job writes one line to `$GITHUB_STEP_SUMMARY` naming what it
+did, and the three that produce a JUnit report run
+`scripts/ci_junit_summary.py` to put the real test count in that line rather
+than a claim:
+
+```
+Backend Tests: ran the backend pytest suite. 2147 tests, 0 failed, 0 errored.
+Backend Tests: documentation-only change, no backend source changed, the pytest suite was NOT run.
+```
+
+The summary changes no conclusion and gates nothing; it makes the rollup
+readable without opening each job log. `ci_junit_summary.py` exits 0 on every
+path, including a missing or unparseable report: it runs inside required
+contexts, and a cosmetic summary writer must never be the reason a passing
+suite reports red.
+
+`mkdocs build --strict` runs on every pull request as a step in the
+**Operator Docs** job (bead `enhancedchannelmanager-pb2s4`). It used to run
+only after the merge, in `docs-pages.yml`, so a broken user-guide link merged
+green and surfaced as a failed Pages deploy on `dev`. It checks something
+disjoint from `npm run docs:check`: pb2s4 records a broken link that the
+first passed and the second caught. `Operator Docs` is deliberately ungated
+and deliberately **not** a required context, so adding the step changes no
+branch-protection surface.
+
 ## Container Freshness Check
 
 **Before triaging any "test failure" bead that reports failures from

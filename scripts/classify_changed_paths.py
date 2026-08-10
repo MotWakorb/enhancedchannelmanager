@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Classify a changed-file set as documentation-only or code.
+"""Classify a changed-file set for the CI gates that read it.
 
-Origin: bead enhancedchannelmanager-5rwzy.
+Origin: bead enhancedchannelmanager-5rwzy. Extended for the published
+user-guide site in bead enhancedchannelmanager-t4d5w.
+
+Two independent verdicts come out of one changed-file set:
+
+    docs_only            nothing outside `**.md` / `.beads/**` changed, so the
+                         code gates have nothing to analyse
+    docs_site_affected   something the mkdocs user-guide site is built from
+                         changed, so the site needs rebuilding and republishing
 
 ## Why this exists
 
@@ -19,7 +27,7 @@ check now runs on every pull request, so the context exists exactly once, and
 gates its expensive steps on the output of this classifier. On a genuinely
 documentation-only change the job does a cheap no-op and passes honestly.
 
-## The rule
+## The docs_only rule
 
 A change is documentation-only when EVERY changed path matches one of the
 globs the CI workflows used to ignore:
@@ -29,24 +37,54 @@ globs the CI workflows used to ignore:
 
 Anything else, including a change with no files at all, is treated as code.
 
+## The docs_site_affected rule
+
+The published user-guide site is built from a much narrower slice of the tree
+than `docs/`: `mkdocs.yml` excludes every internal directory. A change is
+site-affecting when ANY changed path is one the site build reads:
+
+    docs/user_guide/**                any published page
+    docs/images/user_guide/**         any published screenshot
+    docs/index.md                     the site landing page
+    mkdocs.yml                        the site definition itself
+    docs/requirements-docs.txt        the pinned build toolchain
+    .github/workflows/docs-pages.yml  the build-and-deploy workflow
+
+That list used to live in the `paths:` filter of `docs-pages.yml`. It lives
+here now, and that workflow reads this output, so there is one definition.
+
 ## Fail-open, never fail-closed
 
-Misclassifying code as documentation is the dangerous direction: it turns a
-required check green without running the work it is named for. Misclassifying
-documentation as code only costs runner minutes. So every ambiguous input
-(empty file list, unreadable input) resolves to `docs_only=false`, and the
-script exits 0 unconditionally so a classifier hiccup can never skip a
-dependent job. Callers gate work on `docs_only != 'true'` for the same reason:
-an absent or empty output runs the real work.
+The two verdicts fail open in OPPOSITE directions, because their dangerous
+answers are opposite.
+
+For `docs_only`, misclassifying code as documentation turns a required check
+green without running the work it is named for; misclassifying documentation
+as code only costs runner minutes. So every ambiguous input (empty file list,
+unreadable input) resolves to `docs_only=false`, and callers gate work on
+`docs_only != 'true'` so an absent or empty output still runs the real work.
+
+For `docs_site_affected`, the dangerous answer is a `false` that skips a site
+rebuild and leaves the published site stale behind the merged content. So
+ambiguous input resolves to `docs_site_affected=true`, and `docs-pages.yml`
+gates on `!= 'false'` so an absent or empty output still builds.
+
+Either way the script exits 0 unconditionally: a classifier hiccup must never
+be able to skip a dependent job by dying.
 
 ## Usage
 
     python scripts/classify_changed_paths.py --files-from changed_files.txt
     git diff --name-only origin/dev...HEAD | python scripts/classify_changed_paths.py
 
-Writes `docs_only=true` or `docs_only=false` to stdout in the
-`key=value` form GitHub Actions `$GITHUB_OUTPUT` consumes. Diagnostics go to
-stderr so stdout stays machine-parseable.
+Writes two `key=value` lines to stdout in the form GitHub Actions
+`$GITHUB_OUTPUT` consumes:
+
+    docs_only=true|false
+    docs_site_affected=true|false
+
+Consumers must read the key they care about by name, not by line position.
+Diagnostics go to stderr so stdout stays machine-parseable.
 """
 from __future__ import annotations
 
@@ -60,20 +98,43 @@ from pathlib import Path
 DOC_SUFFIX = ".md"
 DOC_PREFIXES = (".beads/",)
 
+# The inputs the published user-guide site is built from. This is the list
+# `.github/workflows/docs-pages.yml` used to carry in its own `paths:` filter;
+# that workflow now reads the `docs_site_affected` output instead, so the
+# definition has exactly one home. `.github/workflows/docs-pages.yml` itself
+# is on the list because editing the build-and-deploy workflow is a reason to
+# re-run it, which is how the original filter behaved.
+DOCS_SITE_PREFIXES = (
+    "docs/user_guide/",
+    "docs/images/user_guide/",
+)
+DOCS_SITE_FILES = (
+    "docs/index.md",
+    "mkdocs.yml",
+    "docs/requirements-docs.txt",
+    ".github/workflows/docs-pages.yml",
+)
 
-def is_doc_path(path: str) -> bool:
-    """True when `path` is one of the documentation-only paths CI may skip.
+
+def normalise_path(path: str) -> str:
+    """Repo-relative, POSIX-separated, no leading `./`. Empty when unusable.
 
     Paths arrive repo-relative and POSIX-separated, which is what both the
     GitHub compare/pull-request file APIs and `git diff --name-only` emit.
     Backslashes are normalised anyway so a Windows-style path cannot slip
-    past the `.beads/` prefix test.
+    past a prefix test.
     """
     normalised = path.strip().replace("\\", "/")
     # Strip a leading `./` only. `str.lstrip("./")` would eat the leading dot
-    # of `.beads/foo` and defeat the prefix test below.
+    # of `.beads/foo` and defeat the prefix tests in the callers.
     while normalised.startswith("./"):
         normalised = normalised[2:]
+    return normalised
+
+
+def is_doc_path(path: str) -> bool:
+    """True when `path` is one of the documentation-only paths CI may skip."""
+    normalised = normalise_path(path)
     if not normalised:
         return False
     if normalised.startswith(DOC_PREFIXES):
@@ -97,11 +158,36 @@ def classify(paths: list[str]) -> tuple[bool, list[str]]:
     return (not code_paths), code_paths
 
 
+def is_docs_site_path(path: str) -> bool:
+    """True when changing `path` changes what the mkdocs site publishes."""
+    normalised = normalise_path(path)
+    if not normalised:
+        return False
+    if normalised in DOCS_SITE_FILES:
+        return True
+    return normalised.startswith(DOCS_SITE_PREFIXES)
+
+
+def classify_docs_site(paths: list[str]) -> tuple[bool, list[str]]:
+    """Return (docs_site_affected, site_paths) for a changed-file set.
+
+    Fails open to True on an empty or undetermined set: a missed rebuild
+    leaves the published site stale behind merged content, whereas a
+    needless rebuild costs a runner minute.
+    """
+    cleaned = [p.strip() for p in paths if p.strip()]
+    if not cleaned:
+        return True, []
+    site_paths = [p for p in cleaned if is_docs_site_path(p)]
+    return bool(site_paths), site_paths
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Classify a changed-file set as documentation-only or code, and "
-            "emit docs_only=true|false for GitHub Actions."
+            "Classify a changed-file set for the CI gates, and emit "
+            "docs_only=true|false and docs_site_affected=true|false for "
+            "GitHub Actions."
         )
     )
     parser.add_argument(
@@ -120,19 +206,23 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as error:
             print(
                 f"::warning::could not read {args.files_from}: {error}. "
-                f"Treating the change as code so every gate runs.",
+                f"Treating the change as code so every gate runs, and as "
+                f"site-affecting so the docs site still rebuilds.",
                 file=sys.stderr,
             )
             print("docs_only=false")
+            print("docs_site_affected=true")
             return 0
 
     paths = raw.splitlines()
     docs_only, code_paths = classify(paths)
+    docs_site_affected, site_paths = classify_docs_site(paths)
 
     if not [p for p in paths if p.strip()]:
         print(
             "::warning::the changed-file set was empty or could not be "
-            "determined. Treating the change as code so every gate runs.",
+            "determined. Treating the change as code so every gate runs, "
+            "and as site-affecting so the docs site still rebuilds.",
             file=sys.stderr,
         )
     elif docs_only:
@@ -150,7 +240,23 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
+    if site_paths:
+        site_preview = ", ".join(site_paths[:10])
+        if len(site_paths) > 10:
+            site_preview += f", and {len(site_paths) - 10} more"
+        print(
+            f"{len(site_paths)} path(s) feed the published user-guide site: "
+            f"{site_preview}",
+            file=sys.stderr,
+        )
+    elif [p for p in paths if p.strip()]:
+        print(
+            "No changed path feeds the published user-guide site.",
+            file=sys.stderr,
+        )
+
     print(f"docs_only={'true' if docs_only else 'false'}")
+    print(f"docs_site_affected={'true' if docs_site_affected else 'false'}")
     return 0
 
 
