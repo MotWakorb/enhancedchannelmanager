@@ -206,7 +206,7 @@ This is a misleading signal in fresh deploys. See the "useful in 30d, fully usef
 If post-deploy verification fails AND rollback fails:
 
 - This is now a P1 incident: the deploy substrate is broken.
-- Page the SRE persona via the operator's chosen channel (no rotation defined yet; routes to `curt@lecaptain.org`).
+- Page the SRE persona via the operator's chosen channel. There is no on-call rotation yet, so pages route to the instance operator directly.
 - Capture all artifacts: logs, `alembic current` output, `/metrics` snapshot, `docker ps` output.
 
 ## See also

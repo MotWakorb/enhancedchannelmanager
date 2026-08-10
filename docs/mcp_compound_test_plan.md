@@ -66,13 +66,15 @@ disposably.
   `USA | Local PBS`, `NFL Game Pass 🏈`, `ESPN+`, `Entertainment`.
 - **M3U accounts (real):** `Provider 1` (Xtream, ~2624 streams), `HD Homerun`
   (~56 streams), `custom` (ERROR state).
-- **EPG sources (real):** `Teamarr`, `Jesmann Gracenote`, `Jesmann Full`, `B1G EPG`,
-  `B1G Advanced EPG` (dummy).
+- **EPG sources (real):** one XMLTV aggregator, two Gracenote-backed feeds, a
+  sport-specific feed, and one dummy EPG profile. Names are instance-specific;
+  substitute your own.
 - **Profiles (real):** channel profiles `LiveTV`, `HDHomerun`, `TestingProfile`;
   stream profiles `ffmpeg`, `VLC`.
 - **Channel Pipeline rules (real):** `Testing Rule` (matches stream name contains
   "ESPN"), `Create B1G Channels`, `USA Entertainment`.
-- **Users (real):** `home`, `kmfelmer` (Dispatcharr).
+- **Users (real):** two Dispatcharr sub-accounts. Names are instance-specific;
+  substitute your own.
 - **Tasks (real ids):** `stream_probe`, `epg_refresh`, `m3u_refresh`,
   `popularity_calculation`.
 

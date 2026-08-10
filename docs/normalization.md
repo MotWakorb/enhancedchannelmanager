@@ -6,7 +6,7 @@
 
 Normalization is the step between "raw name from an M3U line" and "channel name on disk." It runs in three places:
 
-- **Test Rules**: Settings → Normalization → the preview panel where you paste a sample name and see what the current rule set produces. Safe to use freely; no side effects.
+- **Test Rules**: Settings → Channel Normalization → the preview panel where you paste a sample name and see what the current rule set produces. Safe to use freely; no side effects.
 - **Channel Pipeline**: the Channel Pipeline reads the stream's raw name, passes it through the same rule set, and uses the output as the channel name (or as the lookup key for matching an existing channel).
 - **Re-normalize Existing Channels**: a one-time bulk rewrite that reapplies the current rule set to channels already on disk. Manual, gated, undoable.
 
@@ -29,7 +29,7 @@ These three paths **must produce the same output for the same input**. That is t
 
 ### Your first rule
 
-1. Open **Settings → Normalization Rules**.
+1. Open **Settings → Channel Normalization**.
 2. Pick a rule group (or create one). Groups are ordering buckets: rules within a group run in priority order, groups run in group-priority order.
 3. Click **Add rule**. Choose a condition and an action.
 4. Expand the **Test Rules** panel above the rule groups, paste a sample raw name (one per line), and click **Run Test**.
@@ -174,7 +174,7 @@ Do **not** use it to force a one-off rename of a single channel. Edit the channe
 
 ### Dry-run preview walkthrough
 
-1. Settings → Normalization Rules → **Apply to existing channels**.
+1. Settings → Channel Normalization → **Apply to existing channels**.
 2. The modal opens in **dry-run** mode by default. ECM computes the diff and shows one row per channel with a proposed new name.
 
    ![Apply Normalization to Existing Channels modal with the rule-trace drawer expanded on the first row, showing current_name, proposed name, rules-fired count, and a trace panel explaining the diff cause (in this case Unicode normalization only)](images/normalization/apply-to-channels-dry-run.png)
@@ -197,7 +197,7 @@ The execute call takes an `actions[]` array keyed by `channel_id`. Only the chan
 - **Channel numbers**: preserved. A rename does not renumber; a merge folds the source channel's streams into the target and deletes the source, so the source's number becomes available.
 - **Channel groups**: preserved on rename; the merged channel stays in its original group on merge.
 - **Watch history / stats**: preserved on rename (same `channel_id`); on merge, the source's history is deleted with the source row. The target's history is not backfilled.
-- **Journal**: every rename and every merge is logged under the `normalization` category with the `rule_set_hash` computed at execute time. Use the journal view (Settings → Journal, or `GET /api/journal?category=normalization`) to audit and to drive undo.
+- **Journal**: every rename and every merge is logged under the `normalization` category with the `rule_set_hash` computed at execute time. Use the **Journal** page (or `GET /api/journal?category=normalization`) to audit and to drive undo.
 
 ### Undo via journal, rollback
 
@@ -245,7 +245,7 @@ Cause: the merge lookup compares names case-insensitively but does **not** colla
 Fix (two halves, both opt-in):
 
 1. **Stop new duplicates**: edit the rule → enable **"Ignore spacing & case differences when matching"** (`fold_match_key`). Future runs compare names by a folded key (casefold + strip all whitespace) so all four spellings merge into whichever channel exists first. Stored names are never rewritten.
-2. **Clean up existing duplicates**: Channels tab → Find Duplicates → enable **"Ignore spacing differences"**. The same folded key groups the existing spelling variants so you can bulk-merge them.
+2. **Clean up existing duplicates**: Channel Manager → select the channels → Find Duplicates → enable **"Ignore spacing differences"**. The same folded key groups the existing spelling variants so you can bulk-merge them.
 
 Leave both off if your provider uses spacing/case to distinguish genuinely different channels. Note that digit runs collide too ("Canal 5 2" and "Canal 52" fold to the same key).
 

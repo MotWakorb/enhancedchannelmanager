@@ -28,7 +28,7 @@ premise that is false in the current implementation, and acting on it would ship
 
 ## 2. Method and evidence base
 
-Everything asserted below was read from source at `/home/lecaptainc/ecm/wt-newui` (branch `newui`)
+Everything asserted below was read from source in a `newui`-branch worktree
 or measured against the running instance (`ecm-ecm-1`, `ECM_VERSION=0.18.1-0000`,
 `GIT_COMMIT=cbabdc17`). Where I could not verify something, I say so.
 
