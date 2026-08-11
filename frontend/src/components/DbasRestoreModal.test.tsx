@@ -117,6 +117,7 @@ describe('DbasRestoreModal', () => {
 
   it('renders the upload dropzone first', async () => {
     render(<DbasRestoreModal onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'Restore DBAS Backup' })).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText(/drag & drop a backup artifact/i)).toBeInTheDocument();
 
     // Let the mount-time getSettings() fetch settle so the resulting state
@@ -186,8 +187,15 @@ describe('DbasRestoreModal', () => {
       expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
     );
 
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockClear();
     fireEvent.click(screen.getByRole('button', { name: /apply these changes/i }));
 
+    expect(api.startDbasRestore).not.toHaveBeenCalled();
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+    expect(screen.getByRole('dialog', { name: 'Restore DBAS Backup' })).toBe(dialogs[0]);
+    expect(screen.getByRole('dialog', { name: 'Apply DBAS Restore' })).toBe(dialogs[1]);
+    expect(dialogs[0].getAttribute('aria-labelledby')).not.toBe(dialogs[1].getAttribute('aria-labelledby'));
     const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
     expect(applyConfirm).toBeDisabled();
 

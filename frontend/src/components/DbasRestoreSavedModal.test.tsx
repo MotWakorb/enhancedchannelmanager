@@ -112,6 +112,7 @@ describe('DbasRestoreSavedModal', () => {
 
   it('renders the configure step directly with the given filename', async () => {
     render(<DbasRestoreSavedModal filename={FILENAME} onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'Restore Saved DBAS Backup' })).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText(FILENAME)).toBeInTheDocument();
     expect(screen.queryByLabelText('Passphrase')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /run preview/i })).toBeEnabled();
@@ -189,6 +190,11 @@ describe('DbasRestoreSavedModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /apply these changes/i }));
 
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+    expect(screen.getByRole('dialog', { name: 'Restore Saved DBAS Backup' })).toBe(dialogs[0]);
+    expect(screen.getByRole('dialog', { name: 'Apply DBAS Restore' })).toBe(dialogs[1]);
+    expect(dialogs[0].getAttribute('aria-labelledby')).not.toBe(dialogs[1].getAttribute('aria-labelledby'));
     const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
     expect(applyConfirm).toBeDisabled();
 
