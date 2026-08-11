@@ -27,16 +27,20 @@ runs:
 
         case "$EVENT_NAME" in
           pull_request)
+            # GitHub documents a 3,000-file maximum for this endpoint. At the
+            # exact cap there may be unseen files, so completeness is false.
             gh api --paginate --slurp "repos/$REPO/pulls/$PR_NUMBER/files" \
-              --jq '[.[][] | .filename, (.previous_filename // empty)]' > changed_files.json \
+              --jq '(length > 0 and all(.[]; type == "array")) as $valid | ([.[][]?] | {complete: ($valid and length < 3000), paths: [.[] | .filename, (.previous_filename // empty)]})' > changed_files.json \
               || { echo "::warning::could not list PR files"; printf '[]' > changed_files.json; }
             ;;
           push)
             if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
               echo "::warning::no usable before-SHA on this push"
             else
+              # Compare exposes at most 300 files for the entire comparison,
+              # on its first page only. Exact-cap input is therefore unknown.
               gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
+                --jq '(.[0]? // null) as $first | ((length > 0) and (($first | type) == "object") and ($first | ((has("message") or has("documentation_url") or has("errors")) | not)) and (($first.files? | type) == "array") and all(.[1:][]; if type == "object" then ((((has("message") or has("documentation_url") or has("errors")) | not)) and (has("files") | not) and ((.commits? | type) == "array")) else false end)) as $valid | (if (($first | type) == "object") and (($first.files? | type) == "array") then $first.files else [] end) | {complete: ($valid and length < 300), paths: [.[] | .filename, (.previous_filename // empty)]}' > changed_files.json \
                 || { echo "::warning::could not compare event revisions"; printf '[]' > changed_files.json; }
             fi
             ;;
@@ -45,6 +49,6 @@ runs:
             ;;
         esac
 
-        verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
+        verdict=$(python3 scripts/classify_changed_paths.py --input-format envelope --files-from changed_files.json)
         echo "verdict: ${verdict:-<empty, every gate will run>}"
         echo "$verdict" >> "$GITHUB_OUTPUT"
