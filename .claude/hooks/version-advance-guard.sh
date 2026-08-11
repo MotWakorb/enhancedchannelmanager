@@ -98,7 +98,7 @@ if [[ $DIFF_STATUS -ne 0 ]]; then
   exit 0
 fi
 
-CLASSIFIER_STDOUT="$(python3 "$CLASSIFIER" --git-z <"$CHANGED_PATHS_FILE" 2>/dev/null)"
+CLASSIFIER_STDOUT="$(python3 "$CLASSIFIER" --input-format nul <"$CHANGED_PATHS_FILE" 2>/dev/null)"
 CLASSIFIER_STATUS=$?
 if [[ $CLASSIFIER_STATUS -ne 0 ]]; then
   emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification exited non-zero, so the build-advance check is being skipped. CI still enforces the rule against the PR head."

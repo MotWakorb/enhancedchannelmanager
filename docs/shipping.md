@@ -112,7 +112,7 @@ This is the **only** place the classifier has real input: the branch exists and 
 
 ```bash
 git fetch origin
-git diff --name-only --no-renames -z origin/dev...HEAD | python3 scripts/classify_changed_paths.py --git-z
+git diff --name-only --no-renames -z origin/dev...HEAD | python3 scripts/classify_changed_paths.py --input-format nul
 ```
 
 | Verdict | What it means |
