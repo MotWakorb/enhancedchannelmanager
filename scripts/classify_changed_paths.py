@@ -193,6 +193,24 @@ def _parse_json_paths(raw: bytes) -> list[str] | None:
     return payload
 
 
+def _parse_envelope_paths(raw: bytes) -> list[str] | None:
+    """Parse API acquisition output only when its file set is known complete."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"complete", "paths"}:
+        return None
+    if payload["complete"] is not True:
+        return None
+    paths = payload["paths"]
+    if not isinstance(paths, list) or not paths:
+        return None
+    if not all(isinstance(path, str) and normalise_path(path) for path in paths):
+        return None
+    return paths
+
+
 def _parse_git_z_paths(raw: bytes) -> list[str] | None:
     if not raw or not raw.endswith(b"\0"):
         return None
@@ -222,9 +240,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--input-format",
-        choices=("json", "nul"),
+        choices=("json", "nul", "envelope"),
         default="json",
-        help="Input encoding: a JSON path array (default), or NUL-delimited paths.",
+        help=(
+            "Input encoding: a JSON path array (default), NUL-delimited paths, "
+            "or an API completeness envelope."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -232,15 +253,20 @@ def main(argv: list[str] | None = None) -> int:
         paths = None
     elif args.files_from is None:
         raw = sys.stdin.buffer.read()
-        paths = (
-            _parse_git_z_paths(raw)
-            if args.input_format == "nul"
-            else _parse_json_paths(raw)
-        )
+        if args.input_format == "nul":
+            paths = _parse_git_z_paths(raw)
+        elif args.input_format == "envelope":
+            paths = _parse_envelope_paths(raw)
+        else:
+            paths = _parse_json_paths(raw)
     else:
         try:
             raw = args.files_from.read_bytes()
-            paths = _parse_json_paths(raw)
+            paths = (
+                _parse_envelope_paths(raw)
+                if args.input_format == "envelope"
+                else _parse_json_paths(raw)
+            )
         except OSError as error:
             print(
                 f"::warning::could not read {args.files_from}: {error}. "
@@ -253,8 +279,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     if paths is None:
         print(
-            "::warning::changed-path input was malformed, empty, or noncanonical. "
-            "Treating the change as code and site-affecting.",
+            "::warning::changed-path input was incomplete, undetermined, malformed, "
+            "empty, or noncanonical. Treating the change as code and site-affecting.",
             file=sys.stderr,
         )
         print("code_paths_changed=true")

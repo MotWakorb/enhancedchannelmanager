@@ -372,6 +372,32 @@ class TestCommandLine:
         result = _run_cli(["--input-format", "nul"], raw)
         assert _outputs(result)["code_paths_changed"] == "true"
 
+    def test_complete_envelope_classifies_known_paths(self):
+        payload = {"complete": True, "paths": [".beads/state.jsonl"]}
+        result = _run_cli(["--input-format", "envelope"], json.dumps(payload))
+        assert _outputs(result) == {
+            "code_paths_changed": "false",
+            "docs_site_affected": "false",
+        }
+
+    @pytest.mark.parametrize(
+        "payload",
+        (
+            {"complete": False, "paths": [".beads/state.jsonl"]},
+            {"paths": [".beads/state.jsonl"]},
+            {"complete": "true", "paths": [".beads/state.jsonl"]},
+            {"complete": True},
+        ),
+    )
+    def test_incomplete_or_malformed_envelope_fails_safe(self, payload):
+        result = _run_cli(["--input-format", "envelope"], json.dumps(payload))
+        assert _outputs(result) == {
+            "code_paths_changed": "true",
+            "docs_site_affected": "true",
+        }
+        assert "undetermined" in result.stderr.lower()
+        assert ".beads/state.jsonl" not in result.stderr
+
     @pytest.mark.parametrize(
         "raw",
         [
@@ -1048,15 +1074,20 @@ def _validate_rename_sources(workflows: tuple[Path, ...]) -> None:
             )
 
 
-def _run_jq(expression: str, payload) -> list[str]:
+def _run_jq(expression: str, payload):
     """Apply the workflow's real jq expression to a payload, as CI would.
 
     ``gh api --slurp`` wraps all response pages in one outer array. The jq
-    expression must return one JSON array so filename delimiters remain data.
+    expression returns an explicit completeness envelope so filename
+    delimiters remain data and capped responses cannot look complete.
     """
+    return _run_jq_slurped(expression, [payload])
+
+
+def _run_jq_slurped(expression: str, pages):
     result = subprocess.run(
         [JQ, "-r", expression],
-        input=json.dumps([payload]),
+        input=json.dumps(pages),
         capture_output=True,
         text=True,
         check=False,
@@ -1065,9 +1096,14 @@ def _run_jq(expression: str, payload) -> list[str]:
         f"jq rejected the workflow's own expression {expression!r}: "
         f"{result.stderr.strip()}"
     )
-    parsed = json.loads(result.stdout)
-    assert isinstance(parsed, list)
-    return parsed
+    return json.loads(result.stdout)
+
+
+def _envelope_paths(envelope) -> list[str]:
+    assert set(envelope) == {"complete", "paths"}
+    assert isinstance(envelope["complete"], bool)
+    assert isinstance(envelope["paths"], list)
+    return envelope["paths"]
 
 
 class TestRenameSourcesReachTheClassifier:
@@ -1093,7 +1129,12 @@ class TestRenameSourcesReachTheClassifier:
         """The regression guard, end to end through the workflow's own jq."""
         for workflow in DETECT_WORKFLOWS:
             for endpoint, expression in _jq_calls(workflow):
-                paths = _run_jq(expression, _payload_for(endpoint, RENAME_INTO_MARKDOWN_FILES))
+                paths = _envelope_paths(
+                    _run_jq(
+                        expression,
+                        _payload_for(endpoint, RENAME_INTO_MARKDOWN_FILES),
+                    )
+                )
                 code_paths_changed, code_paths = script.classify(paths)
                 assert code_paths_changed is True
                 assert "backend/tests/unit/test_auth_middleware.py" in code_paths
@@ -1102,7 +1143,12 @@ class TestRenameSourcesReachTheClassifier:
         """Real recorded payload, not a hand-guessed shape."""
         for workflow in DETECT_WORKFLOWS:
             for endpoint, expression in _jq_calls(workflow):
-                paths = _run_jq(expression, _payload_for(endpoint, RECORDED_RENAME_COMMIT_FILES))
+                paths = _envelope_paths(
+                    _run_jq(
+                        expression,
+                        _payload_for(endpoint, RECORDED_RENAME_COMMIT_FILES),
+                    )
+                )
                 assert RECORDED_RENAME_SOURCE in paths
                 assert "frontend/src/components/settings/OutboundPolicyCard.css" in paths
 
@@ -1115,7 +1161,7 @@ class TestRenameSourcesReachTheClassifier:
         ]
         for endpoint, expression in _jq_calls(workflow):
             payload = _payload_for(endpoint, plain)
-            paths = _run_jq(expression, payload)
+            paths = _envelope_paths(_run_jq(expression, payload))
             assert paths == ["backend/main.py", "CHANGELOG.md"], (
                 f"{workflow.name} expression {expression!r} produced {paths!r}"
             )
@@ -1127,14 +1173,131 @@ class TestRenameSourcesReachTheClassifier:
         for workflow in DETECT_WORKFLOWS:
             for endpoint, expression in _jq_calls(workflow):
                 if "/compare/" in endpoint:
-                    assert _run_jq(expression, {}) == []
+                    assert _run_jq(expression, {}) == {"complete": False, "paths": []}
 
     def test_json_transport_preserves_filename_characters_without_rewriting(self):
         paths = ["docs/line\nbreak.md", r"docs\shipping.md", " docs/a.md", "docs/a.md "]
         payload_files = [{"filename": path, "status": "modified"} for path in paths]
         for workflow in DETECT_WORKFLOWS:
             for endpoint, expression in _jq_calls(workflow):
-                assert _run_jq(expression, _payload_for(endpoint, payload_files)) == paths
+                assert _envelope_paths(
+                    _run_jq(expression, _payload_for(endpoint, payload_files))
+                ) == paths
+
+    @pytest.mark.parametrize(
+        ("endpoint_kind", "count", "complete"),
+        (
+            ("compare", 299, True),
+            ("compare", 300, False),
+            ("pull", 2999, True),
+            ("pull", 3000, False),
+        ),
+    )
+    def test_endpoint_caps_produce_explicit_completeness(
+        self, endpoint_kind, count, complete
+    ):
+        endpoint, expression = next(
+            (endpoint, expression)
+            for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0])
+            if ("/compare/" in endpoint) == (endpoint_kind == "compare")
+        )
+        files = [
+            {"filename": f".beads/state-{index}.jsonl", "status": "modified"}
+            for index in range(count)
+        ]
+        envelope = _run_jq(expression, _payload_for(endpoint, files))
+        if endpoint_kind == "pull":
+            pages = [files[index : index + 100] for index in range(0, count, 100)]
+            envelope = _run_jq_slurped(expression, pages)
+        assert envelope["complete"] is complete
+        assert len(envelope["paths"]) == count
+
+    def test_malformed_or_missing_api_response_is_explicitly_incomplete(self):
+        for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0]):
+            assert _run_jq(expression, {}) == {"complete": False, "paths": []}
+
+    @pytest.mark.parametrize(
+        "pages",
+        (
+            [{"files": [{"filename": ".beads/a.jsonl"}]}, {"files": "bad"}],
+            [{"files": [{"filename": ".beads/a.jsonl"}]}, {"files": None}],
+            [{"files": [{"filename": ".beads/a.jsonl"}]}, {"message": "error"}],
+            [{"commits": []}, {"files": [{"filename": ".beads/a.jsonl"}]}],
+            [{"files": [{"filename": ".beads/a.jsonl"}]}, "bad-page"],
+            [None, {"files": [{"filename": ".beads/a.jsonl"}]}],
+            [{"files": [{"filename": ".beads/a.jsonl"}]}, {"files": []}],
+        ),
+    )
+    def test_compare_rejects_malformed_or_misordered_slurped_pages(self, pages):
+        _endpoint, expression = next(
+            (endpoint, expression)
+            for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0])
+            if "/compare/" in endpoint
+        )
+        envelope = _run_jq_slurped(expression, pages)
+        assert envelope["complete"] is False
+        result = _run_cli(["--input-format", "envelope"], json.dumps(envelope))
+        assert _outputs(result) == {
+            "code_paths_changed": "true",
+            "docs_site_affected": "true",
+        }
+        assert ".beads/a.jsonl" not in result.stderr
+
+    def test_compare_accepts_documented_later_commit_page_without_files(self):
+        _endpoint, expression = next(
+            (endpoint, expression)
+            for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0])
+            if "/compare/" in endpoint
+        )
+        pages = [
+            {"files": [{"filename": ".beads/a.jsonl"}]},
+            {"commits": []},
+        ]
+        assert _run_jq_slurped(expression, pages) == {
+            "complete": True,
+            "paths": [".beads/a.jsonl"],
+        }
+
+    @pytest.mark.parametrize("position", ("first", "later"))
+    @pytest.mark.parametrize(
+        ("marker", "value"),
+        (
+            ("message", "synthetic API error"),
+            ("documentation_url", "https://example.invalid/docs"),
+            ("errors", [{"code": "synthetic"}]),
+        ),
+    )
+    def test_compare_rejects_success_shape_mixed_with_error_markers(
+        self, position, marker, value
+    ):
+        _endpoint, expression = next(
+            (endpoint, expression)
+            for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0])
+            if "/compare/" in endpoint
+        )
+        first = {"files": [{"filename": ".beads/a.jsonl"}]}
+        later = {"commits": []}
+        (first if position == "first" else later)[marker] = value
+        envelope = _run_jq_slurped(expression, [first, later])
+        assert envelope["complete"] is False
+        result = _run_cli(["--input-format", "envelope"], json.dumps(envelope))
+        assert _outputs(result) == {
+            "code_paths_changed": "true",
+            "docs_site_affected": "true",
+        }
+        assert ".beads/a.jsonl" not in result.stderr
+
+    def test_compare_legitimate_status_field_is_not_an_error_marker(self):
+        _endpoint, expression = next(
+            (endpoint, expression)
+            for endpoint, expression in _jq_calls(DETECT_WORKFLOWS[0])
+            if "/compare/" in endpoint
+        )
+        pages = [
+            {"status": "ahead", "files": [{"filename": ".beads/a.jsonl"}]},
+            {"commits": []},
+        ]
+        assert _run_jq_slurped(expression, pages)["complete"] is True
 
 
 def test_detect_workflows_use_lossless_json_transport():
@@ -1146,7 +1309,7 @@ def test_detect_workflows_use_lossless_json_transport():
             tokens = shlex.split(line)
             assert "--paginate" in tokens
             assert "--slurp" in tokens
-            assert tokens[tokens.index("--jq") + 1].startswith("[")
+            assert tokens[tokens.index("--jq") + 1].startswith("(")
 
 
 def test_classifier_workflow_discovery_includes_yaml(tmp_path):
