@@ -44,7 +44,7 @@ async function openApp(browser: Browser, viewport: { width: number; height: numb
   await page.route(/\/api\/journal(?:\?|$)/, (route) => route.fulfill(json({ count: 0, results: [], page: 1, page_size: 50, total_pages: 0 })));
   await page.route(/\/api\/m3u\/changes\/summary(?:\?|$)/, (route) => route.fulfill(json({ total_changes: 0, groups_added: 0, groups_removed: 0, streams_added: 0, streams_removed: 0, accounts_affected: [], since: null })));
   await page.route(/\/api\/m3u\/changes(?:\?|$)/, (route) => route.fulfill(json({ results: [], total: 0, page: 1, page_size: 50, total_pages: 0 })));
-  await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill(json({ status: 'healthy', version: '0.18.1-0074' })));
+  await page.route(/\/api\/health(?:\?|$)/, (route) => route.fulfill(json({ status: 'healthy', version: '0.18.1-0075' })));
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   const servedCss = await page.locator('link[rel="stylesheet"]').evaluateAll(async (links) =>
     Promise.all(links.map((link) => fetch((link as HTMLLinkElement).href).then((response) => response.text()))));

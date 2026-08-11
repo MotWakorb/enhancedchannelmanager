@@ -439,29 +439,6 @@
 
 /* Confirm Dialog - uses ModalBase.css (modal-overlay, modal-container modal-sm) */
 
-/* Responsive */
-@media (max-width: 600px) {
-  /* The `.form-row` / `.form-row .form-field` narrow-viewport overrides that
-     used to live here went with their unconditional rules above — same
-     reason: no Channel Pipeline element carries `.form-row`, so under 600px
-     they only reached Settings' and M3UAccountModal's rows
-     (bead enhancedchannelmanager-mktnb). */
-
-  .rule-builder-footer {
-    flex-direction: column-reverse;
-    align-items: stretch;
-  }
-
-  .rule-builder-footer-nav {
-    flex-direction: column-reverse;
-    align-items: stretch;
-  }
-
-  .rule-builder-footer .btn {
-    width: 100%;
-  }
-}
-
 .checkbox-group.vertical {
   flex-direction: column;
   gap: 8px;
@@ -583,7 +560,19 @@
   gap: 0.75rem;
 }
 
-@media (max-width: 640px) {
+/* Zoom/reflow tier. Footer actions and the active-window fields stack before
+   the 640 CSS-pixel viewport produced by 200% browser zoom. */
+@media (max-width: 700px) {
+  .rule-builder-footer,
+  .rule-builder-footer-nav {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rule-builder-footer .btn {
+    width: 100%;
+  }
+
   .rule-active-window-fields {
     grid-template-columns: 1fr;
   }

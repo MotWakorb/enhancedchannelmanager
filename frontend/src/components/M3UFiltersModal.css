@@ -223,6 +223,10 @@
   justify-content: flex-end;
 }
 
+.filter-responsive-label {
+  display: none;
+}
+
 .m3u-filters-modal .action-btn {
   display: flex;
   align-items: center;
@@ -259,7 +263,7 @@
 }
 
 /* Responsive */
-@media (max-width: 600px) {
+@media (max-width: 700px) {
   .filter-form .form-row {
     grid-template-columns: 1fr;
   }
@@ -273,8 +277,27 @@
     gap: 0.5rem;
   }
 
-  .filter-action,
+  .filter-pattern {
+    grid-column: 1 / -1;
+  }
+
+  .filter-action {
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .filter-order {
-    display: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .filter-responsive-label {
+    display: inline;
+    color: var(--text-secondary);
+    font-size: var(--type-micro-size);
+    font-weight: var(--type-micro-weight);
+    letter-spacing: var(--type-micro-tracking);
+    text-transform: uppercase;
   }
 }

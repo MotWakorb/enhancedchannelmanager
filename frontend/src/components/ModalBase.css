@@ -349,6 +349,9 @@
   padding: var(--modal-body-padding);
   overflow-y: auto;
   flex: 1;
+  /* Permit the body to shrink below its content-derived flex minimum so the
+     header and wrapping footer remain inside the viewport-height chassis. */
+  min-height: 0;
   max-height: var(--modal-body-max-height);
 }
 
@@ -643,7 +646,9 @@
    RESPONSIVE ADJUSTMENTS
    ============================================================================= */
 
-@media (max-width: 600px) {
+/* Zoom/reflow tier. A 1280px-wide supported desktop becomes a 640 CSS-pixel
+   viewport at 200% browser zoom, so this tier deliberately starts at 700px. */
+@media (max-width: 700px) {
   .modal-overlay {
     padding: 0.5rem;
   }
@@ -660,17 +665,19 @@
     max-width: 100%;
   }
 
-  /* The narrow-viewport `padding` overrides for `.modal-header`, `.modal-body`
-     and `.modal-footer` are gone. They never rendered: a media query adds no
-     specificity, and StreamsPane.css's bare copies of those three classes were
-     emitted after this whole file, so at every width the modal chrome used
-     StreamsPane's 1rem 1.25rem / 1.25rem / 1rem 1.25rem. Now that this file
-     owns the chassis (see the token block at the top), leaving them here would
-     have brought them to life and shrunk every modal's chrome below 600px —
-     a change, not a reconciliation. Deleted to keep the fix render-neutral;
-     restoring a real mobile padding is a separate, deliberate change
-     (bead enhancedchannelmanager-87o0c). `flex-wrap` below DID render and stays. */
+  .modal-header {
+    padding: 0.5rem 1rem;
+  }
+
+  .modal-body {
+    padding: 1rem;
+    /* Reserve the frame's vertical budget as well as retaining the ordinary
+       70vh body cap; tall content scrolls without pushing footer chrome out. */
+    max-height: min(var(--modal-body-max-height), calc(95vh - 8rem));
+  }
+
   .modal-footer {
+    padding: 0.875rem 1rem;
     flex-wrap: wrap;
   }
 
@@ -1915,7 +1922,7 @@
   gap: 1rem;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 700px) {
   .modal-form-row {
     grid-template-columns: 1fr;
   }

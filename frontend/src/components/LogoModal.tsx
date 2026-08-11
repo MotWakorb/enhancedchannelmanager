@@ -222,7 +222,7 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="modal-container logo-modal">
+      <div className="modal-container modal-md logo-modal">
         <div className="modal-header">
           <h2>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">

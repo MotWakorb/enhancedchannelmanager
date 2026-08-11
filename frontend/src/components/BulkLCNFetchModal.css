@@ -195,8 +195,8 @@
 }
 
 /* Responsive */
-@media (max-width: 600px) {
+@media (max-width: 500px) {
   .lcn-item-content .channel-name {
-    max-width: 120px;
+    max-width: min(200px, 30vw);
   }
 }
