@@ -32,8 +32,9 @@ frontend/.modal-harness-dist/
 .DS_Store
 Thumbs.db
 
-# Claude Code temp files
+# Claude Code temp files and local-only settings
 tmpclaude-*-cwd
+.claude/settings.local.json
 
 # Build
 backend/static/
