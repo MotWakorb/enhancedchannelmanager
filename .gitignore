@@ -85,3 +85,23 @@ test-results/
 test-results-visual/
 playwright-report/
 frontend/test-results/
+
+# Ad-hoc Playwright / UI snapshot dumps (bead enhancedchannelmanager-h9av3).
+#
+# These are agent scratch output, written to the repo root by hand during
+# debugging and never intended to be committed. They were NOT ignored, so
+# `git add -A` would have committed them. The h9av3 history sweep found one
+# such file in a stash that had captured a live `mcp_api_key` rendered in
+# the Settings > MCP Integration card, which is exactly the vector these
+# two lines close.
+#
+# Anchored to the `snap-` prefix and the `-snap` suffix rather than a bare
+# `*snap*.yml`. "snapshot" is an active, legitimate word in this repository
+# (e2e/snapshots/, ADR-010-auto-creation-snapshot-revert.md, the
+# auto_creation_snapshots migration), so a substring glob would eventually
+# swallow a real config such as `snapshot-policy.yml`. Verified against
+# `git ls-files`: no tracked file matches either pattern today.
+/snap-*.yml
+/snap-*.yaml
+/*-snap.yml
+/*-snap.yaml
