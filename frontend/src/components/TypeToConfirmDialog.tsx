@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { ModalOverlay } from './ModalOverlay';
 import './ModalBase.css';
 import './TypeToConfirmDialog.css';
@@ -36,12 +36,22 @@ export function TypeToConfirmDialog({
 }: TypeToConfirmDialogProps) {
   const [typed, setTyped] = useState('');
   const canConfirm = typed === confirmText && !busy;
+  const instanceId = useId();
+  const titleId = `${instanceId}-title`;
+  const inputId = `${instanceId}-confirmation`;
 
   return (
-    <ModalOverlay onClose={busy ? () => {} : onCancel}>
+    <ModalOverlay
+      onClose={busy ? () => {} : onCancel}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
       <div className="modal-container modal-sm type-to-confirm-dialog">
         <div className="modal-header">
-          <h3 className="modal-title">{title}</h3>
+          <h3 id={titleId} className="modal-title">
+            {title}
+          </h3>
           {!busy && (
             <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
               <span className="material-icons" aria-hidden="true">close</span>
@@ -51,11 +61,11 @@ export function TypeToConfirmDialog({
 
         <div className="modal-body">
           <div className="type-to-confirm-message">{message}</div>
-          <label className="type-to-confirm-label" htmlFor="type-to-confirm-input">
+          <label className="type-to-confirm-label" htmlFor={inputId}>
             Type <strong>{confirmText}</strong> to confirm
           </label>
           <input
-            id="type-to-confirm-input"
+            id={inputId}
             type="text"
             className="type-to-confirm-input"
             value={typed}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import { ModalOverlay } from './ModalOverlay';
 import { RestoreProgress } from './RestoreProgress';
 import { RestoreCompleteSummary } from './RestoreCompleteSummary';
@@ -39,6 +39,7 @@ export function DbasRestoreSavedModal({
   filename: string;
   onClose: () => void;
 }) {
+  const titleId = useId();
   const [step, setStep] = useState<Step>('configure');
   const [isEncrypted, setIsEncrypted] = useState(false);
   const [passphrase, setPassphrase] = useState('');
@@ -191,10 +192,15 @@ export function DbasRestoreSavedModal({
   const canStart = (!isEncrypted || passphrase.length > 0) && !busy;
 
   return (
-    <ModalOverlay onClose={canClose ? onClose : () => {}}>
+    <ModalOverlay
+      onClose={canClose ? onClose : () => {}}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+    >
       <div className="modal-container modal-md backup-restore-modal-container">
         <div className="modal-header">
-          <h3 className="modal-title">Restore Saved DBAS Backup</h3>
+          <h3 id={titleId} className="modal-title">Restore Saved DBAS Backup</h3>
           {canClose && (
             <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
               <span className="material-icons" aria-hidden="true">close</span>
