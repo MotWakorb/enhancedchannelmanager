@@ -47,26 +47,26 @@ test.describe('M3U Changes Filters', () => {
 
   test('time range filter exists', async ({ appPage }) => {
     // Look for the time range filter (should show options like "Last 7 days")
-    const timeFilter = appPage.locator('.filter-select').first();
+    const timeFilter = appPage.locator('.m3u-changes-filter-select').first();
     await expect(timeFilter).toBeVisible({ timeout: 10000 });
   });
 
   test('account filter dropdown exists', async ({ appPage }) => {
     // There should be multiple filter selects
     await appPage.waitForTimeout(1000);
-    const filterSelects = appPage.locator('.filter-select');
+    const filterSelects = appPage.locator('.m3u-changes-filter-select');
     const count = await filterSelects.count();
     expect(count).toBeGreaterThanOrEqual(2);
   });
 
   test('change type filter dropdown exists', async ({ appPage }) => {
-    const filterSelects = appPage.locator('.filter-select');
+    const filterSelects = appPage.locator('.m3u-changes-filter-select');
     const count = await filterSelects.count();
     expect(count).toBeGreaterThanOrEqual(3);
   });
 
   test('enabled status filter dropdown exists', async ({ appPage }) => {
-    const filterSelects = appPage.locator('.filter-select');
+    const filterSelects = appPage.locator('.m3u-changes-filter-select');
     const count = await filterSelects.count();
     expect(count).toBeGreaterThanOrEqual(4);
   });

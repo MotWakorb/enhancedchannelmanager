@@ -158,7 +158,7 @@
   width: 100%;
 }
 
-.streams-filter-row .filter-select {
+.streams-filter-row .streams-filter-select {
   flex: 1;
 }
 
@@ -194,13 +194,10 @@
    been the live ones all along. Deleted rather than reconciled; § 11 is the
    owner (bead enhancedchannelmanager-6z299.5).
 
-   `.filter-select` stays declared here, and stays bare. It is a live class in
-   three chunks (this one plus Journal and M3U Changes, whose copies bead
-   6z299.2 scoped), and this eager rule is what draws the box those two tabs'
-   filter triggers sit in. Scoping it would silently restyle the frozen route
-   header band on two pages this wave does not own — flagged on the bead
-   instead. */
-.filter-select {
+   The stream filters now own their box chrome explicitly; Journal and M3U
+   Changes preserve their frozen-header chrome in their own lazy chunks
+   (bead enhancedchannelmanager-8epq2). */
+.streams-filter-select {
   width: 100%;
   padding: 0.5rem;
   background-color: var(--input-bg);
@@ -210,7 +207,7 @@
   font-size: var(--type-body-size);
 }
 
-.filter-select:focus {
+.streams-filter-select:focus {
   outline: none;
   border-color: var(--accent-primary);
 }

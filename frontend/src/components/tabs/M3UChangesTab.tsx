@@ -295,7 +295,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       <RouteHeaderSlot name="controls">
       <div className="filters-summary-row">
         <DenseToolbar label="M3U change filters" filters={<>
-          <div className="filter-select">
+          <div className="m3u-changes-filter-select">
             <CustomSelect
               value={String(hoursFilter)}
               onChange={(val) => {
@@ -307,7 +307,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
               placeholder="Time Range"
             />
           </div>
-          <div className="filter-select">
+          <div className="m3u-changes-filter-select">
             <CustomSelect
               value={String(accountFilter)}
               onChange={(val) => setAccountFilter(val === '' ? '' : parseInt(val as string))}
@@ -318,7 +318,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
               placeholder="Filter by Account"
             />
           </div>
-          <div className="filter-select">
+          <div className="m3u-changes-filter-select">
             <CustomSelect
               value={changeTypeFilter}
               onChange={(val) => setChangeTypeFilter(val as M3UChangeType | '')}
@@ -326,7 +326,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
               placeholder="Filter by Type"
             />
           </div>
-          <div className="filter-select">
+          <div className="m3u-changes-filter-select">
             <CustomSelect
               value={String(enabledFilter)}
               onChange={(val) => setEnabledFilter(val === '' ? '' : val === 'true')}

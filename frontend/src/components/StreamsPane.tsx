@@ -1827,7 +1827,7 @@ export function StreamsPane({
               onChange={(val) =>
                 onProviderFilterChange(val ? parseInt(val, 10) : null)
               }
-              className="filter-select"
+              className="streams-filter-select"
               options={[
                 { value: '', label: 'All Providers' },
                 ...providers.map((provider) => ({
@@ -1942,7 +1942,7 @@ export function StreamsPane({
             <CustomSelect
               value={groupFilter ?? ''}
               onChange={(val) => onGroupFilterChange(val || null)}
-              className="filter-select"
+              className="streams-filter-select"
               searchable
               searchPlaceholder="Search groups..."
               options={[

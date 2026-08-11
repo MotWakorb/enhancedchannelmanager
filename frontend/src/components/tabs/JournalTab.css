@@ -89,7 +89,7 @@
 
 /* Filters Bar.
    `.filters-bar` and `.filters-bar .search-box` were declared bare here and
-   this tab renders neither: its own filter row is `.filter-select` controls
+   this tab renders neither: its own filter row is select controls
    laid out by `.journal-header`, and the only element carrying `.filters-bar`
    in the tree is WatchHistoryPanel.tsx:145. Both rules were dead here and
    reached that panel across the chunk boundary instead, so its layout
@@ -99,38 +99,34 @@
    (bead enhancedchannelmanager-albfq). */
 
 /* CustomSelect in filter bar - compact plain text */
-.filter-select {
+.journal-filter-select {
   flex: 0 0 auto;
   width: fit-content;
+  padding: 0.5rem;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: var(--type-body-size);
 }
 
-.filter-select .custom-select {
+.journal-filter-select .custom-select {
   width: fit-content;
 }
 
-/* Scoped, not left bare. These two were declared bare here and in
-   M3UChangesTab.css — two different lazy chunks — and `.filter-select` is
-   ALSO a live class in the eager bundle: StreamsPane.tsx passes it to
-   CustomSelect for the Channel Manager stream/provider/group filters. So
-   after one visit to Journal, Channel Manager's filter triggers took this
-   file's 14px and its 18px !important arrow for the rest of the session
-   (bead enhancedchannelmanager-6z299.2).
-   `.journal-filter-select` lands on the SAME element as `.filter-select`
-   (CustomSelect merges `className` into its root), so it is written as a
-   compound and wrapped in `:where()` to contribute no specificity: these
-   selectors stay at (0,2,0), exactly what they were, and nothing about
-   Journal's own cascade moves. The page root cannot be used — this toolbar
-   is portaled out of `.journal-tab` by RouteHeaderSlot. */
-.filter-select:where(.journal-filter-select) .custom-select-trigger {
+/* The owner class lands on CustomSelect's root and remains valid after the
+   toolbar is portaled out of `.journal-tab` by RouteHeaderSlot. */
+.journal-filter-select .custom-select-trigger {
   width: fit-content;
   font-size: 0.875rem;
   gap: 0.25rem;
 }
 
-.filter-select:where(.journal-filter-select) .custom-select-arrow {
+.journal-filter-select .custom-select-arrow {
   font-size: 18px !important;
   margin-left: 0;
 }
+
 
 /* .loading-state is defined in shared/common.css */
 /* .spinning is defined in shared/common.css */
@@ -576,7 +572,7 @@
     max-width: none;
   }
 
-  .filter-select {
+  .journal-filter-select {
     width: 100%;
   }
 }
