@@ -284,19 +284,6 @@
   border-radius: var(--radius-2xl);
 }
 
-/* The bulk-confirm dialog spells its close button `.modal-close` where
-   ModalBase spells it `.modal-close-btn` (PendingMergesPage.tsx:844), so it
-   misses `.modal-close-btn .material-icons` and the glyph fell through to
-   index.css's base 24px. Sized here to --icon-status, the same value that rule
-   carries, so the two close buttons match. The class-name divergence itself is
-   a separate defect — this button also misses ModalBase's padding, hover and
-   colour — and is filed rather than fixed here, because renaming it would
-   change chrome this pass did not measure
-   (bead enhancedchannelmanager-7bsxj). */
-.pending-merges-page .modal-close .material-icons {
-  font-size: var(--icon-status);
-}
-
 .pending-merges-page .pending-merges-exact-badge {
   background: var(--success-bg, rgba(34, 197, 94, 0.15));
   color: var(--success, #4ade80);

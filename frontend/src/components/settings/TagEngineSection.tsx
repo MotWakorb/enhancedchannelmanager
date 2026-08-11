@@ -663,7 +663,7 @@ export function TagEngineSection() {
           <div className="modal-content">
             <div className="modal-header">
               <h3>Create Tag Group</h3>
-              <button className="modal-close" onClick={() => setShowCreateModal(false)} aria-label="Close" title="Close">
+              <button className="modal-close-btn" onClick={() => setShowCreateModal(false)} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>

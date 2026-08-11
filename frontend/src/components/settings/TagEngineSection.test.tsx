@@ -138,4 +138,18 @@ describe('TagEngineSection — test panel (bead hq3de.f)', () => {
     fireEvent.change(screen.getByPlaceholderText(/enter text to test/i), { target: { value: 'x' } });
     expect(screen.getByText('Test').closest('button')).toBeEnabled();
   });
+
+  it('uses canonical close chrome and closes the create-group dialog', async () => {
+    render(<TagEngineSection />);
+    await waitFor(() => screen.getByText('US Networks'));
+
+    fireEvent.click(screen.getByRole('button', { name: /new group/i }));
+    const close = screen.getByRole('button', { name: /^close$/i });
+    expect(close).toHaveClass('modal-close-btn');
+    expect(close).not.toHaveClass('modal-close');
+    expect(screen.getByText('Create Tag Group')).toBeInTheDocument();
+
+    fireEvent.click(close);
+    expect(screen.queryByText('Create Tag Group')).not.toBeInTheDocument();
+  });
 });
