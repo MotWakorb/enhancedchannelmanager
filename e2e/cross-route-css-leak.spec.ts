@@ -192,6 +192,34 @@ async function openApp(browser: Browser): Promise<Page> {
 }
 
 test.describe('shared-class typography does not depend on route visit order', () => {
+  test('loading Channel Pipeline does not restyle another route modal textarea', async ({ browser }) => {
+    const page = await openApp(browser)
+    await goToRoute(page, ROUTES[0])
+
+    const before = await page.evaluate(() => {
+      const body = document.createElement('div')
+      body.className = 'modal-body'
+      body.dataset.testid = 'foreign-modal-body'
+      const textarea = document.createElement('textarea')
+      textarea.value = 'synthetic'
+      body.append(textarea)
+      document.body.append(body)
+      const style = getComputedStyle(textarea)
+      return [style.width, style.padding, style.backgroundColor, style.borderRadius, style.fontSize]
+    })
+
+    await goToRoute(page, ROUTES.find((route) => route.id === 'channel-pipeline')!)
+    await goToRoute(page, ROUTES[0])
+
+    const after = await page.locator('[data-testid="foreign-modal-body"] textarea').evaluate((textarea) => {
+      const style = getComputedStyle(textarea)
+      return [style.width, style.padding, style.backgroundColor, style.borderRadius, style.fontSize]
+    })
+
+    expect(after).toEqual(before)
+    await page.context().close()
+  })
+
   test('all ten routes render identical shared typography in every visit order', async ({ browser }) => {
     // Three full walks of ten lazily-loaded routes, with screenshots.
     test.setTimeout(10 * 60 * 1000)
