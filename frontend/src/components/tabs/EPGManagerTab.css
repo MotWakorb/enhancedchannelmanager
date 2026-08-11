@@ -579,6 +579,11 @@
   gap: 1rem;
 }
 
+.guide-migration-modal > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
 .guide-migration-summary {
   display: flex;
   flex-wrap: wrap;

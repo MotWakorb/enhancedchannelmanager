@@ -1415,6 +1415,8 @@
 .norm-engine-apply-confirm .modal-body p {
   margin: 0.5rem 0;
   color: var(--text-primary);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 /* Body role. 14.4px -> 13px. */

@@ -501,11 +501,17 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
 
       - name: Install dependencies
         if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright test dependencies
+        if: needs.detect.outputs.code_paths_changed != 'false'
         run: npm ci
 
       - name: Lint (full repo, blocking)
@@ -546,6 +552,17 @@ jobs:
             --reporter=junit \
             --outputFile.junit=./junit.xml
 
+      - name: Install Chromium for modal typography inventory
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        run: npx playwright install --with-deps chromium
+
+      - name: Live modal typography inventory (blocking)
+        id: modal_inventory
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          CI: '1'
+        run: npx playwright test --config=playwright.visual.config.ts e2e/visual/modal-typography-inventory.spec.ts
+
       - name: Summarize what this check did
         # A run summary must never be the reason a required check reports
         # red. If this step breaks, the conclusion the check is named for
@@ -556,8 +573,9 @@ jobs:
           LINT: ${{ steps.lint.outcome }}
           TYPECHECK: ${{ steps.typecheck.outcome }}
           VITEST: ${{ steps.vitest.outcome }}
+          MODAL_INVENTORY: ${{ steps.modal_inventory.outcome }}
         run: |
-          # Three separately-failing gates, so three separate outcomes. Lint
+          # Four separately-failing gates, so four separate outcomes. Lint
           # runs first: when it fails, typecheck and vitest never execute,
           # and a single line claiming all three ran would be false.
           {
@@ -568,6 +586,7 @@ jobs:
               --outcome "$VITEST"
             echo "- lint: ${LINT:-did not run}"
             echo "- typecheck: ${TYPECHECK:-did not run}"
+            echo "- live modal typography inventory: ${MODAL_INVENTORY:-did not run}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
@@ -726,7 +745,8 @@ jobs:
 
   # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
   # Screenshots the Heatmap chart primitive in isolation and diffs against
-  # the committed baseline PNG. Catches the bd-yteek → bd-wdpve class of
+  # the committed baseline PNG, and renders the complete modal harness to
+  # enforce its live typography inventory. Catches the bd-yteek → bd-wdpve class of
   # bug (label rotation that passes jsdom unit tests but renders
   # incorrectly in real browsers). The fixture page boots from the Vite
   # dev server with no backend dependency, so this job runs without a

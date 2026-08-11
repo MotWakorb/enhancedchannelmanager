@@ -1108,6 +1108,8 @@
 .plex-token-modal .plex-token-steps {
   padding-left: 1.25rem;
   margin: 0 0 1.25rem 0;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .plex-token-modal .plex-token-steps li {

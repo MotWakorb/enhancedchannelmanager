@@ -561,6 +561,7 @@
 .rule-builder-enabled {
   flex-shrink: 0;
   padding-bottom: 10px;
+  font-size: var(--type-label-size);
 }
 
 .rule-active-window {
@@ -572,6 +573,8 @@
 .rule-active-window legend {
   margin-bottom: 0.35rem;
   font-weight: 600;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
 }
 
 .rule-active-window-fields {

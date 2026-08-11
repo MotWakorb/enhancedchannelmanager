@@ -2584,6 +2584,8 @@
 .conflict-message {
   margin-bottom: 1rem;
   color: var(--button-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .conflict-message p {

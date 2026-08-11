@@ -1544,7 +1544,7 @@ export function ChannelPipelineTab() {
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
         <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true">
-          <div className="modal-container modal-sm">
+          <div className="modal-container modal-sm pipeline-delete-confirm">
             <div className="modal-header">
               <h2>Confirm Delete</h2>
             </div>
@@ -1581,7 +1581,7 @@ export function ChannelPipelineTab() {
           aria-modal="true"
           aria-labelledby="event-sync-run-confirm-title"
         >
-          <div className="modal-container modal-sm" data-testid="event-sync-run-confirm">
+          <div className="modal-container modal-sm event-sync-run-confirm" data-testid="event-sync-run-confirm">
             <div className="modal-header">
               <h2 id="event-sync-run-confirm-title">
                 {showEventSyncRunConfirm.dryRun
@@ -1653,7 +1653,7 @@ export function ChannelPipelineTab() {
       {/* Rollback Confirmation Dialog */}
       {showRollbackConfirm && (
         <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true">
-          <div className="modal-container modal-sm">
+          <div className="modal-container modal-sm pipeline-rollback-confirm">
             <div className="modal-header">
               <h2>Confirm Rollback</h2>
             </div>

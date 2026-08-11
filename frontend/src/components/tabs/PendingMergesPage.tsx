@@ -843,7 +843,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
           aria-modal="true"
           aria-labelledby="pending-merges-bulk-confirm-title"
         >
-          <div ref={bulkDialogRef} className="modal-container modal-sm">
+          <div ref={bulkDialogRef} className="modal-container modal-sm pending-merge-bulk-confirm">
             <div className="modal-header">
               <h2 id="pending-merges-bulk-confirm-title">Confirm bulk action</h2>
               <button

@@ -184,3 +184,7 @@
   padding: 2rem 0;
   color: var(--text-secondary);
 }
+.cloud-target-delete-confirm > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}

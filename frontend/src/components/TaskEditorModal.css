@@ -85,6 +85,14 @@
   font-weight: 500;
 }
 
+.task-editor-modal .enable-label,
+.task-editor-modal .alert-toggle,
+.schedule-editor .config-section > label,
+.task-editor-modal .schedules-header label {
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+}
+
 /* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .task-editor-modal .add-schedule-btn {
   display: flex;

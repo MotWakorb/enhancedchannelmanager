@@ -561,3 +561,12 @@
    rules disagreed about whether the label was a flex row or a coloured
    string. The indicator gains 0.25rem of padding a side from the reconciled
    rule (bead enhancedchannelmanager-6z299). */
+.delete-confirm-modal > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.logo-manager-tab .source-load-status {
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+}
