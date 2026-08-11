@@ -1498,6 +1498,20 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    it('keeps both import and export textareas beneath the Channel Pipeline root', async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await user.click(screen.getByRole('button', { name: /^import$/i }));
+      const importTextarea = await screen.findByLabelText(/yaml content/i);
+      expect(importTextarea.closest('.channel-pipeline-tab')).not.toBeNull();
+
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /close/i }));
+      await user.click(screen.getByRole('button', { name: /^export$/i }));
+      const exportTextarea = await screen.findByLabelText(/exported yaml/i);
+      expect(exportTextarea.closest('.channel-pipeline-tab')).not.toBeNull();
+    });
+
     it('imports rules from YAML', async () => {
       const user = userEvent.setup();
       renderWithProviders(<ChannelPipelineTab />);

@@ -575,9 +575,12 @@
   flex-shrink: 0;
 }
 
-/* Import/Export textarea styling */
+/* Import/Export textarea styling. ModalOverlay renders in place (it is not a
+   portal), so both dialogs remain beneath the tab root. Keep this lazy-chunk
+   rule scoped there: a bare `.modal-body textarea` would permanently restyle
+   every modal textarea after the operator first visits Channel Pipeline. */
 /* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
-.modal-body textarea {
+:where(.channel-pipeline-tab) .modal-body textarea {
   width: 100%;
   padding: 12px;
   background: var(--input-bg);
@@ -589,7 +592,7 @@
   resize: vertical;
 }
 
-.modal-body textarea:focus {
+:where(.channel-pipeline-tab) .modal-body textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
 }

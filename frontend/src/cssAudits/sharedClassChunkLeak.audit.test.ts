@@ -911,6 +911,28 @@ describe('shared classes are not redeclared across bundle chunks', () => {
       ).not.toContain(knob);
     }
   });
+
+  it('keeps Channel Pipeline textarea rules inside the tab root', () => {
+    const cssFile = path.resolve(SRC, 'components/channelPipeline/ChannelPipelineTab.css');
+    const root = parse(fs.readFileSync(cssFile, 'utf8'), { from: cssFile });
+    const textareaSelectors: string[] = [];
+
+    root.walkRules((rule) => {
+      for (const selector of rule.selectors) {
+        if (selector.includes('.modal-body') && selector.includes('textarea')) {
+          textareaSelectors.push(normalize(selector));
+        }
+      }
+    });
+
+    expect(textareaSelectors).not.toEqual([]);
+    expect(textareaSelectors).not.toContain('.modal-body textarea');
+    expect(textareaSelectors).not.toContain('.modal-body textarea:focus');
+    expect(textareaSelectors).toEqual([
+      ':where(.channel-pipeline-tab) .modal-body textarea',
+      ':where(.channel-pipeline-tab) .modal-body textarea:focus',
+    ]);
+  });
 });
 
 /**
