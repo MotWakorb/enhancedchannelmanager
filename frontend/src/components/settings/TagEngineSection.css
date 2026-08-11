@@ -485,7 +485,7 @@
    Spec § 5 preferred deleting this chassis and reusing ModalBase. It is NOT
    safe in this wave: the geometry genuinely differs (max-width 400px vs
    ModalBase's size classes, 12px radius, no backdrop blur, no overlay padding,
-   `.modal-close` rather than `.modal-close-btn`, an <h3> rather than an <h2>),
+   an <h3> rather than an <h2>),
    so the conversion is a visible change to this modal and Wave 1 has no visual
    budget. Scoped instead; the conversion is left for a page wave.
    `.tag-engine-group-modal` is passed to ModalOverlay in
@@ -537,29 +537,6 @@
   line-height: var(--type-modal-title-line-height);
   font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
-}
-
-:where(.tag-engine-group-modal) .modal-close {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-}
-
-:where(.tag-engine-group-modal) .modal-close:hover {
-  color: var(--text-primary);
-}
-
-/* This modal spells its close button `.modal-close` rather than ModalBase's
-   `.modal-close-btn` (see the note above), so it misses
-   `.modal-close-btn .material-icons` and the glyph fell through to the base
-   24px. Same role and same value as that rule. Written WITHOUT `:where()` —
-   the size has to outrank the base rule, which is exactly what `:where()`
-   prevents (bead enhancedchannelmanager-7bsxj). */
-.tag-engine-group-modal .modal-close .material-icons {
-  font-size: var(--icon-status);
 }
 
 :where(.tag-engine-group-modal) .modal-body {
@@ -716,4 +693,3 @@
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-

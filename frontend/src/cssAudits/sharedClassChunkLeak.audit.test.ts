@@ -140,6 +140,46 @@ import { parse, type Rule, type AtRule, type Declaration } from 'postcss';
 const SRC = path.resolve(process.cwd(), 'src');
 const ENTRY = path.join(SRC, 'main.tsx');
 
+/**
+ * Return source locations of statically-authored legacy class tokens.
+ *
+ * This deliberately walks every string/template fragment in production TSX,
+ * rather than trying to interpret the many ways a JSX className can be
+ * assembled. It therefore covers plain and multi-class JSX attributes,
+ * expression strings, conditional branches, template literals, arrays, and
+ * clsx/classNames arguments. A runtime-only value supplied through a prop is
+ * outside a source census; any repo-authored `modal-close` token used to build
+ * it is still found at its declaration. Token comparison preserves unrelated
+ * names such as `user-modal-close`.
+ */
+function legacyModalCloseLocations(source: string, fileName = 'fixture.tsx'): number[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const locations: number[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      node.kind === ts.SyntaxKind.TemplateHead ||
+      node.kind === ts.SyntaxKind.TemplateMiddle ||
+      node.kind === ts.SyntaxKind.TemplateTail
+    ) {
+      const text = (node as ts.StringLiteralLike).text;
+      if (text.split(/\s+/).includes('modal-close')) {
+        locations.push(sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return locations;
+}
+
 const TYPOGRAPHY = ['font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-transform'];
 
 /**
@@ -932,6 +972,65 @@ describe('shared classes are not redeclared across bundle chunks', () => {
       ':where(.channel-pipeline-tab) .modal-body textarea',
       ':where(.channel-pipeline-tab) .modal-body textarea:focus',
     ]);
+  });
+
+  it('has no legacy modal-close exception in source or the shared E2E selector', () => {
+    const legacyMarkup: string[] = [];
+    const legacyRules: string[] = [];
+
+    for (const entry of fs.readdirSync(SRC, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = path.join(entry.parentPath, entry.name);
+      const relative = path.relative(SRC, file);
+      if (entry.name.endsWith('.tsx') && !entry.name.endsWith('.test.tsx')) {
+        const source = fs.readFileSync(file, 'utf8');
+        for (const line of legacyModalCloseLocations(source, file)) {
+          legacyMarkup.push(`${relative}:${line}`);
+        }
+      }
+      if (entry.name.endsWith('.css')) {
+        const source = fs.readFileSync(file, 'utf8');
+        const root = parse(source, { from: file });
+        root.walkRules((rule) => {
+          if (rule.selectors.some((selector) => /(^|[\s>+~])\.modal-close(?![-\w])/.test(selector))) {
+            legacyRules.push(`${relative}:${rule.source?.start?.line ?? 0}`);
+          }
+        });
+      }
+    }
+
+    expect(legacyMarkup).toEqual([]);
+    expect(legacyRules).toEqual([]);
+    const selectors = fs.readFileSync(path.resolve(process.cwd(), '../e2e/fixtures/test-data.ts'), 'utf8');
+    expect(selectors).toContain("modalClose: '.modal-close-btn'");
+    expect(selectors).not.toContain("modalClose: '.modal-close'");
+  // Coverage instrumentation makes the complete TSX/PostCSS repository scan
+  // slower than Vitest's 5s unit default on shared CI runners. Keep the AST
+  // authoritative (including decoded escapes) and bound only this census.
+  }, 15_000);
+});
+
+describe('legacy modal close token census', () => {
+  it.each([
+    ['multi-class JSX literal', '<button className="quiet modal-close extra" />'],
+    ['JSX expression string', "<button className={'modal-close'} />"],
+    ['conditional branch', "<button className={ready ? 'modal-close' : 'modal-close-btn'} />"],
+    ['template literal', '<button className={`quiet modal-close ${tone}`} />'],
+    ['clsx argument', "<button className={clsx('quiet', active && 'modal-close')} />"],
+    ['static array', "const classes = ['quiet', 'modal-close']; <button className={classes.join(' ')} />"],
+    ['unicode-escaped hyphen', String.raw`<button className={'modal\u002dclose'} />`],
+    ['hex-escaped hyphen', String.raw`<button className={'modal\x2dclose'} />`],
+    ['code-point-escaped hyphen', String.raw`<button className={'modal\u{2d}close'} />`],
+    ['escaped letter', String.raw`<button className={'modal-cl\u006fse'} />`],
+  ])('detects %s', (_label, source) => {
+    expect(legacyModalCloseLocations(source)).not.toEqual([]);
+  });
+
+  it.each([
+    ['canonical token', '<button className="modal-close-btn" />'],
+    ['namespaced token', '<button className="user-modal-close" />'],
+  ])('does not confuse %s with the legacy token', (_label, source) => {
+    expect(legacyModalCloseLocations(source)).toEqual([]);
   });
 });
 

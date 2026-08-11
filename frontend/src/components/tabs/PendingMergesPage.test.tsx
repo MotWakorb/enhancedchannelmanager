@@ -1300,6 +1300,8 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     const close = within(dialog).getByRole('button', { name: /^Close$/i });
     const cancel = within(dialog).getByRole('button', { name: /^Cancel$/i });
     const confirm = within(dialog).getByRole('button', { name: /^Confirm clear$/i });
+    expect(close).toHaveClass('modal-close-btn');
+    expect(close).not.toHaveClass('modal-close');
     expect(cancel).toHaveFocus();
 
     confirm.focus();

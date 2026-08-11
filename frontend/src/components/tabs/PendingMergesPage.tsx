@@ -848,7 +848,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
               <h2 id="pending-merges-bulk-confirm-title">Confirm bulk action</h2>
               <button
                 type="button"
-                className="modal-close"
+                className="modal-close-btn"
                 onClick={cancelBulkIntent}
                 aria-label="Close"
               >

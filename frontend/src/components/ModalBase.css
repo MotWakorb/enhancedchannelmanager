@@ -125,11 +125,9 @@
           is "get me out of here" to buy 8px of chrome is a bad trade, and
           24x24 is the WCAG 2.5.8 floor it would be heading toward.
        3. The padding lever alone delivers the full 16px reduction the PO
-          asked for, and it moves EVERY header — including the two dialogs
-          that spell their close button `.modal-close` (PendingMergesPage,
-          TagEngineSection) and the seven with a second header line. Shrinking
-          the button would have moved only the 55-dialog cluster and WIDENED
-          the spread between clusters. */
+          asked for, and it moves EVERY header, including the seven with a
+          second header line. Shrinking the button would have moved only the
+          55-dialog cluster and WIDENED the spread between clusters. */
   --modal-close-size: var(--icon-status);
 
   /* Animation */
