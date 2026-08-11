@@ -1,5 +1,6 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { useModalFocusLifecycle } from '../hooks/useModalFocusLifecycle';
 import './ModalBase.css';
 import './TypeToConfirmDialog.css';
 
@@ -39,6 +40,9 @@ export function TypeToConfirmDialog({
   const instanceId = useId();
   const titleId = `${instanceId}-title`;
   const inputId = `${instanceId}-confirmation`;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useModalFocusLifecycle({ containerRef, initialFocusRef: inputRef });
 
   return (
     <ModalOverlay
@@ -47,7 +51,7 @@ export function TypeToConfirmDialog({
       aria-modal="true"
       aria-labelledby={titleId}
     >
-      <div className="modal-container modal-sm type-to-confirm-dialog">
+      <div ref={containerRef} className="modal-container modal-sm type-to-confirm-dialog">
         <div className="modal-header">
           <h3 id={titleId} className="modal-title">
             {title}
@@ -65,13 +69,13 @@ export function TypeToConfirmDialog({
             Type <strong>{confirmText}</strong> to confirm
           </label>
           <input
+            ref={inputRef}
             id={inputId}
             type="text"
             className="type-to-confirm-input"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             disabled={busy}
-            autoFocus
             autoComplete="off"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && canConfirm) onConfirm();

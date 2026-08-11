@@ -2,7 +2,8 @@
  * Unit tests for TypeToConfirmDialog (enhancedchannelmanager-rzhid).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TypeToConfirmDialog } from './TypeToConfirmDialog';
 
 describe('TypeToConfirmDialog', () => {
@@ -49,7 +50,7 @@ describe('TypeToConfirmDialog', () => {
     );
   });
 
-  it('is a named modal dialog, focuses its confirmation input, and handles Escape unless busy', () => {
+  it('is a named modal dialog, focuses its confirmation input, and handles Escape unless busy', async () => {
     const onCancel = vi.fn();
     const { rerender } = render(
       <TypeToConfirmDialog
@@ -63,7 +64,7 @@ describe('TypeToConfirmDialog', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Restore Backup' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByLabelText(/type/i)).toHaveFocus();
+    await waitFor(() => expect(screen.getByLabelText(/type/i)).toHaveFocus());
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onCancel).toHaveBeenCalledTimes(1);
 
@@ -122,6 +123,25 @@ describe('TypeToConfirmDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('traps focus and restores it to the opener after close', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return <><button onClick={() => setOpen(true)}>Open restore</button>{open && <TypeToConfirmDialog title="Restore Backup" message="Danger." confirmText="CONFIRM" onCancel={() => setOpen(false)} onConfirm={vi.fn()} />}</>;
+    }
+    render(<Harness />);
+    const opener = screen.getByRole('button', { name: 'Open restore' });
+    opener.focus();
+    fireEvent.click(opener);
+    const input = await screen.findByRole('textbox');
+    await waitFor(() => expect(input).toHaveFocus());
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    cancel.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
   it('shows a custom confirm label and disables inputs while busy', () => {
     render(
       <TypeToConfirmDialog
@@ -138,5 +158,13 @@ describe('TypeToConfirmDialog', () => {
     expect(screen.getByText('Working…')).toBeInTheDocument();
     expect(screen.getByLabelText(/type/i)).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  });
+
+  it('focuses its container when busy leaves no eligible control', async () => {
+    render(<TypeToConfirmDialog title="Restore Backup" message="Danger." confirmText="CONFIRM" busy onCancel={vi.fn()} onConfirm={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Restore Backup' });
+    const container = dialog.querySelector('.type-to-confirm-dialog');
+    await waitFor(() => expect(container).toHaveFocus());
+    expect(container).toHaveAttribute('tabindex', '-1');
   });
 });
