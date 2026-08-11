@@ -248,7 +248,7 @@
 }
 
 /* Responsive */
-@media (max-width: 600px) {
+@media (max-width: 700px) {
   .vlc-os-tabs {
     flex-direction: column;
   }
