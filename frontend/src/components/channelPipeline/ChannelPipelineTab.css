@@ -527,6 +527,19 @@
   align-items: center;
   padding: 8px 0;
   border-bottom: 1px solid var(--border-primary);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.pipeline-delete-confirm > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.event-sync-run-confirm > .modal-body,
+.pipeline-rollback-confirm > .modal-body {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 :where(.channel-pipeline-tab) .detail-row:last-child {

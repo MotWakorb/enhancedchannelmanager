@@ -1326,7 +1326,7 @@
         7,
         "if"
       ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
@@ -1337,7 +1337,7 @@
         8,
         "if"
       ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
@@ -1346,6 +1346,39 @@
         "frontend",
         "steps",
         9,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        10,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        11,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        12,
         "if"
       ],
       "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
@@ -1852,7 +1885,7 @@
         "jobs",
         "frontend",
         "steps",
-        7,
+        10,
         "continue-on-error"
       ],
       "value": true

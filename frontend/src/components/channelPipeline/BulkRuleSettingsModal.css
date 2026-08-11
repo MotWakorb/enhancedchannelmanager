@@ -38,6 +38,7 @@
   margin-bottom: 0.5rem;
   cursor: pointer;
   user-select: none;
+  font-size: var(--type-label-size);
 }
 
 .bulk-checkbox-group {

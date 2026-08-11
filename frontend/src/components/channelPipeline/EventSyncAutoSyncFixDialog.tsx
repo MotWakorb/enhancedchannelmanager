@@ -48,7 +48,7 @@ export function EventSyncAutoSyncFixDialog({
       onClose={busy ? () => {} : onCancel}
       data-testid="autosync-fix-dialog"
     >
-      <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+      <div className="modal-container modal-sm event-sync-autosync-fix-dialog" role="alertdialog" aria-modal="true">
         <div className="modal-header">
           <h3 className="modal-title">
             Turn auto-sync {direction} for &lsquo;{groupName}&rsquo;?

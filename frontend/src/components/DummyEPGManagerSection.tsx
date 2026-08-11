@@ -423,7 +423,7 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
       {/* Delete Confirmation Dialog */}
       {deleteModal.isOpen && profileToDelete && (
         <ModalOverlay onClose={handleCancelDelete} role="dialog" aria-modal="true">
-          <div className="modal-container modal-sm">
+          <div className="modal-container modal-sm dummy-epg-delete-confirm">
             <div className="modal-header">
               <h2>Delete Profile</h2>
               <button className="modal-close-btn" onClick={handleCancelDelete} aria-label="Close">

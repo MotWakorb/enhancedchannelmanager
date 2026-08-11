@@ -149,6 +149,8 @@
   gap: 6px;
   font-weight: 600;
   color: var(--text-primary);
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
 /* Body role. 13px -> 13px. */

@@ -202,7 +202,7 @@ export function CloudTargetsCard() {
 
       {deletingTarget && (
         <ModalOverlay onClose={() => setDeletingTarget(null)}>
-          <div className="modal-container modal-sm">
+          <div className="modal-container modal-sm cloud-target-delete-confirm">
             <div className="modal-header"><h3>Delete Target</h3></div>
             <div className="modal-body">
               <p>Delete cloud target <strong>{deletingTarget.name}</strong>? Scheduled backups using this target will stop uploading off-site.</p>

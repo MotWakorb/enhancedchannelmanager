@@ -615,7 +615,7 @@ def _expected_verdict_manifest():
     step_contracts = {
         "backend": (1, 6, 9),
         "mcp-server": (1, 4, 7),
-        "frontend": (1, 6, 9),
+        "frontend": (1, 9, 12),
         "semgrep-lint": (1, 4, 5),
     }
     for job, (first_true, last_true, last_always) in step_contracts.items():

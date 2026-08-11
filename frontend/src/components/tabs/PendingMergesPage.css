@@ -313,3 +313,7 @@
   margin: 0.75rem 0;
   color: var(--text-secondary, #aaa);
 }
+.pending-merge-bulk-confirm > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
