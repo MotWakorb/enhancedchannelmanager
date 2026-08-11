@@ -85,35 +85,40 @@ fi
 BASELINE_REF="origin/dev"
 git -C "$PROJECT_DIR" fetch --no-tags --quiet origin dev >/dev/null 2>&1 || true
 
-CHANGED_PATHS="$(git -C "$PROJECT_DIR" -c core.quotePath=false diff \
-  --name-only --no-renames "$BASELINE_REF...HEAD" 2>/dev/null)"
+CHANGED_PATHS_FILE="$(mktemp)" || {
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but could not allocate changed-path transport, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
+  exit 0
+}
+trap 'rm -f -- "$CHANGED_PATHS_FILE"' EXIT
+git -C "$PROJECT_DIR" diff --name-only --no-renames -z \
+  "$BASELINE_REF...HEAD" >"$CHANGED_PATHS_FILE" 2>/dev/null
 DIFF_STATUS=$?
 if [[ $DIFF_STATUS -ne 0 ]]; then
   emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but could not diff $BASELINE_REF...HEAD, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-CLASSIFIER_STDOUT="$(printf '%s\n' "$CHANGED_PATHS" | python3 "$CLASSIFIER" 2>/dev/null)"
+CLASSIFIER_STDOUT="$(python3 "$CLASSIFIER" --git-z <"$CHANGED_PATHS_FILE" 2>/dev/null)"
 CLASSIFIER_STATUS=$?
 if [[ $CLASSIFIER_STATUS -ne 0 ]]; then
   emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification exited non-zero, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-mapfile -t DOCS_ONLY_LINES < <(printf '%s\n' "$CLASSIFIER_STDOUT" | sed -n 's/^docs_only=\(.*\)$/\1/p' | tr -d '\r')
-if [[ ${#DOCS_ONLY_LINES[@]} -ne 1 ]]; then
-  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned no unique docs_only key, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
+mapfile -t CODE_PATHS_CHANGED_LINES < <(printf '%s\n' "$CLASSIFIER_STDOUT" | sed -n 's/^code_paths_changed=\(.*\)$/\1/p' | tr -d '\r')
+if [[ ${#CODE_PATHS_CHANGED_LINES[@]} -ne 1 ]]; then
+  emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned no unique code_paths_changed key, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
   exit 0
 fi
 
-case "${DOCS_ONLY_LINES[0]}" in
-  true)
-    emit_notice "version-advance-guard: possible PR creation command detected; SKIPPED the build-advance check because docs_only=true. This change carries no build to advance. Do NOT bump the version touchpoints."
+case "${CODE_PATHS_CHANGED_LINES[0]}" in
+  false)
+    emit_notice "version-advance-guard: possible PR creation command detected; SKIPPED the build-advance check because code_paths_changed=false. This change carries no build to advance. Do NOT bump the version touchpoints."
     exit 0
     ;;
-  false) ;;
+  true) ;;
   *)
-    emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned an unrecognised docs_only value, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
+    emit_notice "version-advance-guard: WARNING, possible PR creation command detected, but changed-path classification returned an unrecognised code_paths_changed value, so the build-advance check is being skipped. CI still enforces the rule against the PR head."
     exit 0
     ;;
 esac

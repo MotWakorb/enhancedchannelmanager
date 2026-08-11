@@ -14,7 +14,7 @@ name: Build and Push Docker Image
 #
 # So `codeql-analysis` now runs on every event and gates its expensive steps
 # on the `detect` job. The image-build jobs are NOT required contexts and
-# still have nothing to do on a documentation-only change; they skip cleanly
+# still have nothing to do on an inert machine-state change; they skip cleanly
 # because `wait-for-tests` skips and they already require it to have
 # succeeded.
 
@@ -34,8 +34,8 @@ env:
 jobs:
   # ─── Changed-path classifier ──────────────────────────────────────────
   # Mirrors test.yml's `detect` job. Both call the same classifier script,
-  # scripts/classify_changed_paths.py, so the documentation-only rule has
-  # exactly one definition. As there, the gate is written `!= 'true'` so an
+  # scripts/classify_changed_paths.py, so the inert-path rule has
+  # exactly one definition. As there, the gate is written `!= 'false'` so an
   # empty or missing output runs the real work.
   detect:
     name: Detect Changed Paths
@@ -44,7 +44,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
+      code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -64,7 +64,7 @@ jobs:
           # No `set -e`: a classifier that dies takes every gate with it.
           set -uo pipefail
 
-          : > changed_files.txt
+          printf '[]' > changed_files.json
 
           # Both sides of a rename, exactly as in test.yml's detect job.
           # See bead enhancedchannelmanager-9ogyd for why `.filename` alone
@@ -74,17 +74,17 @@ jobs:
           # the same hole.
           case "$EVENT_NAME" in
             pull_request)
-              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-                --jq '.[] | .filename, (.previous_filename // empty)' > changed_files.txt \
-                || { echo "::warning::could not list PR files"; : > changed_files.txt; }
+              gh api --paginate --slurp "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '[.[][] | .filename, (.previous_filename // empty)]' > changed_files.json \
+                || { echo "::warning::could not list PR files"; printf '[]' > changed_files.json; }
               ;;
             push)
               if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
                 echo "::warning::no usable before-SHA on this push"
               else
-                gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                  --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
-                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+                gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                  --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
+                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; printf '[]' > changed_files.json; }
               fi
               ;;
             *)
@@ -93,22 +93,22 @@ jobs:
           esac
 
           echo "Changed paths:"
-          cat changed_files.txt
+          cat changed_files.json
 
-          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
           echo "verdict: ${verdict:-<empty, every gate will run>}"
           echo "$verdict" >> "$GITHUB_OUTPUT"
 
   # Security scanning jobs - run on pushes to main and PRs to main
   # NOT a required context, so it may skip at the job level. The
-  # `docs_only` clause keeps the pre-5rwzy behaviour: before this workflow
+  # `code_paths_changed` clause keeps the pre-5rwzy behaviour: before this workflow
   # ran on every event, a Markdown-only PR to main never reached npm audit,
   # and a fresh advisory should not block a typo fix.
   security-scan-frontend:
     name: Frontend Security Scan
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
+    if: needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -133,7 +133,7 @@ jobs:
     name: Backend Security Scan
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
+    if: needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -175,28 +175,26 @@ jobs:
       matrix:
         language: ['javascript-typescript', 'python']
     steps:
-      # A documentation-only change adds no code for CodeQL to analyse, in
-      # either language. Skipping the scan here is the same judgement the
-      # `paths-ignore` filter used to make silently, made explicitly and in
-      # one place. The last analysis on the base branch still stands.
-      - name: Documentation-only change, no code to analyse
-        if: needs.detect.outputs.docs_only == 'true'
+      # Only explicitly inert machine state can reach this no-op. Every
+      # Markdown path runs CodeQL with the rest of the required gates.
+      - name: Inert-only change, no code to analyse
+        if: needs.detect.outputs.code_paths_changed == 'false'
         run: |
-          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Every changed path is on the classifier's explicit inert allowlist."
           echo "CodeQL has no changed ${{ matrix.language }} source to scan,"
           echo "so this check passes without running the analysis."
           # The check name is the same whether the analysis ran or not. Say
           # which happened in the run summary so the rollup is readable
           # without opening the job log. See bead enhancedchannelmanager-t4d5w.
-          echo "**CodeQL Analysis (${{ matrix.language }})**: documentation-only change, no ${{ matrix.language }} source changed, the analysis and the delta-zero alert gate were NOT run." \
+          echo "**CodeQL Analysis (${{ matrix.language }})**: inert machine-state change, the analysis and delta-zero alert gate were NOT run." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
 
       - name: Initialize CodeQL
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
@@ -204,12 +202,12 @@ jobs:
           config-file: .github/codeql/codeql-config.yml
 
       - name: Autobuild
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
         id: analyze
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
@@ -223,7 +221,7 @@ jobs:
       # make this job a required status check.
       - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
         id: delta_zero
-        if: needs.detect.outputs.docs_only != 'true' && github.event_name == 'pull_request'
+        if: needs.detect.outputs.code_paths_changed != 'false' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -375,7 +373,7 @@ jobs:
         # red. If this step breaks, the conclusion the check is named for
         # still stands.
         continue-on-error: true
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           EVENT_NAME: ${{ github.event_name }}
           LANGUAGE: ${{ matrix.language }}
@@ -401,7 +399,7 @@ jobs:
     name: IaC Security Scan
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
+    if: needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -435,15 +433,15 @@ jobs:
   # depends on byte-for-byte.
   #
   # NOT a required context, so it may skip at the job level. Skipping it on a
-  # documentation-only change is what keeps the image builds off: every build
+  # inert machine-state change is what keeps the image builds off: every build
   # job requires `needs.wait-for-tests.result == 'success'`, and a skipped job
   # does not report success. Net effect matches the pre-5rwzy behaviour, where
-  # this workflow did not run at all on a Markdown-only change.
+  # this workflow did not run at all on an ignored-path change.
   wait-for-tests:
     name: Wait for Test Suite
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true'
+    if: needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       checks: read
     steps:

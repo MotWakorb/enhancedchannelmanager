@@ -53,11 +53,11 @@ jobs:
         run: |
           # No `set -e`: a classifier that dies must not silently stop the
           # site from rebuilding. Every failure path below leaves
-          # changed_files.txt empty, and an empty set classifies as
+          # changed_files.json an empty JSON array, which classifies as
           # site-affecting, so the build still runs.
           set -uo pipefail
 
-          : > changed_files.txt
+          printf '[]' > changed_files.json
 
           if [ "$EVENT_NAME" = "push" ]; then
             if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
@@ -69,9 +69,9 @@ jobs:
               # here: moving a page OUT of docs/user_guide/ shows only the
               # destination, so the site would not rebuild and the published
               # page would linger after the source was gone.
-              gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
-                || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+              gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
+                || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; printf '[]' > changed_files.json; }
             fi
           else
             # workflow_dispatch is a deliberate manual rebuild request.
@@ -79,9 +79,9 @@ jobs:
           fi
 
           echo "Changed paths:"
-          cat changed_files.txt
+          cat changed_files.json
 
-          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
           echo "verdict: ${verdict:-<empty, the site will rebuild>}"
           echo "$verdict" >> "$GITHUB_OUTPUT"
 
