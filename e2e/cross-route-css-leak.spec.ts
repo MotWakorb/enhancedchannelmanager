@@ -92,7 +92,6 @@ const SHARED_SELECTORS: readonly string[] = [
   '.search-box input',
   '.search-box .material-icons',
   '.filter-dropdown-button',
-  '.filter-select .custom-select-trigger',
   '.empty-state h3',
   '.empty-state p',
   '.error-message',

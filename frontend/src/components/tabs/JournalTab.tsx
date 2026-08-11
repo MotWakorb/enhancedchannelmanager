@@ -314,7 +314,7 @@ export function JournalTab() {
         <CustomSelect
           value={category}
           onChange={(val) => setCategory(val as JournalCategory | '')}
-          className="filter-select journal-filter-select"
+          className="journal-filter-select"
           disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Categories' },
@@ -330,7 +330,7 @@ export function JournalTab() {
         <CustomSelect
           value={actionType}
           onChange={(val) => setActionType(val as JournalActionType | '')}
-          className="filter-select journal-filter-select"
+          className="journal-filter-select"
           disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Actions' },
@@ -349,7 +349,7 @@ export function JournalTab() {
         <CustomSelect
           value={mutationSource}
           onChange={(val) => setMutationSource(val as MutationSource | '')}
-          className="filter-select journal-filter-select"
+          className="journal-filter-select"
           disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Sources' },

@@ -642,8 +642,6 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
 
   // --- Wave 0 (6z299.1) — § 4.3 hoists / § 4.4 deletes these outright ---
   // § 27 FILTER BAR absorbs the whole Journal/M3U-Changes header block.
-  { selector: '.filter-select', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:111 | M3UChangesTab.css:160 | StreamsPane.css:194 — divergent width; § 4.3 flags the StreamsPane copy for verification' },
-  { selector: '.filter-select .custom-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:116 | M3UChangesTab.css:165' },
   // The unconditional `.filters-bar` pair is retired: neither tab rendered the
   // class, so both copies were deleted outright rather than scoped, and the
   // real owner `.watch-history-panel .filters-bar` now writes out the
@@ -657,7 +655,6 @@ const KNOWN_CROSS_CHUNK_LAYOUT: BaselineEntry[] = [
   { selector: '.header-actions', chunks: ['EAGER', 'JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'common.css:1238 | JournalTab.css:60 | M3UChangesTab.css:63' },
   { selector: '.header-left', chunks: ['JournalTab', 'M3UChangesTab', 'StatsTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'StatsTab.css:33 | JournalTab.css:26 | M3UChangesTab.css:34 — divergent row-gap' },
   { selector: '.header-stats', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:41 | M3UChangesTab.css:49' },
-  { selector: '@media (max-width: 600px) :: .filter-select', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:483 | M3UChangesTab.css:527' },
   { selector: '@media (max-width: 600px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:571 | M3UChangesTab.css:587' },
   { selector: '@media (max-width: 600px) :: .header-actions', chunks: ['JournalTab', 'LogoManagerTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:471 | M3UChangesTab.css:511 | LogoManagerTab.css:456' },
   { selector: '@media (max-width: 768px) :: .filters-bar', chunks: ['JournalTab', 'M3UChangesTab'], bead: 'enhancedchannelmanager-6z299.1', where: 'JournalTab.css:551 | M3UChangesTab.css:559' },
