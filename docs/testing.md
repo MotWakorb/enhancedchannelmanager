@@ -478,11 +478,11 @@ of trusting the aggregate.
    push and pull request to `main` and `dev`.
 2. A `detect` job in each classifies the changed file set by calling
    `scripts/classify_changed_paths.py`. That script holds the single
-   definition of the documentation-only rule (`**.md` and `.beads/**`), which
+   classifier's explicit inert-path allowlist, which
    previously lived in three `paths` blocks that drifted apart.
 3. Every job whose name is a required context **always runs**, so the context
    is emitted exactly once, and gates its expensive **steps** on
-   `needs.detect.outputs.docs_only`. On a documentation-only change the job
+   `needs.detect.outputs.code_paths_changed`. On an inert machine-state change the job
    does a cheap no-op and passes honestly.
 4. `docs-only-pass.yml` is deleted.
 
@@ -499,7 +499,7 @@ of trusting the aggregate.
 Jobs that are **not** required contexts (`Fake-Test Guard`, `Visual
 Regression`, `Operator Workspace Release Matrix`, `Screen-Reader-Only
 Rendering Guard`, the image builds) do skip at the job level on a
-documentation-only change. Promoting any of them to a required check means
+inert-only change. Promoting any of them to a required check means
 converting it to the step-gated shape first.
 
 `backend/tests/unit/test_classify_changed_paths.py` enforces all of this: it
@@ -509,7 +509,7 @@ job or if `test.yml` / `build.yml` regain a path filter.
 
 ### Fail-open, on purpose
 
-The gate expression is always `needs.detect.outputs.docs_only != 'true'`. If
+The gate expression is always `needs.detect.outputs.code_paths_changed != 'false'`. If
 the `detect` job dies its output is empty, the comparison is true, and the
 real work runs. Classifying code as documentation is the dangerous direction,
 because it turns a required check green without running the work it is named
@@ -526,10 +526,9 @@ filter of `docs-pages.yml`, where nothing could see it drift out of step with
 the mkdocs nav. It lives in the classifier now, and `docs-pages.yml` reads it.
 
 The two verdicts are independent, and all four combinations occur: editing
-`docs/user_guide/index.md` is documentation-only **and** site-affecting,
-editing `docs/shipping.md` is documentation-only and **not** site-affecting,
-editing `mkdocs.yml` is neither documentation-only nor exempt from the site
-build, and editing `backend/main.py` is neither.
+`docs/user_guide/index.md` and `mkdocs.yml` are code-gated **and**
+site-affecting, `docs/testing.md` is code-gated and **not** site-affecting,
+and `.beads/issues.jsonl` is inert to both.
 
 `docs_site_affected` fails open in the **opposite** direction, to `true`. Its
 dangerous verdict is a wrong `false`, which skips the rebuild and leaves the
@@ -542,7 +541,7 @@ disabling its deploy.
 ### What a green required check actually ran
 
 Because six of the seven required checks gate their real work on
-`docs_only`, the check **name** is the same whether a suite ran or not.
+`code_paths_changed`, the check **name** is the same whether a suite ran or not.
 `Backend Tests` reads as "the backend tests ran" either way.
 
 So every required job writes one line to `$GITHUB_STEP_SUMMARY` naming what it
@@ -552,7 +551,7 @@ than a claim:
 
 ```
 Backend Tests: ran the backend pytest suite. 2147 tests, 0 failed, 0 errored.
-Backend Tests: documentation-only change, no backend source changed, the pytest suite was NOT run.
+Backend Tests: inert machine-state change, the pytest suite was NOT run.
 ```
 
 The summary changes no conclusion and gates nothing; it makes the rollup

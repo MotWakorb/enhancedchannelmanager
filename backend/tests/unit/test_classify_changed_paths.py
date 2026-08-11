@@ -1,10 +1,10 @@
 """Tests for ``scripts/classify_changed_paths.py``.
 
-Beads enhancedchannelmanager-5rwzy (``docs_only``) and
+Beads enhancedchannelmanager-5rwzy (``code_paths_changed``) and
 enhancedchannelmanager-t4d5w (``docs_site_affected``).
 
 The classifier is the gate that decides whether a required CI status check
-runs its real work or passes as a no-op. A wrong ``docs_only=true`` verdict
+runs its real work or passes as a no-op. A wrong ``code_paths_changed=false`` verdict
 turns ``Backend Tests`` green without pytest ever running, which is the exact
 class of defect this bead exists to close. So the accept/reject boundary and
 the fail-open behaviour are both pinned here.
@@ -48,25 +48,20 @@ def script():
     return _load_script_module()
 
 
-# --- Paths CI is allowed to treat as documentation --------------------------
+# --- The only paths CI may treat as inert machine state ---------------------
 
 
-class TestDocumentationPaths:
+class TestInertPaths:
     @pytest.mark.parametrize(
         "path",
         [
-            "README.md",
-            "CHANGELOG.md",
-            "docs/testing.md",
-            "docs/user_guide/backup-restore/run-a-restore-drill.md",
-            "./docs/shipping.md",
             ".beads/enhancedchannelmanager.jsonl",
-            ".beads/backup/2026-08-08.db",
-            ".beads/config.json",
+            ".beads/issues.jsonl.bak",
+            ".beads/metadata.json",
         ],
     )
-    def test_recognised_as_documentation(self, script, path):
-        assert script.is_doc_path(path) is True
+    def test_recognised_as_inert(self, script, path):
+        assert script.is_inert_path(path) is True
 
 
 class TestCodePaths:
@@ -85,61 +80,109 @@ class TestCodePaths:
             "beads/tool.py",
             # `**.md` matches the file NAME, so a bare `.md` file is not prose.
             ".md",
-            "docs/.md",
+            ".beads/config.yaml",
+            ".beads/.gitignore",
+            ".beads/backup/2026-08-08.db",
+            ".beads/config.json",
+            ".beads/metadata.json.bak",
+            ".beads/nested/issues.jsonl",
+            ".beads/issues.jsonl.bak.extra",
+            # Live Markdown fixture consumed by a backend test.
+            "docs/style_guide.md",
+            "docs/security/threat_model_dbas_import.md",
+            "docs/shipping.md",
+            "README.md",
+            "CHANGELOG.md",
+            "nested/notes.md",
+            "docs/user_guide/backup-restore/run-a-restore-drill.md",
+            "symlink-name.md",
+            "docs/UPPER.MD",
+            "docs/Mixed.Md",
+            "docs/images/architecture.png",
+            "graphify-out/memory/report.txt",
+            "docs/prometheus_rules.yaml",
+            "mkdocs.yml",
+            "docs/requirements-docs.txt",
         ],
     )
     def test_recognised_as_code(self, script, path):
-        assert script.is_doc_path(path) is False
+        assert script.is_inert_path(path) is False
 
     def test_beads_prefix_is_not_eaten_by_lstrip(self, script):
         """Regression guard: ``lstrip('./')`` would strip the leading dot of
         ``.beads/`` and turn every beads path into ``beads/``. The path must
         still classify as documentation."""
-        assert script.is_doc_path(".beads/issues.jsonl") is True
+        assert script.is_inert_path(".beads/issues.jsonl") is True
+
+
+def test_classifier_consumers_use_only_positive_output_name():
+    positive_consumers = [
+        REPO_ROOT / ".github/workflows/test.yml",
+        REPO_ROOT / ".github/workflows/build.yml",
+        REPO_ROOT / ".claude/hooks/version-advance-guard.sh",
+    ]
+    all_consumers = positive_consumers + [
+        REPO_ROOT / ".github/workflows/docs-pages.yml",
+        REPO_ROOT / "docs/shipping.md",
+    ]
+    for consumer in all_consumers:
+        text = consumer.read_text(encoding="utf-8")
+        assert "docs_only" not in text, consumer
+    for consumer in positive_consumers:
+        text = consumer.read_text(encoding="utf-8")
+        assert "code_paths_changed" in text, consumer
+    assert "docs_site_affected" in all_consumers[3].read_text(encoding="utf-8")
 
 
 # --- Whole-set classification ----------------------------------------------
 
 
 class TestClassify:
-    def test_all_markdown_is_docs_only(self, script):
-        docs_only, code_paths = script.classify(["CHANGELOG.md", "docs/api.md"])
-        assert docs_only is True
+    def test_root_machine_beads_state_only_is_inert(self, script):
+        code_paths_changed, code_paths = script.classify(
+            [".beads/issues.jsonl", ".beads/archive.jsonl.bak", ".beads/metadata.json"]
+        )
+        assert code_paths_changed is False
         assert code_paths == []
 
-    def test_markdown_and_beads_is_docs_only(self, script):
-        docs_only, code_paths = script.classify(
+    def test_all_markdown_runs_code_gates(self, script):
+        code_paths_changed, code_paths = script.classify(["CHANGELOG.md", "docs/api.md"])
+        assert code_paths_changed is True
+        assert code_paths == ["CHANGELOG.md", "docs/api.md"]
+
+    def test_markdown_makes_machine_beads_change_code(self, script):
+        code_paths_changed, code_paths = script.classify(
             [".beads/enhancedchannelmanager.jsonl", "docs/api.md"]
         )
-        assert docs_only is True
-        assert code_paths == []
+        assert code_paths_changed is True
+        assert code_paths == ["docs/api.md"]
 
     def test_mixed_change_is_code(self, script):
         """The defect this bead closes: a PR touching code AND Markdown.
 
         Every shipped change carries a CHANGELOG entry, so this is the shape
         of nearly every PR in the repo. It must classify as code."""
-        docs_only, code_paths = script.classify(["CHANGELOG.md", "backend/main.py"])
-        assert docs_only is False
-        assert code_paths == ["backend/main.py"]
+        code_paths_changed, code_paths = script.classify(["CHANGELOG.md", "backend/main.py"])
+        assert code_paths_changed is True
+        assert code_paths == ["CHANGELOG.md", "backend/main.py"]
 
     def test_code_only_is_code(self, script):
-        docs_only, code_paths = script.classify(["backend/main.py"])
-        assert docs_only is False
+        code_paths_changed, code_paths = script.classify(["backend/main.py"])
+        assert code_paths_changed is True
         assert code_paths == ["backend/main.py"]
 
     def test_empty_set_fails_open_to_code(self, script):
         """An undetermined file set must run the real work, never no-op green."""
-        docs_only, code_paths = script.classify([])
-        assert docs_only is False
+        code_paths_changed, code_paths = script.classify([])
+        assert code_paths_changed is True
 
-    def test_blank_lines_are_ignored(self, script):
-        docs_only, _ = script.classify(["", "  ", "docs/api.md", ""])
-        assert docs_only is True
+    def test_blank_or_whitespace_names_fail_open_to_code(self, script):
+        code_paths_changed, _ = script.classify(["", "  ", "docs/api.md"])
+        assert code_paths_changed is True
 
     def test_blank_only_set_fails_open_to_code(self, script):
-        docs_only, _ = script.classify(["", "   ", "\t"])
-        assert docs_only is False
+        code_paths_changed, _ = script.classify(["", "   ", "\t"])
+        assert code_paths_changed is True
 
 
 # --- Paths the published user-guide site is built from ----------------------
@@ -156,7 +199,6 @@ class TestDocsSitePaths:
             "mkdocs.yml",
             "docs/requirements-docs.txt",
             ".github/workflows/docs-pages.yml",
-            "./docs/user_guide/index.md",
         ],
     )
     def test_recognised_as_site_input(self, script, path):
@@ -204,7 +246,7 @@ class TestClassifyDocsSite:
         assert site_paths == []
 
     def test_empty_set_fails_open_to_affected(self, script):
-        """The opposite fail-open direction from ``docs_only``.
+        """The opposite fail-open direction from ``code_paths_changed``.
 
         A missed rebuild leaves the published site stale behind merged
         content; a needless rebuild costs a runner minute."""
@@ -217,20 +259,21 @@ class TestClassifyDocsSite:
         assert affected is True
 
     def test_the_two_verdicts_are_independent(self, script):
-        """A change can be documentation-only AND site-affecting, or neither.
+        """Code-gate and documentation-site decisions remain independent.
 
         The four combinations are all reachable, so neither output may be
         derived from the other."""
         combinations = {
             ("docs/user_guide/index.md",): (True, True),
-            ("docs/shipping.md",): (True, False),
-            ("mkdocs.yml",): (False, True),
-            ("backend/main.py",): (False, False),
+            ("docs/testing.md",): (True, False),
+            ("mkdocs.yml",): (True, True),
+            ("backend/main.py",): (True, False),
+            (".beads/issues.jsonl",): (False, False),
         }
         for paths, expected in combinations.items():
-            docs_only, _ = script.classify(list(paths))
+            code_paths_changed, _ = script.classify(list(paths))
             affected, _ = script.classify_docs_site(list(paths))
-            assert (docs_only, affected) == expected, paths
+            assert (code_paths_changed, affected) == expected, paths
 
 
 # --- End-to-end CLI contract ------------------------------------------------
@@ -252,42 +295,43 @@ def _outputs(result) -> dict[str, str]:
     Read by key, never by line position: the workflows do the same, so a
     future third output must not be able to break an existing consumer."""
     parsed = {}
-    for line in result.stdout.splitlines():
+    stdout = result.stdout.decode("utf-8") if isinstance(result.stdout, bytes) else result.stdout
+    for line in stdout.splitlines():
         key, _, value = line.partition("=")
         parsed[key] = value
     return parsed
 
 
 class TestCommandLine:
-    def test_stdin_docs_only(self):
-        result = _run_cli([], "docs/api.md\nCHANGELOG.md\n")
+    def test_stdin_code_paths_changed(self):
+        result = _run_cli([], json.dumps(["docs/api.md", "CHANGELOG.md"]))
         assert result.returncode == 0
-        assert _outputs(result)["docs_only"] == "true"
+        assert _outputs(result)["code_paths_changed"] == "true"
 
     def test_stdin_mixed(self):
-        result = _run_cli([], "docs/api.md\nbackend/main.py\n")
+        result = _run_cli([], json.dumps(["docs/api.md", "backend/main.py"]))
         assert result.returncode == 0
-        assert _outputs(result)["docs_only"] == "false"
+        assert _outputs(result)["code_paths_changed"] == "true"
         assert "backend/main.py" in result.stderr
 
     def test_files_from(self, tmp_path):
         listing = tmp_path / "changed.txt"
-        listing.write_text("docs/api.md\n.beads/x.jsonl\n", encoding="utf-8")
+        listing.write_text(json.dumps(["docs/api.md", ".beads/x.jsonl"]), encoding="utf-8")
         result = _run_cli(["--files-from", str(listing)])
         assert result.returncode == 0
-        assert _outputs(result)["docs_only"] == "true"
+        assert _outputs(result)["code_paths_changed"] == "true"
 
     def test_missing_files_from_exits_zero_and_fails_open(self, tmp_path):
         """A classifier hiccup must never skip a dependent job."""
         result = _run_cli(["--files-from", str(tmp_path / "nope.txt")])
         assert result.returncode == 0
-        assert _outputs(result) == {"docs_only": "false", "docs_site_affected": "true"}
+        assert _outputs(result) == {"code_paths_changed": "true", "docs_site_affected": "true"}
         assert "::warning::" in result.stderr
 
     def test_empty_input_exits_zero_and_fails_open(self):
         result = _run_cli([], "")
         assert result.returncode == 0
-        assert _outputs(result) == {"docs_only": "false", "docs_site_affected": "true"}
+        assert _outputs(result) == {"code_paths_changed": "true", "docs_site_affected": "true"}
         assert "::warning::" in result.stderr
 
     def test_output_is_exactly_the_two_github_output_keys(self):
@@ -297,17 +341,55 @@ class TestCommandLine:
         Pinned as a set, not a sequence: consumers read by key, and pinning
         the order would make adding an output a breaking change for no
         reason."""
-        result = _run_cli([], "backend/main.py\n")
-        assert set(_outputs(result)) == {"docs_only", "docs_site_affected"}
+        result = _run_cli([], json.dumps(["backend/main.py"]))
+        assert set(_outputs(result)) == {"code_paths_changed", "docs_site_affected"}
         assert all("=" in line for line in result.stdout.splitlines())
 
     def test_site_verdict_on_a_published_page(self):
-        result = _run_cli([], "docs/user_guide/stats/bandwidth.md\n")
-        assert _outputs(result) == {"docs_only": "true", "docs_site_affected": "true"}
+        result = _run_cli([], json.dumps(["docs/user_guide/stats/bandwidth.md"]))
+        assert _outputs(result) == {"code_paths_changed": "true", "docs_site_affected": "true"}
 
     def test_site_verdict_on_an_internal_doc(self):
-        result = _run_cli([], "docs/shipping.md\n")
-        assert _outputs(result) == {"docs_only": "true", "docs_site_affected": "false"}
+        result = _run_cli([], json.dumps(["docs/testing.md"]))
+        assert _outputs(result) == {"code_paths_changed": "true", "docs_site_affected": "false"}
+
+    @pytest.mark.parametrize(
+        "path",
+        ["docs/line\nbreak.md", r"docs\shipping.md", " docs/shipping.md", "docs/shipping.md "],
+    )
+    def test_lossless_odd_names_fail_open_to_code(self, path):
+        result = _run_cli([], json.dumps([path]))
+        assert _outputs(result)["code_paths_changed"] == "true"
+
+    @pytest.mark.parametrize("payload", ["not json", "{}", '["docs/a.md", 1]', '["a\\u0000b"]'])
+    def test_malformed_or_ambiguous_payload_fails_open(self, payload):
+        result = _run_cli([], payload)
+        assert _outputs(result) == {"code_paths_changed": "true", "docs_site_affected": "true"}
+
+    def test_git_z_transport_preserves_rename_source_destination_and_delete(self):
+        raw = "backend/source.py\0docs/destination.md\0backend/deleted.py\0"
+        result = _run_cli(["--git-z"], raw)
+        assert _outputs(result)["code_paths_changed"] == "true"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"docs/line\nbreak.md\0",
+            b"docs\\shipping.md\0",
+            b" docs/shipping.md\0",
+            b"docs/shipping.md \0",
+            b"docs/shipping.md",  # missing terminal NUL is ambiguous
+            b"docs/shipping.md\0\0",
+        ],
+    )
+    def test_git_z_odd_or_malformed_names_fail_open(self, raw):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--git-z"],
+            input=raw,
+            capture_output=True,
+            check=False,
+        )
+        assert _outputs(result)["code_paths_changed"] == "true"
 
 
 # --- The rule matches what the workflows gate on ----------------------------
@@ -360,7 +442,7 @@ class TestWorkflowContract:
         # trigger block comes back under `True`, not `"on"`.
         return workflow.get(True) or workflow.get("on") or {}
 
-    def test_no_docs_only_sentinel_workflow_remains(self):
+    def test_no_code_paths_changed_sentinel_workflow_remains(self):
         assert not (self.WORKFLOW_DIR / "docs-only-pass.yml").exists()
 
     @pytest.mark.parametrize("workflow", ["test.yml", "build.yml"])
@@ -380,7 +462,7 @@ class TestWorkflowContract:
                 )
 
     def test_required_context_jobs_can_never_be_skipped(self):
-        """The half of the invariant that keeps documentation-only PRs mergeable.
+        """The half of the invariant that keeps every PR check set complete.
 
         GitHub counts a SKIPPED job as satisfying a required status check, so
         a required-context job must never carry a job-level `if:` that can
@@ -405,7 +487,7 @@ class TestWorkflowContract:
                     f"and keep the job-level guard at `!cancelled()`. "
                     f"See bead enhancedchannelmanager-5rwzy."
                 )
-                assert "docs_only" not in condition, (
+                assert "code_paths_changed" not in condition, (
                     f"{path.name}:{job_id} gates the whole job on the "
                     f"documentation-only classification. That skips the job, "
                     f"and a skipped job satisfies the required check it is "
@@ -545,14 +627,14 @@ def _jq_expressions(workflow_name: str) -> list[str]:
 
 def _array_shaped(expressions: list[str]) -> str:
     """The expression for `pulls/N/files`, which returns a bare array."""
-    matches = [e for e in expressions if not e.lstrip().startswith(".files")]
+    matches = [e for e in expressions if ".[][]" in e]
     assert len(matches) == 1, f"expected one array-shaped expression, got {matches}"
     return matches[0]
 
 
 def _compare_shaped(expressions: list[str]) -> str:
     """The expression for the compare API, which nests the list under `files`."""
-    matches = [e for e in expressions if e.lstrip().startswith(".files")]
+    matches = [e for e in expressions if ".files" in e]
     assert len(matches) == 1, f"expected one compare-shaped expression, got {matches}"
     return matches[0]
 
@@ -560,12 +642,12 @@ def _compare_shaped(expressions: list[str]) -> str:
 def _run_jq(expression: str, payload) -> list[str]:
     """Apply the workflow's real jq expression to a payload, as CI would.
 
-    Returns the raw stdout lines, blank ones included, because whether the
-    expression can emit a blank line is itself part of the contract.
+    ``gh api --slurp`` wraps all response pages in one outer array. The jq
+    expression must return one JSON array so filename delimiters remain data.
     """
     result = subprocess.run(
         [JQ, "-r", expression],
-        input=json.dumps(payload),
+        input=json.dumps([payload]),
         capture_output=True,
         text=True,
         check=False,
@@ -574,7 +656,9 @@ def _run_jq(expression: str, payload) -> list[str]:
         f"jq rejected the workflow's own expression {expression!r}: "
         f"{result.stderr.strip()}"
     )
-    return result.stdout.splitlines()
+    parsed = json.loads(result.stdout)
+    assert isinstance(parsed, list)
+    return parsed
 
 
 class TestRenameSourcesReachTheClassifier:
@@ -610,8 +694,8 @@ class TestRenameSourcesReachTheClassifier:
         paths = _run_jq(
             _array_shaped(_jq_expressions("test.yml")), RENAME_INTO_MARKDOWN_FILES
         )
-        docs_only, code_paths = script.classify(paths)
-        assert docs_only is False, (
+        code_paths_changed, code_paths = script.classify(paths)
+        assert code_paths_changed is True, (
             f"a rename of a test file into a `.md` path classified "
             f"documentation-only from {paths}. Six of the seven required "
             f"checks gate every step on that verdict."
@@ -643,21 +727,13 @@ class TestRenameSourcesReachTheClassifier:
     @requires_jq
     @pytest.mark.parametrize("workflow", DETECT_WORKFLOWS)
     def test_no_blank_lines_for_ordinary_changes(self, workflow):
-        """`// empty` must emit nothing, not an empty line, when unrenamed.
-
-        The classifier ignores blank lines, so a stray one is harmless today.
-        Pinning it keeps a future spelling such as `.previous_filename // ""`
-        from quietly padding the file and from being copied somewhere that
-        does not tolerate it.
-        """
+        """`// empty` must emit no array element when a file is unrenamed."""
         plain = [
             {"filename": "backend/main.py", "status": "modified"},
             {"filename": "CHANGELOG.md", "previous_filename": None},
         ]
         for expression in _jq_expressions(workflow):
-            payload = (
-                {"files": plain} if expression.lstrip().startswith(".files") else plain
-            )
+            payload = {"files": plain} if ".files" in expression else plain
             paths = _run_jq(expression, payload)
             assert paths == ["backend/main.py", "CHANGELOG.md"], (
                 f"{workflow} expression {expression!r} produced {paths!r}"
@@ -671,6 +747,30 @@ class TestRenameSourcesReachTheClassifier:
         for workflow in ("test.yml", "build.yml", "docs-pages.yml"):
             expression = _compare_shaped(_jq_expressions(workflow))
             assert _run_jq(expression, {}) == []
+
+    @requires_jq
+    def test_json_transport_preserves_filename_characters_without_rewriting(self):
+        paths = ["docs/line\nbreak.md", r"docs\shipping.md", " docs/a.md", "docs/a.md "]
+        expression = _array_shaped(_jq_expressions("test.yml"))
+        payload = [{"filename": path, "status": "modified"} for path in paths]
+        assert _run_jq(expression, payload) == paths
+
+
+def test_detect_workflows_use_lossless_json_transport():
+    for workflow in DETECT_WORKFLOWS:
+        run = _classify_step_run(workflow)
+        assert run.count("gh api --paginate") == run.count("gh api --paginate --slurp")
+        assert "changed_files.json" in run
+        assert "changed_files.txt" not in run
+        assert "--jq '[" in run
+
+
+def test_version_consistency_summary_uses_positive_verdict_polarity():
+    workflow = (TestWorkflowContract.WORKFLOW_DIR / "test.yml").read_text(encoding="utf-8")
+    summary = workflow.split("- name: Summarize what this check did", 1)[1]
+    summary = summary.split("# ─── Fake-test guard", 1)[0]
+    assert 'elif [ "$CODE_PATHS_CHANGED" = "false" ]; then' in summary
+    assert "NOT run (inert machine-state change)" in summary
 
 
 # --- The published user-guide site has one path definition ------------------
@@ -891,13 +991,13 @@ class TestOperatorDocsRunsTheSiteBuild:
         )
 
     def test_job_stays_ungated(self):
-        """Gating this job on the classifier would defeat its purpose: a
-        documentation-only change is exactly what it exists to check."""
+        """Gating this job would defeat its purpose: Markdown changes are
+        exactly what it exists to check."""
         job = self._operator_docs_job()
         assert "if" not in job, (
             "the Operator Docs job gained a job-level `if:`. It is the only "
             "job that examines documentation on every event; gating it means "
-            "documentation-only PRs get no documentation check at all."
+            "Markdown PRs get no documentation check at all."
         )
         assert "needs" not in job, (
             "the Operator Docs job gained a `needs:` dependency. It runs "

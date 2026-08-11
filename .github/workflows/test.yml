@@ -39,11 +39,11 @@ on:
 
 jobs:
   # ─── Changed-path classifier ──────────────────────────────────────────
-  # Decides whether anything outside `**.md` / `.beads/**` changed. Every
-  # other job reads `needs.detect.outputs.docs_only`.
+  # Decides whether any code-gate input or unknown path changed. Every
+  # other job reads `needs.detect.outputs.code_paths_changed`.
   #
-  # The gate is written as `!= 'true'` everywhere on purpose: if this job
-  # fails outright its output is empty, `!= 'true'` is true, and the real
+  # The gate is written as `!= 'false'` everywhere on purpose: if this job
+  # fails outright its output is empty, `!= 'false'` is true, and the real
   # work runs. Fail-open is the only safe direction, because the failure
   # mode of fail-closed is a green required check that ran nothing.
   detect:
@@ -53,7 +53,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
+      code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -75,11 +75,11 @@ jobs:
           AFTER_SHA: ${{ github.sha }}
         run: |
           # No `set -e`: a classifier that dies takes every gate with it.
-          # Every failure path below leaves changed_files.txt empty, and the
+          # Every failure path below leaves an empty JSON array, and the
           # classifier treats an empty set as code.
           set -uo pipefail
 
-          : > changed_files.txt
+          printf '[]' > changed_files.json
 
           # BOTH SIDES OF A RENAME (bead enhancedchannelmanager-9ogyd).
           # `.filename` alone is the DESTINATION only. A renamed file's
@@ -88,22 +88,21 @@ jobs:
           # docs/legacy_notes.md` presented as a single `.md` path and
           # classified documentation-only. Every required check then went
           # green having executed nothing, and `dev` requires no reviews.
-          # `// empty` emits nothing (not a blank line) for the ordinary
-          # non-rename case, and the classifier ignores blank lines anyway.
+          # `// empty` emits no array element for an ordinary non-rename.
           # Duplicate paths are harmless: the verdict is an all/any test.
           case "$EVENT_NAME" in
             pull_request)
-              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-                --jq '.[] | .filename, (.previous_filename // empty)' > changed_files.txt \
-                || { echo "::warning::could not list PR files"; : > changed_files.txt; }
+              gh api --paginate --slurp "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '[.[][] | .filename, (.previous_filename // empty)]' > changed_files.json \
+                || { echo "::warning::could not list PR files"; printf '[]' > changed_files.json; }
               ;;
             push)
               if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
                 echo "::warning::no usable before-SHA on this push"
               else
-                gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                  --jq '.files[]? | .filename, (.previous_filename // empty)' > changed_files.txt \
-                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; : > changed_files.txt; }
+                gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                  --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
+                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; printf '[]' > changed_files.json; }
               fi
               ;;
             *)
@@ -113,9 +112,9 @@ jobs:
           esac
 
           echo "Changed paths:"
-          cat changed_files.txt
+          cat changed_files.json
 
-          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.txt)
+          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
           echo "verdict: ${verdict:-<empty, every gate will run>}"
           echo "$verdict" >> "$GITHUB_OUTPUT"
 
@@ -272,25 +271,25 @@ jobs:
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:
-      - name: Documentation-only change, nothing for pytest to run
-        if: needs.detect.outputs.docs_only == 'true'
+      - name: Inert-only change, nothing for pytest to run
+        if: needs.detect.outputs.code_paths_changed == 'false'
         run: |
-          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Every changed path is on the classifier's explicit inert allowlist."
           echo "The backend suite has no changed Python to exercise, so this"
           echo "check passes without running it. Any change under backend/"
           echo "runs the full suite below."
           # The check name says "Backend Tests" either way. Say in the run
           # summary which of the two things actually happened, so a reader of
           # the rollup does not have to open the job log to find out.
-          echo "**Backend Tests**: documentation-only change, no backend source changed, the pytest suite was NOT run." \
+          echo "**Backend Tests**: inert machine-state change, the pytest suite was NOT run." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
 
       - name: Setup Python
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -298,7 +297,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
@@ -309,7 +308,7 @@ jobs:
           pip install detect-secrets==1.5.0
 
       - name: Verify required test deps are importable (bd-s8kq3)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         # Fast-fail guard: if the install step above silently failed to
         # bring in a required test dep (alembic for migration tests,
@@ -321,7 +320,7 @@ jobs:
         run: python scripts/verify_test_deps.py
 
       - name: Prepare CI SQLite database
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         run: |
           mkdir -p /tmp/ecm_test_config
@@ -333,7 +332,7 @@ jobs:
 
       - name: Run pytest
         id: pytest
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         env:
           CONFIG_DIR: /tmp/ecm_test_config
@@ -370,7 +369,7 @@ jobs:
         # red. If this step breaks, the conclusion the check is named for
         # still stands.
         continue-on-error: true
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
         run: |
@@ -381,7 +380,7 @@ jobs:
             --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload backend coverage artifact
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -392,7 +391,7 @@ jobs:
           retention-days: 14
 
       - name: Upload backend JUnit artifact (flake tracking — bead xq19y)
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-backend` artifact name is consumed by
@@ -426,21 +425,21 @@ jobs:
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:
-      - name: Documentation-only change, nothing for pytest to run
-        if: needs.detect.outputs.docs_only == 'true'
+      - name: Inert-only change, nothing for pytest to run
+        if: needs.detect.outputs.code_paths_changed == 'false'
         run: |
-          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Every changed path is on the classifier's explicit inert allowlist."
           echo "The mcp-server suite has no changed Python to exercise, so"
           echo "this check passes without running it."
-          echo "**MCP Server Tests**: documentation-only change, no mcp-server source changed, the pytest suite was NOT run." \
+          echo "**MCP Server Tests**: inert machine-state change, the pytest suite was NOT run." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
 
       - name: Setup Python
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -448,7 +447,7 @@ jobs:
           cache-dependency-path: mcp-server/requirements.txt
 
       - name: Install dependencies
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: mcp-server
         run: |
           python -m pip install --upgrade pip
@@ -459,7 +458,7 @@ jobs:
 
       - name: Run pytest
         id: pytest
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: mcp-server
         run: |
           # Coverage threshold is enforced via --cov-fail-under=26 with
@@ -485,7 +484,7 @@ jobs:
         # red. If this step breaks, the conclusion the check is named for
         # still stands.
         continue-on-error: true
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
         run: |
@@ -496,7 +495,7 @@ jobs:
             --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mcp-server coverage artifact
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: mcp-server-coverage
@@ -507,7 +506,7 @@ jobs:
           retention-days: 14
 
       - name: Upload mcp-server JUnit artifact (flake tracking — bead xq19y)
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-mcp` artifact name is consumed by
@@ -529,24 +528,24 @@ jobs:
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:
-      - name: Documentation-only change, nothing for the frontend to check
-        if: needs.detect.outputs.docs_only == 'true'
+      - name: Inert-only change, nothing for the frontend to check
+        if: needs.detect.outputs.code_paths_changed == 'false'
         run: |
-          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Every changed path is on the classifier's explicit inert allowlist."
           echo "There is no changed TypeScript to lint, typecheck or test, so"
           echo "this check passes without running the suite."
-          echo "**Frontend Tests**: documentation-only change, no frontend source changed, lint, typecheck and vitest were NOT run." \
+          echo "**Frontend Tests**: inert machine-state change, lint, typecheck and vitest were NOT run." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
         with:
           # Need full history so we can diff against origin/main in PR mode.
           fetch-depth: 0
 
       - name: Setup Node.js
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -554,13 +553,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: npm ci
 
       - name: Lint (full repo, blocking)
         id: lint
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: |
           # Full-repo lint at --max-warnings 0. Baseline was cleared in
@@ -570,13 +569,13 @@ jobs:
 
       - name: Typecheck
         id: typecheck
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: npm run typecheck
 
       - name: Unit tests with coverage (blocking)
         id: vitest
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: |
           # Coverage thresholds are configured in frontend/vitest.config.ts
@@ -601,7 +600,7 @@ jobs:
         # red. If this step breaks, the conclusion the check is named for
         # still stands.
         continue-on-error: true
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           LINT: ${{ steps.lint.outcome }}
           TYPECHECK: ${{ steps.typecheck.outcome }}
@@ -621,7 +620,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
@@ -630,7 +629,7 @@ jobs:
           retention-days: 14
 
       - name: Upload frontend JUnit artifact (flake tracking — bead xq19y)
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-frontend` artifact name is consumed by
@@ -656,7 +655,7 @@ jobs:
   # REQUIRED CONTEXT. Always runs, and unlike the other four it runs its
   # first check unconditionally: proving the three version touchpoints agree
   # costs a checkout and is meaningful on any change. Only the ADVANCE gate
-  # is gated, preserving the documentation-only exemption that used to be
+  # is gated, preserving only the explicit inert-state exemption that replaced
   # inherited from the workflow-level path filter.
   version-consistency:
     name: Version Consistency
@@ -702,7 +701,7 @@ jobs:
       - name: Verify build number advances past base (PRs to dev only)
         id: advance_gate
         if: >-
-          needs.detect.outputs.docs_only != 'true'
+          needs.detect.outputs.code_paths_changed != 'false'
           && github.event_name == 'pull_request'
           && github.base_ref == 'dev'
         run: |
@@ -719,7 +718,7 @@ jobs:
         continue-on-error: true
         if: always()
         env:
-          DOCS_ONLY: ${{ needs.detect.outputs.docs_only }}
+          CODE_PATHS_CHANGED: ${{ needs.detect.outputs.code_paths_changed }}
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           CONSISTENCY: ${{ steps.consistency.outcome }}
@@ -733,8 +732,8 @@ jobs:
             echo "- three version touchpoints agree: ${CONSISTENCY:-did not run}"
             if [ "$EVENT_NAME" != "pull_request" ] || [ "$BASE_REF" != "dev" ]; then
               echo "- build-number advance gate: does not apply to this event"
-            elif [ "$DOCS_ONLY" = "true" ]; then
-              echo "- build-number advance gate: NOT run (documentation-only change)"
+            elif [ "$CODE_PATHS_CHANGED" = "false" ]; then
+              echo "- build-number advance gate: NOT run (inert machine-state change)"
             else
               echo "- build-number advance gate: ${ADVANCE:-did not run}"
             fi
@@ -761,7 +760,7 @@ jobs:
     name: Fake-Test Guard
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true'
+    if: needs.detect.outputs.code_paths_changed != 'false'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -788,7 +787,7 @@ jobs:
     name: Visual Regression
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true'
+    if: needs.detect.outputs.code_paths_changed != 'false'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -864,7 +863,7 @@ jobs:
     name: Operator Workspace Release Matrix
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true'
+    if: needs.detect.outputs.code_paths_changed != 'false'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -939,7 +938,7 @@ jobs:
     name: Screen-Reader-Only Rendering Guard
     runs-on: ubuntu-latest
     needs: [detect]
-    if: needs.detect.outputs.docs_only != 'true'
+    if: needs.detect.outputs.code_paths_changed != 'false'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -997,7 +996,7 @@ jobs:
   # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
   # a TODO(<bead-id>) pointer to a follow-up migration.
   # REQUIRED CONTEXT. Always runs; the steps below are gated. `container:`
-  # cannot be made conditional, so a documentation-only event still pulls the
+  # cannot be made conditional, so an inert-only event still pulls the
   # semgrep image and then does nothing. That is a few seconds of runner time
   # in exchange for the context being emitted exactly once, which is the
   # trade this design is built on.
@@ -1012,27 +1011,27 @@ jobs:
     container:
       image: returntocorp/semgrep:1.160.0
     steps:
-      - name: Documentation-only change, nothing for semgrep to scan
-        if: needs.detect.outputs.docs_only == 'true'
+      - name: Inert-only change, nothing for semgrep to scan
+        if: needs.detect.outputs.code_paths_changed == 'false'
         run: |
-          echo "No file outside '**.md' / '.beads/**' changed on this event."
+          echo "Every changed path is on the classifier's explicit inert allowlist."
           echo "Neither backend/ nor .semgrep.yml changed, so this check"
           echo "passes without running the scan."
-          echo "**Semgrep Lint**: documentation-only change, no backend source changed, the scan was NOT run." \
+          echo "**Semgrep Lint**: inert machine-state change, the scan was NOT run." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout repository
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
 
       - name: Validate Semgrep rule config
         id: validate
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         run: semgrep --validate --config .semgrep.yml
 
       - name: Run Semgrep rule self-test
         id: self_test
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
         # the live .semgrep.yml so the test locks the rule's accept/reject
         # boundary — if the rule drifts, the self-test fails before the
@@ -1044,7 +1043,7 @@ jobs:
 
       - name: Run Semgrep against backend/
         id: scan
-        if: needs.detect.outputs.docs_only != 'true'
+        if: needs.detect.outputs.code_paths_changed != 'false'
         run: |
           # --error flag exits non-zero on any finding. The rule is
           # severity: ERROR so any hit blocks the job.
@@ -1055,7 +1054,7 @@ jobs:
         # red. If this step breaks, the conclusion the check is named for
         # still stands.
         continue-on-error: true
-        if: always() && needs.detect.outputs.docs_only != 'true'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           VALIDATE: ${{ steps.validate.outcome }}
           SELF_TEST: ${{ steps.self_test.outcome }}

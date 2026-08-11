@@ -6,8 +6,7 @@ user-guide site in bead enhancedchannelmanager-t4d5w.
 
 Two independent verdicts come out of one changed-file set:
 
-    docs_only            nothing outside `**.md` / `.beads/**` changed, so the
-                         code gates have nothing to analyse
+    code_paths_changed   at least one changed path is an input to a code gate
     docs_site_affected   something the mkdocs user-guide site is built from
                          changed, so the site needs rebuilding and republishing
 
@@ -24,18 +23,15 @@ green `echo`. Observed live on PR #797, where `Backend Tests` reported
 
 The fix is one source of truth per context. Every job that emits a required
 check now runs on every pull request, so the context exists exactly once, and
-gates its expensive steps on the output of this classifier. On a genuinely
-documentation-only change the job does a cheap no-op and passes honestly.
+gates its expensive steps on the output of this classifier. Only an explicitly
+inert machine-state change can take the cheap no-op path.
 
-## The docs_only rule
+## The code_paths_changed rule
 
-A change is documentation-only when EVERY changed path matches one of the
-globs the CI workflows used to ignore:
-
-    **.md        any file whose name ends in `.md`, at any depth
-    .beads/**    anything under the beads issue-tracking directory
-
-Anything else, including a change with no files at all, is treated as code.
+The verdict is false only when EVERY changed path is an approved root
+machine-generated beads state file. Every other path is code-gate input,
+regardless of suffix, case, location, or intended use. Anything absent,
+unknown, or ambiguous is treated as code.
 
 ## The docs_site_affected rule
 
@@ -58,11 +54,11 @@ here now, and that workflow reads this output, so there is one definition.
 The two verdicts fail open in OPPOSITE directions, because their dangerous
 answers are opposite.
 
-For `docs_only`, misclassifying code as documentation turns a required check
+For `code_paths_changed`, misclassifying code as inert turns a required check
 green without running the work it is named for; misclassifying documentation
 as code only costs runner minutes. So every ambiguous input (empty file list,
-unreadable input) resolves to `docs_only=false`, and callers gate work on
-`docs_only != 'true'` so an absent or empty output still runs the real work.
+unreadable input) resolves to `code_paths_changed=true`, and callers gate work on
+`code_paths_changed != 'false'` so an absent or empty output still runs the real work.
 
 For `docs_site_affected`, the dangerous answer is a `false` that skips a site
 rebuild and leaves the published site stale behind the merged content. So
@@ -74,13 +70,14 @@ be able to skip a dependent job by dying.
 
 ## Usage
 
-    python scripts/classify_changed_paths.py --files-from changed_files.txt
-    git diff --name-only origin/dev...HEAD | python scripts/classify_changed_paths.py
+    python scripts/classify_changed_paths.py --files-from changed_files.json
+    git diff --name-only --no-renames -z origin/dev...HEAD | \
+        python scripts/classify_changed_paths.py --git-z
 
 Writes two `key=value` lines to stdout in the form GitHub Actions
 `$GITHUB_OUTPUT` consumes:
 
-    docs_only=true|false
+    code_paths_changed=true|false
     docs_site_affected=true|false
 
 Consumers must read the key they care about by name, not by line position.
@@ -89,15 +86,13 @@ Diagnostics go to stderr so stdout stays machine-parseable.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-# The globs the CI workflows treat as documentation. Keep this list as the
-# single definition of the rule: it used to live in three `paths` /
-# `paths-ignore` blocks that drifted out of sync with each other.
-DOC_SUFFIX = ".md"
-DOC_PREFIXES = (".beads/",)
-
+# The only code-gate exemption is root machine-generated beads state. Beads
+# configuration, nested artifacts, documentation, images, and every unknown
+# path run the gates.
 # The inputs the published user-guide site is built from. This is the list
 # `.github/workflows/docs-pages.yml` used to carry in its own `paths:` filter;
 # that workflow now reads the `docs_site_affected` output instead, so the
@@ -117,45 +112,46 @@ DOCS_SITE_FILES = (
 
 
 def normalise_path(path: str) -> str:
-    """Repo-relative, POSIX-separated, no leading `./`. Empty when unusable.
+    """Return a canonical Git/API path unchanged, or empty when ambiguous.
 
-    Paths arrive repo-relative and POSIX-separated, which is what both the
-    GitHub compare/pull-request file APIs and `git diff --name-only` emit.
-    Backslashes are normalised anyway so a Windows-style path cannot slip
-    past a prefix test.
+    POSIX backslash and whitespace are filename bytes, not quoting. Never
+    rewrite them into a different repository path. Inputs outside the API/Git
+    canonical form fail toward running code gates.
     """
-    normalised = path.strip().replace("\\", "/")
-    # Strip a leading `./` only. `str.lstrip("./")` would eat the leading dot
-    # of `.beads/foo` and defeat the prefix tests in the callers.
-    while normalised.startswith("./"):
-        normalised = normalised[2:]
-    return normalised
+    if not path or path != path.strip():
+        return ""
+    if any(ord(char) < 32 or ord(char) == 127 for char in path):
+        return ""
+    if path.startswith(("/", "./")) or "//" in path:
+        return ""
+    if any(part in {"", ".", ".."} for part in path.split("/")):
+        return ""
+    return path
 
 
-def is_doc_path(path: str) -> bool:
-    """True when `path` is one of the documentation-only paths CI may skip."""
+def is_inert_path(path: str) -> bool:
+    """True only for explicitly audited paths that cannot affect code gates."""
     normalised = normalise_path(path)
     if not normalised:
         return False
-    if normalised.startswith(DOC_PREFIXES):
+    if normalised == ".beads/metadata.json":
         return True
-    # `**.md` matches on the name, not the directory, so a `.md` file at any
-    # depth counts. A file named exactly `.md` has no stem and is not prose.
-    name = normalised.rsplit("/", 1)[-1]
-    return name.endswith(DOC_SUFFIX) and name != DOC_SUFFIX
+    if normalised.startswith(".beads/"):
+        name = normalised.removeprefix(".beads/")
+        return "/" not in name and (name.endswith(".jsonl") or name.endswith(".jsonl.bak"))
+    return False
 
 
 def classify(paths: list[str]) -> tuple[bool, list[str]]:
-    """Return (docs_only, code_paths) for a changed-file set.
+    """Return (code_paths_changed, code_paths) for a changed-file set.
 
     `code_paths` is every path that forced the code verdict, so the caller
     can print the evidence rather than an unexplained boolean.
     """
-    cleaned = [p.strip() for p in paths if p.strip()]
-    if not cleaned:
-        return False, []
-    code_paths = [p for p in cleaned if not is_doc_path(p)]
-    return (not code_paths), code_paths
+    if not paths:
+        return True, []
+    code_paths = [p for p in paths if not is_inert_path(p)]
+    return bool(code_paths), code_paths
 
 
 def is_docs_site_path(path: str) -> bool:
@@ -175,18 +171,46 @@ def classify_docs_site(paths: list[str]) -> tuple[bool, list[str]]:
     leaves the published site stale behind merged content, whereas a
     needless rebuild costs a runner minute.
     """
-    cleaned = [p.strip() for p in paths if p.strip()]
-    if not cleaned:
+    if not paths:
         return True, []
-    site_paths = [p for p in cleaned if is_docs_site_path(p)]
+    # Any invalid path makes both decisions fail safe; it cannot be proved
+    # irrelevant to the site from a lossy or ambiguous representation.
+    if any(not normalise_path(path) for path in paths):
+        return True, []
+    site_paths = [p for p in paths if is_docs_site_path(p)]
     return bool(site_paths), site_paths
+
+
+def _parse_json_paths(raw: bytes) -> list[str] | None:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    if not all(isinstance(path, str) and normalise_path(path) for path in payload):
+        return None
+    return payload
+
+
+def _parse_git_z_paths(raw: bytes) -> list[str] | None:
+    if not raw or not raw.endswith(b"\0"):
+        return None
+    fields = raw[:-1].split(b"\0")
+    try:
+        paths = [field.decode("utf-8") for field in fields]
+    except UnicodeDecodeError:
+        return None
+    if not paths or not all(normalise_path(path) for path in paths):
+        return None
+    return paths
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Classify a changed-file set for the CI gates, and emit "
-            "docs_only=true|false and docs_site_affected=true|false for "
+            "code_paths_changed=true|false and docs_site_affected=true|false for "
             "GitHub Actions."
         )
     )
@@ -194,15 +218,24 @@ def main(argv: list[str] | None = None) -> int:
         "--files-from",
         type=Path,
         default=None,
-        help="File holding newline-separated changed paths. Defaults to stdin.",
+        help="File holding a UTF-8 JSON array of changed paths. Defaults to stdin.",
+    )
+    parser.add_argument(
+        "--git-z",
+        action="store_true",
+        help="Read NUL-delimited paths from `git diff -z` on stdin.",
     )
     args = parser.parse_args(argv)
 
-    if args.files_from is None:
-        raw = sys.stdin.read()
+    if args.git_z and args.files_from is not None:
+        paths = None
+    elif args.files_from is None:
+        raw = sys.stdin.buffer.read()
+        paths = _parse_git_z_paths(raw) if args.git_z else _parse_json_paths(raw)
     else:
         try:
-            raw = args.files_from.read_text(encoding="utf-8")
+            raw = args.files_from.read_bytes()
+            paths = _parse_json_paths(raw)
         except OSError as error:
             print(
                 f"::warning::could not read {args.files_from}: {error}. "
@@ -210,24 +243,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"site-affecting so the docs site still rebuilds.",
                 file=sys.stderr,
             )
-            print("docs_only=false")
+            print("code_paths_changed=true")
             print("docs_site_affected=true")
             return 0
-
-    paths = raw.splitlines()
-    docs_only, code_paths = classify(paths)
-    docs_site_affected, site_paths = classify_docs_site(paths)
-
-    if not [p for p in paths if p.strip()]:
+    if paths is None:
         print(
-            "::warning::the changed-file set was empty or could not be "
-            "determined. Treating the change as code so every gate runs, "
-            "and as site-affecting so the docs site still rebuilds.",
+            "::warning::changed-path input was malformed, empty, or noncanonical. "
+            "Treating the change as code and site-affecting.",
             file=sys.stderr,
         )
-    elif docs_only:
+        print("code_paths_changed=true")
+        print("docs_site_affected=true")
+        return 0
+    code_paths_changed, code_paths = classify(paths)
+    docs_site_affected, site_paths = classify_docs_site(paths)
+
+    if not code_paths_changed:
         print(
-            f"{len(paths)} changed path(s), all documentation. "
+            f"{len(paths)} changed path(s), all on the explicit inert allowlist. "
             f"Code gates have nothing to analyse.",
             file=sys.stderr,
         )
@@ -236,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         if len(code_paths) > 10:
             preview += f", and {len(code_paths) - 10} more"
         print(
-            f"{len(code_paths)} non-documentation path(s) changed: {preview}",
+            f"{len(code_paths)} code-gate path(s) changed: {preview}",
             file=sys.stderr,
         )
 
@@ -249,13 +282,13 @@ def main(argv: list[str] | None = None) -> int:
             f"{site_preview}",
             file=sys.stderr,
         )
-    elif [p for p in paths if p.strip()]:
+    else:
         print(
             "No changed path feeds the published user-guide site.",
             file=sys.stderr,
         )
 
-    print(f"docs_only={'true' if docs_only else 'false'}")
+    print(f"code_paths_changed={'true' if code_paths_changed else 'false'}")
     print(f"docs_site_affected={'true' if docs_site_affected else 'false'}")
     return 0
 

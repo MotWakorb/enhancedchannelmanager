@@ -29,24 +29,24 @@ bd update <id> --description "Detailed description of changes made"
 
 #### 3a. First decide whether this change gets a version bump at all
 
-**Not every change does.** A documentation-only change carries no build to advance, and bumping it burns a build number that a concurrent branch may already hold.
+**Not every change does.** A change containing only approved root machine-generated `.beads` state carries no build to advance. Every other path requires a bump.
 
 The rule is mechanical and you can apply it from what you edited, without running anything:
 
 | Every file you changed | What to do |
 | --- | --- |
-| ends in `.md`, or lives under `.beads/` | **Do not bump.** Skip 3b entirely, leave all three touchpoints untouched, and go to step 4. |
-| anything else is in the set | Bump all three, per 3b below. |
+| every path is on the classifier's explicit inert allowlist | **Do not bump.** Skip 3b entirely, leave all three touchpoints untouched, and go to step 4. |
+| any code-gate input or unknown path is in the set | Bump all three, per 3b below. |
 
 **"Documentation-only" is not a judgement call.** `scripts/classify_changed_paths.py` is the arbiter, and one source file anywhere in the set makes the whole change code, no matter how small.
 
-**You cannot run that arbiter yet, and that is deliberate.** It reads the branch's committed diff against `origin/dev`, and at this step the branch does not exist: it is created and committed in [step 6](#6-commit-and-open-the-pr). Run it there and nowhere else. Running it here returns `docs_only=false` for *every* change, because the diff is empty and an empty changed-file set is classified as code. That answer looks like a verdict and is not one, and acting on it would bump every documentation PR exactly as the pre-carve-out document did.
+**You cannot run that arbiter yet, and that is deliberate.** It reads the branch's committed diff against `origin/dev`, and at this step the branch does not exist: it is created and committed in [step 6](#6-commit-and-open-the-pr). Run it there and nowhere else. Running it here returns `code_paths_changed=true` for *every* change, because the diff is empty and an empty changed-file set is classified as code. That answer looks like a verdict and is not one, and acting on it would bump every documentation PR exactly as the pre-carve-out document did.
 
 So the mechanical confirmation happens at **[step 6a](#6a-confirm-the-bump-decision-before-opening-the-pr)**, after the commit and before `gh pr create`. It is a checkpoint that can send you back here, not a formality.
 
-> **Why the order matters.** A version touchpoint is a source file. If you bump first and classify afterwards, the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict is `docs_only=false`, and the bump has justified itself. Nothing downstream ever contradicts you, because by then the change really is a code change. That self-justifying loop is how 15 of 40 consecutive merged PRs carried a version bump for changes that were nothing but Markdown.
+> **Why the order matters.** A version touchpoint is a source file. If you bump first and classify afterwards, the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict is `code_paths_changed=true`, and the bump has justified itself. Nothing downstream ever contradicts you, because by then the change really is a code change. That self-justifying loop is how 15 of 40 consecutive merged PRs carried a version bump for changes that were nothing but Markdown.
 
-Nothing downstream will ask a documentation-only PR for a bump. `.github/workflows/test.yml` gates its build-advance step on `needs.detect.outputs.docs_only != 'true'`, and `.claude/hooks/version-advance-guard.sh` skips the same check on the same verdict from the same script, announcing that it skipped. The `Version Consistency` required check still runs and still passes: it proves the three touchpoints **agree with each other**, and leaving all three untouched keeps them agreeing.
+Nothing downstream will ask an inert machine-state PR for a bump. `.github/workflows/test.yml` gates its build-advance step on `needs.detect.outputs.code_paths_changed != 'false'`, and `.claude/hooks/version-advance-guard.sh` skips the same check on the same verdict from the same script, announcing that it skipped. The `Version Consistency` required check still runs and still passes: it proves the three touchpoints **agree with each other**, and leaving all three untouched keeps them agreeing.
 
 If the hook announces a skip and you bump anyway, you have re-created the defect this carve-out exists to remove.
 
@@ -97,7 +97,7 @@ git checkout -b <feature-or-chore-branch> origin/dev
 #   Stage the files this change actually touched, whatever they are.
 git add <the files you changed>
 #   CODE CHANGE ONLY: add the three version touchpoints bumped in step 3b.
-#   A documentation-only change bumped nothing, so it stages nothing here;
+#   An inert machine-state change bumped nothing, so it stages nothing here;
 #   adding these paths with no bump in them stages an empty change and the
 #   commit fails.
 git add frontend/package.json backend/main.py backend/routers/backup.py
@@ -112,13 +112,13 @@ This is the **only** place the classifier has real input: the branch exists and 
 
 ```bash
 git fetch origin
-git diff --name-only --no-renames origin/dev...HEAD | python3 scripts/classify_changed_paths.py
+git diff --name-only --no-renames -z origin/dev...HEAD | python3 scripts/classify_changed_paths.py --git-z
 ```
 
 | Verdict | What it means |
 | --- | --- |
-| `docs_only=true` | No bump was needed and none is present. Go on to `gh pr create`; the ship guard will announce that it skipped the build-advance check. |
-| `docs_only=false` | This change needs a bump. If step 3b was skipped, go back and do it now: bump the three touchpoints, `git add` them, `git commit --amend --no-edit`, and re-run the command above. |
+| `code_paths_changed=false` | No bump was needed and none is present. Go on to `gh pr create`; the ship guard will announce that it skipped the build-advance check. |
+| `code_paths_changed=true` | This change needs a bump. If step 3b was skipped, go back and do it now: bump the three touchpoints, `git add` them, `git commit --amend --no-edit`, and re-run the command above. |
 
 `--no-renames` is not optional here. Without it `git diff --name-only` prints only the *destination* of a rename, so moving a source file to a `.md` path presents a changed-file set that is entirely Markdown. It is the flag `.claude/hooks/version-advance-guard.sh` uses for the same reason.
 
@@ -197,7 +197,7 @@ This matters most for `Operator Docs`, which is where `mkdocs build --strict` an
 
 #### What a green check actually ran
 
-Six of the seven required checks gate their real work on `scripts/classify_changed_paths.py`: on a documentation-only change they pass without running a suite. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened, for example `Backend Tests: documentation-only change, no backend source changed, the pytest suite was NOT run.` versus `Backend Tests: ran the backend pytest suite. 2147 tests, 0 failed, 0 errored.`
+Six of the seven required checks gate their real work on `scripts/classify_changed_paths.py`: only approved root machine-generated `.beads` state can pass without running a suite. Every other path runs the suites. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened.
 
 Read that summary before treating a green rollup as proof the suite passed. `gh run view <run-id>` links it, or open the run in the browser.
 

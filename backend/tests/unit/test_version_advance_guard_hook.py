@@ -61,7 +61,10 @@ def repo(tmp_path: Path) -> Path:
     _git(root, "config", "user.email", "guard@example.invalid")
     _git(root, "config", "user.name", "Guard Test")
     (root / "scripts").mkdir()
-    for name in ("check_version_advances.py", "classify_changed_paths.py"):
+    for name in (
+        "check_version_advances.py",
+        "classify_changed_paths.py",
+    ):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     _write(root, "frontend/package.json", _package(BASE_VERSION))
     _write(root, "backend/app.py", "VALUE = 1\n")
@@ -196,14 +199,20 @@ def test_code_change_with_bump_passes_and_announces(repo: Path) -> None:
     assert "PASSED" in _delivered(result)
 
 
-@pytest.mark.parametrize("path", ["docs/guide.md", ".beads/issues.jsonl"])
+@pytest.mark.parametrize("path", [".beads/issues.jsonl"])
 def test_documentation_change_without_bump_skips(repo: Path, path: str) -> None:
     _commit(repo, {path: "Changed.\n"})
     result = _invoke(repo)
     assert result.returncode == ALLOW, result.stderr
     delivered = _delivered(result)
     assert "SKIPPED" in delivered
-    assert "docs_only=true" in delivered
+    assert "code_paths_changed=false" in delivered
+
+
+def test_markdown_change_without_bump_blocks(repo: Path) -> None:
+    _commit(repo, {"docs/guide.md": "Changed.\n"})
+    result = _invoke(repo)
+    assert result.returncode == BLOCK
 
 
 def test_rename_from_code_to_markdown_still_blocks(repo: Path) -> None:
@@ -237,14 +246,14 @@ def test_classifier_failure_fails_open_loudly(repo: Path) -> None:
     assert "WARNING" in _delivered(result)
 
 
-def test_duplicate_docs_only_keys_fail_open(repo: Path) -> None:
+def test_duplicate_code_paths_changed_keys_fail_open(repo: Path) -> None:
     (repo / "scripts/classify_changed_paths.py").write_text(
-        "print('docs_only=true')\nprint('docs_only=false')\n", encoding="utf-8"
+        "print('code_paths_changed=true')\nprint('code_paths_changed=false')\n", encoding="utf-8"
     )
     _commit(repo, {"backend/app.py": "VALUE = 2\n"})
     result = _invoke(repo)
     assert result.returncode == ALLOW
-    assert "no unique docs_only key" in _delivered(result)
+    assert "no unique code_paths_changed key" in _delivered(result)
 
 
 def test_release_version_without_build_suffix_passes_via_checker(repo: Path) -> None:
