@@ -33,6 +33,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
       docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
     steps:
       - name: Checkout repository
@@ -44,46 +45,7 @@ jobs:
 
       - name: Classify the changed file set
         id: classify
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
-        run: |
-          # No `set -e`: a classifier that dies must not silently stop the
-          # site from rebuilding. Every failure path below leaves
-          # changed_files.json an empty JSON array, which classifies as
-          # site-affecting, so the build still runs.
-          set -uo pipefail
-
-          printf '[]' > changed_files.json
-
-          if [ "$EVENT_NAME" = "push" ]; then
-            if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
-              echo "::warning::no usable before-SHA on this push"
-            else
-              # Both sides of a rename, exactly as in test.yml's detect job
-              # (bead enhancedchannelmanager-9ogyd). This job emits no
-              # required context, but the same omission bites the other way
-              # here: moving a page OUT of docs/user_guide/ shows only the
-              # destination, so the site would not rebuild and the published
-              # page would linger after the source was gone.
-              gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
-                || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; printf '[]' > changed_files.json; }
-            fi
-          else
-            # workflow_dispatch is a deliberate manual rebuild request.
-            echo "Event $EVENT_NAME carries no diff; rebuilding the site."
-          fi
-
-          echo "Changed paths:"
-          cat changed_files.json
-
-          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
-          echo "verdict: ${verdict:-<empty, the site will rebuild>}"
-          echo "$verdict" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-changed-paths
 
   build:
     needs: [detect]

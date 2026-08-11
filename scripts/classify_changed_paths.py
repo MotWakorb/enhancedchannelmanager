@@ -72,7 +72,7 @@ be able to skip a dependent job by dying.
 
     python scripts/classify_changed_paths.py --files-from changed_files.json
     git diff --name-only --no-renames -z origin/dev...HEAD | \
-        python scripts/classify_changed_paths.py --git-z
+        python scripts/classify_changed_paths.py --input-format nul
 
 Writes two `key=value` lines to stdout in the form GitHub Actions
 `$GITHUB_OUTPUT` consumes:
@@ -221,17 +221,22 @@ def main(argv: list[str] | None = None) -> int:
         help="File holding a UTF-8 JSON array of changed paths. Defaults to stdin.",
     )
     parser.add_argument(
-        "--git-z",
-        action="store_true",
-        help="Read NUL-delimited paths from `git diff -z` on stdin.",
+        "--input-format",
+        choices=("json", "nul"),
+        default="json",
+        help="Input encoding: a JSON path array (default), or NUL-delimited paths.",
     )
     args = parser.parse_args(argv)
 
-    if args.git_z and args.files_from is not None:
+    if args.input_format == "nul" and args.files_from is not None:
         paths = None
     elif args.files_from is None:
         raw = sys.stdin.buffer.read()
-        paths = _parse_git_z_paths(raw) if args.git_z else _parse_json_paths(raw)
+        paths = (
+            _parse_git_z_paths(raw)
+            if args.input_format == "nul"
+            else _parse_json_paths(raw)
+        )
     else:
         try:
             raw = args.files_from.read_bytes()

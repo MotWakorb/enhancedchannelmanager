@@ -1,0 +1,50 @@
+name: Classify changed paths
+description: Acquire the event's changed paths and emit conservative gate verdicts.
+outputs:
+  code_paths_changed:
+    description: Whether code gates must run.
+    value: ${{ steps.classify.outputs.code_paths_changed }}
+  docs_site_affected:
+    description: Whether the published documentation site must rebuild.
+    value: ${{ steps.classify.outputs.docs_site_affected }}
+runs:
+  using: composite
+  steps:
+    - id: classify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BEFORE_SHA: ${{ github.event.before }}
+        AFTER_SHA: ${{ github.sha }}
+      run: |
+        # Do not use `set -e`: acquisition failure leaves an empty JSON array,
+        # which the classifier deliberately maps to both conservative verdicts.
+        set -uo pipefail
+        printf '[]' > changed_files.json
+
+        case "$EVENT_NAME" in
+          pull_request)
+            gh api --paginate --slurp "repos/$REPO/pulls/$PR_NUMBER/files" \
+              --jq '[.[][] | .filename, (.previous_filename // empty)]' > changed_files.json \
+              || { echo "::warning::could not list PR files"; printf '[]' > changed_files.json; }
+            ;;
+          push)
+            if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              echo "::warning::no usable before-SHA on this push"
+            else
+              gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
+                --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
+                || { echo "::warning::could not compare event revisions"; printf '[]' > changed_files.json; }
+            fi
+            ;;
+          *)
+            echo "Event carries no diff; running every gate."
+            ;;
+        esac
+
+        verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
+        echo "verdict: ${verdict:-<empty, every gate will run>}"
+        echo "$verdict" >> "$GITHUB_OUTPUT"

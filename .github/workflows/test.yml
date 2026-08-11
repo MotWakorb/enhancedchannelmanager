@@ -54,6 +54,7 @@ jobs:
       pull-requests: read
     outputs:
       code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
+      docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -66,57 +67,7 @@ jobs:
 
       - name: Classify the changed file set
         id: classify
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
-        run: |
-          # No `set -e`: a classifier that dies takes every gate with it.
-          # Every failure path below leaves an empty JSON array, and the
-          # classifier treats an empty set as code.
-          set -uo pipefail
-
-          printf '[]' > changed_files.json
-
-          # BOTH SIDES OF A RENAME (bead enhancedchannelmanager-9ogyd).
-          # `.filename` alone is the DESTINATION only. A renamed file's
-          # source path is carried in `previous_filename` and was thrown
-          # away, so `git mv backend/tests/unit/test_auth_middleware.py
-          # docs/legacy_notes.md` presented as a single `.md` path and
-          # classified documentation-only. Every required check then went
-          # green having executed nothing, and `dev` requires no reviews.
-          # `// empty` emits no array element for an ordinary non-rename.
-          # Duplicate paths are harmless: the verdict is an all/any test.
-          case "$EVENT_NAME" in
-            pull_request)
-              gh api --paginate --slurp "repos/$REPO/pulls/$PR_NUMBER/files" \
-                --jq '[.[][] | .filename, (.previous_filename // empty)]' > changed_files.json \
-                || { echo "::warning::could not list PR files"; printf '[]' > changed_files.json; }
-              ;;
-            push)
-              if [ -z "${BEFORE_SHA:-}" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
-                echo "::warning::no usable before-SHA on this push"
-              else
-                gh api --paginate --slurp "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" \
-                  --jq '[.[].files[]? | .filename, (.previous_filename // empty)]' > changed_files.json \
-                  || { echo "::warning::could not compare $BEFORE_SHA...$AFTER_SHA"; printf '[]' > changed_files.json; }
-              fi
-              ;;
-            *)
-              # workflow_dispatch and anything else: run everything.
-              echo "Event $EVENT_NAME carries no diff; running every gate."
-              ;;
-          esac
-
-          echo "Changed paths:"
-          cat changed_files.json
-
-          verdict=$(python3 scripts/classify_changed_paths.py --files-from changed_files.json)
-          echo "verdict: ${verdict:-<empty, every gate will run>}"
-          echo "$verdict" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/classify-changed-paths
 
   # Not a required context, but deliberately UNGATED: a documentation-only
   # change is precisely what this job checks, and this workflow now runs on
