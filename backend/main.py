@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0065",
+    version="0.18.1-0066",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -521,9 +521,9 @@ AUTH_EXEMPT_PATHS = {
     #     first run has setup_complete False, so it never engages there.
     #   * the endpoint's real gate lives in the handler
     #     (``routers.backup._guard_initial_restore``), which inspects instance
-    #     state — does a user row exist? — instead of trusting setup_complete,
-    #     a flag POST /api/auth/setup never persists (bead
-    #     enhancedchannelmanager-qg14z).
+    #     state — does a user row exist? — independently of setup_complete, so
+    #     the restore gate remains safe if configuration persistence is ever
+    #     interrupted or damaged.
     # Removing the exemption therefore adds no new refusal; it turns an
     # anonymous multipart upload away before FastAPI spools an
     # attacker-controlled ZIP to disk.

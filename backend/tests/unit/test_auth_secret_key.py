@@ -24,6 +24,8 @@ def isolated_auth_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_settings, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(auth_settings, "AUTH_CONFIG_FILE", tmp_path / "auth_settings.json")
     monkeypatch.setattr(auth_settings, "_cached_auth_settings", None)
+    monkeypatch.setattr(auth_settings, "_cached_auth_settings_signature", None)
+    monkeypatch.setattr(auth_settings, "_durable_user_exists", lambda: False)
     monkeypatch.setattr(auth_tokens, "_fallback_logged", False)
     yield auth_settings
 

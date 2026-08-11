@@ -4,9 +4,8 @@
  * These cover the seam that let bead enhancedchannelmanager-lf29s through:
  * ProtectedRoute decides what to render from `authStatus`, which AuthProvider
  * fetches exactly once at mount. POST /api/auth/setup changes the server's
- * answer without persisting `setup_complete` (bead
- * enhancedchannelmanager-qg14z), so the value cached at mount is stale the
- * moment the setup wizard finishes. Nothing here had test coverage before,
+ * persisted answer, so the value cached at mount is stale the moment the
+ * setup wizard finishes. Nothing here had test coverage before,
  * which is why a live browser was the only place the regression showed up.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -43,8 +42,7 @@ const STATUS_BEFORE_SETUP: AuthStatus = {
   smtp_configured: false,
 };
 
-// What the same endpoint reports once a user row exists: the backend repairs
-// `setup_complete` on read (backend/auth/routes.py, GET /status).
+// What the same endpoint reports after POST /api/auth/setup persists the gate.
 const STATUS_AFTER_SETUP: AuthStatus = { ...STATUS_BEFORE_SETUP, setup_complete: true };
 
 const ADMIN_USER = {

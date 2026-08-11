@@ -90,7 +90,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0065"
+APP_VERSION = "0.18.1-0066"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2214,11 +2214,10 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
 # replaced every admin password hash and the tls/ directory.
 #
 # The gate below keys on INSTANCE STATE (does a user row exist?) rather than on
-# ``auth_settings.setup_complete``. POST /api/auth/setup never persists that
-# flag (bead enhancedchannelmanager-qg14z), so it is still False on exactly the
-# instances that already hold an admin account; a setup_complete-only gate
-# would be a no-op precisely where the hole is. For the same reason the gate
-# cannot delegate to ``auth.dependencies.require_admin_if_enabled``, which
+# ``auth_settings.setup_complete``. The user row is durable instance state and
+# remains authoritative if configuration persistence is interrupted or
+# damaged. The gate therefore cannot delegate to
+# ``auth.dependencies.require_admin_if_enabled``, which intentionally
 # short-circuits to "anonymous is fine" whenever setup_complete is False.
 # ---------------------------------------------------------------------------
 
