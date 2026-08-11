@@ -1,71 +1,18 @@
 /// <reference types="node" />
 /**
- * Audit ledger for the neutral ModalOverlay primitive (bead czmph).
+ * Closed ownership audit for the neutral ModalOverlay primitive (hr4ft.3).
  *
- * An entry in KNOWN_MISSING_SEMANTICS is debt, not an accessibility exception
- * or a claim that the caller is usable. Bead enhancedchannelmanager-hr4ft owns
- * classifying and remediating this explicit remainder. New omissions and stale
- * entries both fail, so the ledger cannot silently grow or rot.
+ * The manifest records both accessible callers and explicit current debt. It
+ * is bidirectional: production callers and reviewed entries must match exactly.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ts from 'typescript';
+import { MODAL_OVERLAY_MANIFEST, type ModalOverlayManifestEntry } from './modalOverlayManifest';
 
 const SRC = path.resolve(process.cwd(), 'src');
 const EXPECTED_CALL_SITES = 75;
-const KNOWN_MISSING_SEMANTICS = [
-  'components/AutoSyncSettingsModal.tsx#1',
-  'components/BackupRestoreModal.tsx#1',
-  'components/BulkEPGAssignModal.tsx#1',
-  'components/BulkLCNFetchModal.tsx#1',
-  'components/CSVImportModal.tsx#1',
-  'components/ChannelProfilesListModal.tsx#1',
-  'components/ChannelStatsDetailModal.tsx#1',
-  'components/DeleteOrphanedGroupsModal.tsx#1',
-  'components/DummyEPGChannelPicker.tsx#1',
-  'components/DummyEPGProfileModal.tsx#1',
-  'components/DummyEPGSourceModal.tsx#1',
-  'components/EditChannelModal.tsx#1',
-  'components/FindDuplicatesModal.tsx#1',
-  'components/GracenoteConflictModal.tsx#1',
-  'components/HistoryToolbar.tsx#1',
-  'components/ImportDummyEPGModal.tsx#1',
-  'components/LogoModal.tsx#1',
-  'components/M3UAccountModal.tsx#1',
-  'components/M3UFiltersModal.tsx#1',
-  'components/M3UGroupsModal.tsx#1',
-  'components/M3ULinkedAccountsModal.tsx#1',
-  'components/M3UProfileModal.tsx#1',
-  'components/MergeChannelsModal.tsx#1',
-  'components/NormalizeNamesModal.tsx#1',
-  'components/PreviewStreamModal.tsx#1',
-  'components/PrintGuideModal.tsx#1',
-  'components/SecurityFirstRunModal.tsx#1',
-  'components/ServerGroupsModal.tsx#1',
-  'components/SettingsModal.tsx#1',
-  'components/StreamProfilesListModal.tsx#1',
-  'components/StreamsPane.tsx#2',
-  'components/TaskEditorModal.tsx#1',
-  'components/TaskEditorModal.tsx#2',
-  'components/TaskEditorModal.tsx#3',
-  'components/UserMenu.tsx#1',
-  'components/UserMenu.tsx#2',
-  'components/VLCProtocolHelperModal.tsx#1',
-  'components/settings/CloudTargetEditor.tsx#1',
-  'components/settings/CloudTargetsCard.tsx#1',
-  'components/settings/LinkedAccountsSection.tsx#1',
-  'components/settings/NormalizationEngineSection.tsx#1',
-  'components/settings/NormalizationEngineSection.tsx#2',
-  'components/settings/NormalizationEngineSection.tsx#3',
-  'components/settings/NormalizationEngineSection.tsx#5',
-  'components/settings/TagEngineSection.tsx#1',
-  'components/settings/TagEngineSection.tsx#2',
-  'components/tabs/EPGManagerTab.tsx#1',
-  'components/tabs/LogoManagerTab.tsx#1',
-  'components/tabs/SettingsTab.tsx#1',
-  'components/tabs/SettingsTab.tsx#2',
-] as const;
 
 function attributeValue(
   opening: ts.JsxOpeningLikeElement,
@@ -87,29 +34,60 @@ function attributeValue(
   return undefined;
 }
 
-function ownsSemantics(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): boolean {
+function roleValue(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): 'dialog' | 'alertdialog' | null {
   const role = attributeValue(opening, 'role', source);
-  const modal = attributeValue(opening, 'aria-modal', source);
-  return (role === 'dialog' || role === 'alertdialog') && (modal === true || modal === 'true');
+  return role === 'dialog' || role === 'alertdialog' ? role : null;
 }
 
-function descendantOwnsSemantics(
+function hasAttribute(opening: ts.JsxOpeningLikeElement, name: string, source: ts.SourceFile): boolean {
+  return opening.attributes.properties.some(
+    (candidate) => ts.isJsxAttribute(candidate) && candidate.name.getText(source) === name,
+  );
+}
+
+function modalValue(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): 'true' | 'missing' | 'invalid' {
+  if (!hasAttribute(opening, 'aria-modal', source)) return 'missing';
+  const modal = attributeValue(opening, 'aria-modal', source);
+  return modal === true || modal === 'true' ? 'true' : 'invalid';
+}
+
+function hasAccessibleName(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): boolean {
+  return opening.attributes.properties.some((candidate) => {
+    if (!ts.isJsxAttribute(candidate)) return false;
+    const name = candidate.name.getText(source);
+    if (name !== 'aria-labelledby' && name !== 'aria-label') return false;
+    const initializer = candidate.initializer;
+    if (!initializer) return false;
+    if (ts.isStringLiteral(initializer)) return initializer.text.trim().length > 0;
+    if (!ts.isJsxExpression(initializer) || !initializer.expression) return false;
+    const expression = initializer.expression;
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      return expression.text.trim().length > 0;
+    }
+    return expression.kind !== ts.SyntaxKind.FalseKeyword &&
+      expression.kind !== ts.SyntaxKind.NullKeyword &&
+      expression.getText(source).trim().length > 0;
+  });
+}
+
+function isPartialSemanticSurface(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): boolean {
+  return roleValue(opening, source) !== null || hasAttribute(opening, 'aria-modal', source);
+}
+
+function semanticDescendants(
   dialog: ts.JsxElement,
   source: ts.SourceFile,
   overlayNames: ReadonlySet<string>,
-): boolean {
-  let found = false;
+): ts.JsxOpeningLikeElement[] {
+  const found: ts.JsxOpeningLikeElement[] = [];
   const visit = (node: ts.Node): void => {
-    if (found) return;
     if (ts.isJsxElement(node)) {
       if (overlayNames.has(node.openingElement.tagName.getText(source))) return;
-      if (ownsSemantics(node.openingElement, source)) {
-        found = true;
-        return;
+      if (isPartialSemanticSurface(node.openingElement, source)) {
+        found.push(node.openingElement);
       }
-    } else if (ts.isJsxSelfClosingElement(node) && ownsSemantics(node, source)) {
-      found = true;
-      return;
+    } else if (ts.isJsxSelfClosingElement(node) && isPartialSemanticSurface(node, source)) {
+      found.push(node);
     }
     ts.forEachChild(node, visit);
   };
@@ -134,14 +112,15 @@ function modalOverlayNames(source: ts.SourceFile): Set<string> {
   return names;
 }
 
-function auditModalOverlays(): { total: number; missing: string[] } {
+type AuditedEntry = Omit<ModalOverlayManifestEntry, 'family' | 'focus'>;
+
+function auditModalOverlays(): AuditedEntry[] {
   const files = fs
     .readdirSync(SRC, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.tsx') && !entry.name.endsWith('.test.tsx'))
     .map((entry) => path.join(entry.parentPath, entry.name))
     .sort();
-  const missing: string[] = [];
-  let total = 0;
+  const audited: AuditedEntry[] = [];
 
   for (const file of files) {
     const source = ts.createSourceFile(
@@ -153,6 +132,7 @@ function auditModalOverlays(): { total: number; missing: string[] } {
     );
     const overlayNames = modalOverlayNames(source);
     let index = 0;
+    const overlayStack: string[] = [];
     const visit = (node: ts.Node): void => {
       const opening = ts.isJsxElement(node)
         ? node.openingElement
@@ -161,28 +141,42 @@ function auditModalOverlays(): { total: number; missing: string[] } {
           : null;
       if (opening && overlayNames.has(opening.tagName.getText(source))) {
         index += 1;
-        total += 1;
-        const descendantSemantics = ts.isJsxElement(node)
-          ? descendantOwnsSemantics(node, source, overlayNames)
-          : false;
-        if (!ownsSemantics(opening, source) && !descendantSemantics) {
-          missing.push(`${path.relative(SRC, file)}#${index}`);
-        }
+        const identity = `${path.relative(SRC, file)}#${index}`;
+        const descendants = ts.isJsxElement(node) ? semanticDescendants(node, source, overlayNames) : [];
+        const overlayIsSurface = isPartialSemanticSurface(opening, source);
+        if (overlayIsSurface && descendants.length > 0) throw new Error(`${identity}: nested dialog semantics`);
+        if (descendants.length > 1) throw new Error(`${identity}: multiple descendant dialog owners`);
+        const semanticOpening = overlayIsSurface || descendants.length === 0 ? opening : descendants[0];
+        audited.push({
+          identity,
+          owner: descendants.length === 1 ? 'descendant' : 'overlay',
+          role: roleValue(semanticOpening, source),
+          modal: modalValue(semanticOpening, source),
+          name: hasAccessibleName(semanticOpening, source) ? 'named' : 'missing',
+          relation: overlayStack.length ? `nested:${overlayStack[overlayStack.length - 1]}` : 'root',
+        });
+        overlayStack.push(identity);
+        ts.forEachChild(node, visit);
+        overlayStack.pop();
+        return;
       }
       ts.forEachChild(node, visit);
     };
     visit(source);
   }
-  return { total, missing };
+  return audited;
 }
 
 describe('ModalOverlay caller semantics ledger', () => {
   it(
-    'has no unrecorded or stale semantics omissions',
+    'matches the exact reviewed ownership manifest with no unrecorded or stale callers',
     () => {
       const audit = auditModalOverlays();
-      expect(audit.total).toBe(EXPECTED_CALL_SITES);
-      expect(audit.missing).toEqual([...KNOWN_MISSING_SEMANTICS]);
+      expect(audit).toHaveLength(EXPECTED_CALL_SITES);
+      expect(MODAL_OVERLAY_MANIFEST).toHaveLength(EXPECTED_CALL_SITES);
+      expect(new Set(MODAL_OVERLAY_MANIFEST.map((entry) => entry.identity)).size).toBe(EXPECTED_CALL_SITES);
+      expect(audit).toEqual(MODAL_OVERLAY_MANIFEST.map(({ family: _family, focus: _focus, ...entry }) => entry));
+      expect(MODAL_OVERLAY_MANIFEST.every((entry) => entry.owner === 'overlay' || entry.owner === 'descendant')).toBe(true);
     },
     // This authoritative census parses every production TSX file. V8 coverage
     // instrumentation can push it beyond Vitest's 5 s default on CI runners;
@@ -208,5 +202,49 @@ describe('ModalOverlay caller semantics ledger', () => {
     );
     expect([...modalOverlayNames(named)]).toEqual(['Overlay']);
     expect([...modalOverlayNames(namespace)]).toEqual(['modal.ModalOverlay']);
+  });
+
+  it.each([
+    ['role only', '<div role="dialog" />', 'dialog', 'missing', 'missing'],
+    ['modal only', '<div aria-modal="true" />', null, 'true', 'missing'],
+    ['empty aria-label', '<div role="dialog" aria-modal="true" aria-label="" />', 'dialog', 'true', 'missing'],
+    ['empty labelledby', '<div role="dialog" aria-modal="true" aria-labelledby={""} />', 'dialog', 'true', 'missing'],
+    ['valid static label', '<div role="dialog" aria-modal="true" aria-label="Named" />', 'dialog', 'true', 'named'],
+    ['valid reference', '<div role="alertdialog" aria-modal="true" aria-labelledby={titleId} />', 'alertdialog', 'true', 'named'],
+    ['invalid modal', '<div role="dialog" aria-modal="false" aria-label="Named" />', 'dialog', 'invalid', 'named'],
+  ] as const)('extracts %s role, modal, and name independently', (_case, jsx, role, modal, name) => {
+    const source = ts.createSourceFile('surface.tsx', jsx, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let opening: ts.JsxOpeningLikeElement | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxElement(node)) opening = node.openingElement;
+      if (ts.isJsxSelfClosingElement(node)) opening = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(opening).toBeDefined();
+    expect(roleValue(opening!, source)).toBe(role);
+    expect(modalValue(opening!, source)).toBe(modal);
+    expect(hasAccessibleName(opening!, source) ? 'named' : 'missing').toBe(name);
+  });
+
+  it.each([
+    '<div role="dialog" />',
+    '<div role="alertdialog" aria-modal="false" />',
+    '<div aria-modal="true" />',
+  ])('treats a partial descendant semantic surface as owned debt: %s', (descendant) => {
+    const source = ts.createSourceFile(
+      'descendant.tsx',
+      `import { ModalOverlay } from './ModalOverlay'; <ModalOverlay onClose={() => {}}>${descendant}</ModalOverlay>;`,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+    let overlay: ts.JsxElement | undefined;
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === 'ModalOverlay') overlay = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(semanticDescendants(overlay!, source, new Set(['ModalOverlay']))).toHaveLength(1);
   });
 });

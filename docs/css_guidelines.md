@@ -761,6 +761,25 @@ declare the floor itself.
 
 ## Modal Patterns (ModalBase.css)
 
+`ModalOverlay` is deliberately neutral: it supplies the backdrop and topmost
+Escape routing, but it does not default a dialog role, accessible name, or
+focus behavior. Each caller owns exactly one semantic surface, either on the
+overlay or on one reviewed descendant, with `role="dialog"`/`alertdialog`,
+`aria-modal="true"`, and a stable accessible name. Never add a second role to
+the other layer. The closed caller contract lives in
+`frontend/src/a11y/modalOverlayManifest.ts`; a recorded missing state is debt,
+not an exception.
+
+Callers opting into managed focus use `useModalFocusLifecycle` with their
+dialog container and preferred initial-focus refs. A missing or disabled
+preferred target falls back to the first eligible control; if none exists, the
+helper temporarily makes the container programmatically focusable and restores
+its original tab-index state at cleanup. It traps or recaptures Tab only in the
+topmost overlay and restores the opener in stack order. Escape remains owned
+by `ModalOverlay` and the caller's `onClose`, so a busy caller suppresses it by
+passing its existing no-op/guarded close callback rather than through the focus
+helper.
+
 ```tsx
 import '../ModalBase.css';  // MUST import in every modal component
 
