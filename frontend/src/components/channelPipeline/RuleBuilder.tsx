@@ -1298,9 +1298,9 @@ export function RuleBuilder({
           onClose={() => setShowCancelConfirm(false)}
           data-testid="rule-discard-dialog"
         >
-          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-discard-title`}>
             <div className="modal-header">
-              <h2>Unsaved Changes</h2>
+              <h2 id={`${id}-discard-title`}>Unsaved Changes</h2>
             </div>
             <div className="modal-body">
               <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5 }}>You have unsaved changes. Are you sure you want to discard them?</p>

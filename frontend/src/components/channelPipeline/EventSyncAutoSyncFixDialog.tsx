@@ -10,6 +10,7 @@
  * group settings; the journal entry is the recovery breadcrumb). Never a
  * side effect of saving a rule or running the pipeline.
  */
+import { useId } from 'react';
 import { ModalOverlay } from '../ModalOverlay';
 import '../ModalBase.css';
 import './EventSyncAutoSyncFixDialog.css';
@@ -40,6 +41,7 @@ export function EventSyncAutoSyncFixDialog({
   onCancel,
   onConfirm,
 }: EventSyncAutoSyncFixDialogProps) {
+  const titleId = `${useId()}-title`;
   const { groupName, accountName, enable } = target;
   const direction = enable ? 'ON' : 'OFF';
 
@@ -48,9 +50,9 @@ export function EventSyncAutoSyncFixDialog({
       onClose={busy ? () => {} : onCancel}
       data-testid="autosync-fix-dialog"
     >
-      <div className="modal-container modal-sm event-sync-autosync-fix-dialog" role="alertdialog" aria-modal="true">
+      <div className="modal-container modal-sm event-sync-autosync-fix-dialog" role="alertdialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="modal-header">
-          <h3 className="modal-title">
+          <h3 id={titleId} className="modal-title">
             Turn auto-sync {direction} for &lsquo;{groupName}&rsquo;?
           </h3>
           {!busy && (

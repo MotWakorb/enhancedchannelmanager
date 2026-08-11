@@ -26,6 +26,16 @@ const renderWithProviders = (ui: React.JSX.Element) =>
     </AuthProvider>
   );
 
+function expectDialogLabelledByVisibleHeading(dialog: HTMLElement, expectedName: string) {
+  const titleId = dialog.getAttribute('aria-labelledby');
+  expect(titleId).toBeTruthy();
+
+  const title = document.getElementById(titleId!);
+  expect(title).toBeVisible();
+  expect(title).toHaveTextContent(expectedName);
+  expect(title).toHaveAttribute('id', titleId);
+}
+
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
@@ -246,12 +256,10 @@ describe('ChannelPipelineTab', () => {
 
       await user.click(screen.getByRole('button', { name: /delete/i }));
 
-      // Should show confirmation dialog
-      await waitFor(() => {
-        expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument();
-      });
+      const deleteDialog = await screen.findByRole('dialog', { name: 'Confirm Delete' });
+      expectDialogLabelledByVisibleHeading(deleteDialog, 'Confirm Delete');
 
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(within(deleteDialog).getByRole('button', { name: /confirm/i }));
 
       await waitFor(() => {
         expect(screen.queryByText('Deletable Rule')).not.toBeInTheDocument();
@@ -985,7 +993,7 @@ describe('ChannelPipelineTab', () => {
       });
       // Scope to the details dialog — the compact list chip also carries
       // event_sync words (e.g. "already attached").
-      const dialog = within(screen.getByRole('dialog'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
       expect(dialog.getByText(/^attached:?$/i)).toBeInTheDocument();
       expect(dialog.getByText(/^already attached:?$/i)).toBeInTheDocument();
       expect(dialog.getByText(/ambiguous/i)).toBeInTheDocument();
@@ -1069,7 +1077,7 @@ describe('ChannelPipelineTab', () => {
       await waitFor(() => {
         expect(screen.getByText(/secondary streams evaluated/i)).toBeInTheDocument();
       });
-      const dialog = within(screen.getByRole('dialog'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
       expect(dialog.getByText(/^would attach:?$/i)).toBeInTheDocument();
       expect(dialog.queryByText(/^attached:?$/i)).toBeNull();
     });
@@ -1257,7 +1265,7 @@ describe('ChannelPipelineTab', () => {
       expect(screen.getByText(/legacy per-run undo/i)).toBeInTheDocument();
       // Text spans a <strong> boundary ("no pre-run snapshot"), so match against
       // the dialog's full text content rather than a single node.
-      expect(screen.getByRole('dialog').textContent).toMatch(/no pre-run snapshot/i);
+      expect(screen.getByRole('dialog', { name: 'Confirm Rollback' }).textContent).toMatch(/no pre-run snapshot/i);
 
       await user.click(screen.getByRole('button', { name: /cancel/i }));
 
@@ -1341,7 +1349,7 @@ describe('ChannelPipelineTab', () => {
       await user.click(screen.getByRole('button', { name: /undo this run/i }));
 
       await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Undo This Run' })).toBeInTheDocument();
         // ADR-010 §D5 mandatory overwrite warning must be visible
         expect(screen.getByTestId('revert-warning')).toBeInTheDocument();
         expect(screen.getByText(/overwrite the current stream assignments/i)).toBeInTheDocument();
@@ -1480,10 +1488,9 @@ describe('ChannelPipelineTab', () => {
 
       await user.click(screen.getByRole('button', { name: /export/i }));
 
-      await waitFor(() => {
-        // Should show YAML in modal or download
-        expect(screen.getByText(/yaml/i)).toBeInTheDocument();
-      });
+      const exportDialog = await screen.findByRole('dialog', { name: 'Export Rules (YAML)' });
+      expectDialogLabelledByVisibleHeading(exportDialog, 'Export Rules (YAML)');
+      expect(within(exportDialog).getByLabelText(/exported yaml/i)).toBeInTheDocument();
     });
 
     it('opens import dialog', async () => {
@@ -1493,7 +1500,7 @@ describe('ChannelPipelineTab', () => {
       await user.click(screen.getByRole('button', { name: /import/i }));
 
       await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Import Rules' })).toBeInTheDocument();
         expect(screen.getByLabelText(/yaml content/i)).toBeInTheDocument();
       });
     });
@@ -1528,7 +1535,7 @@ describe('ChannelPipelineTab', () => {
       await user.type(textarea, 'rules:');
 
       // Click the Import button inside the dialog
-      const dialog = screen.getByRole('dialog');
+      const dialog = screen.getByRole('dialog', { name: 'Import Rules' });
       const importButton = within(dialog).getByRole('button', { name: /^import$/i });
       await user.click(importButton);
 

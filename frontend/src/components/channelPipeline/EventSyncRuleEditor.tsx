@@ -2470,9 +2470,9 @@ export function EventSyncRuleEditor({
           onClose={() => setShowDiscardConfirm(false)}
           data-testid="event-sync-discard-dialog"
         >
-          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-discard-title`}>
             <div className="modal-header">
-              <h3 className="modal-title">Discard this rule?</h3>
+              <h3 id={`${id}-discard-title`} className="modal-title">Discard this rule?</h3>
             </div>
             <div className="modal-body">
               <p>Your patterns and scope selections will be lost.</p>
