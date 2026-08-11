@@ -477,11 +477,8 @@ class TestRestoreInitialIdentityGate:
     table, admin password hashes included) and the ``tls`` directory.
 
     The gate deliberately does NOT key on ``auth_settings.setup_complete``
-    alone. ``POST /api/auth/setup`` never persists that flag (bead
-    enhancedchannelmanager-qg14z), so it is still ``False`` on exactly the
-    instances that hold an admin account, and a ``setup_complete``-only gate
-    would be a no-op precisely where the hole is. A user row is the primary
-    condition.
+    alone. A user row is durable instance state and remains authoritative if
+    configuration persistence is interrupted or damaged.
     """
 
     @staticmethod
@@ -602,14 +599,14 @@ class TestRestoreInitialIdentityGate:
         reached only after the operator has been through the login page. What
         sends them there is ``ProtectedRoute.handleSetupComplete`` re-reading
         ``GET /api/auth/status`` when the setup wizard finishes: the status
-        cached at mount still says ``setup_complete`` is False, because setup
-        does not persist the flag (bead enhancedchannelmanager-qg14z).
+        cached at mount still says ``setup_complete`` is False even though
+        setup has just persisted the flag (bead enhancedchannelmanager-qg14z).
 
         That re-read is part of this bead's fix. Until it existed the frontend
         rendered the app on the stale status with no session, and the Settings
         modal's "restore from backup" button called this endpoint anonymously
-        and took the 403 above. A page reload hid it, because the reload's own
-        status call repairs the flag. Both the failure and the fix were
+        and took the 403 above. A page reload hid it, because the reload fetched
+        fresh status. Both the failure and the fix were
         reproduced in a browser against a disposable instance with no reload
         between finishing setup and clicking restore.
         """

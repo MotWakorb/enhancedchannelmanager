@@ -66,15 +66,15 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
   // Handle setup completion
   //
   // Re-read auth status BEFORE dropping the setup page. POST /api/auth/setup
-  // creates the admin row but issues no session cookie and does not persist
-  // `setup_complete` (bead enhancedchannelmanager-qg14z), so the status cached
-  // at mount still reports setup_complete=false. Rendering children on that
+  // creates the admin row and persists `setup_complete`, but issues no session
+  // cookie, so the status cached at mount still reports setup_complete=false.
+  // Rendering children on that
   // stale value makes useAuthRequired() return false, and a brand-new instance
   // lands in the app with no session instead of at the login page. There the
   // auto-opened Settings modal's "Restore from Backup" calls
   // /api/backup/restore-initial with no cookie and is refused by its identity
   // gate (bead enhancedchannelmanager-lf29s). A page reload used to hide this,
-  // because the reload's own /api/auth/status call repairs the flag.
+  // because the reload fetches the newly persisted status.
   //
   // refreshUser() stays because setup leaves no session: it resolves the
   // now-current user, or clears a stale one on the 401 the fresh instance

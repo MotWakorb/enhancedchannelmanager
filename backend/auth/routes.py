@@ -5,6 +5,7 @@ Provides login, logout, token refresh, and password management.
 """
 import logging
 import os
+import fcntl
 import secrets
 import smtplib
 import ssl
@@ -48,6 +49,45 @@ from .dependencies import (
 logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("RATE_LIMIT_ENABLED", "1") != "0")
+
+
+def _serialize_initial_setup():
+    """Hold a non-blocking host-wide lock for the first-admin transaction."""
+    from . import settings as auth_settings_module
+
+    lock_fd = None
+    try:
+        auth_settings_module.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        lock_path = auth_settings_module.CONFIG_DIR / ".auth-setup.lock"
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Initial setup is already in progress.",
+        ) from None
+    except OSError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Initial setup is temporarily unavailable.",
+        ) from None
+
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            logger.error("[AUTH] Failed to release initial setup lock")
+        finally:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                logger.error("[AUTH] Failed to close initial setup lock")
 
 
 def _cleanup_expired_sessions(session: Session, user_id: int) -> int:
@@ -459,6 +499,7 @@ async def check_setup_required(
 async def initial_setup(
     setup_request: SetupRequest,
     session: Session = Depends(get_session),
+    _setup_lock=Depends(_serialize_initial_setup),
 ):
     """
     Create the initial admin user during first-run setup.
@@ -505,10 +546,65 @@ async def initial_setup(
     )
     session.add(identity)
 
-    session.commit()
+    # Persist the gate before returning success. The global middleware and
+    # every ``*_if_enabled`` dependency key on this flag; creating the user
+    # without it leaves the entire admin API anonymous until a later status
+    # request happens to repair the state (bead qg14z).
+    auth_settings = get_auth_settings()
+    previous_setup_complete = auth_settings.setup_complete
+    completed_auth_settings = auth_settings.model_copy(deep=True)
+    completed_auth_settings.setup_complete = True
+    try:
+        settings_persisted = save_auth_settings(completed_auth_settings)
+    except Exception:
+        session.rollback()
+        logger.error("[AUTH] Initial setup settings persistence failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be persisted.",
+        )
+    if not settings_persisted:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be persisted.",
+        )
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+
+        # A database driver may raise after COMMIT reached durable storage.
+        # Verify through an independent Session before considering a rollback
+        # of the auth gate. Ambiguous outcomes remain fail-closed (True).
+        durable_user_exists: Optional[bool] = None
+        verification_session = None
+        try:
+            verification_session = Session(bind=session.get_bind())
+            durable_user_exists = verification_session.query(User.id).first() is not None
+        except Exception:
+            logger.error("[AUTH] Could not verify initial setup commit outcome")
+        finally:
+            if verification_session is not None:
+                verification_session.close()
+
+        if durable_user_exists is False:
+            restored_auth_settings = completed_auth_settings.model_copy(deep=True)
+            restored_auth_settings.setup_complete = previous_setup_complete
+            try:
+                settings_restored = save_auth_settings(restored_auth_settings)
+            except Exception:
+                settings_restored = False
+            if not settings_restored:
+                logger.error("[AUTH] Failed to restore setup state after database failure")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be completed.",
+        ) from None
     session.refresh(user)
 
-    logger.info("[AUTH] Initial setup completed. Admin user created: %s", user.username)
+    logger.info("[AUTH] Initial setup completed. Admin user created")
 
     return SetupResponse(
         user=UserResponse.model_validate(user),
@@ -1925,4 +2021,3 @@ async def unlink_identity(
     logger.info("[AUTH] User %s unlinked %s identity: %s", current_user.username, provider, identifier)
 
     return UnlinkIdentityResponse(message="Identity unlinked successfully")
-

@@ -175,9 +175,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // The mount effect above fetches /api/auth/status exactly once, so anything
   // that changes the server's answer mid-session leaves `authStatus` stale.
   // First-run setup is exactly such an event: POST /api/auth/setup creates the
-  // operator row but does not persist `setup_complete` (bead
-  // enhancedchannelmanager-qg14z), and GET /api/auth/status is what repairs the
-  // flag. Callers that change auth state must therefore re-read it rather than
+  // operator row and persists `setup_complete` (bead
+  // enhancedchannelmanager-qg14z), while the value fetched before setup stays
+  // stale. Callers that change auth state must therefore re-read it rather than
   // trust the value cached at mount (bead enhancedchannelmanager-lf29s).
   //
   // Failures deliberately leave the previous status in place, matching
