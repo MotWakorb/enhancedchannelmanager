@@ -21,7 +21,12 @@ import re
 # Strips embedded channel numbers from a name for sorting purposes:
 # "US | 5034 - Name" -> "US - Name", "123 | Name" -> "Name", "Name | 123" -> "Name".
 _MID_NUMBER_RE = re.compile(r"^([A-Za-z].+?\s*\|\s*)\d+(?:\.\d+)?\s*([-:]\s*.+)$")
-_PREFIX_NUMBER_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$")
+# A bare space is not sufficient evidence that the leading number is generated
+# channel numbering: numeric brands such as "360 Tunebox" are real names.  The
+# explicit separators are the supported strip_numbers contract.
+_PREFIX_NUMBER_RE = re.compile(
+    r"^(?:(?:\d+\.\d+)\s*\.|(?:\d+(?:\.\d+)?)\s*[|\-]|(?:\d+)\s*\.(?!\d))\s*(.+)$"
+)
 _SUFFIX_NUMBER_RE = re.compile(r"^(.+)\s*[|\-.]\s*(\d+(?:\.\d+)?)$")
 
 # Ported 1:1 from frontend/src/utils/channelSort.ts::stripCountryPrefix.
@@ -52,7 +57,7 @@ def get_name_for_sorting(channel_name: str) -> str:
 
     prefix_match = _PREFIX_NUMBER_RE.match(channel_name)
     if prefix_match:
-        return prefix_match.group(2).strip()
+        return prefix_match.group(1).strip()
 
     suffix_match = _SUFFIX_NUMBER_RE.match(channel_name)
     if suffix_match:

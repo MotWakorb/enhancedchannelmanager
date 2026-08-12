@@ -16,8 +16,10 @@ import { naturalCompare } from './naturalSort';
 
 /**
  * Strip a leading/trailing/embedded channel number from a name for sorting
- * purposes. Matches the same patterns as computeAutoRename: "123 | Name",
- * "123-Name", "US | 5034 - Name", "Name | 123".
+ * purposes. Matches explicit generated-number separators used by
+ * computeAutoRename: "123 | Name", "123-Name", "US | 5034 - Name",
+ * "Name | 123". A bare space is intentionally not a separator because names
+ * such as "360 Tunebox" contain a meaningful numeric brand prefix.
  *
  * Extracted from ChannelsPane.tsx's former inline `getNameForSorting`
  * (originally a `useCallback` with no deps — a pure function that didn't
@@ -35,10 +37,12 @@ export function getNameForSorting(channelName: string): string {
     return (midMatch[1] + midMatch[2]).trim();
   }
 
-  // Try stripping prefix: "123 | Name" or "123-Name" or "123.Name" or "123 Name"
-  const prefixMatch = channelName.match(/^(\d+(?:\.\d+)?)\s*[|\-.\s]\s*(.+)$/);
+  // Try stripping an explicitly separated prefix: "123 | Name", "123-Name", "123.Name".
+  const prefixMatch = channelName.match(
+    /^(?:(?:\d+\.\d+)\s*\.|(?:\d+(?:\.\d+)?)\s*[|-]|(?:\d+)\s*\.(?!\d))\s*(.+)$/
+  );
   if (prefixMatch) {
-    return prefixMatch[2].trim();
+    return prefixMatch[1].trim();
   }
 
   // Try stripping suffix: "Name | 123"
