@@ -208,9 +208,12 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
     window.history.replaceState(null, '', '#stats?section=stats-section-late-arrival');
     rerender(<Harness containerRef={ref} late />);
 
-    await screen.findByRole('button', { name: 'Late arrival' });
+    // The button's appearance only proves discovery completed. The deep-link
+    // effect runs afterwards; wait for its user-visible selection state before
+    // asserting the queued scroll side effect.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Late arrival' }))
+      .toHaveAttribute('aria-current', 'location'));
     await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('button', { name: 'Late arrival' })).toHaveAttribute('aria-current', 'location');
   });
 
   it('drops a ?section= that names nothing, says so, and never fires it later', async () => {

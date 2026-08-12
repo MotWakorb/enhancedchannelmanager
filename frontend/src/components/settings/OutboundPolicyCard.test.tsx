@@ -47,9 +47,10 @@ describe('OutboundPolicyCard', () => {
   it('loads and reflects the LAN-friendly (default) mode', async () => {
     mockMode('lan_friendly');
     render(<OutboundPolicyCard />);
-    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-    const lan = screen.getByTestId('outbound-mode-lan_friendly') as HTMLInputElement;
-    expect(lan.checked).toBe(true);
+    // Observing the request is not observing its state update. Await the
+    // operator-visible settled radio state so coverage scheduling cannot race
+    // the promise continuation.
+    await waitFor(() => expect(screen.getByTestId('outbound-mode-lan_friendly')).toBeChecked());
   });
 
   it('reflects public-only when that is the stored mode', async () => {
