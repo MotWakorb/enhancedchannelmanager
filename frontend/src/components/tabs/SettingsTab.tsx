@@ -661,6 +661,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [telegramConfigured, setTelegramConfigured] = useState(false);
   const [telegramTesting, setTelegramTesting] = useState(false);
 
+  // bead 9ej7f: GET /api/settings withholds the Discord webhook and the
+  // Telegram bot token + chat id from a caller that is not allowed to WRITE
+  // them (a non-admin, or the MCP service key). Such a caller loads a blank
+  // field alongside a `*_configured` boolean that says the integration IS set
+  // up. Remember that so the post-save badge recompute below does not read the
+  // blank field as "the operator cleared it" — which would flip the badge to
+  // Unconfigured on an unrelated preference save. An admin loads the real
+  // value, so these stay false and the badge tracks the field as before.
+  const [discordWebhookRedacted, setDiscordWebhookRedacted] = useState(false);
+  const [telegramCredentialsRedacted, setTelegramCredentialsRedacted] = useState(false);
+
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
@@ -1146,6 +1157,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setTelegramBotToken(settings.telegram_bot_token ?? '');
       setTelegramChatId(settings.telegram_chat_id ?? '');
       setTelegramConfigured(settings.telegram_configured ?? false);
+      // bead 9ej7f: "configured, but the server sent no value" is exactly the
+      // redaction signature — the value was withheld from this caller.
+      setDiscordWebhookRedacted(
+        Boolean(settings.discord_configured) && !settings.discord_webhook_url
+      );
+      setTelegramCredentialsRedacted(
+        Boolean(settings.telegram_configured) && !settings.telegram_bot_token
+      );
       setNeedsRestart(false);
 
       // Load SMTP alert recipients from Alert Methods (used by task email alerts).
@@ -1582,10 +1601,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setSmtpPassword('');
       // Update SMTP configured status
       setSmtpConfigured(!!(smtpHost && smtpFromEmail));
-      // Update Discord configured status
-      setDiscordConfigured(!!discordWebhookUrl);
-      // Update Telegram configured status
-      setTelegramConfigured(!!(telegramBotToken && telegramChatId));
+      // Update Discord configured status. bead 9ej7f: when the value was
+      // withheld from this caller the blank field means "the backend kept the
+      // stored webhook", not "the operator cleared it", so leave the badge
+      // alone. An admin who genuinely blanks the field still clears it.
+      if (!discordWebhookRedacted) {
+        setDiscordConfigured(!!discordWebhookUrl);
+      }
+      // Update Telegram configured status (same 9ej7f reasoning)
+      if (!telegramCredentialsRedacted) {
+        setTelegramConfigured(!!(telegramBotToken && telegramChatId));
+      }
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
       if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
