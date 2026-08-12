@@ -4,6 +4,7 @@ import { naturalCompare } from '../utils/naturalSort';
 import './ModalBase.css';
 import './NormalizeNamesModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface Channel {
   id: number;
@@ -23,6 +24,7 @@ interface NormalizeNamesModalProps {
 }
 
 export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels, onConfirm, onCancel }: NormalizeNamesModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [normalizations, setNormalizations] = useState<NormalizationEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -105,10 +107,10 @@ export const NormalizeNamesModal = memo(function NormalizeNamesModal({ channels,
   };
 
   return (
-    <ModalOverlay onClose={onCancel}>
-      <div className="modal-container modal-md normalize-names-modal">
+    <ModalOverlay onClose={onCancel} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md normalize-names-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Normalize Channel Names</h2>
+          <h2 id={titleId}>Normalize Channel Names</h2>
           <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

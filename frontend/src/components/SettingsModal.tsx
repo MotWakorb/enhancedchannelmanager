@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { invalidateServerData } from '../hooks/useServerDataInvalidation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import type { DispatcharrAuthMethod, Theme } from '../services/api';
 import './ModalBase.css';
 import './SettingsModal.css';
@@ -15,6 +16,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [url, setUrl] = useState('');
   const [authMethod, setAuthMethod] = useState<DispatcharrAuthMethod>('password');
@@ -213,10 +215,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="settings-modal modal-container modal-md">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="settings-modal modal-container modal-md" ref={containerRef}>
         <div className="modal-header">
-          <h2>Dispatcharr Connection Settings</h2>
+          <h2 id={titleId}>Dispatcharr Connection Settings</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

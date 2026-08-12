@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { RestoreProgress } from './RestoreProgress';
 import { RestoreCompleteSummary } from './RestoreCompleteSummary';
 import { LogoMissBanner } from './LogoMissBanner';
@@ -18,6 +19,7 @@ interface BackupRestoreModalProps {
 type Step = 'upload' | 'select' | 'restoring' | 'results';
 
 export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [step, setStep] = useState<Step>('upload');
   const [file, setFile] = useState<File | null>(null);
   const [validation, setValidation] = useState<BackupValidation | null>(null);
@@ -171,10 +173,10 @@ export function BackupRestoreModal({ onClose }: BackupRestoreModalProps) {
   const canClose = step !== 'restoring';
 
   return (
-    <ModalOverlay onClose={canClose ? onClose : () => {}}>
-      <div className="modal-container modal-md backup-restore-modal-container">
+    <ModalOverlay onClose={canClose ? onClose : () => {}} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md backup-restore-modal-container" ref={containerRef}>
         <div className="modal-header">
-          <h3 className="modal-title">Restore from YAML Export</h3>
+          <h3 className="modal-title" id={titleId}>Restore from YAML Export</h3>
           {canClose && (
             <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
               <span className="material-icons" aria-hidden="true">close</span>

@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import './ModalBase.css';
 import './LogoModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface LogoModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface LogoModalProps {
 }
 
 export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, logo }: LogoModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const isEdit = logo !== null;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -221,10 +223,10 @@ export const LogoModal = memo(function LogoModal({ isOpen, onClose, onSaved, log
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md logo-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md logo-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
+          <h2 id={titleId}>{isEdit ? 'Edit Logo' : 'Add Logo'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

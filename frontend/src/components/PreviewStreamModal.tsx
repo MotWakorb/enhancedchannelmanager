@@ -6,6 +6,7 @@ import type { StreamPreviewMode } from '../services/api';
 import './ModalBase.css';
 import './PreviewStreamModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 // Labels for preview modes
 const PREVIEW_MODE_LABELS: Record<StreamPreviewMode, { label: string; icon: string; description: string }> = {
@@ -31,6 +32,7 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
   channelName,
   providerName,
 }: PreviewStreamModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [playerState, setPlayerState] = useState<VideoPlayerState>('idle');
   const [playerError, setPlayerError] = useState<VideoPlayerError | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
@@ -146,14 +148,14 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
     : `${window.location.origin}/api/stream-preview/${stream!.id}`;
 
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div
         className="modal-container modal-lg preview-stream-modal"
-      >
+       ref={containerRef}>
         {/* Header */}
         <div className="modal-header">
           <div className="preview-stream-header-info">
-            <h2>
+            <h2 id={titleId}>
               <span className="material-icons">{displayInfo.icon}</span>
               {displayInfo.title}
             </h2>

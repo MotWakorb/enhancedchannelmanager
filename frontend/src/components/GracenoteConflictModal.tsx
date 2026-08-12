@@ -8,6 +8,7 @@
 
 import { useState, useMemo, memo } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './GracenoteConflictModal.css';
 
@@ -31,6 +32,7 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
   onResolve,
   onCancel,
 }: GracenoteConflictModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   // Track which conflicts to overwrite (by channel ID)
   const [selectedForOverwrite, setSelectedForOverwrite] = useState<Set<number>>(new Set());
 
@@ -66,10 +68,10 @@ export const GracenoteConflictModal = memo(function GracenoteConflictModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onCancel}>
-      <div className="modal-container gracenote-conflict-modal">
+    <ModalOverlay onClose={onCancel} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container gracenote-conflict-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Gracenote ID Conflicts</h2>
+          <h2 id={titleId}>Gracenote ID Conflicts</h2>
           <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

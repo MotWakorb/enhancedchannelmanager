@@ -1,6 +1,7 @@
 import { useState, useCallback, memo } from 'react';
 import { importChannelsFromCSV, parseCSVPreview, CSVImportResult, CSVPreviewResult } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './CSVImportModal.css';
 import { logger } from '../utils/logger';
@@ -18,6 +19,7 @@ export const CSVImportModal = memo(function CSVImportModal({
   onClose,
   onSuccess,
 }: CSVImportModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<CSVPreviewResult | null>(null);
   const [importResult, setImportResult] = useState<CSVImportResult | null>(null);
@@ -112,10 +114,10 @@ export const CSVImportModal = memo(function CSVImportModal({
   const canImport = file && preview && preview.rows.length > 0 && importState !== 'importing';
 
   return (
-    <ModalOverlay onClose={handleClose} className="modal-overlay csv-import-modal" data-testid="csv-import-modal">
-      <div className="modal-container modal-lg">
+    <ModalOverlay onClose={handleClose} className="modal-overlay csv-import-modal" data-testid="csv-import-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg" ref={containerRef}>
         <div className="modal-header">
-          <h2>
+          <h2 id={titleId}>
             <span className="material-icons">upload_file</span>
             Import Channels from CSV
           </h2>

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { logger } from '../utils/logger';
 import './ModalBase.css';
 
@@ -40,6 +41,7 @@ export const EditChannelModal = memo(function EditChannelModal({
   onLogoUpload,
   epgDataLoading,
 }: EditChannelModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   // Create a map for quick EPG source name lookup
   const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
   // Source priority lookup (higher = more preferred), used to order search
@@ -468,10 +470,10 @@ export const EditChannelModal = memo(function EditChannelModal({
       : `${selectedEpgSourceIds.size} sources`;
 
   return (
-    <ModalOverlay onClose={handleClose}>
-      <div className="modal-container edit-channel-modal">
+    <ModalOverlay onClose={handleClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container edit-channel-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Edit Channel</h2>
+          <h2 id={titleId}>Edit Channel</h2>
           <button className="modal-close-btn" onClick={handleClose} title="Close" aria-label="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

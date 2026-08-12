@@ -45,6 +45,20 @@ function hasAttribute(opening: ts.JsxOpeningLikeElement, name: string, source: t
   );
 }
 
+function attributeExpressionText(
+  opening: ts.JsxOpeningLikeElement,
+  name: string,
+  source: ts.SourceFile,
+): string | null {
+  const attribute = opening.attributes.properties.find(
+    (candidate): candidate is ts.JsxAttribute =>
+      ts.isJsxAttribute(candidate) && candidate.name.getText(source) === name,
+  );
+  return attribute?.initializer && ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression
+    ? attribute.initializer.expression.getText(source)
+    : null;
+}
+
 function modalValue(opening: ts.JsxOpeningLikeElement, source: ts.SourceFile): 'true' | 'missing' | 'invalid' {
   if (!hasAttribute(opening, 'aria-modal', source)) return 'missing';
   const modal = attributeValue(opening, 'aria-modal', source);
@@ -167,6 +181,54 @@ function auditModalOverlays(): AuditedEntry[] {
   return audited;
 }
 
+interface ManagedDialogContract {
+  titleSymbol: string;
+  containerSymbol: string;
+  overlay: ts.JsxElement;
+}
+
+function managedDialogContract(identity: string): ManagedDialogContract {
+  const relativeFile = identity.replace(/^components\//, '').replace(/#\d+$/, '');
+  const wantedIndex = Number(identity.match(/#(\d+)$/)?.[1]);
+  const file = path.join(SRC, 'components', relativeFile);
+  const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const overlayNames = modalOverlayNames(source);
+  let overlayIndex = 0;
+  let overlay: ts.JsxElement | undefined;
+  const findOverlay = (node: ts.Node): void => {
+    if (ts.isJsxElement(node) && overlayNames.has(node.openingElement.tagName.getText(source))) {
+      overlayIndex += 1;
+      if (overlayIndex === wantedIndex) overlay = node;
+    }
+    if (!overlay) ts.forEachChild(node, findOverlay);
+  };
+  findOverlay(source);
+  if (!overlay) throw new Error(`${identity}: ModalOverlay not found`);
+
+  let owner: ts.Node | undefined = overlay.parent;
+  while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
+  if (!owner) throw new Error(`${identity}: enclosing caller function not found`);
+  let titleSymbol: string | undefined;
+  let containerSymbol: string | undefined;
+  const findBinding = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) && node !== owner) return;
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) &&
+        node.initializer && ts.isCallExpression(node.initializer) &&
+        node.initializer.expression.getText(source) === 'useOwnedDialog') {
+      for (const element of node.name.elements) {
+        const property = (element.propertyName ?? element.name).getText(source);
+        const local = element.name.getText(source);
+        if (property === 'titleId') titleSymbol = local;
+        if (property === 'containerRef') containerSymbol = local;
+      }
+    }
+    ts.forEachChild(node, findBinding);
+  };
+  findBinding(owner);
+  if (!titleSymbol || !containerSymbol) throw new Error(`${identity}: bound useOwnedDialog result not found`);
+  return { titleSymbol, containerSymbol, overlay };
+}
+
 describe('ModalOverlay caller semantics ledger', () => {
   it(
     'matches the exact reviewed ownership manifest with no unrecorded or stale callers',
@@ -184,6 +246,36 @@ describe('ModalOverlay caller semantics ledger', () => {
     // narrow, explicit budget instead of introducing a lossy lexical prefilter.
     15_000,
   );
+
+  it('binds every managed-focus caller to one structural dialog contract', () => {
+    for (const entry of MODAL_OVERLAY_MANIFEST.filter(({ focus }) => focus === 'managed-helper')) {
+      // TypeToConfirmDialog is the foundation's direct helper integration; this
+      // bounded contract covers the hr4ft.1 callers using useOwnedDialog.
+      if (entry.identity === 'components/TypeToConfirmDialog.tsx#1') continue;
+      const { titleSymbol, containerSymbol, overlay } = managedDialogContract(entry.identity);
+      const source = overlay.getSourceFile();
+      const opening = overlay.openingElement;
+      expect(roleValue(opening, source), `${entry.identity}: overlay role`).toBe('dialog');
+      expect(modalValue(opening, source), `${entry.identity}: overlay modal state`).toBe('true');
+      expect(attributeExpressionText(opening, 'aria-labelledby', source), `${entry.identity}: label binding`)
+        .toBe(titleSymbol);
+
+      const container = overlay.children.find(ts.isJsxElement);
+      expect(container, `${entry.identity}: semantic container`).toBeDefined();
+      expect(attributeExpressionText(container!.openingElement, 'ref', source), `${entry.identity}: focus container`)
+        .toBe(containerSymbol);
+      const headingIds: string[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isJsxElement(node) && /^h[1-6]$/.test(node.openingElement.tagName.getText(source))) {
+          const id = attributeExpressionText(node.openingElement, 'id', source);
+          if (id) headingIds.push(id);
+        }
+        ts.forEachChild(node, visit);
+      };
+      overlay.children.forEach(visit);
+      expect(headingIds, `${entry.identity}: visible heading ID must resolve the overlay label`).toContain(titleSymbol);
+    }
+  });
 
   it('discovers named and namespace import aliases', () => {
     const named = ts.createSourceFile(
