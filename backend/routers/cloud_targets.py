@@ -16,6 +16,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
+from auth import RequireHumanAdminForOutboundTest
 from cloud_storage import SUPPORTED_PROVIDERS, get_adapter
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
@@ -374,8 +375,23 @@ def _deferred_provider_result(provider_type: str) -> Optional[dict]:
 
 
 @router.post("/{target_id}/test")
-async def test_cloud_target(target_id: int):
-    """Test connection to a saved cloud storage target."""
+async def test_cloud_target(
+    target_id: int,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test connection to a saved cloud storage target.
+
+    bead 9kwzp.6: admin-gated, and the static MCP service principal is
+    refused. This endpoint carried NO route dependency. It decrypts the
+    target's STORED credentials and authenticates against the provider with
+    them, then reports the verdict back — the same class as
+    ``/api/settings/test-smtp`` that bead i4qrp closed. For a WebDAV target
+    the stored ``base_url`` is operator-named, so the probe is also an
+    outbound reach the gate has to decide the principal for.
+
+    ``RequireAdminIfEnabled`` would NOT do here: the MCP principal carries
+    ``is_admin=True``, so the plain admin gate would leave it reachable.
+    """
     db = get_session()
     try:
         target = db.query(CloudStorageTarget).filter(CloudStorageTarget.id == target_id).first()
@@ -432,8 +448,20 @@ async def test_cloud_target(target_id: int):
 
 
 @router.post("/test")
-async def test_cloud_target_inline(req: CloudTargetTestRequest):
-    """Test connection with inline credentials (before saving)."""
+async def test_cloud_target_inline(
+    req: CloudTargetTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test connection with inline credentials (before saving).
+
+    bead 9kwzp.6: admin-gated, and the static MCP service principal is
+    refused. This endpoint carried NO route dependency and is the most
+    caller-controlled sink of the set: the caller names the provider, the
+    credentials AND (for WebDAV) the ``base_url``, and reads back whether the
+    reach succeeded. That is an in-band probe with attacker-chosen
+    credentials, the exact primitive bead i4qrp denied the MCP principal on
+    ``/api/settings/test``.
+    """
     deferred = _deferred_provider_result(req.provider_type)
     if deferred is not None:
         logger.info("[CLOUD-TARGETS] Inline test refused for deferred provider '%s'", req.provider_type)

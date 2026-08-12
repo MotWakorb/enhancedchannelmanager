@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from alert_methods import get_alert_manager, get_method_types, create_method
+from auth import RequireHumanAdminForOutboundTest
 from database import get_session
 
 logger = logging.getLogger(__name__)
@@ -378,8 +379,26 @@ async def delete_alert_method(method_id: int):
 
 
 @router.post("/{method_id}/test")
-async def test_alert_method(method_id: int):
-    """Test an alert method by sending a test message."""
+async def test_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test an alert method by sending a test message.
+
+    bead 9kwzp.6: admin-gated, and the static MCP service principal is
+    refused. This endpoint carried NO route dependency, so any authenticated
+    caller could drive it. It sends with the method's STORED credentials (the
+    Discord webhook URL, the Telegram bot token, the SMTP password held in
+    ``AlertMethod.config``) — the caller never has to know them, which is the
+    same class as ``/api/settings/test-smtp`` that bead i4qrp closed, and it
+    reports the upstream verdict back.
+
+    ``RequireAdminIfEnabled`` would NOT do here: the MCP principal carries
+    ``is_admin=True`` (``auth.dependencies._build_mcp_service_principal``), so
+    the plain admin gate would close the non-admin half and leave the MCP half
+    open. The gate no-ops when ``require_auth`` is False or setup is
+    incomplete, so first-run configuration is untouched.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] POST /alert-methods/%s/test", method_id)
