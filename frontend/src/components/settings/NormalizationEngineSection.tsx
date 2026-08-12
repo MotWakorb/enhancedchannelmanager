@@ -40,6 +40,7 @@ import type {
   ApplyToChannelsActionOverride,
 } from '../../types';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import './NormalizationEngineSection.css';
 import '../ModalBase.css';
 import { CustomSelect } from '../CustomSelect';
@@ -311,6 +312,7 @@ export function NormalizationEngineSection() {
     elseActionType: 'remove',
     elseActionValue: '',
   });
+  const [savingRule, setSavingRule] = useState(false);
 
   // Group editor state
   const [groupEditor, setGroupEditor] = useState<GroupEditorState>({
@@ -319,6 +321,7 @@ export function NormalizationEngineSection() {
     name: '',
     description: '',
   });
+  const [savingGroup, setSavingGroup] = useState(false);
 
   // Live preview state
   const [previewResult, setPreviewResult] = useState<TestRuleResult | null>(null);
@@ -358,6 +361,10 @@ export function NormalizationEngineSection() {
       errors: number;
       ruleSetHash?: string;
     } | null>(null);
+  const { titleId: ruleTitleId, containerRef: ruleContainerRef } = useOwnedDialog(ruleEditor.isOpen);
+  const { titleId: importTitleId, containerRef: importContainerRef } = useOwnedDialog(showImportModal);
+  const { titleId: applyTitleId, containerRef: applyContainerRef } = useOwnedDialog(showApplyModal);
+  const { titleId: groupTitleId, containerRef: groupContainerRef } = useOwnedDialog(groupEditor.isOpen);
 
   // Drag-and-drop sensors for rule reordering
   const sensors = useSensors(
@@ -597,12 +604,14 @@ export function NormalizationEngineSection() {
 
   // Close rule editor
   const closeRuleEditor = useCallback(() => {
+    if (savingRule) return;
     setRuleEditor((prev) => ({ ...prev, isOpen: false }));
     setPreviewResult(null);
-  }, []);
+  }, [savingRule]);
 
   // Save rule
   const saveRule = useCallback(async () => {
+    setSavingRule(true);
     try {
       // Build the request with compound conditions if enabled
       const conditionsData = ruleEditor.useCompoundConditions && ruleEditor.conditions.length > 0
@@ -667,6 +676,8 @@ export function NormalizationEngineSection() {
       await loadData();
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save rule', 'Normalization');
+    } finally {
+      setSavingRule(false);
     }
   }, [ruleEditor, closeRuleEditor, loadData, notifications]);
 
@@ -692,11 +703,13 @@ export function NormalizationEngineSection() {
 
   // Close group editor
   const closeGroupEditor = useCallback(() => {
+    if (savingGroup) return;
     setGroupEditor((prev) => ({ ...prev, isOpen: false }));
-  }, []);
+  }, [savingGroup]);
 
   // Save group
   const saveGroup = useCallback(async () => {
+    setSavingGroup(true);
     try {
       if (groupEditor.editingGroup) {
         await api.updateNormalizationGroup(groupEditor.editingGroup.id, {
@@ -715,6 +728,8 @@ export function NormalizationEngineSection() {
       await loadData();
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to save group', 'Normalization');
+    } finally {
+      setSavingGroup(false);
     }
   }, [groupEditor, groups, closeGroupEditor, loadData, notifications]);
 
@@ -1560,14 +1575,15 @@ export function NormalizationEngineSection() {
 
       {/* Rule Editor Modal */}
       {ruleEditor.isOpen && (
-        <ModalOverlay onClose={closeRuleEditor}>
-          <div className="modal-container modal-md">
+        <ModalOverlay onClose={closeRuleEditor} role="dialog" aria-modal="true" aria-labelledby={ruleTitleId}>
+          <div className="modal-container modal-md" ref={ruleContainerRef}>
             <div className="modal-header">
-              <h2 className="modal-title">{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h2>
+              <h2 className="modal-title" id={ruleTitleId}>{ruleEditor.editingRule ? 'Edit Rule' : 'New Rule'}</h2>
               <button
                 className="modal-close-btn"
                 onClick={closeRuleEditor}
                 type="button"
+                disabled={savingRule}
                 aria-label="Close"
                 title="Close"
               >
@@ -1991,16 +2007,17 @@ export function NormalizationEngineSection() {
                 className="modal-btn modal-btn-secondary"
                 onClick={closeRuleEditor}
                 type="button"
+                disabled={savingRule}
               >
                 Cancel
               </button>
               <button
                 className="modal-btn modal-btn-primary"
                 onClick={saveRule}
-                disabled={!ruleEditor.name.trim()}
+                disabled={savingRule || !ruleEditor.name.trim()}
                 type="button"
               >
-                {ruleEditor.editingRule ? 'Save Changes' : 'Create Rule'}
+                {savingRule ? 'Saving...' : ruleEditor.editingRule ? 'Save Changes' : 'Create Rule'}
               </button>
             </div>
           </div>
@@ -2009,13 +2026,14 @@ export function NormalizationEngineSection() {
 
       {/* Import Rules Modal */}
       {showImportModal && (
-        <ModalOverlay onClose={() => setShowImportModal(false)}>
-          <div className="modal-container modal-lg">
+        <ModalOverlay onClose={() => { if (!importing) setShowImportModal(false); }} role="dialog" aria-modal="true" aria-labelledby={importTitleId}>
+          <div className="modal-container modal-lg" ref={importContainerRef}>
             <div className="modal-header">
-              <h2>Import Normalization Rules</h2>
+              <h2 id={importTitleId}>Import Normalization Rules</h2>
               <button
                 className="modal-close-btn"
-                onClick={() => setShowImportModal(false)}
+                onClick={() => { if (!importing) setShowImportModal(false); }}
+                disabled={importing}
                 type="button"
                 aria-label="Close"
                 title="Close"
@@ -2063,7 +2081,8 @@ export function NormalizationEngineSection() {
             <div className="modal-footer">
               <button
                 className="modal-btn modal-btn-secondary"
-                onClick={() => setShowImportModal(false)}
+                onClick={() => { if (!importing) setShowImportModal(false); }}
+                disabled={importing}
                 type="button"
               >
                 Cancel
@@ -2083,13 +2102,14 @@ export function NormalizationEngineSection() {
 
       {/* Apply-to-channels Modal (GH-104, bd-eio04.12) */}
       {showApplyModal && (
-        <ModalOverlay onClose={closeApplyModal}>
+        <ModalOverlay onClose={closeApplyModal} role="dialog" aria-modal="true" aria-labelledby={applyTitleId}>
           <div
             className="modal-container modal-lg norm-engine-apply-modal"
             data-testid="apply-to-channels-modal"
+            ref={applyContainerRef}
           >
             <div className="modal-header">
-              <h2 className="modal-title">Apply Normalization to Existing Channels</h2>
+              <h2 className="modal-title" id={applyTitleId}>Apply Normalization to Existing Channels</h2>
               <button
                 className="modal-close-btn"
                 onClick={closeApplyModal}
@@ -2515,14 +2535,15 @@ export function NormalizationEngineSection() {
 
       {/* Group Editor Modal */}
       {groupEditor.isOpen && (
-        <ModalOverlay onClose={closeGroupEditor}>
-          <div className="modal-container modal-sm">
+        <ModalOverlay onClose={closeGroupEditor} role="dialog" aria-modal="true" aria-labelledby={groupTitleId}>
+          <div className="modal-container modal-sm" ref={groupContainerRef}>
             <div className="modal-header">
-              <h2 className="modal-title">{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h2>
+              <h2 className="modal-title" id={groupTitleId}>{groupEditor.editingGroup ? 'Edit Group' : 'New Rule Group'}</h2>
               <button
                 className="modal-close-btn"
                 onClick={closeGroupEditor}
                 type="button"
+                disabled={savingGroup}
                 aria-label="Close"
                 title="Close"
               >
@@ -2557,16 +2578,17 @@ export function NormalizationEngineSection() {
                 className="modal-btn modal-btn-secondary"
                 onClick={closeGroupEditor}
                 type="button"
+                disabled={savingGroup}
               >
                 Cancel
               </button>
               <button
                 className="modal-btn modal-btn-primary"
                 onClick={saveGroup}
-                disabled={!groupEditor.name.trim()}
+                disabled={savingGroup || !groupEditor.name.trim()}
                 type="button"
               >
-                {groupEditor.editingGroup ? 'Save Changes' : 'Create Group'}
+                {savingGroup ? 'Saving...' : groupEditor.editingGroup ? 'Save Changes' : 'Create Group'}
               </button>
             </div>
           </div>

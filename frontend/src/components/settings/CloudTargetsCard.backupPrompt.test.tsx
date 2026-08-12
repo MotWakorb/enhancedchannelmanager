@@ -7,7 +7,7 @@
  * wiring end to end through the real BackupDestinationPromptProvider.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 
 const notify = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
 vi.mock('../../contexts/NotificationContext', () => ({
@@ -32,6 +32,7 @@ vi.mock('../../services/api', () => ({
 import { SECURITY_FIRST_RUN_KEY } from '../SecurityFirstRunModal';
 import { BackupDestinationPromptProvider } from '../../contexts/BackupDestinationPromptContext';
 import { CloudTargetsCard } from './CloudTargetsCard';
+import * as cloudApi from '../../services/cloudTargetsApi';
 
 /** Find the <input>/<textarea> inside the form group whose label matches. */
 function inputForLabel(label: RegExp): HTMLElement {
@@ -80,5 +81,21 @@ describe('CloudTargetsCard — backup-destination trigger (s5a3o)', () => {
     // Editor closes on save; give any async open a chance, then assert absence.
     await waitFor(() => expect(screen.queryByText('Create Target')).not.toBeInTheDocument());
     expect(screen.queryByTestId('security-first-run-modal')).not.toBeInTheDocument();
+  });
+
+  it('names delete confirmation and blocks Cancel and Escape while deletion is pending', async () => {
+    vi.mocked(cloudApi.getCloudTargets).mockResolvedValue([{
+      id: 7, name: 'Synthetic target', provider_type: 's3', credentials: {}, upload_path: '/',
+      enabled: true, insecure: false, created_at: '', updated_at: '',
+    }]);
+    vi.mocked(cloudApi.deleteCloudTarget).mockReturnValue(new Promise(() => {}));
+    renderCard();
+    const deleteButton = await screen.findByRole('button', { name: 'Delete cloud target' });
+    fireEvent.click(deleteButton);
+    const dialog = screen.getByRole('dialog', { name: 'Delete Target' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
   });
 });

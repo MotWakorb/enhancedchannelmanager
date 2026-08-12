@@ -9,7 +9,7 @@
  * (same gotcha documented in NormalizationEngineSection's test suites).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TagEngineSection } from './TagEngineSection';
 
 const mockSuccess = vi.fn();
@@ -151,5 +151,35 @@ describe('TagEngineSection — test panel (bead hq3de.f)', () => {
 
     fireEvent.click(close);
     expect(screen.queryByText('Create Tag Group')).not.toBeInTheDocument();
+  });
+
+  it('names create-group and blocks every dismissal while creation is pending', async () => {
+    vi.mocked(api.createTagGroup).mockReturnValue(new Promise(() => {}));
+    render(<TagEngineSection />);
+    await waitFor(() => screen.getByText('US Networks'));
+    fireEvent.click(screen.getByRole('button', { name: /New Group/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Create Tag Group' });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g., Custom Tags'), { target: { value: 'Synthetic group' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Group' }));
+
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('names import and blocks every dismissal while import is pending', async () => {
+    vi.mocked(api.importTagsYaml).mockReturnValue(new Promise(() => {}));
+    render(<TagEngineSection />);
+    await waitFor(() => screen.getByText('US Networks'));
+    fireEvent.click(screen.getByRole('button', { name: /Import/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Import Tags' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Paste YAML content here...'), { target: { value: 'groups: []' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import' }));
+
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
   });
 });

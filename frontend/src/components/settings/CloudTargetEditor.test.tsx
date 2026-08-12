@@ -9,7 +9,7 @@
  *   working; only new-target creation gets the disabled affordance).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 const notify = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
 vi.mock('../../contexts/NotificationContext', () => ({
@@ -41,6 +41,45 @@ function openProviderDropdown() {
 describe('CloudTargetEditor — provider affordances (0i2vt.8)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('is named and blocks every direct dismissal while creation is pending', async () => {
+    const cloudApi = await import('../../services/cloudTargetsApi');
+    vi.mocked(cloudApi.createCloudTarget).mockReturnValue(new Promise(() => {}));
+    const onClose = vi.fn();
+    render(<CloudTargetEditor target={null} onClose={onClose} onSaved={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'New Cloud Target' });
+    fireEvent.change(screen.getByPlaceholderText('My S3 Bucket'), { target: { value: 'Synthetic target' } });
+    for (const [label, value] of [[/^Bucket Name/, 'synthetic-bucket'], [/^Access Key ID/, 'synthetic-id'], [/^Secret Access Key/, 'synthetic-key']] as const) {
+      const input = screen.getByText(label).closest('.modal-form-group')?.querySelector('input');
+      if (!input) throw new Error(`missing field for ${label}`);
+      fireEvent.change(input, { target: { value } });
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Target' }));
+
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('blocks Close, Cancel, and Escape while Test Connection is pending', async () => {
+    const cloudApi = await import('../../services/cloudTargetsApi');
+    vi.mocked(cloudApi.testCloudConnectionInline).mockReturnValue(new Promise(() => {}));
+    const onClose = vi.fn();
+    render(<CloudTargetEditor target={null} onClose={onClose} onSaved={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'New Cloud Target' });
+    const accessKey = screen.getByText(/^Access Key ID/).closest('.modal-form-group')?.querySelector('input');
+    if (!accessKey) throw new Error('missing synthetic Access Key ID field');
+    fireEvent.change(accessKey, { target: { value: 'synthetic-id' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Test Connection/ }));
+
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
   });
 
   it('offers WebDAV as a selectable provider with its credential fields', () => {

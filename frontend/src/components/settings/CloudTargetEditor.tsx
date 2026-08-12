@@ -3,6 +3,7 @@ import type { CloudTarget, ProviderType } from '../../types/cloudTargets';
 import * as cloudApi from '../../services/cloudTargetsApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import { CustomSelect } from '../CustomSelect';
 import '../ModalBase.css';
 
@@ -66,6 +67,7 @@ const PROVIDER_FIELDS: Record<string, CredentialField[]> = {
 
 export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEditorProps) {
   const notifications = useNotifications();
+  const { titleId, containerRef } = useOwnedDialog();
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
@@ -179,12 +181,15 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
     }
   };
 
+  const busy = saving || testing;
+  const closeEditor = () => { if (!busy) onClose(); };
+
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg">
+    <ModalOverlay onClose={closeEditor} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg" ref={containerRef}>
         <div className="modal-header">
-          <h3>{isEditing ? 'Edit Cloud Target' : 'New Cloud Target'}</h3>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+          <h3 id={titleId}>{isEditing ? 'Edit Cloud Target' : 'New Cloud Target'}</h3>
+          <button className="modal-close-btn" onClick={closeEditor} disabled={busy} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
@@ -272,7 +277,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
             </label>
         </div>
         <div className="modal-footer">
-          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="modal-btn modal-btn-secondary" onClick={closeEditor} disabled={busy}>Cancel</button>
           <button className="modal-btn modal-btn-primary" onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Target'}
           </button>

@@ -14,21 +14,18 @@
  *     removes the dead "link" entry point, not display of existing links.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import type { AuthStatus, LinkedIdentitiesResponse } from '../../types';
 
 vi.mock('../../services/api', () => ({
   getLinkedIdentities: vi.fn(),
   getAuthStatus: vi.fn(),
+  linkIdentity: vi.fn(),
 }));
 
+const notifications = { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() };
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-  }),
+  useNotifications: () => notifications,
 }));
 
 import * as api from '../../services/api';
@@ -94,6 +91,23 @@ describe('LinkedAccountsSection', () => {
         screen.getByText(/Enter your Local credentials to link this account\./i)
       ).toBeInTheDocument();
     });
+  });
+
+  it('names the link dialog and blocks Close, Cancel, and Escape while linking is pending', async () => {
+    (api.getLinkedIdentities as Mock).mockResolvedValue(identities([]));
+    (api.getAuthStatus as Mock).mockResolvedValue(authStatus());
+    (api.linkIdentity as Mock).mockReturnValue(new Promise(() => {}));
+    render(<LinkedAccountsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Link Local/i }));
+    const dialog = screen.getByRole('dialog', { name: 'Link Local Account' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Enter your Local username'), { target: { value: 'synthetic-user' } });
+    fireEvent.change(within(dialog).getByPlaceholderText('Enter your password'), { target: { value: 'synthetic-pass' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Link Account/ }));
+
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
   });
 
   it('still displays an already-linked OIDC identity in the identity list', async () => {
