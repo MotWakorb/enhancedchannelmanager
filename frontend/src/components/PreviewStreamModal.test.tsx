@@ -345,6 +345,18 @@ describe('PreviewStreamModal', () => {
 
       // Check for error message
       expect(screen.getByText('Playback Error')).toBeInTheDocument();
+      expect(screen.getByText(/raw stream previews connect from the ECM container/i)).toBeInTheDocument();
+      expect(screen.getByText(/same VPN or network route/i)).toBeInTheDocument();
+    });
+
+    it('does not show raw-provider routing guidance for channel proxy errors', async () => {
+      render(<PreviewStreamModal {...defaultProps} channel={mockChannel} />);
+      const callbacks = (window as unknown as { __videoPlayerCallbacks: { onStateChange: (s: string) => void; onError: (e: { message: string }) => void } }).__videoPlayerCallbacks;
+      await act(async () => {
+        callbacks?.onStateChange('error');
+        callbacks?.onError({ message: 'Playback failed' });
+      });
+      expect(screen.queryByText(/raw stream previews connect from the ECM container/i)).not.toBeInTheDocument();
     });
 
     it('shows alternative options section for streams', async () => {

@@ -91,8 +91,9 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_stream_preview_passthrough_returns_streaming_response(self, async_client):
         """GET /api/stream-preview/{id} returns streaming response in passthrough mode."""
+        provider_url = "http://provider.invalid/account/token/stream.ts"
         mock_client = MagicMock()
-        mock_client.get_stream = AsyncMock(return_value={"id": 1, "name": "Test", "url": "http://example.com/stream.ts"})
+        mock_client.get_stream = AsyncMock(return_value={"id": 1, "name": "Test", "url": provider_url})
 
         # Mock httpx response
         mock_response = MagicMock()
@@ -110,13 +111,15 @@ class TestStreamPreview:
                 with patch("httpx.AsyncClient") as mock_http:
                     mock_context = AsyncMock()
                     mock_context.__aenter__.return_value = MagicMock()
-                    mock_context.__aenter__.return_value.stream = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+                    stream_request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+                    mock_context.__aenter__.return_value.stream = stream_request
                     mock_http.return_value = mock_context
 
                     response = await async_client.get("/api/stream-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
                     assert response.headers.get("content-type") == "video/mp2t"
+                    stream_request.assert_called_once_with("GET", provider_url)
 
     @pytest.mark.asyncio
     async def test_stream_preview_transcode_ffmpeg_not_found(self, async_client):
@@ -216,13 +219,19 @@ class TestChannelPreview:
                 with patch("httpx.AsyncClient") as mock_http:
                     mock_context = AsyncMock()
                     mock_context.__aenter__.return_value = MagicMock()
-                    mock_context.__aenter__.return_value.stream = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+                    stream_request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+                    mock_context.__aenter__.return_value.stream = stream_request
                     mock_http.return_value = mock_context
 
                     response = await async_client.get("/api/channel-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
                     assert response.headers.get("content-type") == "video/mp2t"
+                    stream_request.assert_called_once_with(
+                        "GET",
+                        "http://localhost:5656/proxy/ts/stream/test-uuid-123",
+                        headers={"Authorization": "Bearer test-jwt-token"},
+                    )
 
     @pytest.mark.asyncio
     async def test_channel_preview_transcode_ffmpeg_not_found(self, async_client):

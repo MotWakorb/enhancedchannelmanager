@@ -266,6 +266,12 @@ export const PreviewStreamModal = memo(function PreviewStreamModal({
                   <strong>Playback Error</strong>
                   <p>{playerError.message}</p>
                   {playerError.details && <p className="error-details">{playerError.details}</p>}
+                  {!isChannelPreview && (
+                    <p className="error-details">
+                      Raw stream previews connect from the ECM container, not through Dispatcharr.
+                      Ensure ECM has the same VPN or network route required by this provider.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
