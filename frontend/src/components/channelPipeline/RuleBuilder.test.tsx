@@ -283,6 +283,29 @@ describe('RuleBuilder', () => {
   });
 
   describe('save and cancel', () => {
+    it('renders and saves Smart Sort as the explicit new-rule default', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      render(<RuleBuilder onSave={onSave} onCancel={vi.fn()} />);
+
+      await user.type(screen.getByLabelText(/rule name/i), 'New default rule');
+      await user.click(screen.getByRole('button', { name: /add condition/i }));
+      await user.type(screen.getByPlaceholderText(/enter text/i), 'synthetic');
+      await user.click(screen.getByRole('button', { name: /add action/i }));
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /^skip/i }));
+      await gotoStep(user, 3);
+
+      const streamSortTrigger = screen.getByText('Stream Sort')
+        .closest('.form-field')
+        ?.querySelector('.custom-select-trigger');
+      expect(streamSortTrigger).toHaveTextContent('Smart Sort (default)');
+
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].stream_sort_field).toBe('smart_sort');
+    });
+
     it('calls onSave with rule data when valid', async () => {
       const user = userEvent.setup();
       const onSave = vi.fn();
@@ -1086,6 +1109,37 @@ describe('RuleBuilder', () => {
           fold_match_key: true,
         });
       });
+
+      it.each([
+        [null, '', 'No sorting'],
+        ['smart_sort', 'smart_sort', 'Smart Sort'],
+        ['quality', 'quality', 'Quality'],
+        ['stream_name', 'stream_name', 'Stream Name'],
+        ['stream_name_natural', 'stream_name_natural', 'Stream Name (Natural)'],
+        ['provider_order', 'provider_order', 'Provider Order'],
+      ] as const)(
+        'restores and saves persisted stream sort %s without substituting the default',
+        async (persisted, expected, label) => {
+          const user = userEvent.setup();
+          const onSave = vi.fn().mockResolvedValue(undefined);
+          render(
+            <RuleBuilder
+              rule={{ ...FULL_RULE, stream_sort_field: persisted }}
+              onSave={onSave}
+              onCancel={vi.fn()}
+            />,
+          );
+
+          await gotoStep(user, 3);
+          const streamSortTrigger = screen.getByText('Stream Sort')
+            .closest('.form-field')
+            ?.querySelector('.custom-select-trigger');
+          expect(streamSortTrigger).toHaveTextContent(label);
+          await user.click(screen.getByRole('button', { name: /^save$/i }));
+          await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+          expect(onSave.mock.calls[0][0].stream_sort_field).toBe(expected);
+        },
+      );
     });
 
     describe('full-field dirty guard (data-loss fix)', () => {

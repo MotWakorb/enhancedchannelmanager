@@ -3203,6 +3203,7 @@ class TestOrphanCleanupRenumberFailureRunStatus:
 
     def test_orphan_cleanup_renumber_failure_finalizes_completed_with_errors(self):
         rule = self._make_rule()
+        rule.sort_field = "stream_name"
         # One NEW stream => creates channel 1000 (current), so 999 (previous)
         # becomes an orphan; after deleting it the remaining [1000] is renumbered.
         streams = [
@@ -3245,6 +3246,41 @@ class TestOrphanCleanupRenumberFailureRunStatus:
         managed = set(rule.get_managed_channel_ids())
         assert 999 not in managed
         assert 1000 in managed
+
+    def test_no_sort_preserves_existing_manual_numbers_during_orphan_cleanup(self):
+        """GH #833: cleanup may delete debt, but no-sort must not renumber survivors.
+
+        Drive the real executor/pipeline path: a fixed-number create action still
+        allocates the genuinely new channel, while the pre-existing managed
+        channel keeps its manually assigned number because no channel sort was
+        requested.
+        """
+        existing = {
+            "id": 1000,
+            "name": "Existing",
+            "channel_group_id": 5,
+            "channel_number": 777,
+            "streams": [601],
+        }
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 2, "results": [self._orphan, existing]}
+        )
+        self.client.assign_channel_numbers = AsyncMock()
+        rule = self._make_rule()
+        rule.sort_field = None
+        rule.set_managed_channel_ids([999, 1000])
+        streams = [
+            StreamContext(stream_id=601, stream_name="Existing", m3u_account_id=1),
+            StreamContext(stream_id=602, stream_name="New", m3u_account_id=1),
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        assert result["success"] is True
+        self.client.delete_channel.assert_awaited_with(999)
+        self.client.assign_channel_numbers.assert_not_awaited()
+        created_payloads = [call.args[0] for call in self.client.create_channel.await_args_list]
+        assert any(payload.get("channel_number") == 100 for payload in created_payloads)
 
 
 class TestRunLevelFailureAggregationFullCoverage:

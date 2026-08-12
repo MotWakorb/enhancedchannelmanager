@@ -5344,7 +5344,12 @@ class ChannelPipelineEngine:
                 remaining_channel_ids = [cid for cid in remaining_channel_ids if cid not in orphan_ids]
                 starting_number = _get_rule_starting_number(rule)
 
-                if remaining_channel_ids and starting_number is not None:
+                # GH #833: a fixed/range create number controls allocation of
+                # genuinely new channels; it is not permission to rewrite the
+                # manual numbers of surviving channels.  Post-cleanup gap
+                # closing belongs to channel sorting and therefore requires the
+                # same explicit sort_field opt-in as Pass 3.
+                if remaining_channel_ids and starting_number is not None and rule.sort_field:
                     if dry_run:
                         results["dry_run_results"].append({
                             "stream_id": None,

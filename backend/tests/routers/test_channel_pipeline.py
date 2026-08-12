@@ -293,6 +293,31 @@ class TestUpdateChannelPipelineRule:
         assert response.json()["name"] == "New Name"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stream_sort_field",
+        [None, "smart_sort", "quality", "stream_name", "stream_name_natural", "provider_order"],
+    )
+    async def test_stream_sort_round_trips_through_update_and_reopen(
+        self, async_client, test_session, stream_sort_field
+    ):
+        """GH #833: the persisted API value is authoritative on reopen."""
+        rule = _create_rule(test_session, stream_sort_field="smart_sort")
+        payload_value = stream_sort_field if stream_sort_field is not None else ""
+
+        with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            updated = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"stream_sort_field": payload_value},
+            )
+        reopened = await async_client.get(f"/api/auto-creation/rules/{rule.id}")
+
+        assert updated.status_code == 200, updated.text
+        assert reopened.status_code == 200, reopened.text
+        assert updated.json()["stream_sort_field"] == stream_sort_field
+        assert reopened.json()["stream_sort_field"] == stream_sort_field
+
+    @pytest.mark.asyncio
     async def test_clears_active_window_and_rejects_cross_field_reversal(self, async_client, test_session):
         rule = _create_rule(test_session, name="Windowed", active_from=date(2026, 9, 1),
                             active_until=date(2027, 2, 15))
@@ -2098,6 +2123,50 @@ class TestImportYAML:
         ).one()
         assert target.active_from == date(2026, 9, 1)
         assert target.active_until == date(2027, 2, 15)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stream_sort_field",
+        [None, "smart_sort", "quality", "stream_name", "stream_name_natural", "provider_order"],
+    )
+    async def test_export_import_round_trip_preserves_stream_sort_field(
+        self, async_client, test_session, stream_sort_field
+    ):
+        """GH #833: exercise the actual YAML serializer and importer pair."""
+        import yaml
+
+        source = _create_rule(
+            test_session,
+            name="Stream-sort source",
+            stream_sort_field=stream_sort_field,
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = []
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
+            exported = await async_client.get("/api/auto-creation/export/yaml")
+        assert exported.status_code == 200, exported.text
+
+        document = yaml.safe_load(exported.text)
+        assert document["rules"][0]["stream_sort_field"] == stream_sort_field
+        document["rules"][0]["name"] = "Stream-sort target"
+        test_session.delete(source)
+        test_session.commit()
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
+             patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            imported = await async_client.post(
+                "/api/auto-creation/import/yaml",
+                json={"yaml_content": yaml.safe_dump(document, sort_keys=False)},
+            )
+
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["errors"] == []
+        test_session.expire_all()
+        target = test_session.query(ChannelPipelineRule).filter_by(
+            name="Stream-sort target"
+        ).one()
+        assert target.stream_sort_field == stream_sort_field
 
     @pytest.mark.asyncio
     async def test_valid_overwrite_persists_changed_active_window(
