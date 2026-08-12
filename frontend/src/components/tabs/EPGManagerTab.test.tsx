@@ -10,7 +10,7 @@
  * a deprecation notice and NO new-creation affordance.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useServerDataInvalidation } from '../../hooks/useServerDataInvalidation';
 import { EPGManagerTab, getTiedPriorities } from './EPGManagerTab';
 import type { EPGSource } from '../../types';
@@ -72,6 +72,21 @@ function makeSource(overrides: Partial<EPGSource>): EPGSource {
 describe('EPGManagerTab — legacy Dummy EPG Sources section', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('names the source editor and blocks Close, Cancel, and Escape while save is pending', async () => {
+    vi.mocked(api.getEPGSources).mockResolvedValue([]);
+    vi.mocked(api.createEPGSource).mockReturnValue(new Promise(() => {}));
+    render(<EPGManagerTab />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /Add Standard EPG/ }))[0]);
+    const dialog = screen.getByRole('dialog', { name: 'Add Standard EPG' });
+    fireEvent.change(within(dialog).getByLabelText(/Name/), { target: { value: 'Synthetic EPG' } });
+    fireEvent.change(within(dialog).getByLabelText(/URL/), { target: { value: 'https://example.invalid/guide.xml' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add EPG' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
   });
 
   it('hides the legacy section entirely when there are zero legacy dummy sources', async () => {

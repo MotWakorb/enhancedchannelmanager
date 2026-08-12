@@ -136,3 +136,127 @@ test('all catalogued modal text has a reviewed type-scale owner at 1280x720', as
   // gate without leaking modal content into public CI logs.
   expect(residuals).toEqual([])
 })
+
+test('every rendered ModalOverlay catalog state has an accessible named semantic owner', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto(HARNESS_URL, { waitUntil: 'load' })
+  await waitForHarness(page)
+  const catalog = await page.evaluate(
+    () => (window as Window & { __MODAL_HARNESS__: { catalog: CatalogEntry[] } }).__MODAL_HARNESS__.catalog,
+  )
+  const expectedNested = new Set([
+    'norm-apply-confirm',
+    'task-schedule-add',
+    'task-schedule-edit',
+    'streams-bulk-create-conflict',
+  ])
+  const reviewedNonOverlayCatalogIds = new Set([
+    'group-multi-select-dropdown',
+    'selection-action-bar',
+    'stream-create-menu',
+    'cp-circuit-breaker-banner',
+    'cp-event-sync-rule-editor',
+    'cp-rule-builder',
+    'scheduled-tasks-run',
+    'channels-pane-renumber-all',
+  ])
+  // These catalog states predate the owned-focus rollout and are explicitly
+  // retained as focus debt. The exact comparison below makes both additions
+  // and removals review-visible while every state still runs the same probe.
+  const reviewedInitialFocusDebt = new Set([
+    'dbas-restore',
+    'dbas-restore-saved',
+    'stream-dedup',
+    'cp-bulk-rule-settings',
+    'cp-event-sync-autosync-fix',
+    'dummy-epg-delete-confirm',
+    'dummy-epg-export',
+    'dummy-epg-import-yaml',
+    'norm-apply-confirm',
+    'settings-plex-token',
+    'cp-rule-builder-modal',
+    'cp-delete-confirm',
+    'cp-import-dialog',
+    'cp-export-dialog',
+    'cp-execution-details',
+    'cp-event-sync-run-confirm',
+    'cp-rollback-confirm',
+    'cp-revert-confirm',
+    'cp-revert-result',
+  ])
+  const reviewedTabRecaptureDebt = new Set([
+    'dummy-epg-delete-confirm',
+    'dummy-epg-export',
+    'dummy-epg-import-yaml',
+    'norm-apply-confirm',
+    'settings-plex-token',
+    'cp-rule-builder-modal',
+    'cp-delete-confirm',
+    'cp-import-dialog',
+    'cp-export-dialog',
+    'cp-execution-details',
+    'cp-event-sync-run-confirm',
+    'cp-rollback-confirm',
+    'cp-revert-confirm',
+    'cp-revert-result',
+  ])
+  const observedWithoutOverlay: string[] = []
+  const initialFocusFailures: string[] = []
+  const tabRecaptureFailures: string[] = []
+
+  for (const entry of catalog) {
+    if (entry.status === 'gap') continue
+    await page.goto(`${HARNESS_URL}?dialog=${encodeURIComponent(entry.id)}`, { waitUntil: 'load' })
+    await waitForHarness(page)
+    const result = await page.evaluate(() => {
+      const harness = (window as Window & { __MODAL_HARNESS__: { status: string; error: unknown } }).__MODAL_HARNESS__
+      const overlays = [...document.querySelectorAll<HTMLElement>('[data-modal-overlay]')]
+        .filter((overlay) => getComputedStyle(overlay).display !== 'none')
+      const surfaceNodes = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')]
+        .filter((surface) => getComputedStyle(surface).display !== 'none')
+      const surfaces = surfaceNodes.map((surface) => ({
+          role: surface.getAttribute('role'),
+          modal: surface.getAttribute('aria-modal'),
+          name: surface.getAttribute('aria-label')?.trim() ||
+            document.getElementById(surface.getAttribute('aria-labelledby') ?? '')?.textContent?.trim() || '',
+        }))
+      const ownedSurfaceCounts = overlays.map((overlay) =>
+        surfaceNodes.filter((surface) => surface.closest('[data-modal-overlay]') === overlay).length)
+      return { status: harness.status, hasError: harness.error !== null, overlays: overlays.length, surfaces, ownedSurfaceCounts }
+    })
+    expect(result.status, `${entry.id} harness status`).toBe('rendered')
+    expect(result.hasError, `${entry.id} harness error`).toBe(false)
+    if (result.overlays === 0) {
+      observedWithoutOverlay.push(entry.id)
+      continue
+    }
+    expect(reviewedNonOverlayCatalogIds.has(entry.id), `${entry.id} unexpected non-overlay classification`).toBe(false)
+    expect(result.surfaces, `${entry.id} semantic surface count`).toHaveLength(expectedNested.has(entry.id) ? 2 : 1)
+    expect(result.ownedSurfaceCounts, `${entry.id} one semantic owner per overlay`)
+      .toEqual(new Array(result.overlays).fill(1))
+    for (const surface of result.surfaces) {
+      expect(surface.modal, `${entry.id} modal state`).toBe('true')
+      expect(surface.name, `${entry.id} accessible name`).not.toBe('')
+    }
+    await expect(page.locator('[role="dialog"], [role="alertdialog"]').last()).toContainText(/\S/)
+    if (!(await page.evaluate(() => {
+      const surfaces = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')]
+      return surfaces.at(-1)?.contains(document.activeElement) ?? false
+    }))) {
+      initialFocusFailures.push(entry.id)
+    }
+    await page.evaluate(() => {
+      const outside = document.querySelector<HTMLElement>('[data-harness-chrome]')
+      outside?.setAttribute('tabindex', '-1')
+      outside?.focus()
+    })
+    await page.keyboard.press('Tab')
+    if (!(await page.evaluate(() => {
+      const surfaces = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')]
+      return surfaces.at(-1)?.contains(document.activeElement) ?? false
+    }))) tabRecaptureFailures.push(entry.id)
+  }
+  expect(observedWithoutOverlay.sort()).toEqual([...reviewedNonOverlayCatalogIds].sort())
+  expect(initialFocusFailures.sort()).toEqual([...reviewedInitialFocusDebt].sort())
+  expect(tabRecaptureFailures.sort()).toEqual([...reviewedTabRecaptureDebt].sort())
+})

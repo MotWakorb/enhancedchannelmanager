@@ -11,7 +11,7 @@
  */
 import type * as React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { LogoManagerTab } from './LogoManagerTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
@@ -60,6 +60,18 @@ describe('LogoManagerTab', () => {
       expect(screen.queryByText('Loading logos...')).not.toBeInTheDocument();
     });
   }
+
+  it('names delete confirmation and blocks Close, Cancel, and Escape while delete is pending', async () => {
+    vi.mocked(api.deleteLogo).mockReturnValue(new Promise(() => {}));
+    await renderAndSettle();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete logo' })[0]);
+    const dialog = screen.getByRole('dialog', { name: 'Delete Logo' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+  });
 
   it('loads the first page with the default sort (name, ascending)', async () => {
     await renderAndSettle();

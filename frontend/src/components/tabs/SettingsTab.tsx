@@ -33,6 +33,7 @@ import { ModalOverlay } from '../ModalOverlay';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { useScrollTopReset } from '../../hooks/useScrollTopReset';
 import { StickySectionNav } from '../StickySectionNav';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import {
   DndContext,
   closestCenter,
@@ -712,6 +713,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [showReorderModal, setShowReorderModal] = useState(false);
   const [reorderData, setReorderData] = useState<ProbeHistoryEntry['reordered_channels'] | null>(null);
   const [reorderSortConfig, setReorderSortConfig] = useState<ProbeHistoryEntry['sort_config'] | null>(null);
+  const { titleId: probeResultsTitleId, containerRef: probeResultsContainerRef } = useOwnedDialog(showProbeResultsModal);
+  const { titleId: reorderTitleId, containerRef: reorderContainerRef } = useOwnedDialog(showReorderModal);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   // M3U accounts for guidance on max concurrent probes
   const [m3uAccountsMaxStreams, setM3uAccountsMaxStreams] = useState<{ name: string; max_streams: number }[]>([]);
@@ -6012,12 +6015,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       />
 
       {showProbeResultsModal && probeResults && (
-        <ModalOverlay onClose={() => setShowProbeResultsModal(false)}>
+        <ModalOverlay onClose={() => setShowProbeResultsModal(false)} role="dialog" aria-modal="true" aria-labelledby={probeResultsTitleId}>
           <div
             className="modal-container modal-lg probe-results-modal"
+            ref={probeResultsContainerRef}
           >
             <div className="modal-header">
-              <h2 className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}>
+              <h2 id={probeResultsTitleId} className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}>
                 {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : probeResultsType === 'low_fps' ? 'Low FPS Streams' : 'Failed Streams'} (
                 {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResultsType === 'low_fps' ? probeResults.low_fps_count : probeResults.failed_count})
               </h2>
@@ -6158,12 +6162,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       {/* Reordered Channels Modal */}
       {showReorderModal && reorderData && (
-        <ModalOverlay onClose={() => setShowReorderModal(false)}>
+        <ModalOverlay onClose={() => setShowReorderModal(false)} role="dialog" aria-modal="true" aria-labelledby={reorderTitleId}>
           <div
             className="modal-container modal-xl reorder-modal"
+            ref={reorderContainerRef}
           >
             <div className="modal-header">
-              <h2>
+              <h2 id={reorderTitleId}>
                 Reordered Channels ({reorderData.length})
               </h2>
               <button
