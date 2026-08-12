@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChangeRecord, SavePoint } from '../types';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { getDateLocale } from '../utils/formatting';
 import './HistoryToolbar.css';
 
@@ -39,6 +40,7 @@ export function HistoryToolbar({
 }: HistoryToolbarProps) {
   const [savePointDropdownOpen, setSavePointDropdownOpen] = useState(false);
   const [showNameModal, setShowNameModal] = useState(false);
+  const { titleId, containerRef } = useOwnedDialog(showNameModal);
   const [checkpointName, setCheckpointName] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -203,9 +205,9 @@ export function HistoryToolbar({
 
       {/* Checkpoint Name Modal */}
       {showNameModal && (
-        <ModalOverlay onClose={handleCancelCheckpoint} className="checkpoint-name-modal-overlay">
-          <div className="checkpoint-name-modal">
-            <h4>Create Checkpoint</h4>
+        <ModalOverlay onClose={handleCancelCheckpoint} className="checkpoint-name-modal-overlay" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+          <div className="checkpoint-name-modal" ref={containerRef}>
+            <h4 id={titleId}>Create Checkpoint</h4>
             <input
               ref={nameInputRef}
               type="text"

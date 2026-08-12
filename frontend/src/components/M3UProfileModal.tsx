@@ -6,6 +6,7 @@ import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import './ModalBase.css';
 import './M3UProfileModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface M3UProfileModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ function M3UProfileModalInner({
   onSaved,
   account,
 }: Omit<M3UProfileModalProps, 'isOpen'>) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [profiles, setProfiles] = useState<M3UAccountProfile[]>([]);
   const [editingProfile, setEditingProfile] = useState<EditingProfile | null>(null);
   const [isAddingNew, setIsAddingNew] = useState(false);
@@ -170,10 +172,10 @@ function M3UProfileModalInner({
   const isEditingDefault = editingProfile?.is_default === true;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg m3u-profile-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg m3u-profile-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>
+          <h2 id={titleId}>
             <span className="material-icons">account_circle</span>
             Account Profiles - {account.name}
           </h2>

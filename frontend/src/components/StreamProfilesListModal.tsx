@@ -3,6 +3,7 @@ import type { StreamProfile } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './StreamProfilesListModal.css';
 
@@ -22,6 +23,7 @@ interface StreamProfilesListModalProps {
  * operations outside this bead).
  */
 export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: StreamProfilesListModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const notifications = useNotifications();
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
@@ -57,10 +59,10 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md stream-profiles-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md stream-profiles-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2 className="modal-title">Stream Profiles</h2>
+          <h2 className="modal-title" id={titleId}>Stream Profiles</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

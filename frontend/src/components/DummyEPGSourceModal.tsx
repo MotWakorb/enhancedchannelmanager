@@ -3,6 +3,7 @@ import type { EPGSource, DummyEPGCustomProperties, DummyEPGPreviewResult, DummyE
 import type { CreateEPGSourceRequest } from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { render as renderTemplate, TemplateSyntaxError } from '../utils/templateEngine';
 import * as api from '../services/api';
 import { logger } from '../utils/logger';
@@ -208,6 +209,7 @@ const CollapsibleSection = memo(function CollapsibleSection({ title, isOpen, onT
 });
 
 export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, source, onClose, onSave }: DummyEPGSourceModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   // Basic Info
   const [name, setName] = useState('');
   const [isActive, setIsActive] = useState(true);
@@ -588,10 +590,10 @@ export const DummyEPGSourceModal = memo(function DummyEPGSourceModal({ isOpen, s
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg dummy-epg-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg dummy-epg-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{source ? 'Edit Dummy EPG Source' : 'Add Dummy EPG Source'}</h2>
+          <h2 id={titleId}>{source ? 'Edit Dummy EPG Source' : 'Add Dummy EPG Source'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

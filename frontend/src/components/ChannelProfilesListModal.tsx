@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ChannelProfilesListModal.css';
 
 interface ChannelProfilesListModalProps {
@@ -28,6 +29,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   channels,
   channelGroups,
 }: ChannelProfilesListModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [profiles, setProfiles] = useState<ProfileWithState[]>([]);
   const [search, setSearch] = useState('');
@@ -380,12 +382,12 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg channel-profiles-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg channel-profiles-modal" ref={containerRef}>
         {viewMode === 'list' ? (
           <>
             <div className="modal-header">
-              <h2>Channel Profiles</h2>
+              <h2 id={titleId}>Channel Profiles</h2>
               <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>

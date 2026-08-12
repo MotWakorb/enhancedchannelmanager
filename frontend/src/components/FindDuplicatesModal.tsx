@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import type { DuplicateGroup, BulkMergeItem } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './FindDuplicatesModal.css';
 
@@ -14,6 +15,7 @@ interface FindDuplicatesModalProps {
 }
 
 export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   // A selection of zero channels isn't a meaningful scope — treat it the
   // same as "no selection passed" (global scan) rather than sending an
   // empty channel_ids that the backend would interpret as "scope to
@@ -145,11 +147,11 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg find-duplicates-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg find-duplicates-modal" ref={containerRef}>
         <div className="modal-header">
           <div>
-            <h2>
+            <h2 id={titleId}>
               <span className="material-icons">content_copy</span>
               Find Duplicate Channels
             </h2>

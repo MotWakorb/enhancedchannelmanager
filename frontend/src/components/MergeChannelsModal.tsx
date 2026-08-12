@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import type { Channel, Logo, MergeChannelsRequest } from '../types';
 import { CustomSelect, type SelectOption } from './CustomSelect';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import * as api from '../services/api';
 import './ModalBase.css';
 import './MergeChannelsModal.css';
@@ -29,6 +30,7 @@ export function MergeChannelsModal({
   onClose,
   onMerged,
 }: MergeChannelsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   // Default values from the first selected channel
   const first = channels[0];
 
@@ -139,10 +141,10 @@ export function MergeChannelsModal({
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg merge-channels-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg merge-channels-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Merge {channels.length} Channels</h2>
+          <h2 id={titleId}>Merge {channels.length} Channels</h2>
           <button className="modal-close-btn" onClick={onClose} title="Close" aria-label="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

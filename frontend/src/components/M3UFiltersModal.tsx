@@ -3,6 +3,7 @@ import type { M3UAccount, M3UFilter, M3UFilterCreateRequest } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './M3UFiltersModal.css';
 
@@ -36,6 +37,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   onSaved,
   account,
 }: M3UFiltersModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [filters, setFilters] = useState<M3UFilter[]>([]);
   const [loading, setLoading] = useState(false);
@@ -173,11 +175,11 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container m3u-filters-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container m3u-filters-modal" ref={containerRef}>
         <div className="modal-header">
           <div className="header-info">
-            <h2>Manage Filters</h2>
+            <h2 id={titleId}>Manage Filters</h2>
             <span className="account-name">{account.name}</span>
           </div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">

@@ -4,6 +4,7 @@ import type { M3UAccount, M3UAccountType, M3UAccountCreateRequest, ServerGroup }
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { isHDHomerunLineupUrl } from '../utils/hdhomerun';
 import './ModalBase.css';
 import './M3UAccountModal.css';
@@ -37,6 +38,7 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   account,
   serverGroups,
 }: M3UAccountModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const isEdit = account !== null;
 
   // The account holds no provider password (bead
@@ -275,10 +277,10 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container m3u-account-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container m3u-account-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
+          <h2 id={titleId}>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

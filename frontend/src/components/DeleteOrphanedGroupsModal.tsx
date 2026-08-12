@@ -2,6 +2,7 @@ import { useState, memo } from 'react';
 import './ModalBase.css';
 import './DeleteOrphanedGroupsModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface OrphanedGroup {
   id: number;
@@ -23,6 +24,7 @@ function DeleteOrphanedGroupsModalInner({
   onConfirm,
   groups,
 }: Omit<DeleteOrphanedGroupsModalProps, 'isOpen'>) {
+  const { titleId, containerRef } = useOwnedDialog();
   // Default = all selected. Only track user's explicit changes from that default.
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(
     () => new Set(groups.map(g => g.id))
@@ -52,10 +54,10 @@ function DeleteOrphanedGroupsModalInner({
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md delete-orphaned-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md delete-orphaned-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Delete Orphaned Channel Groups</h2>
+          <h2 id={titleId}>Delete Orphaned Channel Groups</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

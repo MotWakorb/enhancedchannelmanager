@@ -3,6 +3,7 @@ import type { ServerGroup } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './ServerGroupsModal.css';
 
@@ -31,6 +32,7 @@ interface RowState extends ServerGroup {
  * relationship the account-side UI already owns.
  */
 export function ServerGroupsModal({ onClose, onChanged }: ServerGroupsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const notifications = useNotifications();
   const [groups, setGroups] = useState<RowState[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,10 +117,10 @@ export function ServerGroupsModal({ onClose, onChanged }: ServerGroupsModalProps
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md server-groups-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md server-groups-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2 className="modal-title">Manage Server Groups</h2>
+          <h2 className="modal-title" id={titleId}>Manage Server Groups</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
