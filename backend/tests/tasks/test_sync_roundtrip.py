@@ -74,6 +74,262 @@ async def test_convergence_empty_b_matches_a_by_natural_key(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_epg_assignment_round_trips_by_portable_row_identity(tmp_path):
+    """A/B row ids differ; unique tvg_id restores new and matched channels."""
+    source = StatefulDispatcharrFake.seeded_source()
+    source_row = source.epg_data.create(
+        {"name": "Source guide", "tvg_id": "guide.synthetic"}
+    )
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel["epg_data_id"] = source_row["id"]
+    source_channel["tvg_id"] = None
+
+    dest = StatefulDispatcharrFake.empty_dest()
+    dest_row = dest.epg_data.create(
+        {"name": "Destination guide", "tvg_id": " GUIDE.SYNTHETIC "}
+    )
+    existing = dest.channels.create(
+        {
+            "name": source_channel["name"],
+            "channel_number": source_channel["channel_number"],
+            "streams": [],
+            "epg_data_id": None,
+            "tvg_id": None,
+        }
+    )
+
+    report = await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] == dest_row["id"]
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] != source_row["id"]
+
+    # A newly created channel follows the same portable-key path.
+    created_source = source.channels.create(
+        {
+            "name": "Created synthetic",
+            "channel_number": 77,
+            "streams": [],
+            "epg_data_id": source_row["id"],
+            "tvg_id": None,
+        }
+    )
+    await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+    created_dest = next(
+        c
+        for c in dest.channels.rows.values()
+        if c["name"] == created_source["name"]
+    )
+    assert created_dest["epg_data_id"] == dest_row["id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "destination_rows", [[], ["collision.synthetic", "COLLISION.SYNTHETIC"]]
+)
+async def test_missing_or_ambiguous_epg_identity_preserves_existing_assignment(
+    tmp_path, destination_rows
+):
+    source = StatefulDispatcharrFake.seeded_source()
+    source_row = source.epg_data.create(
+        {"name": "Source guide", "tvg_id": "collision.synthetic"}
+    )
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel["epg_data_id"] = source_row["id"]
+    created_source = source.channels.create(
+        {
+            "name": "Unresolved created synthetic",
+            "channel_number": 78,
+            "streams": [],
+            "epg_data_id": source_row["id"],
+        }
+    )
+
+    dest = StatefulDispatcharrFake.empty_dest()
+    preserved = dest.epg_data.create(
+        {"name": "Preserved guide", "tvg_id": "preserved.synthetic"}
+    )
+    for index, tvg_id in enumerate(destination_rows):
+        dest.epg_data.create({"name": f"Candidate {index}", "tvg_id": tvg_id})
+    existing = dest.channels.create(
+        {
+            "name": source_channel["name"],
+            "channel_number": source_channel["channel_number"],
+            "streams": [],
+            "epg_data_id": preserved["id"],
+        }
+    )
+
+    report = await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] == preserved["id"]
+    created_dest = next(
+        row
+        for row in dest.channels.rows.values()
+        if row["name"] == created_source["name"]
+    )
+    assert created_dest.get("epg_data_id") is None
+    assert report.epg_links_unrestored == 2
+    assert {detail.name for detail in report.epg_link_miss_details} == {
+        source_channel["name"],
+        created_source["name"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_null_source_epg_assignment_does_not_replace_destination(tmp_path):
+    source = StatefulDispatcharrFake.seeded_source()
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel["epg_data_id"] = None
+    dest = StatefulDispatcharrFake.empty_dest()
+    preserved = dest.epg_data.create(
+        {"name": "Preserved guide", "tvg_id": "preserved.synthetic"}
+    )
+    existing = dest.channels.create(
+        {
+            "name": source_channel["name"],
+            "channel_number": source_channel["channel_number"],
+            "streams": [],
+            "epg_data_id": preserved["id"],
+        }
+    )
+
+    await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] == preserved["id"]
+
+
+@pytest.mark.asyncio
+async def test_epg_identity_lookup_failures_do_not_log_diagnostic_values(
+    tmp_path, caplog, monkeypatch
+):
+    marker = "SYNTHETIC-DIAGNOSTIC-VALUE"
+    source = StatefulDispatcharrFake.seeded_source()
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel["epg_data_id"] = 123
+
+    async def fail_lookup(*args, **kwargs):
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(source, "get_epg_data", fail_lookup)
+    await SyncHarness(source=source, dest=StatefulDispatcharrFake.empty_dest()).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_state", ["exception", "missing", "blank", "truncated"])
+async def test_live_sync_requires_stamped_epg_link_provenance(
+    tmp_path, caplog, monkeypatch, source_state
+):
+    """A channel's own tvg_id must never substitute for its linked guide row."""
+    marker = "SYNTHETIC-LOOKUP-DIAGNOSTIC"
+    fallback_key = "fallback.synthetic"
+    source = StatefulDispatcharrFake.seeded_source()
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel.update({"epg_data_id": 987654, "tvg_id": fallback_key})
+
+    if source_state == "exception":
+        async def fail_lookup(*args, **kwargs):
+            raise RuntimeError(marker)
+
+        monkeypatch.setattr(source, "get_epg_data", fail_lookup)
+    elif source_state == "blank":
+        source.epg_data.rows[987654] = {
+            "id": 987654,
+            "name": "Blank source row",
+            "tvg_id": "   ",
+        }
+    elif source_state == "truncated":
+        monkeypatch.setattr("routers.backup.EPG_INDEX_MAX_ROWS", 2)
+        source.epg_data.rows[987654] = {
+            "id": 987654,
+            "name": "Resolvable source row",
+            "tvg_id": fallback_key,
+        }
+        source.epg_data.rows[987655] = {
+            "id": 987655,
+            "name": "Ceiling row",
+            "tvg_id": "ceiling.synthetic",
+        }
+
+    dest = StatefulDispatcharrFake.empty_dest()
+    preserved = dest.epg_data.create(
+        {"name": "Preserved guide", "tvg_id": "preserved.synthetic"}
+    )
+    dest.epg_data.create({"name": "False fallback", "tvg_id": fallback_key})
+    existing = dest.channels.create(
+        {
+            "name": source_channel["name"],
+            "channel_number": source_channel["channel_number"],
+            "streams": [],
+            "epg_data_id": preserved["id"],
+        }
+    )
+
+    report = await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] == preserved["id"]
+    assert report.epg_links_unrestored == 1
+    assert [detail.name for detail in report.epg_link_miss_details] == [
+        source_channel["name"]
+    ]
+    assert marker not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_destination_epg_inventory_ceiling_preserves_links_and_counts_misses(
+    tmp_path, monkeypatch
+):
+    """A visible candidate is unsafe when a duplicate may be beyond the cap."""
+    portable_key = "capped.synthetic"
+    source = StatefulDispatcharrFake.seeded_source()
+    source_row = source.epg_data.create(
+        {"name": "Source guide", "tvg_id": portable_key}
+    )
+    source_channel = next(iter(source.channels.rows.values()))
+    source_channel["epg_data_id"] = source_row["id"]
+
+    dest = StatefulDispatcharrFake.empty_dest()
+    preserved = dest.epg_data.create(
+        {"name": "Preserved guide", "tvg_id": "preserved.synthetic"}
+    )
+    dest.epg_data.create({"name": "Visible candidate", "tvg_id": portable_key})
+    dest.epg_data.create({"name": "Hidden duplicate", "tvg_id": portable_key.upper()})
+    existing = dest.channels.create(
+        {
+            "name": source_channel["name"],
+            "channel_number": source_channel["channel_number"],
+            "streams": [],
+            "epg_data_id": preserved["id"],
+        }
+    )
+    monkeypatch.setattr("dbas.channel_reattach.EPG_INDEX_MAX_ROWS", 2)
+
+    report = await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert dest.channels.rows[existing["id"]]["epg_data_id"] == preserved["id"]
+    assert report.epg_links_unrestored == 1
+    assert [detail.name for detail in report.epg_link_miss_details] == [
+        source_channel["name"]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_dry_run_default_makes_zero_writes_to_b(tmp_path):
     """confirm_apply=False (default) is a counts-only preview — B stays empty."""
     source = StatefulDispatcharrFake.seeded_source()

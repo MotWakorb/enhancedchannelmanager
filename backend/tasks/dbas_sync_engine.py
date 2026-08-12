@@ -23,9 +23,10 @@ take the Dispatcharr ``client`` as an injected parameter — the ONLY coupling t
 5. and runs the UNCHANGED orchestrator against a remote (dest-B) client built
    from a ``SyncTarget`` row (``dbas_sync_client.make_remote_client``).
 
-There are **zero edits to ``backend/dbas/``** — the orchestrator + importers are
-reused as-is. The only new code here is the live-source plan reader, the
-config-only step registry, ``run_sync``, and the shared never-sync constant.
+The orchestrator, importers, and post-import natural-key reattachment machinery
+are reused rather than reimplemented. Sync-specific code remains the live-source
+plan reader, config-only step registry, ``run_sync``, and shared never-sync
+constant.
 
 Scope of THIS engine (ADR-013 phasing / S9)
 -------------------------------------------
@@ -81,6 +82,7 @@ from pathlib import Path
 from typing import Optional
 
 import journal
+from dbas.channel_reattach import reattach_epg_links
 from dbas.preflight import (
     CHANNEL_FK_FIELDS,
     ImportPlan,
@@ -89,6 +91,7 @@ from dbas.preflight import (
 )
 from dbas.restore_artifact import _SECTION_TO_ENTITY
 from dbas.restore_contracts import (
+    ChannelReattachMode,
     EntityType,
     FailureDetail,
     FailureReason,
@@ -235,7 +238,9 @@ async def _gather_live_channels() -> list[dict]:
                 break
             page += 1
     except Exception as exc:  # noqa: BLE001 - fail-soft: no channels rather than crash
-        logger.warning("[SYNC] Could not list source channels: %s", exc)
+        logger.warning(
+            "[SYNC] Could not list source channels: %s", type(exc).__name__
+        )
         return []
 
     # Resolve each channel's embedded stream records so the importer can match
@@ -253,11 +258,25 @@ async def _gather_live_channels() -> list[dict]:
                 "[SYNC] Could not fetch streams for channel '%s' (id=%s): %s",
                 channel.get("name") or "<unknown>",
                 channel_id,
-                exc,
+                type(exc).__name__,
             )
             channel["streams"] = []
 
-    logger.info("[SYNC] Gathered %d source channel(s) with embedded streams.", len(channels))
+    # Convert the source-instance EPG row id into the portable row identity
+    # before the channel importer deliberately discards that unsafe FK. A
+    # ceiling hit is unresolved for live sync: partial provenance is not proof.
+    try:
+        await backup_mod._resolve_epg_link_natural_keys(
+            client, channels, allow_truncated=False
+        )
+    except Exception as exc:  # noqa: BLE001 - optional identity enrichment
+        logger.warning(
+            "[SYNC] Could not resolve source channel EPG identities: %s",
+            type(exc).__name__,
+        )
+    logger.info(
+        "[SYNC] Gathered %d source channel(s) with embedded streams.", len(channels)
+    )
     return channels
 
 
@@ -679,6 +698,17 @@ def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
             remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
             allow_fuzzy_stream_match=allow_fuzzy_stream_match,
+            created_source_ids=ctx.created_channel_source_ids,
+        )
+        await reattach_epg_links(
+            client=ctx.client,
+            report=ctx.report,
+            remap=ctx.remap,
+            archive_channels=list(cat.entities) if cat else [],
+            created_source_ids=ctx.created_channel_source_ids,
+            mode=ChannelReattachMode.OVERWRITE,
+            is_dry_run=ctx.is_dry_run,
+            allow_channel_tvg_id_fallback=False,
         )
         return None
 

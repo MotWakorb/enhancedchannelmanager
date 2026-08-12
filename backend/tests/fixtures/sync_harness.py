@@ -237,6 +237,9 @@ class StatefulDispatcharrFake:
         # Distinct id bases per entity type so a leaked A-id is obvious on B.
         self.m3u_accounts = _Store("m3u_account", _name_key, id_base=id_base + 100)
         self.epg_sources = _Store("epg_source", _name_key, id_base=id_base + 200)
+        # Guide rows are not a synced entity. They model independently minted
+        # ids on A/B so channel-link tests must resolve by the portable tvg_id.
+        self.epg_data = _Store("epg_data", _name_key, id_base=id_base + 250)
         self.channel_groups = _Store("channel_group", _name_key, id_base=id_base + 300)
         self.channel_profiles = _Store("channel_profile", _name_key, id_base=id_base + 400)
         self.stream_profiles = _Store("stream_profile", _name_key, id_base=id_base + 500)
@@ -322,6 +325,9 @@ class StatefulDispatcharrFake:
 
     async def delete_epg_source(self, source_id: int) -> None:
         self.epg_sources.delete(source_id)
+
+    async def get_epg_data(self, max_results: int = 200_000) -> list:
+        return self.epg_data.list()[:max_results]
 
     # ----- channel groups (create takes a NAME STRING) ---------------------
 
