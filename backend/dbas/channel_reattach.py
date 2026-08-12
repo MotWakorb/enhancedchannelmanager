@@ -452,10 +452,9 @@ async def reattach_channel_logos(
 async def _tvg_id_index(client: DispatcharrClient) -> dict[str, int]:
     """Build a ``tvg_id -> destination EPG-data id`` index.
 
-    Case-insensitive, whitespace-trimmed keys. On a duplicate ``tvg_id`` the
-    LOWEST id wins — the same deterministic, order-independent tie-break the
-    group and logo matchers use, so the reattach result does not depend on the
-    order Dispatcharr happened to return rows in.
+    Case-insensitive, whitespace-trimmed keys. Duplicate ``tvg_id`` values are
+    omitted: choosing either destination row would make an ambiguous portable
+    identity silently instance-dependent.
 
     Never raises: a failed fetch yields an empty index, which turns the whole
     pass into "every link is an honest, counted miss" rather than a crash.
@@ -469,7 +468,14 @@ async def _tvg_id_index(client: DispatcharrClient) -> dict[str, int]:
             type(exc).__name__,
         )
         return {}
-    index: dict[str, int] = {}
+    if len(rows or []) >= EPG_INDEX_MAX_ROWS:
+        logger.warning(
+            "[DBAS-REATTACH] Destination EPG data hit the %d-row read ceiling; "
+            "link identity is incomplete, so no channel EPG links were applied.",
+            EPG_INDEX_MAX_ROWS,
+        )
+        return {}
+    candidates: dict[str, set[int]] = {}
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -480,13 +486,17 @@ async def _tvg_id_index(client: DispatcharrClient) -> dict[str, int]:
         key = tvg_id.strip().lower()
         if not key:
             continue
-        existing = index.get(key)
-        if existing is None or row_id < existing:
-            index[key] = row_id
-    return index
+        candidates.setdefault(key, set()).add(row_id)
+    return {
+        key: next(iter(row_ids))
+        for key, row_ids in candidates.items()
+        if len(row_ids) == 1
+    }
 
 
-def _link_tvg_id(archive_channel: dict) -> str:
+def _link_tvg_id(
+    archive_channel: dict, *, allow_channel_fallback: bool = True
+) -> str:
     """The natural key to relink this archived channel by, trimmed (may be "").
 
     PREFERS :data:`ARCHIVE_EPG_TVG_ID_KEY`, the tvg_id the backup producer read
@@ -501,7 +511,12 @@ def _link_tvg_id(archive_channel: dict) -> str:
     ``tvg_id`` remains its own field and is restored to the channel untouched by
     the channel create. This pass only reads it, never writes it.
     """
-    for key in (ARCHIVE_EPG_TVG_ID_KEY, "tvg_id"):
+    keys = (
+        (ARCHIVE_EPG_TVG_ID_KEY, "tvg_id")
+        if allow_channel_fallback
+        else (ARCHIVE_EPG_TVG_ID_KEY,)
+    )
+    for key in keys:
         raw = archive_channel.get(key)
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
@@ -551,6 +566,7 @@ async def reattach_epg_links(
     created_source_ids: set[int] | None,
     mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
     is_dry_run: bool = False,
+    allow_channel_tvg_id_fallback: bool = True,
 ) -> int:
     """Reconnect each restored channel to its EPG row via the archived tvg_id.
 
@@ -589,6 +605,9 @@ async def reattach_epg_links(
             information".
         mode: What to do about channels this restore did not create.
         is_dry_run: Report the split without reading or writing anything.
+        allow_channel_tvg_id_fallback: Accept the channel row's own ``tvg_id``
+            for legacy artifacts without a stamped link key. Live sync disables
+            this because the channel field is not provenance for its EPG link.
 
     Returns:
         The number of channels relinked (the WOULD-BE number on a dry run).
@@ -675,7 +694,10 @@ async def reattach_epg_links(
             if source_channel_id is not None
             else None
         )
-        tvg_id = _link_tvg_id(archive_channel)
+        tvg_id = _link_tvg_id(
+            archive_channel,
+            allow_channel_fallback=allow_channel_tvg_id_fallback,
+        )
         dest_epg_id = index.get(tvg_id.lower()) if tvg_id else None
         was_created = (
             created_source_ids is not None and source_channel_id in created_source_ids

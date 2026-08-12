@@ -90,7 +90,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0086"
+APP_VERSION = "0.18.1-0087"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2746,7 +2746,9 @@ def _epg_link_id(channel: dict) -> int | None:
     return as_int(channel.get("epg_data_id"))
 
 
-async def _resolve_epg_link_natural_keys(client, channels: list[dict]) -> int:
+async def _resolve_epg_link_natural_keys(
+    client, channels: list[dict], *, allow_truncated: bool = True
+) -> int:
     """Stamp each EPG-linked channel with the tvg_id of the row it points at.
 
     Bead ``enhancedchannelmanager-dfkbn``, drill run 2026-08-04-run2. ``epg_data_id``
@@ -2773,6 +2775,9 @@ async def _resolve_epg_link_natural_keys(client, channels: list[dict]) -> int:
     Args:
         client: The Dispatcharr API client.
         channels: The gathered channel records. Mutated in place.
+        allow_truncated: Preserve legacy backup behavior when the bounded guide
+            inventory hits its ceiling. Live sync passes ``False`` because an
+            incomplete source inventory cannot prove link provenance safely.
 
     Returns:
         The number of channels whose link natural key was resolved.
@@ -2807,6 +2812,8 @@ async def _resolve_epg_link_natural_keys(client, channels: list[dict]) -> int:
             "below may be a truncation artifact, not a dangling reference.",
             EPG_INDEX_MAX_ROWS,
         )
+        if not allow_truncated:
+            return 0
 
     index: dict[int, str] = {}
     for row in rows or []:
