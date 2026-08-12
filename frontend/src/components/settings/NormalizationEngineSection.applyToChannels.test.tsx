@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { NormalizationEngineSection } from './NormalizationEngineSection';
+import * as api from '../../services/api';
 
 // Mock the notification context.
 // IMPORTANT: `useNotifications` must return a STABLE reference across
@@ -95,6 +96,51 @@ describe('NormalizationEngineSection — apply to existing channels (GH-104)', (
     // Seed the mount-time API calls so the loading state always resolves.
     mockGetRules.mockResolvedValue({ groups: [] });
     mockGetTags.mockResolvedValue({ groups: [] });
+  });
+
+  it('names group editor and blocks every dismissal while create is pending', async () => {
+    vi.mocked(api.createNormalizationGroup).mockReturnValue(new Promise(() => {}));
+    render(<NormalizationEngineSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create First Group' }));
+    const dialog = screen.getByRole('dialog', { name: 'New Rule Group' });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g., My Custom Rules'), { target: { value: 'Synthetic group' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Group' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('blocks rule Close, Cancel, and Escape while rule creation is pending', async () => {
+    mockGetRules.mockResolvedValue({ groups: [{
+      id: 7, name: 'Synthetic rules', description: null, enabled: true, priority: 0,
+      is_builtin: false, created_at: '', updated_at: '', rules: [],
+    }] });
+    vi.mocked(api.createNormalizationRule).mockReturnValue(new Promise(() => {}));
+    render(<NormalizationEngineSection />);
+    fireEvent.click(await screen.findByText('Synthetic rules'));
+    fireEvent.click(await screen.findByRole('button', { name: /Add Rule$/ }));
+    const dialog = screen.getByRole('dialog', { name: 'New Rule' });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g., Strip HD suffix'), { target: { value: 'Synthetic rule' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Rule' }));
+
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('names import dialog and blocks every dismissal while import is pending', async () => {
+    vi.mocked(api.importNormalizationRulesYaml).mockReturnValue(new Promise(() => {}));
+    render(<NormalizationEngineSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /Import/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Import Normalization Rules' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Paste YAML content here...'), { target: { value: 'groups: []' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
   });
 
   it('renders the apply-to-channels button in the header', async () => {
@@ -258,6 +304,29 @@ describe('NormalizationEngineSection — apply to existing channels (GH-104)', (
     expect(sent).toEqual([
       expect.objectContaining({ channel_id: 1, action: 'rename' }),
     ]);
+  });
+
+  it('keeps both parent dialog and descendant alertdialog locked while apply is unresolved', async () => {
+    mockPreview.mockResolvedValue({
+      dry_run: true,
+      channels_with_changes: 1,
+      diffs: [baseDiff({ channel_id: 1 })],
+    });
+    mockExecute.mockReturnValue(new Promise(() => {}));
+    render(<NormalizationEngineSection />);
+    fireEvent.click(await screen.findByTestId('apply-to-channels-btn'));
+    const parent = await screen.findByRole('dialog', { name: 'Apply Normalization to Existing Channels' });
+    fireEvent.click(await screen.findByTestId('apply-to-channels-execute'));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Confirm bulk rename' });
+    fireEvent.click(within(confirm).getByTestId('apply-to-channels-confirm-execute'));
+
+    await waitFor(() => expect(within(confirm).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(confirm).getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(within(parent).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(parent).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('alertdialog', { name: 'Confirm bulk rename' })).toBe(confirm);
+    expect(screen.getByRole('dialog', { name: 'Apply Normalization to Existing Channels' })).toBe(parent);
   });
 
   // ------------------------------------------------------------------

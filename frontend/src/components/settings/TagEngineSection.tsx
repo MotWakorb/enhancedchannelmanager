@@ -10,6 +10,7 @@ import * as api from '../../services/api';
 import type { TagGroup, Tag } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import { logger } from '../../utils/logger';
 import './TagEngineSection.css';
 import '../ModalBase.css';
@@ -393,6 +394,7 @@ export function TagEngineSection() {
   const [loading, setLoading] = useState(true);
   const [expandedGroupId, setExpandedGroupId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupDescription, setNewGroupDescription] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -402,6 +404,8 @@ export function TagEngineSection() {
   const [importYaml, setImportYaml] = useState('');
   const [importOverwrite, setImportOverwrite] = useState(false);
   const [importing, setImporting] = useState(false);
+  const { titleId: importTitleId, containerRef: importContainerRef } = useOwnedDialog(showImportModal);
+  const { titleId: createTitleId, containerRef: createContainerRef } = useOwnedDialog(showCreateModal);
   const importFileRef = useRef<HTMLInputElement>(null);
 
   const loadGroups = useCallback(async () => {
@@ -423,6 +427,7 @@ export function TagEngineSection() {
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) return;
 
+    setCreating(true);
     try {
       await api.createTagGroup({
         name: newGroupName.trim(),
@@ -435,8 +440,12 @@ export function TagEngineSection() {
     } catch (err) {
       notifications.error('Failed to create tag group', 'Tags');
       logger.error('Tag operation failed:', err);
+    } finally {
+      setCreating(false);
     }
   };
+  const closeCreate = () => { if (!creating) setShowCreateModal(false); };
+  const closeImport = () => { if (!importing) setShowImportModal(false); };
 
   const handleDeleteGroup = async (groupId: number) => {
     const group = groups.find(g => g.id === groupId);
@@ -592,11 +601,11 @@ export function TagEngineSection() {
 
       {/* Import Tags Modal */}
       {showImportModal && (
-        <ModalOverlay onClose={() => setShowImportModal(false)}>
-          <div className="modal-container modal-lg">
+        <ModalOverlay onClose={closeImport} role="dialog" aria-modal="true" aria-labelledby={importTitleId}>
+          <div className="modal-container modal-lg" ref={importContainerRef}>
             <div className="modal-header">
-              <h2>Import Tags</h2>
-              <button className="modal-close-btn" onClick={() => setShowImportModal(false)} aria-label="Close" title="Close">
+              <h2 id={importTitleId}>Import Tags</h2>
+              <button className="modal-close-btn" onClick={closeImport} disabled={importing} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
@@ -637,7 +646,7 @@ export function TagEngineSection() {
               </label>
             </div>
             <div className="modal-footer">
-              <button className="modal-btn modal-btn-secondary" onClick={() => setShowImportModal(false)}>
+              <button className="modal-btn modal-btn-secondary" onClick={closeImport} disabled={importing}>
                 Cancel
               </button>
               <button
@@ -659,11 +668,11 @@ export function TagEngineSection() {
           overrode ModalBase for every modal in the app once Settings had been
           visited (bead enhancedchannelmanager-6z299.2). */}
       {showCreateModal && (
-        <ModalOverlay onClose={() => setShowCreateModal(false)} className="modal-overlay tag-engine-group-modal">
-          <div className="modal-content">
+        <ModalOverlay onClose={closeCreate} className="modal-overlay tag-engine-group-modal" role="dialog" aria-modal="true" aria-labelledby={createTitleId}>
+          <div className="modal-content" ref={createContainerRef}>
             <div className="modal-header">
-              <h3>Create Tag Group</h3>
-              <button className="modal-close-btn" onClick={() => setShowCreateModal(false)} aria-label="Close" title="Close">
+              <h3 id={createTitleId}>Create Tag Group</h3>
+              <button className="modal-close-btn" onClick={closeCreate} disabled={creating} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
@@ -689,15 +698,15 @@ export function TagEngineSection() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>
+              <button className="btn-secondary" onClick={closeCreate} disabled={creating}>
                 Cancel
               </button>
               <button
                 className="btn-primary"
                 onClick={handleCreateGroup}
-                disabled={!newGroupName.trim()}
+                disabled={creating || !newGroupName.trim()}
               >
-                Create Group
+                {creating ? 'Creating...' : 'Create Group'}
               </button>
             </div>
           </div>
