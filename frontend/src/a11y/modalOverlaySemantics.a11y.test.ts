@@ -281,6 +281,11 @@ describe('ModalOverlay caller semantics ledger', () => {
     }
   });
 
+  it('has zero remaining role, modal-state, or accessible-name debt', () => {
+    expect(MODAL_OVERLAY_MANIFEST.filter(({ role, modal, name }) =>
+      role === null || modal !== 'true' || name !== 'named')).toEqual([]);
+  });
+
   it('discovers named and namespace import aliases', () => {
     const named = ts.createSourceFile(
       'named.tsx',

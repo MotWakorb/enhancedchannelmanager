@@ -23,6 +23,7 @@ import { DummyEPGSourceModal } from '../DummyEPGSourceModal';
 import { DummyEPGManagerSection } from '../DummyEPGManagerSection';
 import { CustomSelect } from '../CustomSelect';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import { PageHeader } from '../PageHeader';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
@@ -285,6 +286,7 @@ const SD_LOGO_STYLES: { value: NonNullable<SDCustomProperties['logo_style']>; la
 ];
 
 function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const [name, setName] = useState('');
   const [sourceType, setSourceType] = useState<EPGSourceType>('xmltv');
   const [url, setUrl] = useState('');
@@ -400,13 +402,14 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
   };
 
   if (!isOpen) return null;
+  const closeModal = () => { if (!saving) onClose(); };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg epg-source-modal">
+    <ModalOverlay onClose={closeModal} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg epg-source-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+          <h2 id={titleId}>{source ? 'Edit EPG Source' : 'Add Standard EPG'}</h2>
+          <button className="modal-close-btn" onClick={closeModal} disabled={saving} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
@@ -591,7 +594,7 @@ function EPGSourceModal({ isOpen, source, onClose, onSave }: EPGSourceModalProps
           </div>
 
           <div className="modal-footer">
-            <button type="button" className="modal-btn modal-btn-secondary" onClick={onClose} disabled={saving}>
+            <button type="button" className="modal-btn modal-btn-secondary" onClick={closeModal} disabled={saving}>
               Cancel
             </button>
             <button type="submit" className="modal-btn modal-btn-primary" disabled={saving}>

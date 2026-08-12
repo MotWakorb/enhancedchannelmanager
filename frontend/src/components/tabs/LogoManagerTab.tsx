@@ -4,6 +4,7 @@ import type { Logo } from '../../types';
 import * as api from '../../services/api';
 import { LogoModal } from '../LogoModal';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
 import { SourceLoadStatus } from '../SourceLoadStatus';
@@ -58,6 +59,8 @@ export function LogoManagerTab() {
   // Delete confirmation state
   const [deletingLogo, setDeletingLogo] = useState<Logo | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const { titleId: deleteTitleId, containerRef: deleteContainerRef } = useOwnedDialog(Boolean(deletingLogo));
+  const closeDelete = () => { if (!deleteLoading) setDeletingLogo(null); };
 
   // Track logos with failed image loads
   const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
@@ -550,13 +553,14 @@ export function LogoManagerTab() {
 
       {/* Delete Confirmation Modal */}
       {deletingLogo && (
-        <ModalOverlay onClose={() => setDeletingLogo(null)}>
+        <ModalOverlay onClose={closeDelete} role="dialog" aria-modal="true" aria-labelledby={deleteTitleId}>
           <div
             className="modal-content delete-confirm-modal"
+            ref={deleteContainerRef}
           >
             <div className="modal-header">
-              <h2>Delete Logo</h2>
-              <button className="close-btn" onClick={() => setDeletingLogo(null)}>
+              <h2 id={deleteTitleId}>Delete Logo</h2>
+              <button className="close-btn" onClick={closeDelete} disabled={deleteLoading} aria-label="Close">
                 &times;
               </button>
             </div>
@@ -577,7 +581,7 @@ export function LogoManagerTab() {
             <div className="modal-footer">
               <button
                 className="btn-secondary"
-                onClick={() => setDeletingLogo(null)}
+                onClick={closeDelete}
                 disabled={deleteLoading}
               >
                 Cancel
