@@ -1893,7 +1893,11 @@ class ActionExecutor:
         if target == "existing_channel" or target == "auto":
             channel = None
 
-            if find_channel_by == "name_exact":
+            # Explicit find fields belong only to existing_channel. The UI
+            # hides but historically retained them when switching to auto;
+            # consuming that stale state (often name_exact with no value)
+            # suppressed auto's normalized-identity lookup entirely (GH #845).
+            if target == "existing_channel" and find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
                 channel = self._find_channel_by_name(
                     expanded_name, scope_group_id=effective_scope_group_id,
@@ -1901,9 +1905,9 @@ class ActionExecutor:
                 )
                 if channel is None:
                     blocked_manual = self._last_manual_block
-            elif find_channel_by == "name_regex":
+            elif target == "existing_channel" and find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
-            elif find_channel_by == "tvg_id":
+            elif target == "existing_channel" and find_channel_by == "tvg_id":
                 channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id)
 
             # enhancedchannelmanager-jnzst: SCORED-FUZZY resolution. When a
@@ -1927,25 +1931,20 @@ class ActionExecutor:
             # Auto-fallback: if no find_channel_by was specified and target is "auto",
             # try to find by normalized stream name (strips prefixes, applies normalization)
             # Skipped on the scored-fuzzy path — the scored resolver above owns it.
-            if not scored_fuzzy and not channel and target == "auto" and not find_channel_by:
-                lookup_name = stream_ctx.normalized_name or stream_ctx.stream_name
-                # Also try running normalization engine if available
-                if self._normalization_engine and not stream_ctx.normalized_name:
-                    try:
-                        norm_result = self._normalization_engine.normalize(stream_ctx.stream_name)
-                        if norm_result.normalized:
-                            lookup_name = norm_result.normalized
-                    except Exception as e:
-                        logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
+            if not scored_fuzzy and not channel and target == "auto":
+                # Use the exact rule-scoped identity already computed at the
+                # action chokepoint. Re-normalizing here without group_ids made
+                # a normalized_name_in_group condition and its merge action
+                # disagree about the same stream (GH #845).
+                lookup_name = template_ctx[TemplateVariables.NORMALIZED_NAME]
                 logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
                 # bd-0emgo.1: default to exact normalized-name equality. With
                 # exact_only=True the GH-104 re-normalize/core-name fuzzy
                 # fallbacks inside _find_channel_by_name are skipped; only the
                 # exact-key indices are consulted. loose_name_match=True restores
                 # the legacy fuzzy lookup.
-                channel = self._find_channel_by_name(
+                channel = self._find_unique_channel_by_exact_identity(
                     lookup_name, scope_group_id=effective_scope_group_id,
-                    exact_only=not loose_name_match,
                     block_manual=not allow_manual_channel_merge,
                 )
                 if channel is None:
@@ -5135,6 +5134,51 @@ class ActionExecutor:
         lst = candidates.setdefault(key, [])
         if not any(existing is channel for existing in lst):
             lst.append(channel)
+
+    def _find_unique_channel_by_exact_identity(
+        self,
+        name: str,
+        *,
+        scope_group_id: Optional[int] = None,
+        block_manual: bool = True,
+    ) -> Optional[dict]:
+        """Resolve one exact post-normalization identity, never a collision."""
+        key = name.lower()
+        candidates: list[dict] = []
+        created = self._created_channels.get(key)
+        if created is not None:
+            candidates.append(created)
+        for mapping in (
+            self._base_name_candidates,
+            self._by_name_candidates,
+            self._normalized_name_candidates,
+        ):
+            candidates.extend(mapping.get(key, ()))
+
+        unique: list[dict] = []
+        seen: set[int] = set()
+        for candidate in candidates:
+            identity = candidate.get("id")
+            marker = id(candidate) if identity is None else int(identity)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            if scope_group_id is not None and candidate.get("channel_group_id") != scope_group_id:
+                continue
+            if block_manual and self._is_manual_channel(candidate):
+                self._last_manual_block = candidate
+                continue
+            unique.append(candidate)
+
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) > 1:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Exact normalized channel identity is "
+                "ambiguous across %d eligible channels; stream skipped.",
+                len(unique),
+            )
+        return None
 
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False,

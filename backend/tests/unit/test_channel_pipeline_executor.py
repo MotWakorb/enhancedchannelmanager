@@ -6,13 +6,14 @@ and streams with proper rollback tracking.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
+import pytest
 
 from channel_pipeline_executor import (
     ActionResult,
     ExecutionContext,
     ActionExecutor,
 )
-from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_evaluator import ConditionEvaluator, StreamContext
 
 
 class TestActionResult:
@@ -1150,6 +1151,161 @@ class TestMergeStreamsExactDefaultMatch:
         assert result.success is True
         client.update_channel.assert_called()
         assert client.update_channel.call_args[0][0] == 50
+
+
+class TestNormalizeThenMergeIdentity:
+    """GH #845: rule-scoped normalization is the merge handoff identity."""
+
+    @staticmethod
+    def _normalizer(raw_name: str, normalized_name: str):
+        engine = MagicMock()
+
+        def normalize(value, group_ids=None):
+            result = MagicMock()
+            result.normalized = (
+                normalized_name if group_ids in (None, [41]) else raw_name
+            )
+            return result
+
+        engine.normalize.side_effect = normalize
+        engine.extract_core_name.return_value = raw_name
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    @staticmethod
+    def _stream(name="Provider synthetic", stream_id=901):
+        return StreamContext(
+            stream_id=stream_id,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Synthetic provider",
+            group_name="Synthetic group",
+            tvg_id=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_rule_scoped_normalized_identity_merges_existing_without_duplicates(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        target = {
+            "id": 51,
+            "name": "Canonical synthetic",
+            "streams": [],
+            "auto_created": True,
+        }
+        executor = ActionExecutor(
+            client,
+            existing_channels=[target],
+            normalization_engine=self._normalizer(
+                "Provider synthetic", "Canonical synthetic"
+            ),
+        )
+
+        evaluator = ConditionEvaluator(
+            [dict(target, channel_group_id=7)],
+            [{"id": 7, "name": "Synthetic target group"}],
+            normalization_engine=executor._normalization_engine,
+        )
+        condition = evaluator.evaluate(
+            {"type": "normalized_name_in_group", "value": 7}, self._stream()
+        )
+        assert condition.matched is True
+        result = None
+        if condition.matched:
+            result = await executor.execute(
+                {
+                    "type": "merge_streams",
+                    "target": "auto",
+                    "find_channel_by": "name_exact",
+                },
+                self._stream(),
+                ExecutionContext(),
+                normalization_group_ids=[41],
+            )
+
+        assert result is not None
+        assert result.success is True
+        client.update_channel.assert_awaited_once_with(51, {"streams": [901]})
+        assert len(executor.existing_channels) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("targets", [[], [61, 62]])
+    async def test_absent_or_ambiguous_normalized_identity_skips(self, targets):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        channels = [
+            {
+                "id": channel_id,
+                "name": "Canonical synthetic",
+                "streams": [],
+                "auto_created": True,
+            }
+            for channel_id in targets
+        ]
+        executor = ActionExecutor(
+            client,
+            existing_channels=channels,
+            normalization_engine=self._normalizer(
+                "Provider synthetic", "Canonical synthetic"
+            ),
+        )
+
+        result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream(),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+        )
+
+        assert result.skipped is True
+        client.update_channel.assert_not_awaited()
+        assert len(executor.existing_channels) == len(targets)
+
+    @pytest.mark.asyncio
+    async def test_same_run_created_normalized_target_is_reused(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        client.create_channel = AsyncMock(
+            return_value={
+                "id": 71,
+                "name": "Canonical synthetic",
+                "streams": [900],
+            }
+        )
+        executor = ActionExecutor(
+            client,
+            existing_channels=[],
+            normalization_engine=self._normalizer(
+                "Provider synthetic", "Canonical synthetic"
+            ),
+        )
+        create_result = await executor.execute(
+            {
+                "type": "create_channel",
+                "name_template": "{normalized_name}",
+                "group_id": 7,
+            },
+            self._stream(stream_id=900),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+        )
+
+        merge_result = await executor.execute(
+            {
+                "type": "merge_streams",
+                "target": "auto",
+                "find_channel_by": "name_exact",
+            },
+            self._stream(),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+        )
+
+        assert create_result.created is True
+        assert merge_result.success is True
+        client.create_channel.assert_awaited_once()
+        client.update_channel.assert_awaited_once_with(71, {"streams": [900, 901]})
+        assert len(executor._created_channels) == 1
 
 
 class TestActionExecutorPropertyActions:
