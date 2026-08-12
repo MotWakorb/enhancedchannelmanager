@@ -10,6 +10,7 @@ import { useAuth, useAuthRequired } from '../hooks/useAuth';
 import { useNotifications } from '../contexts/NotificationContext';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './UserMenu.css';
 
 export function UserMenu() {
@@ -23,6 +24,8 @@ export function UserMenu() {
   // Modal states
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const { titleId: profileTitleId, containerRef: profileContainerRef } = useOwnedDialog(showProfileModal);
+  const { titleId: passwordTitleId, containerRef: passwordContainerRef } = useOwnedDialog(showPasswordModal);
 
   // Profile form state
   const [displayName, setDisplayName] = useState('');
@@ -34,6 +37,8 @@ export function UserMenu() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
+  const closeProfile = () => { if (!savingProfile) setShowProfileModal(false); };
+  const closePassword = () => { if (!savingPassword) setShowPasswordModal(false); };
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -80,11 +85,13 @@ export function UserMenu() {
 
   const handleOpenProfile = () => {
     setIsOpen(false);
+    menuRef.current?.querySelector<HTMLButtonElement>('.user-menu-trigger')?.focus();
     setShowProfileModal(true);
   };
 
   const handleOpenPassword = () => {
     setIsOpen(false);
+    menuRef.current?.querySelector<HTMLButtonElement>('.user-menu-trigger')?.focus();
     setShowPasswordModal(true);
     setCurrentPassword('');
     setNewPassword('');
@@ -194,13 +201,14 @@ export function UserMenu() {
 
       {/* Profile Edit Modal */}
       {showProfileModal && (
-        <ModalOverlay onClose={() => setShowProfileModal(false)} className="user-modal-overlay">
-          <div className="user-modal">
+        <ModalOverlay onClose={closeProfile} className="user-modal-overlay" role="dialog" aria-modal="true" aria-labelledby={profileTitleId}>
+          <div className="user-modal" ref={profileContainerRef}>
             <div className="user-modal-header">
-              <h3>Edit Profile</h3>
+              <h3 id={profileTitleId}>Edit Profile</h3>
               <button
                 className="user-modal-close"
-                onClick={() => setShowProfileModal(false)}
+                onClick={closeProfile}
+                disabled={savingProfile}
                 aria-label="Close profile dialog"
                 title="Close profile dialog"
               >
@@ -239,7 +247,8 @@ export function UserMenu() {
                 <button
                   type="button"
                   className="user-modal-btn user-modal-btn-secondary"
-                  onClick={() => setShowProfileModal(false)}
+                  onClick={closeProfile}
+                  disabled={savingProfile}
                 >
                   Cancel
                 </button>
@@ -258,13 +267,14 @@ export function UserMenu() {
 
       {/* Change Password Modal */}
       {showPasswordModal && (
-        <ModalOverlay onClose={() => setShowPasswordModal(false)} className="user-modal-overlay">
-          <div className="user-modal">
+        <ModalOverlay onClose={closePassword} className="user-modal-overlay" role="dialog" aria-modal="true" aria-labelledby={passwordTitleId}>
+          <div className="user-modal" ref={passwordContainerRef}>
             <div className="user-modal-header">
-              <h3>Change Password</h3>
+              <h3 id={passwordTitleId}>Change Password</h3>
               <button
                 className="user-modal-close"
-                onClick={() => setShowPasswordModal(false)}
+                onClick={closePassword}
+                disabled={savingPassword}
                 aria-label="Close password dialog"
                 title="Close password dialog"
               >
@@ -313,7 +323,8 @@ export function UserMenu() {
                 <button
                   type="button"
                   className="user-modal-btn user-modal-btn-secondary"
-                  onClick={() => setShowPasswordModal(false)}
+                  onClick={closePassword}
+                  disabled={savingPassword}
                 >
                   Cancel
                 </button>

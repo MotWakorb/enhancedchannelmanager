@@ -13,7 +13,8 @@
  *      reconcile is a trust problem.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { TaskStatus, TaskSchedule } from '../services/api';
 
 vi.mock('../services/api', () => ({
@@ -191,5 +192,30 @@ describe('TaskEditorModal — vkktd.4 wontRun UX', () => {
     );
 
     expect(await screen.findByRole('heading', { name: /add schedule/i })).toBeInTheDocument();
+  });
+
+  it('stacks one named schedule dialog, closes it first, and restores focus to its parent opener', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getTaskSchedules).mockResolvedValue({ schedules: [] });
+    const onClose = vi.fn();
+    render(<TaskEditorModal task={makeTask()} onClose={onClose} onSaved={() => {}} />);
+
+    const parent = await screen.findByRole('dialog', { name: 'Configure Task' });
+    const opener = within(parent).getByRole('button', { name: /Add Schedule$/ });
+    await user.click(opener);
+
+    const child = screen.getByRole('dialog', { name: 'Add Schedule' });
+    expect(screen.getAllByRole('dialog')).toEqual([parent, child]);
+    expect(parent.getAttribute('aria-labelledby')).not.toBe(child.getAttribute('aria-labelledby'));
+    await waitFor(() => expect(child).toContainElement(document.activeElement as HTMLElement));
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Add Schedule' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Configure Task' })).toBe(parent);
+    expect(opener).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
