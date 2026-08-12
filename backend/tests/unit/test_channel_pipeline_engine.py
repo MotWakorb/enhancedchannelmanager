@@ -1593,6 +1593,29 @@ class TestSortChannelGroupsPass:
         assert action["success"] is True
         assert "Sports" in action["description"]
 
+    def test_live_sort_group_preserves_numeric_brand_for_natural_ordering(self):
+        """GH #838: exercise the real Pass 3.6 client write, not only its helper."""
+        channels = [
+            {"id": 1, "name": "360Tunebox", "channel_group_id": 5, "channel_number": 1},
+            {"id": 2, "name": "Alpha", "channel_group_id": 5, "channel_number": 2},
+            {"id": 3, "name": "10 Sports", "channel_group_id": 5, "channel_number": 3},
+            {"id": 4, "name": "360 Tunebox", "channel_group_id": 5, "channel_number": 4},
+            {"id": 5, "name": "2 Sports", "channel_group_id": 5, "channel_number": 5},
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=channels, existing_groups=self.groups,
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": 1, "strip_numbers": True, "ignore_country": False}}
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(
+                requests, executor, results, dry_run=False, settings=self.settings,
+            )
+        )
+
+        self.client.assign_channel_numbers.assert_awaited_once_with([5, 3, 4, 1, 2], 1)
+
     def test_live_sorts_descending(self):
         results = {"execution_log": [], "dry_run_results": []}
         requests = {5: {"order": "desc", "starting_number": 100, "strip_numbers": True, "ignore_country": False}}

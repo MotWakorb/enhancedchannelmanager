@@ -36,6 +36,24 @@ class TestGetNameForSorting:
     def test_decimal_prefix_stripped(self):
         assert get_name_for_sorting("2.1 | ESPN") == "ESPN"
 
+    def test_decimal_prefix_with_dash_stripped(self):
+        assert get_name_for_sorting("2.1 - ESPN") == "ESPN"
+
+    def test_decimal_prefix_with_dot_stripped(self):
+        assert get_name_for_sorting("2.1.ESPN") == "ESPN"
+
+    def test_numeric_brand_with_space_is_not_treated_as_channel_number(self):
+        assert get_name_for_sorting("360 Tunebox") == "360 Tunebox"
+
+    def test_numeric_brand_without_space_is_unchanged(self):
+        assert get_name_for_sorting("360Tunebox") == "360Tunebox"
+
+    def test_decimal_numeric_brand_with_space_is_unchanged(self):
+        assert get_name_for_sorting("2.1 Tunebox") == "2.1 Tunebox"
+
+    def test_integer_dot_separator_is_still_stripped(self):
+        assert get_name_for_sorting("123.Name") == "Name"
+
 
 class TestStripCountryPrefix:
     def test_strips_pipe_separated_prefix(self):
@@ -87,6 +105,27 @@ class TestChannelSortKeyNaturalOrdering:
 
 
 class TestSortChannelsByName:
+    def test_numeric_names_with_and_without_spaces_share_natural_ordering(self):
+        channels = [
+            {"id": 1, "name": "360Tunebox"},
+            {"id": 2, "name": "Alpha"},
+            {"id": 3, "name": "10 Sports"},
+            {"id": 4, "name": "360 Tunebox"},
+            {"id": 5, "name": "2 Sports"},
+        ]
+        sorted_channels = sort_channels_by_name(channels, strip_numbers=True)
+        assert [c["id"] for c in sorted_channels] == [5, 3, 4, 1, 2]
+
+    def test_decimal_and_integer_brands_follow_natural_ordering(self):
+        channels = [
+            {"id": 1, "name": "10 Tunebox"},
+            {"id": 2, "name": "2.10 Tunebox"},
+            {"id": 3, "name": "2 Tunebox"},
+            {"id": 4, "name": "2.1 Tunebox"},
+        ]
+        sorted_channels = sort_channels_by_name(channels, strip_numbers=True)
+        assert [c["id"] for c in sorted_channels] == [3, 4, 2, 1]
+
     def test_sorts_ascending_by_default(self):
         channels = [{"id": 1, "name": "Channel 10"}, {"id": 2, "name": "Channel 2"}]
         sorted_channels = sort_channels_by_name(channels)

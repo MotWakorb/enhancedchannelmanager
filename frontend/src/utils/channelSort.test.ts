@@ -32,6 +32,28 @@ describe('getNameForSorting', () => {
   it('returns the name unchanged when there is no number', () => {
     expect(getNameForSorting('ESPN')).toBe('ESPN');
   });
+
+  it.each(['360 Tunebox', '360Tunebox'])(
+    'does not treat numeric brand %s as a generated channel-number prefix',
+    (name) => {
+      expect(getNameForSorting(name)).toBe(name);
+    },
+  );
+
+  it('retains a decimal numeric brand followed by a space', () => {
+    expect(getNameForSorting('2.1 Tunebox')).toBe('2.1 Tunebox');
+  });
+
+  it.each(['2.1 | ESPN', '2.1 - ESPN', '2.1.ESPN'])(
+    'strips decimal generated numbering with an explicit separator: %s',
+    (name) => {
+      expect(getNameForSorting(name)).toBe('ESPN');
+    },
+  );
+
+  it('retains intentional integer dot-prefix stripping', () => {
+    expect(getNameForSorting('123.Name')).toBe('Name');
+  });
 });
 
 describe('stripCountryPrefix', () => {
@@ -107,6 +129,29 @@ describe('sortByChannelName', () => {
     ];
     const sorted = sortByChannelName(items, (i) => i.name);
     expect(sorted.map((i) => i.id)).toEqual([2, 1]);
+  });
+
+  it('naturally orders numeric names with and without spaces', () => {
+    const items: Item[] = [
+      { id: 1, name: '360Tunebox' },
+      { id: 2, name: 'Alpha' },
+      { id: 3, name: '10 Sports' },
+      { id: 4, name: '360 Tunebox' },
+      { id: 5, name: '2 Sports' },
+    ];
+    const sorted = sortByChannelName(items, (i) => i.name, { stripNumbers: true });
+    expect(sorted.map((i) => i.id)).toEqual([5, 3, 4, 1, 2]);
+  });
+
+  it('naturally orders decimal and integer brands', () => {
+    const items: Item[] = [
+      { id: 1, name: '10 Tunebox' },
+      { id: 2, name: '2.10 Tunebox' },
+      { id: 3, name: '2 Tunebox' },
+      { id: 4, name: '2.1 Tunebox' },
+    ];
+    const sorted = sortByChannelName(items, (i) => i.name, { stripNumbers: true });
+    expect(sorted.map((i) => i.id)).toEqual([3, 4, 2, 1]);
   });
 
   it('sorts descending', () => {
