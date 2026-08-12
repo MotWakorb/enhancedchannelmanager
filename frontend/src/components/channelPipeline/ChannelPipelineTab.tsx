@@ -1,7 +1,7 @@
 /**
  * Main Channel Pipeline tab component for managing channel pipeline rules and executions.
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react';
 import type {
   ChannelPipelineRule,
   ChannelPipelineExecution,
@@ -234,6 +234,7 @@ function getActionCategory(action: ActionLogEntry): string | null {
 }
 
 export function ChannelPipelineTab() {
+  const dialogId = useId();
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_admin);
 
@@ -1543,10 +1544,10 @@ export function ChannelPipelineTab() {
 
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
-        <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-delete-title`}>
           <div className="modal-container modal-sm pipeline-delete-confirm">
             <div className="modal-header">
-              <h2>Confirm Delete</h2>
+              <h2 id={`${dialogId}-delete-title`}>Confirm Delete</h2>
             </div>
             <div className="modal-body">
               <p>Are you sure you want to delete &quot;{showDeleteConfirm.name}&quot;?</p>
@@ -1652,10 +1653,10 @@ export function ChannelPipelineTab() {
 
       {/* Rollback Confirmation Dialog */}
       {showRollbackConfirm && (
-        <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-rollback-title`}>
           <div className="modal-container modal-sm pipeline-rollback-confirm">
             <div className="modal-header">
-              <h2>Confirm Rollback</h2>
+              <h2 id={`${dialogId}-rollback-title`}>Confirm Rollback</h2>
             </div>
             <div className="modal-body">
               <p>
@@ -1907,10 +1908,10 @@ export function ChannelPipelineTab() {
         };
 
         return (
-        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-execution-details-title`}>
           <div className="modal-container modal-lg">
             <div className="modal-header">
-              <h2>Execution Details</h2>
+              <h2 id={`${dialogId}-execution-details-title`}>Execution Details</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowExecutionDetails(null)}
@@ -2271,10 +2272,10 @@ export function ChannelPipelineTab() {
 
       {/* Import Dialog */}
       {showImportDialog && (
-        <ModalOverlay onClose={() => setShowImportDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowImportDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-import-title`}>
           <div className="modal-container modal-md">
             <div className="modal-header">
-              <h2>Import Rules</h2>
+              <h2 id={`${dialogId}-import-title`}>Import Rules</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => { setShowImportDialog(false); setImportConflicts([]); setImportNewCount(0); }}
@@ -2348,10 +2349,10 @@ export function ChannelPipelineTab() {
 
       {/* Export Dialog */}
       {showExportDialog && (
-        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-export-title`}>
           <div className="modal-container modal-md">
             <div className="modal-header">
-              <h2>Export Rules (YAML)</h2>
+              <h2 id={`${dialogId}-export-title`}>Export Rules (YAML)</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowExportDialog(false)}

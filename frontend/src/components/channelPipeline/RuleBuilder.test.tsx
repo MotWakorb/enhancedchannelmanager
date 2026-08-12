@@ -14,6 +14,7 @@ import {
   createMockChannelGroup,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
+import { ModalOverlay } from '../ModalOverlay';
 import type { ChannelPipelineRule } from '../../types/channelPipeline';
 
 /**
@@ -1176,7 +1177,19 @@ describe('RuleBuilder', () => {
         await user.type(screen.getByLabelText(/rule name/i), '!');
         await act(async () => registeredClose());
 
-        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+        expect(screen.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeInTheDocument();
+      });
+
+      it('keeps a named parent dialog and named nested discard alertdialog as exactly two roles', async () => {
+        const user = userEvent.setup();
+        let registeredClose: (() => void) | undefined;
+        render(<ModalOverlay onClose={vi.fn()} role="dialog" aria-modal="true" aria-label="Rule editor"><RuleBuilder rule={VALID_RULE} onSave={vi.fn()} onCancel={vi.fn()} onRegisterClose={fn => { if (fn) registeredClose = fn; }} /></ModalOverlay>);
+        await waitFor(() => expect(typeof registeredClose).toBe('function'));
+        await user.type(screen.getByLabelText(/rule name/i), '!');
+        await act(async () => registeredClose!());
+        expect(screen.getByRole('dialog', { name: 'Rule editor' })).toBeInTheDocument();
+        expect(screen.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeInTheDocument();
+        expect([...screen.getAllByRole('dialog'), ...screen.getAllByRole('alertdialog')]).toHaveLength(2);
       });
 
       it('a successful save clears the dirty state (no confirm on the next close)', async () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useId, memo } from 'react';
 import type { DummyEPGProfile, DummyEPGCustomProperties } from '../types';
 import * as api from '../services/api';
 import { copyToClipboard } from '../utils/clipboard';
@@ -45,6 +45,7 @@ interface DummyEPGManagerSectionProps {
 }
 
 export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onSourcesChanged }: DummyEPGManagerSectionProps) {
+  const dialogId = useId();
   const notifications = useNotifications();
   const [profiles, setProfiles] = useState<DummyEPGProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -422,10 +423,10 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
 
       {/* Delete Confirmation Dialog */}
       {deleteModal.isOpen && profileToDelete && (
-        <ModalOverlay onClose={handleCancelDelete} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={handleCancelDelete} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-delete-title`}>
           <div className="modal-container modal-sm dummy-epg-delete-confirm">
             <div className="modal-header">
-              <h2>Delete Profile</h2>
+              <h2 id={`${dialogId}-delete-title`}>Delete Profile</h2>
               <button className="modal-close-btn" onClick={handleCancelDelete} aria-label="Close">
                 <span className="material-icons">close</span>
               </button>
@@ -452,10 +453,10 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
 
       {/* Export Dialog */}
       {showExportDialog && (
-        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-export-title`}>
           <div className="modal-container modal-xxl">
             <div className="modal-header">
-              <h2>Export Profiles (YAML)</h2>
+              <h2 id={`${dialogId}-export-title`}>Export Profiles (YAML)</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowExportDialog(false)}
@@ -501,10 +502,10 @@ export const DummyEPGManagerSection = memo(function DummyEPGManagerSection({ onS
 
       {/* Import YAML Dialog */}
       {showImportYamlDialog && (
-        <ModalOverlay onClose={() => setShowImportYamlDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowImportYamlDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-import-title`}>
           <div className="modal-container modal-md">
             <div className="modal-header">
-              <h2>Import Profiles (YAML)</h2>
+              <h2 id={`${dialogId}-import-title`}>Import Profiles (YAML)</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowImportYamlDialog(false)}

@@ -1576,6 +1576,7 @@ describe('EventSyncRuleEditor', () => {
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
       expect(screen.getByTestId('event-sync-discard-dialog')).toBeInTheDocument();
+      expect(screen.getByRole('alertdialog', { name: 'Discard this rule?' })).toBeInTheDocument();
       expect(onCancel).not.toHaveBeenCalled();
 
       // "Keep editing" dismisses the prompt without discarding.
