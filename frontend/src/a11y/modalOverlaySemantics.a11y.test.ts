@@ -208,25 +208,29 @@ function managedDialogContract(identity: string): ManagedDialogContract {
   let owner: ts.Node | undefined = overlay.parent;
   while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
   if (!owner) throw new Error(`${identity}: enclosing caller function not found`);
-  let titleSymbol: string | undefined;
-  let containerSymbol: string | undefined;
+  const bindings: Array<{ titleSymbol: string; containerSymbol: string }> = [];
   const findBinding = (node: ts.Node): void => {
     if (ts.isFunctionLike(node) && node !== owner) return;
     if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) &&
         node.initializer && ts.isCallExpression(node.initializer) &&
         node.initializer.expression.getText(source) === 'useOwnedDialog') {
+      let titleSymbol: string | undefined;
+      let containerSymbol: string | undefined;
       for (const element of node.name.elements) {
         const property = (element.propertyName ?? element.name).getText(source);
         const local = element.name.getText(source);
         if (property === 'titleId') titleSymbol = local;
         if (property === 'containerRef') containerSymbol = local;
       }
+      if (titleSymbol && containerSymbol) bindings.push({ titleSymbol, containerSymbol });
     }
     ts.forEachChild(node, findBinding);
   };
   findBinding(owner);
-  if (!titleSymbol || !containerSymbol) throw new Error(`${identity}: bound useOwnedDialog result not found`);
-  return { titleSymbol, containerSymbol, overlay };
+  const labelSymbol = attributeExpressionText(overlay.openingElement, 'aria-labelledby', source);
+  const binding = bindings.find(({ titleSymbol }) => titleSymbol === labelSymbol);
+  if (!binding) throw new Error(`${identity}: overlay label is not bound to its useOwnedDialog result`);
+  return { ...binding, overlay };
 }
 
 describe('ModalOverlay caller semantics ledger', () => {

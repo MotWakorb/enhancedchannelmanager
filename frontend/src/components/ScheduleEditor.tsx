@@ -530,7 +530,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
 
       {/* Modal Footer - action buttons */}
       <div className="modal-footer">
-        <button type="button" onClick={onCancel} className="modal-btn modal-btn-secondary">
+        <button type="button" onClick={onCancel} disabled={saving} className="modal-btn modal-btn-secondary">
           Cancel
         </button>
         <button

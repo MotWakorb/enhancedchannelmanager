@@ -13,6 +13,7 @@ import { CustomSelect } from './CustomSelect';
 import { StreamCreateMenu } from './StreamCreateMenu';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
 import { logger } from '../utils/logger';
@@ -544,6 +545,7 @@ export function StreamsPane({
   const [bulkCreateNewGroupName, setBulkCreateNewGroupName] = useState('');
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
+  const { titleId: conflictTitleId, containerRef: conflictContainerRef } = useOwnedDialog(bulkCreateShowConflict);
   const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
   const [bulkCreateEndOfSequenceNumber, setBulkCreateEndOfSequenceNumber] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
@@ -2959,9 +2961,9 @@ export function StreamsPane({
 
       {/* Bulk Create Conflict Dialog */}
       {bulkCreateShowConflict && (
-        <ModalOverlay onClose={() => setBulkCreateShowConflict(false)}>
-          <div className="modal-content conflict-dialog">
-            <h3>Channel Number Conflict</h3>
+        <ModalOverlay onClose={bulkCreateLoading ? () => {} : () => setBulkCreateShowConflict(false)} role="dialog" aria-modal="true" aria-labelledby={conflictTitleId}>
+          <div className="modal-content conflict-dialog" ref={conflictContainerRef}>
+            <h3 id={conflictTitleId}>Channel Number Conflict</h3>
             <div className="conflict-message">
               <p>
                 <strong>{bulkCreateConflictCount}</strong> existing channel{bulkCreateConflictCount !== 1 ? 's' : ''} would
