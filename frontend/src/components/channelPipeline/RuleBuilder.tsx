@@ -156,7 +156,12 @@ export function RuleBuilder({
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
-  const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
+  // New rules opt into the product default.  An existing rule's persisted
+  // NULL, however, is the explicit "No sorting" choice and must not be
+  // collapsed back to Smart Sort when the editor reopens (GH #833).
+  const [streamSortField, setStreamSortField] = useState(
+    rule ? (rule.stream_sort_field ?? '') : 'smart_sort',
+  );
   const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
   const [qualityTieBreakOrder, setQualityTieBreakOrder] = useState<'asc' | 'desc'>(
     (rule?.quality_tie_break_order as 'asc' | 'desc') || 'desc'
