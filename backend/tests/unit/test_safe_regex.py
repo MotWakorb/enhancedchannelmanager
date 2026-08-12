@@ -376,3 +376,40 @@ class TestSubErrorLogLabels:
             safe_regex.sub("[invalid(", "x", "abc")
         combined = " ".join(r.getMessage() for r in caplog.records)
         assert "compile error at sub" in combined
+
+
+class TestSubMetadataOnlyDiagnostics:
+    """Sensitive callers can retain failure categories without value excerpts."""
+
+    @pytest.mark.parametrize(
+        ("pattern", "repl", "text", "expected_category", "fragments"),
+        [
+            ("sensitive-invalid-fragment(", "x", "abc", "compile error", ("sensitive-invalid",)),
+            ("sensitive-oversize-fragment" * 30, "x", "abc", "oversize", ("sensitive-oversize",)),
+            (r"sensitive-timeout-(a|aa)+b", "x", "sensitive-timeout-" + "a" * 30 + "!", "timed out", ("sensitive-timeout", "(a|aa)")),
+            (r"(sensitive-template)", r"private-template-fragment-\2", "sensitive-template", "replacement template error", ("sensitive-template", "private-template")),
+        ],
+    )
+    def test_metadata_only_mode_never_logs_pattern_or_replacement_fragments(
+        self, caplog, pattern, repl, text, expected_category, fragments
+    ):
+        with caplog.at_level(logging.WARNING, logger="safe_regex"):
+            assert safe_regex.sub(
+                pattern,
+                repl,
+                text,
+                diagnostic_mode="metadata_only",
+            ) == text
+
+        assert expected_category in caplog.text
+        assert "pattern_sha256=" in caplog.text
+        assert "pattern_excerpt=" not in caplog.text
+        assert "repl_excerpt=" not in caplog.text
+        for fragment in fragments:
+            assert fragment not in caplog.text
+
+    def test_default_diagnostic_mode_keeps_existing_excerpt_contract(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="safe_regex"):
+            safe_regex.sub("visible-default-fragment(", "x", "abc")
+
+        assert "pattern_excerpt='visible-default-fragment('" in caplog.text

@@ -24,6 +24,21 @@ from models import StreamStats
 
 logger = logging.getLogger(__name__)
 
+PROBE_NETWORK_ROUTE_GUIDANCE = (
+    "Provider connection failed from the ECM container. Raw stream probes do "
+    "not use Dispatcharr's proxy; give ECM the same VPN or network route."
+)
+
+
+NETWORK_FAILURE_MARKERS = (
+    "timed out", "timeout", "connection refused", "connection to",
+    "network is unreachable", "no route to host", "name or service not known",
+)
+
+
+class ProbeNetworkRouteError(RuntimeError):
+    """An upstream connection failure whose raw diagnostic must stay private."""
+
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
@@ -1042,12 +1057,23 @@ class StreamProber:
                 name,
                 None,
                 "timeout",
-                f"Probe timed out after {self.probe_timeout}s"
+                PROBE_NETWORK_ROUTE_GUIDANCE
             )
         except Exception as e:
-            logger.error("[STREAM-PROBE] Stream %s probe failed: %s", stream_id, e)
-            # Return generic error to client; details stay in server logs
-            return self._save_probe_result(stream_id, name, None, "failed", "Probe failed")
+            # FFmpeg/ffprobe diagnostics can contain the provider URL (including
+            # embedded credentials) or a redirect target. Log only the error
+            # category; never copy subprocess text into logs or persisted state.
+            logger.error(
+                "[STREAM-PROBE] Stream %s probe failed (%s)",
+                stream_id,
+                type(e).__name__,
+            )
+            public_error = (
+                PROBE_NETWORK_ROUTE_GUIDANCE
+                if isinstance(e, ProbeNetworkRouteError)
+                else "Probe failed"
+            )
+            return self._save_probe_result(stream_id, name, None, "failed", public_error)
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
@@ -1081,7 +1107,13 @@ class StreamProber:
             raise
 
         if process.returncode != 0:
-            error_text = stderr.decode().strip()[:500] if stderr else ""
+            # Classify the complete diagnostic only after removing the exact
+            # input URL. URLs may themselves contain words such as
+            # "connection to", and truncating before redaction can both create
+            # false network classifications and hide a real marker that comes
+            # after a long credential-bearing URL.
+            error_text = stderr.decode(errors="replace").strip() if stderr else ""
+            error_text = error_text.replace(url, "[REDACTED stream URL]")
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
@@ -1091,11 +1123,13 @@ class StreamProber:
             # waste semaphore time.
             transient_patterns = ("5XX", "500", "502", "503", "520", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
             if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
-                logger.info("[STREAM-PROBE] Transient error — retry %s/%s in %ss: %s...", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay, url[:80])
+                logger.info("[STREAM-PROBE] Transient provider error — retry %s/%s in %ss", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay)
                 await asyncio.sleep(self.probe_retry_delay)
                 return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
 
-            raise RuntimeError(f"ffprobe failed: {error_text}")
+            if any(marker in error_text.lower() for marker in NETWORK_FAILURE_MARKERS):
+                raise ProbeNetworkRouteError("Provider connection failed")
+            raise RuntimeError("ffprobe failed: [REDACTED diagnostic]")
 
         output = stdout.decode()
         if not output.strip():
@@ -1156,7 +1190,12 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Timeout during bitrate measurement")
             return None
         except Exception as e:
-            logger.warning("[STREAM-PROBE] Failed to measure bitrate: %s", e)
+            # Client exceptions can include the requested URL or a redirect
+            # target. Keep diagnostics useful without exposing either value.
+            logger.warning(
+                "[STREAM-PROBE] Failed to measure bitrate (%s)",
+                type(e).__name__,
+            )
             return None
 
     # YAVG brightness threshold for dark/black screen detection.
@@ -1217,22 +1256,22 @@ class StreamProber:
             process.kill()
             await process.wait()
             logger.warning(
-                "[STREAM-PROBE] Black screen detection timed out after %ss: %s",
-                total_timeout, url[:80],
+                "[STREAM-PROBE] Black screen detection timed out after %ss",
+                total_timeout,
             )
             return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:
-            logger.debug("[STREAM-PROBE] No YAVG data from signalstats: %s", url[:80])
+            logger.debug("[STREAM-PROBE] No YAVG data from signalstats")
             return None
         avg_brightness = sum(float(v) for v in yavg_values) / len(yavg_values)
         is_dark = avg_brightness < self.BLACK_SCREEN_YAVG_THRESHOLD
         if is_dark:
-            logger.warning("[STREAM-PROBE] Dark screen detected (YAVG=%.1f, threshold=%d): %s",
-                           avg_brightness, self.BLACK_SCREEN_YAVG_THRESHOLD, url[:80])
+            logger.warning("[STREAM-PROBE] Dark screen detected (YAVG=%.1f, threshold=%d)",
+                           avg_brightness, self.BLACK_SCREEN_YAVG_THRESHOLD)
         else:
-            logger.debug("[STREAM-PROBE] Screen brightness OK (YAVG=%.1f): %s", avg_brightness, url[:80])
+            logger.debug("[STREAM-PROBE] Screen brightness OK (YAVG=%.1f)", avg_brightness)
         return is_dark
 
     def _save_probe_result(
@@ -1844,11 +1883,15 @@ class StreamProber:
         # log with a pattern sha256 + excerpt. That sentinel is the correct
         # fallback here: an unrewritten URL probes directly against the
         # source, which is safer than blocking the probe entirely.
-        rewritten = safe_regex.sub(search_pattern, replace_pattern, original_url)
+        rewritten = safe_regex.sub(
+            search_pattern,
+            replace_pattern,
+            original_url,
+            diagnostic_mode="metadata_only",
+        )
         if rewritten != original_url:
-            logger.debug("[STREAM-PROBE] Profile %s: rewrote URL "
-                       "(pattern: %s -> %s)",
-                       profile['id'], search_pattern, replace_pattern)
+            # Rewrite patterns may themselves contain provider credentials.
+            logger.debug("[STREAM-PROBE] Profile %s: rewrote URL", profile['id'])
         return rewritten
 
     async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
@@ -2461,20 +2504,19 @@ class StreamProber:
                     if selected_profile:
                         stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
 
-                    # Log probe details for traceability
+                    # Log probe decisions without provider URLs, which may embed
+                    # account identifiers or credentials.
                     if selected_profile:
                         logger.debug("[STREAM-PROBE] Stream %s (%s): "
                                      "strategy=%s, "
-                                     "profile=%s ('%s'), "
-                                     "url=%s",
+                                     "profile=%s ('%s')",
                                      stream_id, stream_name,
                                      self.profile_distribution_strategy,
-                                     selected_profile['id'], selected_profile.get('name', 'unnamed'),
-                                     stream_url)
+                                     selected_profile['id'], selected_profile.get('name', 'unnamed'))
                     else:
                         logger.debug("[STREAM-PROBE] Stream %s (%s): "
-                                     "no profile (direct URL), url=%s",
-                                     stream_id, stream_name, stream_url)
+                                     "no profile (direct provider connection)",
+                                     stream_id, stream_name)
 
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:

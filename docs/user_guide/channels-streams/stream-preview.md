@@ -20,6 +20,14 @@ expect, before spending time building a channel around it. The adjacent
 **Open in VLC** button (`play_circle`) launches VLC instead of playing in the
 browser; it does not open this modal.
 
+Raw stream previews and stream probes connect to the provider directly from
+the ECM container. They do not inherit Dispatcharr's network namespace or VPN
+route. If a provider works in Dispatcharr but its raw preview or probe times
+out in ECM, attach ECM to the same VPN/routed Docker network (or add an
+equivalent route from ECM). Do not copy provider URLs into support reports;
+they commonly contain credentials. Dispatcharr does not expose a supported
+raw-stream-by-ID proxy for ECM to use without changing channel state.
+
 ### Preview a channel's actual output
 
 1. Open the channel's **Channel actions** menu and select **Preview**.
