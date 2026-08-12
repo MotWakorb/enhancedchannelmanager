@@ -41,12 +41,13 @@ confirm the surviving rules produce the right channels.
 
 ---
 
-## The seven finding codes
+## The eight finding codes
 
 Each finding has a severity, a code, the field it points at, and a suggestion.
-Six of the seven codes are `warning` severity: problems worth fixing, not fatal
-errors. The seventh, `MERGE_SCOPE_NOT_TARGET_GROUP`, is `info`: an advisory
-heads-up about a setting whose default changed, not a misconfiguration.
+Seven of the eight codes are `warning` severity: problems worth fixing, not
+fatal errors. The eighth, `MERGE_SCOPE_NOT_TARGET_GROUP`, is `info`: an
+advisory heads-up about a setting whose default changed, not a
+misconfiguration.
 
 ### `REGEX_TRIVIALLY_MATCHES_ALL`
 
@@ -265,6 +266,47 @@ the UK rule create its own **ESPN** in **UK | Sports**.
 - Leave it off if you *deliberately* want a same-name channel in another group
   to absorb these streams: the original behavior. This is a deliberate-choice
   finding, not an error.
+
+---
+
+### `MERGE_SCOPE_PINNED_TO_OTHER_GROUP`
+
+**Severity:** `warning` (a real misconfiguration).
+
+**What it looks like in the rule editor:**
+The rule's **Merge lookup scope** is set to a specific channel group, and that
+group is not the group the rule's **Create Channel** action puts channels in.
+
+**Why it is wrong:**
+When you pin the merge lookup scope to a group, the "does a channel with this
+name already exist?" check searches only that group. If the rule creates its
+channels somewhere else, the check searches a group your channels are never in
+and can never find them. Every run then creates a brand-new set of channels,
+and if **Orphan action** is **Delete**, the previous run's channels are deleted
+right after. The result is a full delete/recreate cycle on every run: your
+channel IDs change every time, anything referencing them (client favourites,
+EPG mappings) breaks, and stream merging across providers never happens.
+
+This is the mirror image of `MERGE_SCOPE_NOT_TARGET_GROUP` above. That one
+fires when the scope is **off**; this one fires when the scope is **on but
+pointed at the wrong group**.
+
+**Worked example:**
+A "PPV Events" rule creates channels in group **Sports | PPV** but its Merge
+lookup scope was pinned, during an earlier setup, to **Sports | Live**. Each
+run reported 49 channels created and 49 deleted, over and over. Repinning the
+scope to **Sports | PPV** turned the next run into 23 merges and 1 create, and
+the run after that into a clean no-op with stable channel IDs.
+
+**How to fix it:**
+
+- Set **Merge lookup scope** to the group the rule creates channels in, or
+- Clear it to **Auto**, which makes the lookup follow the Create Channel
+  action's group automatically.
+
+**Note:** If the rule has a **Create Group** action before its Create Channel
+action, the destination group is only decided while the rule runs, so the
+analyzer cannot compare it against the pin and stays silent.
 
 ---
 

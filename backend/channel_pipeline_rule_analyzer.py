@@ -328,6 +328,130 @@ def _check_merge_scope_not_target_group(
     )]
 
 
+def _action_type(action) -> str | None:
+    return action.get("type") if isinstance(action, dict) else getattr(action, "type", None)
+
+
+def _action_param(action, key: str):
+    return action.get(key) if isinstance(action, dict) else getattr(action, key, None)
+
+
+def _resolve_create_channel_group_id(
+    actions: list, index: int, target_group_id: int | None,
+) -> int | None:
+    """Statically resolve the group a ``create_channel`` action lands in.
+
+    Mirrors the runtime chain in
+    :meth:`channel_pipeline_executor.ActionExecutor._execute_create_channel`::
+
+        group_id = params.get("group_id") or exec_ctx.current_group_id
+                   or rule_target_group_id
+
+    ``exec_ctx.current_group_id`` is set by a ``create_group`` action earlier
+    in the same action list (actions run in list order, one
+    ``ExecutionContext`` per stream), and the group it resolves to depends on
+    the stream's data at run time. So when a ``create_group`` precedes this
+    action the landing group is NOT statically knowable and this function
+    returns ``None`` rather than guessing.
+
+    ``None`` therefore means "cannot resolve" and callers must stay silent,
+    which also covers the rule that has no group configured anywhere.
+    """
+    explicit = _action_param(actions[index], "group_id")
+    if explicit:
+        return explicit
+    for earlier in actions[:index]:
+        if _action_type(earlier) == "create_group":
+            return None
+    return target_group_id or None
+
+
+def _check_merge_scope_pinned_to_other_group(
+    rule_id: int | None,
+    rule_name: str,
+    actions: list,
+    target_group_id: int | None,
+    match_scope_target_group: bool,
+    match_scope_group_id: int | None,
+    orphan_action: str | None,
+) -> list[RuleFinding]:
+    """Flag a merge-lookup scope pinned to a group the rule never creates in.
+
+    Shape: ``match_scope_target_group`` on (so the lookup IS scoped) plus an
+    explicit ``match_scope_group_id`` pin that differs from the group the
+    rule's ``create_channel`` action actually lands in. The executor computes
+    ``scope_group_id = rule_scope_group_id or group_id``, so the pin wins and
+    every same-name lookup faithfully searches a group this rule's channels
+    were never in. The lookup can therefore never hit: the rule re-creates its
+    whole channel set on every run, and with ``orphan_action=delete`` the
+    previous run's set is deleted right after, so every channel ID changes
+    every run (GH #801, bead rtst2.1).
+
+    This is the INVERSE of :func:`_check_merge_scope_not_target_group`
+    (GH #226, bd-p6ko9), which covers the scope-off/search-all-groups
+    direction and early-returns exactly when a pin is active.
+
+    The check applies to every ``if_exists`` mode: the name lookup runs before
+    ``if_exists`` is consulted, so a wrong scope makes ``merge``/``merge_only``
+    lose the merge and makes ``skip``/``update`` create a duplicate.
+
+    Severity is ``warning``, this module's ceiling for its own findings (the
+    docstring reserves ``error`` for regex_lint's strict, save-blocking path).
+    The churn consequence is carried in the message and in
+    ``detail["deletes_orphans"]`` rather than by inventing a higher tier.
+    """
+    if not match_scope_target_group or not match_scope_group_id:
+        return []
+
+    for index, action in enumerate(actions or []):
+        if _action_type(action) != "create_channel":
+            continue
+        create_group_id = _resolve_create_channel_group_id(
+            actions, index, target_group_id,
+        )
+        if create_group_id is None or create_group_id == match_scope_group_id:
+            continue
+
+        deletes_orphans = (orphan_action or "delete") == "delete"
+        churn = (
+            "so the rule creates a duplicate set of channels on every run"
+        )
+        if deletes_orphans:
+            churn += (
+                ", and because ``orphan_action`` is ``delete`` the previous "
+                "run's channels are then removed. Every channel ID changes "
+                "on every run"
+            )
+        return [RuleFinding(
+            rule_id=rule_id,
+            rule_name=rule_name,
+            code="MERGE_SCOPE_PINNED_TO_OTHER_GROUP",
+            severity="warning",
+            field="match_scope_group_id",
+            message=(
+                f"This rule's merge lookup is pinned to channel group "
+                f"id={match_scope_group_id}, but its Create Channel action "
+                f"creates channels in group id={create_group_id}. Every "
+                f"same-name lookup searches a group this rule's channels are "
+                f"never in, so the lookup can never match: {churn}."
+            ),
+            suggestion=(
+                f"Set the merge lookup scope group to id={create_group_id} "
+                f"(the group this rule creates channels in), or clear it to "
+                f"'Auto' so the lookup follows the Create Channel action's "
+                f"group."
+            ),
+            detail={
+                "match_scope_group_id": match_scope_group_id,
+                "create_group_id": create_group_id,
+                "action_index": index,
+                "orphan_action": orphan_action or "delete",
+                "deletes_orphans": deletes_orphans,
+            },
+        )]
+    return []
+
+
 def _check_rule_has_no_hope_of_matching(
     rule_id: int | None, rule_name: str, conditions: list,
 ) -> list[RuleFinding]:
@@ -490,6 +614,10 @@ def analyze_rule(
     match_scope_target_group = bool(
         rule.get("match_scope_target_group", False) if isinstance(rule, dict) else False
     )
+    match_scope_group_id = (
+        rule.get("match_scope_group_id") if isinstance(rule, dict) else None
+    )
+    orphan_action = rule.get("orphan_action") if isinstance(rule, dict) else None
 
     out: list[RuleFinding] = []
     out.extend(_bubble_up_regex_advisories(rule_id, rule_name, conditions or []))
@@ -500,6 +628,10 @@ def analyze_rule(
     ))
     out.extend(_check_merge_scope_not_target_group(
         rule_id, rule_name, actions or [], match_scope_target_group,
+    ))
+    out.extend(_check_merge_scope_pinned_to_other_group(
+        rule_id, rule_name, actions or [], target_group_id,
+        match_scope_target_group, match_scope_group_id, orphan_action,
     ))
     out.extend(_check_disabled_normalization_groups(
         rule_id, rule_name, normalization_group_ids, normalization_groups,

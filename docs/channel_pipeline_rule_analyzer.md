@@ -192,6 +192,38 @@ want channels created in the target group. Leave it off if you
 deliberately want a same-name channel in another group to absorb the
 streams (the original GH-92 behavior).
 
+### `MERGE_SCOPE_PINNED_TO_OTHER_GROUP`
+
+**Severity.** `warning` (a real misconfiguration, not an advisory).
+
+**Trigger.** A rule with `match_scope_target_group` **on** and an
+explicit `match_scope_group_id` pin that differs from the group its
+`create_channel` action actually lands in. The landing group is
+resolved through the same chain the executor uses: the action's
+`group_id`, then a group created by an earlier `create_group` action,
+then the rule's `target_group_id`. When an earlier `create_group`
+action is present the landing group is only knowable at run time, so
+the analyzer stays silent rather than guessing.
+
+**Why it matters.** The executor computes the merge-lookup scope as
+`match_scope_group_id or <the action's group>`, so an explicit pin
+wins. Every same-name lookup then faithfully searches a group this
+rule's channels are never in and can never match. The rule creates a
+duplicate set of channels on every run, and with
+`orphan_action: delete` the previous run's set is deleted immediately
+after, so every channel ID changes on every run. The reporter of
+GH #801 measured create-49 / delete-49 churn run after run until the
+scope was repinned, after which the next run was 23 merges / 1 create
+and the one after that a clean no-op with stable IDs.
+
+This is the inverse of `MERGE_SCOPE_NOT_TARGET_GROUP` above, which
+covers the scope-**off**/search-all-groups direction and is silent
+whenever a pin is active.
+
+**Remediation.** Set the *Merge lookup scope* group to the group the
+rule creates channels in, or clear it to **Auto** so the lookup
+follows the Create Channel action's group.
+
 ### `RULE_HAS_NO_HOPE_OF_MATCHING`
 
 **Trigger.** Every OR-group on the rule contains a `never`

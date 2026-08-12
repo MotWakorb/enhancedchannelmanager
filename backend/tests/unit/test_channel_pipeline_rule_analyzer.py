@@ -379,6 +379,231 @@ class TestMergeScopeNotTargetGroup:
 
 
 # =========================================================================
+# MERGE_SCOPE_PINNED_TO_OTHER_GROUP (GH #801, bead rtst2.1) - the rule's
+# merge lookup is pinned to a group its create_channel action never lands
+# in, so every same-name lookup searches a group the rule's channels were
+# never in. This is the INVERSE of MERGE_SCOPE_NOT_TARGET_GROUP above,
+# which covers scope-off/search-all-groups (GH #226, bd-p6ko9).
+# =========================================================================
+
+_PIN_CODE = "MERGE_SCOPE_PINNED_TO_OTHER_GROUP"
+
+
+class TestMergeScopePinnedToOtherGroup:
+    def test_pin_differs_from_rule_target_group_flagged(self):
+        """The reporter's shape: scope pinned to 7, channels land in 12."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "orphan_action": "delete",
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert _PIN_CODE in _codes(rule)
+
+    def test_pin_differs_from_action_group_id_flagged(self):
+        """An action-level group_id wins over the rule target group, exactly
+        as in _execute_create_channel's fallback chain."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 12,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge", "group_id": 30}],
+        }
+        findings = [f for f in analyze_rule(rule) if f.code == _PIN_CODE]
+        assert findings
+        assert findings[0].detail["create_group_id"] == 30
+
+    def test_pin_matching_action_group_id_not_flagged(self):
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 30,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge", "group_id": 30}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_pin_matching_target_group_not_flagged(self):
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 12,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_no_pin_is_auto_and_not_flagged(self):
+        """match_scope_group_id=None is the Auto choice: the scope follows the
+        create action's group, so it can never disagree with it."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": None,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_scope_off_not_flagged(self):
+        """With match_scope_target_group off the lookup searches every group,
+        so the pin is inert. MERGE_SCOPE_NOT_TARGET_GROUP covers that case."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": False,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_create_group_before_create_channel_not_flagged(self):
+        """A prior create_group action sets exec_ctx.current_group_id at run
+        time, so the landing group is not statically knowable. Never invent a
+        finding from data we do not have."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [
+                {"type": "create_group", "name_template": "{stream_group}"},
+                {"type": "create_channel", "if_exists": "merge"},
+            ],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_create_group_after_create_channel_still_flagged(self):
+        """Actions run in list order, so a create_group AFTER the create_channel
+        cannot have set current_group_id for it."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [
+                {"type": "create_channel", "if_exists": "merge"},
+                {"type": "create_group", "name_template": "{stream_group}"},
+            ],
+        }
+        assert _PIN_CODE in _codes(rule)
+
+    def test_unresolvable_landing_group_not_flagged(self):
+        """No action group_id and no rule target group: nothing to compare."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": None,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    def test_no_create_channel_action_not_flagged(self):
+        """merge_streams is group-agnostic; this check is create_channel only."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "merge_streams", "target": "auto"}],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+    @pytest.mark.parametrize("if_exists", ["merge", "merge_only", "skip", "update"])
+    def test_every_if_exists_mode_flagged(self, if_exists):
+        """The name lookup runs before if_exists is consulted, so a wrong scope
+        misses for every mode: merge/merge_only lose the merge, skip and update
+        create a duplicate instead of skipping/updating."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": if_exists}],
+        }
+        assert _PIN_CODE in _codes(rule)
+
+    def test_severity_and_detail(self):
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "orphan_action": "delete",
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        findings = [f for f in analyze_rule(rule) if f.code == _PIN_CODE]
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "warning"
+        assert f.detail["match_scope_group_id"] == 7
+        assert f.detail["create_group_id"] == 12
+        assert f.detail["orphan_action"] == "delete"
+        assert f.detail["deletes_orphans"] is True
+
+    def test_orphan_action_keep_still_flagged_without_delete_language(self):
+        """Without orphan_action=delete the rule still churns duplicates, it
+        just does not delete the previous run's channels."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "orphan_action": "keep",
+            "conditions": [],
+            "actions": [{"type": "create_channel", "if_exists": "merge"}],
+        }
+        findings = [f for f in analyze_rule(rule) if f.code == _PIN_CODE]
+        assert len(findings) == 1
+        assert findings[0].detail["deletes_orphans"] is False
+        assert "deleted" not in findings[0].message
+
+    def test_second_action_mismatch_flagged_once(self):
+        """First create_channel agrees with the pin, second does not."""
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 12,
+            "target_group_id": 12,
+            "conditions": [],
+            "actions": [
+                {"type": "create_channel", "if_exists": "merge"},
+                {"type": "create_channel", "if_exists": "merge", "group_id": 30},
+            ],
+        }
+        findings = [f for f in analyze_rule(rule) if f.code == _PIN_CODE]
+        assert len(findings) == 1
+        assert findings[0].detail["create_group_id"] == 30
+        assert findings[0].detail["action_index"] == 1
+
+    def test_missing_actions_key_not_flagged(self):
+        rule = {
+            "id": 1, "name": "PPV",
+            "match_scope_target_group": True,
+            "match_scope_group_id": 7,
+            "target_group_id": 12,
+            "conditions": [],
+        }
+        assert _PIN_CODE not in _codes(rule)
+
+
+# =========================================================================
 # RULE_HAS_NO_HOPE_OF_MATCHING — every OR-group contains ``never``.
 # =========================================================================
 
