@@ -366,7 +366,7 @@ class TestEmbyTestConnectionLoopbackDenylist:
     ``ssrf_outbound_mode``, so:
 
     * link-local / IMDS stay denied in BOTH modes (always-on denylist),
-    * loopback and RFC1918 follow the wizard toggle — allowed under
+    * loopback, RFC1918, and RFC 6598 shared space follow the wizard toggle — allowed under
       ``lan_friendly`` (the shipped default, ADR-012 D4), denied under
       ``public_only``,
 
@@ -384,7 +384,6 @@ class TestEmbyTestConnectionLoopbackDenylist:
             "http://169.254.1.1",                        # 169.254.0.0/16
             "http://[fe80::1]",                          # IPv6 link-local
             "http://[fd12:3456:789a::1]",                # IPv6 ULA
-            "http://100.64.0.1",                         # CGNAT
         ],
     )
     @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
@@ -408,6 +407,28 @@ class TestEmbyTestConnectionLoopbackDenylist:
         assert body["ok"] is False
         assert "host" in body["error"].lower()
         emby_constructor.assert_not_called()
+
+    @pytest.mark.parametrize("mode, expected_ok", [
+        ("lan_friendly", True),
+        ("public_only", False),
+    ])
+    @pytest.mark.asyncio
+    async def test_rfc6598_peer_follows_outbound_mode(
+        self, async_client, mode, expected_ok,
+    ):
+        """The settings caller inherits the shared RFC 6598 policy contract."""
+        from security.ssrf import SSRFMode
+        emby_client = AsyncMock()
+        emby_client.test_connection.return_value = {"ok": True}
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             patch("routers.settings.EmbyClient", return_value=emby_client):
+            response = await async_client.post(
+                "/api/settings/emby/test-connection",
+                json={"base_url": "http://100.80.3.24", "api_key": "k"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is expected_ok
 
     @pytest.mark.parametrize(
         "base_url",

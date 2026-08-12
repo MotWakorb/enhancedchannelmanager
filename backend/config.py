@@ -372,11 +372,11 @@ class DispatcharrSettings(BaseModel):
     # DBAS outbound SSRF mode (bead 0i2vt.5, threat model §9.4 item 7 / ADR-012
     # D4). The SINGLE wizard knob governing the outbound-destination policy for
     # cloud upload (S3/WebDAV/OneDrive/Dropbox/GDrive). "lan_friendly" (DEFAULT)
-    # allows RFC1918 private + 127/8 loopback destinations (operators backing up
-    # to a LAN NAS); "public_only" blocks those. The ALWAYS-ON denylist
-    # (metadata/link-local/CGNAT/IPv6-special/non-http(s)) is enforced
+    # allows RFC1918 private, RFC 6598 shared, and 127/8 loopback destinations
+    # (operators backing up to a LAN/VPN peer); "public_only" blocks those. The
+    # ALWAYS-ON denylist (metadata/link-local/IPv6-special/non-http(s)) is enforced
     # unconditionally in code (security/ssrf.py) regardless of this value — this
-    # key can ONLY move the RFC1918/loopback band, never the always-on denylist
+    # key can ONLY move the RFC1918/RFC6598/loopback band, never the always-on denylist
     # (threat model B6). The first-run wizard that records this choice is a
     # separate frontend bead; this field is the persistence seam.
     ssrf_outbound_mode: str = "lan_friendly"

@@ -24,15 +24,16 @@ Design (per §9.4)
 * **Scheme allowlist** — only ``http`` / ``https``.
 * **Always-on denylist** (BOTH modes, no opt-out, no settings key, no
   allowlist): ``0.0.0.0/8``, ``169.254.0.0/16`` (incl. IMDS ``169.254.169.254``),
-  ``100.64.0.0/10`` (CGNAT), ``::``, ``fc00::/7`` (ULA),
+  ``::``, ``fc00::/7`` (ULA),
   ``fe80::/10`` (link-local), ``fec0::/10`` (site-local), IPv4-mapped IPv6
   ``::ffff:0:0/96`` (unwrapped + re-checked against the v4 rules), multicast
   (``224.0.0.0/4`` / ``ff00::/8``). Backed by the stdlib ``ipaddress``
   ``is_private`` / ``is_reserved`` / ``is_loopback`` / ``is_link_local`` /
   ``is_multicast`` properties as a **fail-closed backstop** so a future special
   range we did not enumerate is still denied.
-* **Wizard-toggled band** — RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``)
-  + loopback (``127.0.0.0/8`` and ``::1``) are ALLOWED in LAN-friendly
+* **Wizard-toggled band** — RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``),
+  RFC 6598 Shared Address Space (``100.64/10``), and loopback
+  (``127.0.0.0/8`` and ``::1``) are ALLOWED in LAN-friendly
   (default) and REJECTED in public-only. IPv6 unique-local ``fc00::/7`` is
   *always* denied — there is no LAN IPv6 ULA carve-out in §9.4.
 
@@ -159,7 +160,6 @@ class ResolvedTarget:
 _ALWAYS_ON_V4 = tuple(ipaddress.ip_network(c) for c in (
     "0.0.0.0/8",            # "this" network / wildcard
     "169.254.0.0/16",      # link-local (incl. IMDS 169.254.169.254)
-    "100.64.0.0/10",       # CGNAT (RFC 6598)
     "224.0.0.0/4",         # multicast
 ))
 _ALWAYS_ON_V6 = tuple(ipaddress.ip_network(c) for c in (
@@ -177,6 +177,7 @@ _TOGGLED_V4 = tuple(ipaddress.ip_network(c) for c in (
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    "100.64.0.0/10",       # RFC 6598 Shared Address Space / intended peers
     "127.0.0.0/8",         # loopback toggles with the band per §9.4 item 2
 ))
 
@@ -235,7 +236,7 @@ def _is_always_on_denied(ip: _IPAddress) -> bool:
 
 
 def _is_toggled_band(ip: _IPAddress) -> bool:
-    """RFC1918 + loopback (v4 ``127/8`` and v6 ``::1``) — the wizard's band."""
+    """RFC1918, RFC 6598, and loopback — the LAN-friendly policy band."""
     if ip.version == 4:
         return _in_any(ip, _TOGGLED_V4)
     # The only v6 member is ``::1`` (GH #754 / bead 0yh70). There is still no
@@ -276,7 +277,7 @@ def _ip_allowed(ip: _IPAddress, mode: SSRFMode) -> bool:
         return False
 
     if _is_toggled_band(ip):
-        # RFC1918 / loopback (127.0.0.0/8, ::1): the explicit LAN allowlist —
+        # RFC1918 / RFC 6598 / loopback: the explicit LAN-friendly allowlist —
         # allowed only in LAN-friendly. A mapped ::ffff:<RFC1918> reaches after
         # unwrap and follows the same toggle (§9.4 item 2: "re-checked against
         # the IPv4 rules").

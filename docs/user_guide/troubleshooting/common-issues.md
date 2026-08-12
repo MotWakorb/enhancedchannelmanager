@@ -100,16 +100,17 @@ button returns the same explanation without the field prefix.
 Two things about this policy are worth knowing before you start changing
 settings:
 
-- **Loopback and private LAN addresses are allowed by default.**
+- **Loopback, private LAN, and RFC 6598 shared addresses are allowed by default.**
   `http://localhost:9191`, `http://127.0.0.1:9191`, and RFC1918 addresses such
-  as `192.168.1.50` are all accepted under the shipped mode, which is called
+  as `192.168.1.50`, plus shared carrier/VPN addresses from `100.64.0.0/10`,
+  are accepted under the shipped mode, which is called
   `lan_friendly`. If you have read older documentation claiming loopback is
   always rejected, that documentation is stale: it described a bug that was
   fixed under
   [GitHub issue #754](https://github.com/MotWakorb/enhancedchannelmanager/issues/754).
 - **Some addresses are refused in every mode, and no setting will change that.**
   Link-local (`169.254.x.x`, which includes cloud metadata endpoints),
-  carrier-grade NAT, IPv6 unique-local, multicast, and `0.0.0.0/8` are denied
+  IPv6 unique-local, multicast, and `0.0.0.0/8` are denied
   unconditionally. So are schemes other than `http` and `https`.
 
 The one operator-facing knob is on **Settings → Backup & Restore**, in the
@@ -119,7 +120,7 @@ The one operator-facing knob is on **Settings → Backup & Restore**, in the
 
 Leave it on **Allow your home network (recommended)** unless you deliberately
 want ECM to refuse every address on your own network. Switching to **Public
-internet only** is what makes a loopback or LAN URL start failing.
+internet only** is what makes a loopback, LAN, or `100.64.0.0/10` peer URL start failing.
 
 One deliberate exception on the settings path: a host that cannot be **resolved**
 at all is not treated as a policy denial. A LAN media server that happens to be
