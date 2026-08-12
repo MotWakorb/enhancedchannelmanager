@@ -230,10 +230,11 @@ following items extend the checklist; they are acceptance criteria for the Phase
     this checklist item is the contract. *(B1, B2, B4, B6, Addendum B; ADR-012 D4)*
 22. **Always-on denylist regardless of LAN-friendly choice (Addendum B)**: even when the
     first-run wizard (`0i2vt.5`) chose LAN-friendly mode, the validator ALWAYS rejects, with
-    no opt-out: link-local `169.254.0.0/16` (incl. IMDS `169.254.169.254/32`), CGNAT
-    `100.64.0.0/10`, `0.0.0.0/8`, IPv6 ULA `fc00::/7`, IPv6 link-local
+    no opt-out: link-local `169.254.0.0/16` (incl. IMDS `169.254.169.254/32`),
+    `0.0.0.0/8`, IPv6 ULA `fc00::/7`, IPv6 link-local
     `fe80::/10`, IPv6 site-local `fec0::/10`, IPv4-mapped-IPv6 `::ffff:0:0/96`, and any
-    non-`http`/`https` scheme. Loopback (`127.0.0.0/8` **and `::1`**) and RFC1918 ranges are
+    non-`http`/`https` scheme. Loopback (`127.0.0.0/8` **and `::1`**), RFC1918 ranges, and RFC 6598
+    Shared Address Space (`100.64.0.0/10`) are
     rejected in public-only mode and allowed in LAN-friendly mode; everything in the always-on
     list is rejected in **both**. *(`::1` moved from always-on to the toggled band by GH #754 /
     bead `0yh70`; see §9.4 item 2.)*
@@ -532,9 +533,9 @@ deliberately makes outbound requests to **destinations the operator typed in**, 
 attacker-influenceable and must be validated.
 
 ADR-012 D4 resolves the policy: a **first-run wizard** lets the operator pick *LAN-friendly*
-(RFC1918 + loopback allowed: this is the default, because plenty of operators back up to a NAS on
+(RFC1918 + RFC 6598 shared space + loopback allowed: this is the default, because operators back up to LAN, VPN, and carrier-shared peers such as a NAS or second ECM instance on
 `192.168.x.x`) vs *public-only* (private ranges blocked). **Regardless of that choice**, an
-always-on denylist blocks metadata/link-local/CGNAT/etc., and DNS-rebinding mitigations are
+always-on denylist blocks metadata/link-local/special-use ranges outside that explicit peer band, and DNS-rebinding mitigations are
 mandatory. This addendum is the threat-model backing for `0i2vt.5`; §9.4 hands the concrete
 validator requirements to that bead.
 
@@ -547,7 +548,7 @@ untrusted *and* treat the act of connecting as a capability that must be gated.
 | # | Surface | STRIDE | Threat | Attack scenario | Mitigation | Status | Sev |
 |---|---------|--------|--------|-----------------|------------|--------|-----|
 | B1 | CloudTarget config | Tampering / Spoofing | Operator-supplied S3/WebDAV **endpoint URL** is malicious | Admin (or hijacked admin session) sets the "S3 endpoint" to `http://169.254.169.254/` or `http://10.0.0.5:6379/` ("MinIO on the LAN"). ECM dutifully connects on the next backup upload. | Shared SSRF validator (§9.4) on **every** outbound URL before connect, endpoint URLs included, not just tokens. No adapter issues a raw `httpx`/`requests` call that bypasses the validator (single chokepoint). | to-build (`0i2vt.5` + `0i2vt.8`) | **High** |
-| B2 | Any outbound URL | Information Disclosure / EoP | SSRF to cloud metadata / link-local / internal ranges | Destination resolves to `169.254.169.254` → ECM fetches the instance's IAM credentials and (because it's a "backup destination") may even *upload to it* or surface the response in an error. Or destination is `127.0.0.1:<admin-port>` / `100.64.x.x` / `[::1]` and ECM is now an internal-network scanner/proxy. | **Always-on denylist** (regardless of wizard choice): `169.254.0.0/16` (incl. IMDS), `100.64.0.0/10`, `0.0.0.0/8`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `::ffff:0:0/96`, non-`http(s)` schemes: *all rejected in both modes*. Loopback (`127.0.0.0/8` + `::1`) + RFC1918 rejected in public-only mode, allowed in LAN-friendly (`::1` moved to the toggled band by GH #754 / `0yh70`). (§9.4 item 2.) | to-build (`0i2vt.5`) | **High** |
+| B2 | Any outbound URL | Information Disclosure / EoP | SSRF to cloud metadata / link-local / internal ranges | Destination resolves to `169.254.169.254` → ECM fetches the instance's IAM credentials and (because it's a "backup destination") may even *upload to it* or surface the response in an error. Or a public-only destination resolves to `127.0.0.1:<admin-port>` / `100.64.x.x` / `[::1]` and ECM is now an internal-network scanner/proxy. | **Always-on denylist** (regardless of wizard choice): `169.254.0.0/16` (incl. IMDS), `0.0.0.0/8`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `::ffff:0:0/96`, non-`http(s)` schemes: *all rejected in both modes*. Loopback (`127.0.0.0/8` + `::1`), RFC1918, and RFC 6598 Shared Address Space (`100.64.0.0/10`) are rejected in public-only mode and allowed in LAN-friendly. (§9.4 item 2.) | to-build (`0i2vt.5`) | **High** |
 | B3 | Any outbound URL | Tampering | DNS rebinding / TOCTOU: hostname validated, then re-resolves to a denied IP at connect time (or a redirect lands on one) | Attacker controls `evil.example.com`; first DNS lookup (validation) returns a public IP, second lookup (the actual connect) returns `169.254.169.254`. Or the destination replies `302 → http://169.254.169.254/latest/meta-data/`. The naïve "validate the hostname then `requests.get(hostname)`" pattern is bypassed. | **Resolve-then-connect-by-IP:** resolve once, validate *every* returned A/AAAA against the denylist (any denied record → reject the whole request), connect by the validated IP with the hostname as SNI/`Host:`. **Redirect re-validation:** 3xx to a new host is not auto-followed; re-run the full denylist + resolve-by-IP on the redirect target, and reject `https→http` downgrades. (§9.4 items 3–4.) | to-build (`0i2vt.5`) | **High** |
 | B4 | Cloud adapters | EoP / bypass | An adapter (`s3_adapter.py` etc.) makes a raw HTTP call that skips the validator | The S3 SDK or a WebDAV client library opens its own connection straight from the endpoint URL string, never touching ECM's validator → SSRF protection is theatre. | The validator is the **single chokepoint**: either (a) all adapters route through one ECM-owned HTTP client that validates on every request and pins to the resolved IP, or (b) where an SDK insists on doing its own DNS, ECM pre-resolves + validates and hands the SDK an IP + `Host:` override. CI test: grep adapters for direct `httpx`/`requests`/`urllib` calls; any hit fails the build unless it's the validated client. (§9.4 item 1.) | to-build (`0i2vt.8`) | High |
 | B5 | CloudTarget/SyncTarget creds | Tampering / Repudiation | Scheduled backup uses a *stale* (rotated/revoked) cloud token; or `insecure=true` is set with no audit trail | (a) Admin rotates the Dropbox token; a backup schedule created earlier still fires with the old token, silently failing or, worse, hitting a now-attacker-controlled account that reused the old token. (b) Admin sets `insecure=true` for a self-signed WebDAV box; later that box is MITM'd and nobody knows ECM was talking to it without TLS verification. | (a) `credential_version` + `token_revoked_at` columns on the model (`0i2vt.4`); scheduler captures version at enqueue, worker re-checks at execute, aborts with WARN + audit row on mismatch (Security Mandatory #5). (b) `verify=True` default; `insecure=true` per-target escape hatch writes a `journal.log_entry` (`category='backup_outbound'`, host, `tls_verified=false`) on **every** request, not once at config time. (§9.4 items 5–6, checklist 25–26.) | to-build (`0i2vt.4` + `0i2vt.8`) | Med |
@@ -556,8 +557,8 @@ untrusted *and* treat the act of connecting as a capability that must be gated.
 ### 9.3 Mitigations summary (Addendum B)
 
 1. **One SSRF chokepoint.** A single ECM-owned validated HTTP client (or pre-resolve+IP-pin shim for SDKs that won't cooperate). CI grep forbids raw outbound calls in the adapters. (Checklist 21, 24; §9.4 item 1.)
-2. **Always-on denylist, unconditional.** Metadata/link-local/CGNAT/IPv6-special/non-http(s) rejected in *both* wizard modes; no settings key, no allowlist can re-enable them. IPv6 loopback `::1` is **not** in this set: it sits in the toggled band described in item 3. (Checklist 22; §9.4 item 2.)
-3. **LAN-friendly is the only knob.** The wizard toggles RFC1918 plus loopback (`127.0.0.0/8` and `::1/128`) only; default LAN-friendly per ADR-012 D4. (Checklist 22; §9.4 item 2.)
+2. **Always-on denylist, unconditional.** Metadata/link-local/IPv6-special/non-http(s) destinations outside the explicit peer band are rejected in *both* wizard modes; no settings key or allowlist can re-enable them. IPv6 loopback `::1` is **not** in this set: it sits in the toggled band described in item 3. (Checklist 22; §9.4 item 2.)
+3. **LAN-friendly is the only knob.** The wizard toggles RFC1918, RFC 6598 Shared Address Space (`100.64.0.0/10`), and loopback (`127.0.0.0/8` and `::1/128`); default LAN-friendly per ADR-012 D4. RFC 6598 is special-use and not globally routable, but is used for carrier and overlay-network peer addressing; this permission does not expand to other special-use ranges. (Checklist 22; §9.4 item 2.)
 4. **Resolve-then-connect-by-IP.** Resolve once, validate all records, connect by validated IP with hostname as SNI/`Host:`. Closes DNS-rebinding TOCTOU. (Checklist 23; §9.4 item 3.)
 5. **Redirect re-validation + no scheme downgrade.** 3xx to a new host re-runs the full check; `https→http` rejected. (Checklist 24; §9.4 item 4.)
 6. **TLS verify on; insecure flag is audited per request.** `verify=True` default; `insecure=true` → audit row every time. (Checklist 25; §9.4 item 6.)
@@ -568,7 +569,7 @@ untrusted *and* treat the act of connecting as a capability that must be gated.
 `0i2vt.5` MUST deliver a validator meeting **all** of the following. (`0i2vt.5`'s own description
 already lists most of this; restating here so the threat model is the single source the bead's
 acceptance criteria check against. Where `0i2vt.5` says "extends bead `zbt74` validator pattern":
-that pattern covers scheme + IPv4 RFC1918; the items below add IPv6, CGNAT, IMDS, and
+that pattern covers scheme + IPv4 RFC1918; the items below add IPv6, RFC 6598, IMDS, and
 DNS-rebinding coverage that `zbt74` does not.)
 
 1. **Single validated outbound client / chokepoint.** All outbound HTTP(S) from the backup/sync
@@ -578,12 +579,13 @@ DNS-rebinding coverage that `zbt74` does not.)
 2. **Scheme allowlist + always-on IP denylist + wizard-toggled band.**
    - Scheme: only `http` and `https`. Reject `file`, `ftp`, `gopher`, `data`, `dict`, etc.
    - Always-on deny (both wizard modes, no opt-out, no settings override, no allowlist):
-     `0.0.0.0/8`, `169.254.0.0/16` (incl. `169.254.169.254/32` IMDS), `100.64.0.0/10` (CGNAT),
+     `0.0.0.0/8`, `169.254.0.0/16` (incl. `169.254.169.254/32` IMDS),
      `fc00::/7` (ULA), `fe80::/10` (link-local), `fec0::/10` (site-local),
      `::ffff:0:0/96` (IPv4-mapped: must be unwrapped and re-checked against the IPv4 rules so
      `::ffff:169.254.169.254` is caught), `::/128`, multicast (`224.0.0.0/4`, `ff00::/8`).
-   - Wizard-toggled: loopback (`127.0.0.0/8` and `::1/128`) and RFC1918 (`10/8`, `172.16/12`,
-     `192.168/16`): *allowed* in LAN-friendly (default), *rejected* in public-only. There is
+   - Wizard-toggled: loopback (`127.0.0.0/8` and `::1/128`), RFC1918 (`10/8`, `172.16/12`,
+     `192.168/16`), and RFC 6598 Shared Address Space (`100.64/10`): *allowed* in LAN-friendly
+     (default), *rejected* in public-only. There is
      still no LAN carve-out for an IPv6 *network*: ULA `fc00::/7` and link-local `fe80::/10`
      stay always-on denied.
 

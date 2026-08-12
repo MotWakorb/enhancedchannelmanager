@@ -58,7 +58,8 @@ Two things to know:
 
 1. **By default, this now works.** ECM's outbound-connection safety check has
    a mode setting: `lan_friendly` (the default) allows loopback and
-   private-network destinations; `public_only` blocks them. Prior to the fix
+   private-network and RFC 6598 shared (`100.64.0.0/10`) peer destinations;
+   `public_only` blocks them. Prior to the fix
    for #754, **Test Connection** and **Save** disagreed even in the default
    mode: test connection allowed loopback, but save always rejected it
    regardless of mode. So an operator could see "Connected" and still be
@@ -91,8 +92,8 @@ Two things to know:
 
    ![The "Where backups can be sent" card, with "Allow your home network (recommended)" selected and "Public internet only" as the other option](../../images/user_guide/getting-started/3-outbound-policy-card.png)
 
-**Result:** with `lan_friendly` selected (the default), a loopback or
-private-network Dispatcharr URL saves successfully and the connection
+**Result:** with `lan_friendly` selected (the default), a loopback,
+private-network, or `100.64.0.0/10` Dispatcharr peer URL saves successfully and the connection
 behaves identically to any other URL.
 
 ### Confirm the connection is healthy

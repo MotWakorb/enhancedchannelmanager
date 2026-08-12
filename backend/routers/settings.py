@@ -1693,7 +1693,7 @@ def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
     loopback + link-local denylist that ``_sanitize_base_url`` used to carry
     (bd-fbc50). That denylist pre-empted the canonical validator: it rejected
     loopback unconditionally, so ``ssrf_outbound_mode`` — which ships as
-    ``lan_friendly`` and explicitly permits loopback + RFC1918 per ADR-012 D4 —
+    ``lan_friendly`` and explicitly permits loopback + RFC1918 + RFC 6598 per ADR-012 D4 —
     could never be honoured. A user running Dispatcharr behind a shared gluetun
     network (``http://localhost:9191`` is the only address that reaches it) had
     a working, testable connection that the save path refused to store.
@@ -1701,9 +1701,9 @@ def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
     Policy now comes from ONE place, ``security.ssrf.validate_outbound_url``
     under the persisted mode:
 
-    * always-on denylist (link-local / IMDS / ULA / CGNAT / multicast /
+    * always-on denylist (link-local / IMDS / ULA / multicast /
       ``0.0.0.0/8``) — rejected in BOTH modes, no opt-out;
-    * wizard-toggled band (RFC1918 + loopback) — allowed under
+    * wizard-toggled band (RFC1918 + RFC 6598 shared space + loopback) — allowed under
       ``lan_friendly``, rejected under ``public_only``;
     * every A/AAAA record is checked and ANY denied record rejects the whole
       URL (the DNS-rebinding mitigation, threat model §9.4 item 3).
@@ -1767,8 +1767,8 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
        let a crafted ``http://attacker.com/legit/path?bypass`` survive
        to the HTTP probe.
     4. Apply the mode-aware host policy via
-       :func:`_host_denied_by_outbound_policy`. Loopback and RFC1918 follow
-       ``ssrf_outbound_mode``; link-local / IMDS / ULA / CGNAT are denied in
+       :func:`_host_denied_by_outbound_policy`. Loopback, RFC1918, and RFC 6598
+       shared space follow ``ssrf_outbound_mode``; link-local / IMDS / ULA are denied in
        both modes.
 
     Returns:

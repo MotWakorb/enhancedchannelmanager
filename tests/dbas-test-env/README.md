@@ -188,8 +188,9 @@ curl -s -X POST http://127.0.0.1:9292/api/accounts/token/ \
 #     "credentials":{"auth_method":"password","username":"ecmtest-b",
 #                    "password":"<throwaway-password>"},
 #     "enabled":true,"sync_logos":false}
-#    (SSRF: a LAN/RFC1918 base_url needs ssrf_outbound_mode=lan_friendly, the
-#     default. Link-local/IMDS/CGNAT are refused unconditionally.)
+#    (SSRF: a LAN/RFC1918 or RFC 6598 shared base_url needs
+#     ssrf_outbound_mode=lan_friendly, the default. Link-local/IMDS remain
+#     refused unconditionally.)
 
 # 4. Drive cycles via the privileged task endpoint. Each SyncTarget has its
 #    OWN task id — dbas_sync_<id> (7ipq2.3 / ADR-013 S6). The task is BOUND

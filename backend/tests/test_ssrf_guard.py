@@ -97,9 +97,6 @@ ALWAYS_ON_DENIED = [
     # IMDS + link-local
     "http://169.254.169.254/latest/meta-data/",   # AWS/GCP/Azure IMDS
     "http://169.254.1.1/",                          # link-local 169.254.0.0/16
-    # CGNAT 100.64.0.0/10
-    "http://100.64.0.1/",
-    "http://100.127.255.254/",
     # 0.0.0.0/8 wildcard
     "http://0.0.0.0/",
     "http://0.1.2.3/",
@@ -125,7 +122,6 @@ ALWAYS_ON_DENIED = [
     # always-on list — see TestWizardToggledBand below.)
     "http://[::ffff:169.254.169.254]/",            # mapped IMDS (169.254/16 always-on)
     "http://[::ffff:0.0.0.0]/",                     # mapped wildcard (0.0.0.0/8 always-on)
-    "http://[::ffff:100.64.0.1]/",                  # mapped CGNAT (100.64/10 always-on)
 ]
 
 
@@ -185,8 +181,8 @@ class TestAlwaysOnDenylist:
 
 
 # ---------------------------------------------------------------------------
-# Wizard-toggled band: RFC1918 + loopback (§9.4 item 2 — wizard-toggled;
-# corpus: RFC1918 allowed in LAN-friendly / rejected in public-only).
+# Wizard-toggled band: RFC1918 + RFC 6598 shared space + loopback (§9.4 item 2;
+# allowed in LAN-friendly / rejected in public-only).
 # ---------------------------------------------------------------------------
 
 class TestWizardToggledBand:
@@ -201,6 +197,54 @@ class TestWizardToggledBand:
     def test_rfc1918_and_loopback_allowed_in_lan_friendly(self, url):
         result = validate_outbound_url(url, SSRFMode.LAN_FRIENDLY)
         assert result is not None
+
+    @pytest.mark.parametrize("url", [
+        "http://100.64.0.0/",
+        "http://100.80.3.24/",
+        "http://100.127.255.255/",
+        "http://[::ffff:100.80.3.24]/",
+    ])
+    def test_rfc6598_shared_space_allowed_in_lan_friendly(self, url):
+        result = validate_outbound_url(url, SSRFMode.LAN_FRIENDLY)
+        assert str(result.ip) in {"100.64.0.0", "100.80.3.24", "100.127.255.255"}
+
+    def test_hostname_resolving_only_to_rfc6598_allowed_in_lan_friendly(self):
+        with _patch_dns("100.80.3.24"):
+            result = validate_outbound_url("https://peer.example.test/", SSRFMode.LAN_FRIENDLY)
+        assert str(result.ip) == "100.80.3.24"
+
+    @pytest.mark.parametrize("url", [
+        "http://100.64.0.0/",
+        "http://100.80.3.24/",
+        "http://100.127.255.255/",
+    ])
+    def test_rfc6598_shared_space_blocked_in_public_only(self, url):
+        with pytest.raises(SSRFError):
+            validate_outbound_url(url, SSRFMode.PUBLIC_ONLY)
+
+    def test_mapped_rfc6598_blocked_in_public_only(self):
+        with pytest.raises(SSRFError):
+            validate_outbound_url(
+                "http://[::ffff:100.80.3.24]/", SSRFMode.PUBLIC_ONLY
+            )
+
+    @pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.0"])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_adjacent_global_addresses_remain_public_literal(self, address, mode):
+        result = validate_outbound_url(f"https://{address}/", mode)
+        assert str(result.ip) == address
+
+    @pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.0"])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_adjacent_global_addresses_remain_public_via_dns(self, address, mode):
+        with _patch_dns(address):
+            result = validate_outbound_url("https://public.example.test/", mode)
+        assert str(result.ip) == address
+
+    def test_rfc6598_does_not_weaken_reject_any_dns_record(self):
+        with _patch_dns("100.80.3.24", "169.254.169.254"):
+            with pytest.raises(SSRFError):
+                validate_outbound_url("https://peer.example.test/", SSRFMode.LAN_FRIENDLY)
 
     @pytest.mark.parametrize("url", [
         "http://10.0.0.5/",
@@ -384,6 +428,20 @@ class TestFailClosed:
 # ---------------------------------------------------------------------------
 
 class TestRedirectValidation:
+    def test_redirect_to_rfc6598_follows_mode(self):
+        result = ssrf.validate_redirect(
+            "http://example.com/",
+            "http://100.80.3.24/api/",
+            SSRFMode.LAN_FRIENDLY,
+        )
+        assert str(result.ip) == "100.80.3.24"
+        with pytest.raises(SSRFError):
+            ssrf.validate_redirect(
+                "http://example.com/",
+                "http://100.80.3.24/api/",
+                SSRFMode.PUBLIC_ONLY,
+            )
+
     def test_redirect_to_imds_rejected(self):
         with _patch_dns("169.254.169.254"):
             with pytest.raises(SSRFError):
@@ -445,7 +503,7 @@ class TestIpaddressBackstop:
     ])
     def test_reserved_ranges_denied_in_both_modes(self, ip):
         # These are is_reserved / is_private-ish per stdlib and must be denied
-        # even though they are not in the explicit CGNAT/IMDS list.
+        # even though they are not in the explicit policy bands.
         for mode in (SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY):
             with pytest.raises(SSRFError):
                 validate_outbound_url(f"http://{ip}/", mode)
