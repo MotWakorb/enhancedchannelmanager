@@ -9,7 +9,10 @@ ECM has two admin gates that look interchangeable and are not:
   principal IS ADMITTED, because ``_build_mcp_service_principal`` sets
   ``is_admin=True``.
 * ``auth.RequireHumanAdminIfEnabled`` / ``auth.RequireHumanAdminForOutboundTest``
-  — admin required AND the MCP service principal is refused.
+  / ``auth.RequireHumanAdminForServiceCredential`` — admin required AND the MCP
+  service principal is refused. These three behave identically; they differ
+  only in the 403 body, which names the surface being refused so incident
+  triage starts in the right place.
 
 Reaching for the first when you meant the second closes the non-admin half of
 a hole and leaves the MCP half wide open, which reads as fixed in review. That
@@ -30,7 +33,9 @@ is denied exactly where a route:
    status-code oracle / in-band scanner class — i4qrp, 9kwzp.6, 9kwzp.7); or
 2. rewrites the settings blob wholesale, which would bypass the field-level
    carve-out ``routers.settings._resolve_settings_admin`` applies to
-   POST /api/settings (kgz3k / 6n76m).
+   POST /api/settings (kgz3k / 6n76m); or
+3. manages the lifecycle of the static MCP key itself, which would make the
+   bearer of a credential the party that rotates and revokes it (9kwzp.8).
 
 Everything else stays admitted. The groups below record that verdict per site
 so the next reader does not re-derive it.
@@ -56,6 +61,7 @@ from fastapi.routing import APIRoute
 from auth import (
     RequireAdminIfEnabled,
     RequireHumanAdminForOutboundTest,
+    RequireHumanAdminForServiceCredential,
     RequireHumanAdminIfEnabled,
 )
 
@@ -241,8 +247,26 @@ _OUTBOUND_CREDENTIAL_TEST = {
     ("POST", "/api/cloud-targets/{target_id}/test"),
 }
 
+# 9kwzp.8: the static MCP key's own lifecycle. Both halves carried NO
+# dependency at all, so any authenticated non-admin could mint itself a
+# credential the middleware treats as admin (privilege escalation) or revoke
+# every sidecar integration (denial of service). The MCP principal is refused
+# on top of that for a reason unlike either group above — nothing here reaches
+# the network and nothing writes the settings blob wholesale. It is refused
+# because it would be the BEARER rotating and revoking its own credential: the
+# minted key is disclosed only in the response body, so a holder of a leaked
+# key could mint a successor that survives the operator's rotation. Hence its
+# own dependency, ``RequireHumanAdminForServiceCredential``, whose 403 names
+# this surface instead of a connection test that never happens here.
+_SERVICE_CREDENTIAL_LIFECYCLE = {
+    ("POST", "/api/settings/mcp-api-key"),
+    ("DELETE", "/api/settings/mcp-api-key"),
+}
+
 MCP_DENIED: frozenset = frozenset(
-    _WHOLESALE_CONFIG_WRITE | _OUTBOUND_CREDENTIAL_TEST
+    _WHOLESALE_CONFIG_WRITE
+    | _OUTBOUND_CREDENTIAL_TEST
+    | _SERVICE_CREDENTIAL_LIFECYCLE
 )
 
 
@@ -306,11 +330,12 @@ def test_classifier_distinguishes_the_two_gates():
 
     If ``_gate_kind`` stopped telling the two gates apart, the set assertions
     below would still pass whenever both sets happened to be classified the
-    same way. Pin the classifier against the three shipped dependencies first.
+    same way. Pin the classifier against the four shipped dependencies first.
     """
     assert _gate_kind(RequireAdminIfEnabled.dependency) == "admitted"
     assert _gate_kind(RequireHumanAdminIfEnabled.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForOutboundTest.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForServiceCredential.dependency) == "denied"
 
 
 def test_no_route_is_classified_both_ways():

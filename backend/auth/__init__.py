@@ -88,6 +88,7 @@ try:
         RequireAdminIfEnabled,
         RequireHumanAdminIfEnabled,
         RequireHumanAdminForOutboundTest,
+        RequireHumanAdminForServiceCredential,
         resolve_is_admin_if_enabled,
         ResolveIsAdminIfEnabled,
     )
@@ -105,6 +106,7 @@ try:
         "RequireAdminIfEnabled",
         "RequireHumanAdminIfEnabled",
         "RequireHumanAdminForOutboundTest",
+        "RequireHumanAdminForServiceCredential",
         "resolve_is_admin_if_enabled",
         "ResolveIsAdminIfEnabled",
     ])
