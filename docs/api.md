@@ -779,10 +779,10 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/alert-methods` | List all alert methods. Admin-only when auth is enabled; the MCP service key is **admitted**, so the shipped `list_alert_methods` tool keeps working. **The response carries each method's `config` UNMASKED** (webhook URL, bot token, SMTP password), so this route discloses those to the automation credential. Accepted residual; masking the response is bead 9kwzp.13 (beads 9kwzp.10, 9kwzp.13). |
+| `GET /api/alert-methods` | List all alert methods. Admin-only when auth is enabled; the MCP service key is **admitted**, so the shipped `list_alert_methods` tool keeps working. **The response `config` is MASKED**: `password`, `bot_token`, `webhook_url` and `api_key` come back as `********` for every caller, so no credential value is disclosed. Non-credential config keys are returned as stored, which for Telegram includes the destination `chat_id` and for SMTP the recipient list. Until build 0096 this handler returned `config` verbatim (beads 9kwzp.10, 9kwzp.13). |
 | `GET /api/alert-methods/types` | Get available alert method types. Admin-only when auth is enabled; the MCP service key is admitted, since the catalogue is static and holds no install data (bead 9kwzp.10). |
 | `POST /api/alert-methods` | Create alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
-| `GET /api/alert-methods/{id}` | Get alert method details. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password. No MCP tool calls this route. Note the refusal withholds nothing today, since `GET /api/alert-methods` returns the same fields for every method (beads 9kwzp.10, 9kwzp.13). |
+| `GET /api/alert-methods/{id}` | Get alert method details. **The response `config` is MASKED** on the same terms as the list route. Admin-only when auth is enabled; the MCP service key is refused, because no MCP tool calls this route. Note the refusal withholds nothing, since `GET /api/alert-methods` returns the same masked fields for every method (beads 9kwzp.10, 9kwzp.13). |
 | `PATCH /api/alert-methods/{id}` | Update alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `DELETE /api/alert-methods/{id}` | Delete alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
@@ -804,14 +804,19 @@ An **alert method** is one configured channel (Discord webhook, Telegram bot, SM
   "notify_error": true,
   "alert_sources": null,
   "last_sent_at": "2026-04-25T14:30:12Z",
-  "created_at": "2026-04-01T10:00:00Z"
+  "created_at": "2026-04-01T10:00:00Z",
+  "updated_at": "2026-04-25T14:30:12Z"
 }
 ```
 
-`config` shape varies by `method_type`:
+`GET /api/alert-methods/{id}` returns one record of the same shape.
+
+`config` shape varies by `method_type`, as **stored**:
 - **`discord`**: `{ "webhook_url": "https://discord.com/api/webhooks/..." }`
 - **`telegram`**: `{ "bot_token": "...", "chat_id": "..." }`
 - **`smtp`**: `{ "to_emails": ["alice@example.com", "bob@example.com"] }` (recipient list only; shared SMTP server settings live under `/api/settings`, see `smtp_*` fields)
+
+**Reads mask the credential keys (bead 9kwzp.13).** Both read routes serialize through `AlertMethod.to_dict(include_sensitive=False)`, which replaces `password`, `bot_token`, `webhook_url` and `api_key` with the literal `********` (or `null` when the stored value is empty). So a Discord method reads back as `{ "webhook_url": "********" }` and a Telegram method as `{ "bot_token": "********", "chat_id": "-1001234567890" }`. There is **no** API path that returns the unmasked values: no query parameter, header, or caller tier reaches `include_sensitive=True`. Keys outside that set, including the Telegram `chat_id` and the SMTP `to_emails`, are returned as stored. **Do not echo a read response back into a write**: `********` is not treated as a sentinel on the write side, so sending it in a `config` would overwrite the live credential with that literal. Send only the fields you intend to change.
 
 `alert_sources` is either `null` (send for every event) or a structured filter object documented under the per-section keys `epg_refresh`, `m3u_refresh`, and `probe_failures` (each with `enabled`, `filter_mode` ∈ `{all, only_selected, all_except}`, and a per-section ID list or `min_failures` threshold).
 
@@ -836,6 +841,8 @@ An **alert method** is one configured channel (Discord webhook, Telegram bot, SM
 **SMTP `to_emails` shape (bd-9vz32):** the canonical write shape is `list[str]`. The route accepts either `list[str]` or a legacy comma-joined `str` on POST/PATCH and normalizes string input to a list **before** persistence, so reads from rows written after bd-9vz32 always return `list[str]`. This is a **write-strict / read-tolerant** contract: pre-bd-9vz32 rows that were stored as a `str` continue to load (the SMTP runtime path coerces both shapes via `_coerce_to_emails_to_list`), so no Alembic migration is needed for the JSON-blob field. Writers should send `list[str]`; readers should expect `list[str]` for any row created or last-updated after bd-9vz32 and tolerate `str` for older rows.
 
 `PATCH /api/alert-methods/{id}` is a partial update: every field on the body is `Optional`, and only fields present on the wire are touched. The common shape since PR #163 is **config-only** (e.g. `{"config": {"to_emails": [...]}}`), used by the Settings → Email Alerts panel to push recipient changes without re-sending the unchanged severity flags. The handler validates the same per-type `validate_config()` and applies the same SMTP `to_emails` canonicalization on PATCH as on POST. `404` if the method doesn't exist; `200` with `{"success": true}` on success.
+
+**`config` is REPLACED, not merged.** The partial-update semantics are per top-level field: sending `config` overwrites the whole stored blob with what you sent, so any key you omit is dropped. The `validate_config()` call is what keeps this honest, since a `config` missing that type's required fields is rejected with `400` rather than persisted; a Discord method cannot silently lose its `webhook_url` this way. The current in-tree callers are unaffected: the only config-writing UI path is the SMTP recipient save, and `to_emails` is the entire config an SMTP method has. Treat `config` as a whole-object write when adding a caller for a type with more than one key.
 
 `DELETE /api/alert-methods/{id}` removes the row and unloads the method from the in-memory `AlertMethodManager`. `404` if the method doesn't exist; `200` with `{"success": true}` on success. Deletion is unconditional: alerts in flight at deletion time are not buffered or re-routed.
 

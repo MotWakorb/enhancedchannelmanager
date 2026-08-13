@@ -340,40 +340,48 @@ _ALERT_METHOD_TYPES = {
 }
 
 # ===========================================================================
-# STOP. THIS ROUTE DISCLOSES UNREDACTED CREDENTIALS TO THE MCP PRINCIPAL.
+# THIS ROUTE IS ADMITTED, AND ITS RESPONSE IS MASKED. BOTH HALVES MATTER.
 # ===========================================================================
-# bead 9kwzp.10 item 4, amended by the PO. Do not read the plain
+# bead 9kwzp.10 item 4, amended by the PO; disclosure closed by bead
+# enhancedchannelmanager-9kwzp.13. Do not read the plain
 # ``RequireAdminIfEnabled`` on ``routers/alert_methods.py::list_alert_methods``
-# and conclude the route is uninteresting. It is the opposite.
+# and conclude the route is uninteresting: the gate is plain because the
+# CONTAINMENT is somewhere else, not because there is nothing to contain.
 #
-# WHAT IT DISCLOSES. The handler hand-rolls its response dict and emits
-# ``"config": json.loads(m.config)`` for every configured method, with NO
-# masking of any kind. That blob is where the Discord webhook URL, the Telegram
-# bot token and the SMTP password live. Those are the exact three families bead
-# 9ej7f withheld from this same principal on ``GET /api/settings``, so as long
-# as this route is admitted, that redaction is reachable around. Note this also
-# makes the human-admin gate on ``GET /api/alert-methods/{method_id}`` (in
-# ``_NOTIFICATION_CREDENTIAL``) disclosure-vacuous against the MCP principal:
-# the list returns the same fields for every method, so denying the single-read
-# withholds nothing the list does not already hand over. That gate is held
-# because no tool needs the route, not because it is containing anything.
+# WHAT IT USED TO DISCLOSE. The handler hand-rolled its response dict and
+# emitted ``"config": json.loads(m.config)`` for every configured method, with
+# NO masking of any kind. That blob is where the Discord webhook URL, the
+# Telegram bot token and the SMTP password live, the exact three families bead
+# 9ej7f withheld from this same principal on ``GET /api/settings``, so while
+# that shape stood this route was a way around that redaction.
 #
-# WHY IT IS ADMITTED ANYWAY. The shipped ``list_alert_methods`` MCP tool is the
+# WHY IT IS ADMITTED. The shipped ``list_alert_methods`` MCP tool is the
 # operator's inventory of their own alert methods and calls exactly this route.
-# This bead denied it; the PO reversed that, accepting the disclosure, because
-# refusing it removed a capability the sidecar was built to provide.
+# Bead 9kwzp.10 denied it; the PO reversed that, accepting the disclosure at
+# the time, because refusing it removed a capability the sidecar was built to
+# provide.
 #
-# WHAT ACTUALLY FIXES IT — and this is the point of recording it here rather
-# than leaving it to the gate name. The right fix is the RESPONSE, not the
-# gate. ``models.AlertMethod.to_dict(include_sensitive=False)`` already builds
-# a masked ``config`` and substitutes ``********`` for sensitive keys; this
-# handler simply never calls it. That is bead
-# enhancedchannelmanager-9kwzp.13 (P1, open). Closing it removes this residual
-# without touching this dependency and without taking the tool away — which is
-# why the authorization verdict here is not the place to fight it.
+# WHAT FIXED IT, and the reason it is recorded here rather than left to the
+# gate name: the fix is the RESPONSE, not the gate. Both read handlers now
+# serialize through ``models.AlertMethod.to_dict(include_sensitive=False)``,
+# which substitutes ``********`` for ``password``, ``bot_token``,
+# ``webhook_url`` and ``api_key``, so an admitted caller gets the inventory
+# with no credential VALUE in it. Nothing about this dependency changed and the
+# tool was never taken away.
+#
+# WHAT THIS ROUTE STILL DISCLOSES TO THE PRINCIPAL, stated so the admission is
+# not read as costless: the method's id, name, type, enabled flag, severity
+# filters, alert-source filters, timestamps, and every NON-credential config
+# key, which for a Telegram method includes ``chat_id`` (the destination, not
+# a credential; posting to it still needs the masked ``bot_token``) and for an
+# SMTP method includes ``to_emails``. That also makes the human-admin gate on
+# ``GET /api/alert-methods/{method_id}`` (in ``_NOTIFICATION_CREDENTIAL``)
+# disclosure-vacuous against this principal, exactly as before: the list
+# returns the same masked fields for every method. That gate is held because
+# no tool needs the route, not because it is containing anything.
 #
 # If you are here because you are about to widen this router, the question to
-# ask is whether 9kwzp.13 has landed yet.
+# ask is whether the widened response still goes through ``to_dict``.
 _ALERT_METHOD_LIST = {
     ("GET", "/api/alert-methods"),
 }
@@ -495,21 +503,24 @@ _OUTBOUND_POLICY_WRITE = {
 # An alert method holds the Discord webhook URL, the Telegram bot token and the
 # SMTP password in ``AlertMethod.config``. The three WRITES here can repoint
 # where ECM's own alerts go, or end them — that is the kgz3k shape, and the
-# reason for denying is the same one that denies ``POST /api/settings``. The
-# single READ, ``GET /{method_id}``, returns that blob verbatim.
+# reason for denying is the same one that denies ``POST /api/settings``. Note
+# the writes are why this group survives the masking: a masked READ says
+# nothing about a caller's ability to point the operator's alerts at a
+# destination of its choosing.
 #
-# BE PRECISE ABOUT WHAT THE READ HALF OF THIS GATE ACHIEVES TODAY: nothing,
-# against the MCP principal. ``GET /api/alert-methods`` is ADMITTED (see
-# ``_ALERT_METHOD_LIST``) and returns the same unmasked ``config`` for EVERY
-# method, so the principal can read through the list exactly what this gate
-# withholds on the single-method route. ``GET /{method_id}`` is kept here
-# because no tool needs it and the group is coherent, not because it is
-# containing a disclosure. Bead enhancedchannelmanager-9kwzp.13 is what
-# contains it, by masking ``config`` in both read responses.
+# BE PRECISE ABOUT WHAT THE READ HALF OF THIS GATE ACHIEVES: nothing, against
+# the MCP principal. ``GET /api/alert-methods`` is ADMITTED (see
+# ``_ALERT_METHOD_LIST``) and returns the same fields for EVERY method, so the
+# principal can read through the list exactly what this gate withholds on the
+# single-method route. ``GET /{method_id}`` is kept here because no tool needs
+# it and the group is coherent, not because it is containing a disclosure.
+# What contains the disclosure is bead enhancedchannelmanager-9kwzp.13, which
+# landed: both read handlers serialize through
+# ``AlertMethod.to_dict(include_sensitive=False)``, so neither returns a
+# credential value to anyone.
 #
 # ``test_alert_method`` was denied separately by 9kwzp.6 and lives in
-# ``_OUTBOUND_CREDENTIAL_TEST``. The response bodies are UNCHANGED — this bead
-# adds authorization, not masking.
+# ``_OUTBOUND_CREDENTIAL_TEST``.
 #
 # COARSE ON PURPOSE: a display-name or severity-filter change is denied
 # exactly like a credential replacement.

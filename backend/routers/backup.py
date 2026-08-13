@@ -94,7 +94,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0095"
+APP_VERSION = "0.18.1-0096"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -134,7 +134,20 @@ _SETTINGS_CREDENTIAL_FIELDS = (
 
 # Credential-class keys that may live inside alert_methods.config JSON. Matches
 # the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
-# in lock-step with the API-response masking already shipped to clients.
+# in lock-step with the API-response masking.
+#
+# CORRECTION (bead enhancedchannelmanager-9kwzp.13): this comment used to end
+# "...the API-response masking ALREADY SHIPPED TO CLIENTS", and that clause was
+# false when it was written. The masking existed on the model, but the two read
+# routes in routers/alert_methods.py hand-rolled their response dicts and
+# emitted alert_methods.config VERBATIM, so no API response was masked at all.
+# The false claim is why the hole stayed invisible: a reader working out where
+# alert credentials can leak got "the API already masks these" from here and
+# stopped. Both read routes now serialize through
+# AlertMethod.to_dict(include_sensitive=False), so the lock-step claim is true
+# as written; if you ever make one of those handlers build its own dict again,
+# this comment goes false again and this tuple is the thing that silently
+# drifts.
 _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
 
 # SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
