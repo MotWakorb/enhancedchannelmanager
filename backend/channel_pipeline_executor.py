@@ -8,7 +8,7 @@ potential rollback.
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 import re
 
 import safe_regex
@@ -267,7 +267,8 @@ class ActionExecutor:
                  normalization_engine=None, settings=None, all_profile_ids: list[int] | None = None,
                  epg_data: list = None, epg_sources: list = None,
                  triggered_by: str = "manual", execution_id: int | None = None,
-                 channel_profile_membership: dict[int, set[int]] | None = None):
+                 channel_profile_membership: dict[int, set[int]] | None = None,
+                 managed_channel_ids: Iterable[int] | None = None):
         """
         Initialize the executor.
 
@@ -307,6 +308,14 @@ class ActionExecutor:
                 ``channels_updated``. ``None``/absent falls back to no-diff for
                 unknown channels (write-all), preserving prior behavior for
                 direct-construct callers/tests.
+            managed_channel_ids: Channel ids ECM's pipeline already owns, from
+                the union of every rule's persisted ``managed_channel_ids``
+                ledger (GH #801 / bead 0ippw). Cross-run provenance for
+                ``_is_manual_channel``: Dispatcharr does not persist the
+                in-memory ``auto_created`` marker, so without this a rule reads
+                its OWN channels as hand-built on the next run. ``None`` (the
+                default for direct-construct callers/tests) means "no ledger
+                supplied" and preserves the marker-only behavior.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -327,6 +336,11 @@ class ActionExecutor:
         self._all_profile_ids = all_profile_ids
         self._triggered_by = triggered_by
         self._execution_id = execution_id
+        # GH #801 / bead 0ippw: durable ECM provenance for _is_manual_channel.
+        # Populated by the engine from every rule's persisted
+        # managed_channel_ids; grows as this run creates channels so the marker
+        # and the ledger never disagree within a run either.
+        self._pipeline_managed_channel_ids: set[int] = set(managed_channel_ids or ())
         # y3m6o.1 review follow-up: current channel-profile membership at RUN
         # START — ``channel_id -> set(profile_ids the channel is ENABLED in)``,
         # built from the SAME ``get_channel_profiles()`` fetch the engine already
@@ -1394,6 +1408,11 @@ class ActionExecutor:
             # "manual/protected" and block later same-run streams from
             # dedup-merging into this freshly-created channel.
             new_channel["auto_created"] = True
+            # GH #801 / bead 0ippw: record the same fact in the durable
+            # provenance set. The engine persists this run's created ids into
+            # the rule's managed_channel_ids ledger, so keeping the in-memory
+            # set in step means the two provenance sources never disagree.
+            self._pipeline_managed_channel_ids.add(new_channel["id"])
             self._created_channels[channel_name.lower()] = new_channel
             self._channel_by_id[new_channel["id"]] = new_channel
             # bead g0uuf: register in the multi-candidate index so a scoped
@@ -4719,11 +4738,17 @@ class ActionExecutor:
         * **Create-or-adopt** per unit via a constructed
           ``Action(type="create_channel", if_exists="skip")`` through
           :meth:`_execute_create_channel`'s existing group-scoped duplicate
-          lookup (``match_scope_target_group``). ``allow_manual_channel_merge``
-          is True: a previously-promoted channel reads as "manual" on later
-          runs (Dispatcharr does not persist ECM's in-run auto_created
-          marker), and adopting it by name IS the idempotence mechanism —
-          the promotion target group is documented ECM-owned space.
+          lookup (``match_scope_target_group``). Adopting a previously
+          promoted channel by name IS the idempotence mechanism. This path
+          used to force ``allow_manual_channel_merge=True`` because such a
+          channel read as "manual" on later runs (Dispatcharr does not
+          persist ECM's in-run ``auto_created`` marker). GH #801 / bead 0ippw
+          made provenance authoritative at :meth:`_is_manual_channel` via the
+          persisted ``managed_channel_ids`` ledger — which for this rule kind
+          holds exactly the promoted channels — so the override is gone. It
+          was also strictly harmful: it let a genuinely hand-built channel
+          sitting in the promotion target group be adopted AND registered in
+          the managed set, putting it in scope for Pass 4 deletion.
         * **Attach** every unit stream via :meth:`_add_stream_to_channel`
           with provenance ``kind="event_sync_promote"`` (content fingerprint
           + names; IDs display-only) under journal category ``event_sync``.
@@ -4824,7 +4849,6 @@ class ActionExecutor:
                 create_action, first_ctx, exec_ctx, template_ctx={},
                 rule_target_group_id=target_group_id,
                 match_scope_target_group=True,
-                allow_manual_channel_merge=True,
             )
             exec_ctx.add_result(result)
             if not result.success:
@@ -5106,8 +5130,7 @@ class ActionExecutor:
 
         return summary
 
-    @staticmethod
-    def _is_manual_channel(channel: Optional[dict]) -> bool:
+    def _is_manual_channel(self, channel: Optional[dict]) -> bool:
         """True when ``channel`` is a hand-built MANUAL channel (protected).
 
         enhancedchannelmanager-orzck: a channel is MANUAL when its
@@ -5116,10 +5139,41 @@ class ActionExecutor:
         ``not ch.get("auto_created", False)``): a missing key means manual /
         protected, NOT auto. Only an explicit truthy ``auto_created`` makes a
         channel an unprotected auto-created merge candidate.
+
+        GH #801 / bead 0ippw: the marker alone cannot answer this question
+        across runs. ``_execute_create_channel`` stamps ``auto_created`` on the
+        in-memory dict only; the create payload never carries it and
+        Dispatcharr neither stores nor echoes it (confirmed at the API level by
+        the GH #801 reporter). Every ECM-created channel therefore reloads
+        WITHOUT the marker on the next run, reads as MANUAL here, and gets
+        rejected by the ``block_manual`` gate — so a rule could not see the
+        channels it created last run, re-created its whole set every run, and
+        the orphan pass deleted the previous set right after.
+
+        ``self._pipeline_managed_channel_ids`` closes that gap. It is the union
+        of every rule's persisted ``managed_channel_ids`` ledger, which already
+        existed, already survives runs, and is populated ONLY with channels a
+        rule created or already managed (``channel_pipeline_engine``'s
+        ``owned_by_this_rule`` gate) — never with a hand-built channel a rule
+        merely merged into. Membership is therefore durable proof of ECM
+        provenance, and it is checked by channel id, not by name.
+
+        The union rather than the firing rule's ledger alone is deliberate:
+        "was this hand-built?" is a property of the channel, not of whoever is
+        asking. Scoping it per rule would let the same channel answer
+        differently depending on the caller, which is the exact divergence that
+        produced this bug, and it would also diverge from within-run behavior,
+        where the in-memory marker is visible to every rule in the run.
         """
         if channel is None:
             return False
-        return not channel.get("auto_created", False)
+        if channel.get("auto_created", False):
+            return False
+        channel_id = channel.get("id")
+        return not (
+            channel_id is not None
+            and channel_id in self._pipeline_managed_channel_ids
+        )
 
     @staticmethod
     def _add_candidate(candidates: dict, key: str, channel: dict) -> None:

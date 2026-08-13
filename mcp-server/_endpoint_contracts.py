@@ -127,12 +127,48 @@ _AC_RULE_CREATE_FIELDS = frozenset(
         "skip_struck_streams",
         "orphan_action",
         "match_scope_target_group",
+        # GH #801 / bead 0fn69: the tool signatures already forward this and the
+        # backend PUT accepts it, but omitting it here made call_endpoint reject
+        # the request client-side, which left the documented churn workaround
+        # unreachable through the sidecar.
+        "allow_manual_channel_merge",
     }
 )
 
 # backend/routers/auto_creation.py :: UpdateAutoCreationRuleRequest — same
 # field names as create, all Optional.
 _AC_RULE_UPDATE_FIELDS = _AC_RULE_CREATE_FIELDS
+
+# Rule fields the backend's Create/UpdateChannelPipelineRuleRequest models
+# accept but the MCP sidecar deliberately does NOT expose: no tool signature
+# takes them, so declaring them above would advertise keys no tool can send.
+#
+# This set is the documented half of the GH #801 / bead 0fn69 guard. The
+# contract test (backend/tests/integration/test_mcp_tool_contracts.py) asserts
+# that every field the backend rule body accepts is either in
+# _AC_RULE_CREATE_FIELDS or named here, so a newly added backend field cannot
+# go silently unreachable through the sidecar the way
+# allow_manual_channel_merge did. Adding a name here is a decision, not a
+# formality: it means "the sidecar cannot set this field".
+#
+#   active_from / active_until  Rule activation window. Date-typed scheduling,
+#                               no MCP tool parameter.
+#   match_scope_group_id        Explicit merge-lookup scope group (GH #298).
+#                               Set through the UI; the sidecar exposes only
+#                               the match_scope_target_group boolean.
+#   fold_match_key              Fold-match opt-in (GH #645).
+#   event_sync_config           Event Sync rule config. A nested object edited
+#                               through its own preview/config tooling, not a
+#                               scalar the rule tools set.
+AC_RULE_FIELDS_NOT_EXPOSED = frozenset(
+    {
+        "active_from",
+        "active_until",
+        "match_scope_group_id",
+        "fold_match_key",
+        "event_sync_config",
+    }
+)
 
 # backend/routers/dummy_epg.py :: ProfileCreateRequest / ProfileUpdateRequest —
 # identical field names between create and update (update makes every field

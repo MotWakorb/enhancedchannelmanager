@@ -16,7 +16,7 @@ Cover the Channel Pipeline page end-to-end: how rules are structured, what condi
 | [Event Sync Quick Start](event-sync-quickstart.md) | Getting from the Channel Pipeline page to a first Event Sync preview; defers to [`docs/event_sync.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/event_sync.md) for the full guide. |
 | [Channel Sort vs. Channel Numbering](sort-vs-numbering.md) | Why "Channel Sort" doesn't renumber channels by itself, the `channel_number: auto` gotcha that silently skips rule-level renumbering, and why `sort_group` is the action built for "keep my channels alphabetically numbered." |
 | [Runaway Safety Cap](runaway-safety-cap.md) | The per-run channel cap (the GH #473 safety valve): why a run gets "capped", that the Channel Pipeline is idempotent so you can just re-run, and how to view/raise/disable the cap (and its sibling log-entries cap) from **Settings → Channel Pipeline** (admin-only). |
-| [Debugging Rules](debugging-rules.md) | How to diagnose "my rule didn't fire" using the rule analyzer: the 7 finding codes in plain language with worked examples, how to run the analyzer (API direct call, debug-bundle upload, `/analyze-rules` agent command), and when to use the analyzer vs. the per-rule dry-run preview. |
+| [Debugging Rules](debugging-rules.md) | How to diagnose "my rule didn't fire" using the rule analyzer: the 8 finding codes in plain language with worked examples, how to run the analyzer (API direct call, debug-bundle upload, `/analyze-rules` agent command), and when to use the analyzer vs. the per-rule dry-run preview. |
 | [Fuzzy Matching for Local / OTA Channels](fuzzy-locals-matching.md) | Scored fuzzy matching for OTA / Local channels: when to use it, how to preview before writing, the callsign safety gate, and the dry-run / rollback guarantees. |
 
 ## Going deeper (for now)
@@ -28,7 +28,7 @@ Cover the Channel Pipeline page end-to-end: how rules are structured, what condi
 - [`sort-vs-numbering.md`](sort-vs-numbering.md): the `sort_field` vs. `sort_group` distinction and the Auto-numbering gotcha behind "I set Channel Sort but my channels aren't numbered alphabetically."
 - [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the `/channel-pipeline` router endpoints (the old `/auto-creation` path still works as a deprecated alias).
 - [`docs/normalization.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md): Channel Pipeline rules typically reference a normalization group; understand normalization before authoring complex rules.
-- [`debugging-rules.md`](debugging-rules.md): the rule analyzer: what it checks, the 7 finding codes, and how to run it.
+- [`debugging-rules.md`](debugging-rules.md): the rule analyzer: what it checks, the 8 finding codes, and how to run it.
 - [`runaway-safety-cap.md`](runaway-safety-cap.md): what to do when a run is "capped", and how to adjust the per-run safety cap.
 - [`docs/channel_pipeline_rule_analyzer.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/channel_pipeline_rule_analyzer.md): the full technical reference for the rule analyzer (finding-code trigger logic, response schema, implementation notes).
 - [`docs/commands/analyze-rules.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/commands/analyze-rules.md): the `/analyze-rules` agent command, for running the analyzer via an AI assistant.

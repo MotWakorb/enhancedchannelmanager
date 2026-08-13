@@ -2248,6 +2248,21 @@ class ChannelPipelineEngine:
             if getattr(s, "is_catchup", False):
                 catchup_stream_ids.add(s.stream_id)
 
+        # GH #801 / bead 0ippw: durable ECM provenance for the executor's
+        # manual-channel gate. Dispatcharr never persists the in-run
+        # ``auto_created`` marker, so every ECM-created channel reloads without
+        # it and a rule reads its OWN channels as hand-built on the next run.
+        # The managed_channel_ids ledgers already survive runs and already hold
+        # exactly the channels the pipeline created or manages, so their union
+        # is the provenance source. Union rather than per-rule because "was
+        # this hand-built?" is a property of the channel, not of the asker;
+        # see ActionExecutor._is_manual_channel.
+        pipeline_managed_channel_ids: set[int] = set()
+        for _ledger_rule in list(rules) + list(event_sync_rules or []):
+            pipeline_managed_channel_ids.update(
+                _ledger_rule.get_managed_channel_ids() or []
+            )
+
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
             normalization_engine=norm_engine,
@@ -2268,6 +2283,7 @@ class ChannelPipelineEngine:
             # assign_channel_profile writes only actual flips (no channels_updated
             # inflation on idempotent reconciles).
             channel_profile_membership=channel_profile_membership,
+            managed_channel_ids=pipeline_managed_channel_ids,
         )
 
         # Results tracking

@@ -656,8 +656,10 @@ async def analyze_channel_pipeline_rule_body(request: AnalyzeRuleBodyRequest):
 
         # The analyzer reads a dict shaped like a rule's to_dict(). Only the
         # fields it consumes are forwarded; the rest of the create-shaped body
-        # (sort fields, orphan_action, etc.) is accepted for forward-compat but
-        # not needed by any current check.
+        # (sort fields, etc.) is accepted for forward-compat but not needed by
+        # any current check. match_scope_group_id and orphan_action feed
+        # MERGE_SCOPE_PINNED_TO_OTHER_GROUP (GH #801, bead rtst2.1) so the rule
+        # builder catches a wrong scope pin while the rule is still a draft.
         rule_dict = {
             "id": None,
             "name": request.name,
@@ -666,6 +668,8 @@ async def analyze_channel_pipeline_rule_body(request: AnalyzeRuleBodyRequest):
             "target_group_id": request.target_group_id,
             "normalization_group_ids": request.normalization_group_ids,
             "match_scope_target_group": request.match_scope_target_group,
+            "match_scope_group_id": request.match_scope_group_id,
+            "orphan_action": request.orphan_action,
         }
 
         # Richer findings (bd-m1s38.2): normalization-group enabled-state lets

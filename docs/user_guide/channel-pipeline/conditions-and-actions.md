@@ -38,8 +38,8 @@ rest of the rule dialog.
    similar) the choices are **Contains**, **Does Not Contain**, **Begins
    With**, **Ends With**, **Matches (Regex)**, **Does Not Match (Regex)**.
    If you reach for regex, read
-   [Debugging rules](debugging-rules.md#the-seven-finding-codes) first.
-   Two of the seven analyzer finding codes exist specifically because
+   [Debugging rules](debugging-rules.md#the-eight-finding-codes) first.
+   Two of the eight analyzer finding codes exist specifically because
    **Contains** and **Matches (Regex)** are easy to confuse.
 4. Enter the **value** to compare against, and toggle **Case sensitive** if
    the comparison should not ignore case (off by default).
@@ -116,7 +116,7 @@ becomes its own channel, named after the stream.
 
 - [Rules overview](rules-overview.md): where Logic fits in the rule
   dialog, and the Targeting / Output & Run tabs.
-- [Debugging rules](debugging-rules.md): the rule analyzer's seven finding
+- [Debugging rules](debugging-rules.md): the rule analyzer's eight finding
   codes, most of which are condition/regex mistakes.
 - [Fuzzy matching for Local/OTA channels](fuzzy-locals-matching.md): a
   scored-matching mode for Merge Streams, layered on top of the operators

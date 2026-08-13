@@ -37,7 +37,11 @@ _MCP_DIR = _REPO_ROOT / "mcp-server"
 if str(_MCP_DIR) not in sys.path:
     sys.path.insert(0, str(_MCP_DIR))
 
-from _endpoint_contracts import ENDPOINTS, Endpoint  # noqa: E402
+from _endpoint_contracts import (  # noqa: E402
+    AC_RULE_FIELDS_NOT_EXPOSED,
+    ENDPOINTS,
+    Endpoint,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +258,74 @@ def test_endpoint_matches_backend_openapi(openapi_spec, ep: Endpoint):
             f"Endpoint {ep.name!r}: response_is_list=True but {ep.method} {ep.path} "
             f"has no JSON response body in the OpenAPI spec."
         )
+
+
+# ---------------------------------------------------------------------------
+# Reverse-direction guard: backend field accepted, contract silent
+# ---------------------------------------------------------------------------
+
+_AC_RULE_ENDPOINT_IDS = ("ac_create_rule", "ac_update_rule")
+
+
+def _ac_rule_declared_fields(spec: dict, ep: Endpoint) -> set[str]:
+    """Property names the backend's rule create/update body model declares."""
+    operation = _path_item(spec, ep)
+    body_schema = _request_body_schema(spec, operation)
+    assert body_schema is not None, (
+        f"Endpoint {ep.name!r}: {ep.method} {ep.path} declares no JSON request "
+        f"body in the OpenAPI spec, so this guard cannot run."
+    )
+    declared = _schema_property_names(spec, body_schema)
+    assert declared, (
+        f"Endpoint {ep.name!r}: the backend body schema for {ep.method} "
+        f"{ep.path} declares no properties. This guard needs a Pydantic-modelled "
+        f"body; if the route moved to a free-form dict, rework the guard."
+    )
+    return declared
+
+
+@pytest.mark.parametrize("ep_id", _AC_RULE_ENDPOINT_IDS)
+def test_ac_rule_contract_exposes_every_backend_field(openapi_spec, ep_id: str):
+    """GH #801 / bead 0fn69: a rule field the backend accepts must be either in
+    the endpoint's ``request_fields`` or in ``AC_RULE_FIELDS_NOT_EXPOSED``.
+
+    The existing per-endpoint check above runs one direction only (contract
+    fields must be a subset of what the backend accepts), so a field the
+    backend added and the contract never learned about stayed invisible. That
+    is exactly how ``allow_manual_channel_merge`` shipped unreachable: the MCP
+    tool signature forwarded it, the backend PUT accepted it, and
+    ``call_endpoint`` rejected it client-side because the contract allowlist
+    omitted it. This test runs the other direction so the next added field
+    forces a deliberate choice: expose it, or name it in the exclusion set.
+    """
+    ep = ENDPOINTS[ep_id]
+    declared = _ac_rule_declared_fields(openapi_spec, ep)
+    unreachable = declared - ep.request_fields - AC_RULE_FIELDS_NOT_EXPOSED
+    assert not unreachable, (
+        f"Endpoint {ep.name!r}: the backend accepts {sorted(unreachable)} but "
+        f"the contract neither declares them in request_fields nor lists them "
+        f"in AC_RULE_FIELDS_NOT_EXPOSED, so an MCP tool that forwards them is "
+        f"rejected client-side by call_endpoint. Add each field to the "
+        f"contract set (and to the tool signature) or, if the sidecar "
+        f"deliberately does not expose it, add it to AC_RULE_FIELDS_NOT_EXPOSED "
+        f"with a reason."
+    )
+
+
+def test_ac_rule_exclusion_set_has_no_stale_names(openapi_spec):
+    """Every name in ``AC_RULE_FIELDS_NOT_EXPOSED`` must still be a real backend
+    field. A removed or renamed field left in the exclusion set would silently
+    keep suppressing the guard above for a name that no longer exists.
+    """
+    declared: set[str] = set()
+    for ep_id in _AC_RULE_ENDPOINT_IDS:
+        declared |= _ac_rule_declared_fields(openapi_spec, ENDPOINTS[ep_id])
+    stale = AC_RULE_FIELDS_NOT_EXPOSED - declared
+    assert not stale, (
+        f"AC_RULE_FIELDS_NOT_EXPOSED names {sorted(stale)}, which the backend "
+        f"rule create/update models no longer declare. Drop the stale entries "
+        f"from mcp-server/_endpoint_contracts.py."
+    )
 
 
 # ---------------------------------------------------------------------------
