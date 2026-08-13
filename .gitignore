@@ -51,6 +51,11 @@ mcp-server/.coverage
 mcp-server/coverage.xml
 mcp-server/htmlcov/
 
+# Root-level coverage db, same artifact as backend/.coverage above but left
+# by a pytest run invoked from the repo root instead of backend/; the
+# subdir-scoped entry does not match this path.
+/.coverage
+
 # JUnit XML reports — emitted in CI for the flake-pr-comment workflow
 # (bead xq19y) and locally when running pytest/vitest with --junitxml.
 backend/junit.xml
