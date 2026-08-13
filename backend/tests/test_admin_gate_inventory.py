@@ -52,8 +52,9 @@ is denied exactly where a route:
    the fence rather than the probe (9kwzp.10 item 1); or
 6. writes a notification credential, or reads a SINGLE one, because the
    alert-method ``config`` blob holds the webhook URL, bot token and SMTP
-   password in clear (9kwzp.10 item 4, as amended — see the residual note
-   below, because the LIST read is admitted and discloses the same blob); or
+   password (9kwzp.10 item 4, as amended — see the exception note below,
+   because the LIST read is admitted; since bead 9kwzp.13 BOTH reads mask that
+   blob, so what this rule now buys is the write half); or
 7. irreversibly destroys operator data with no compensating write and no
    rollback ledger (9kwzp.12).
 
@@ -78,27 +79,45 @@ on plain ``RequireAdminIfEnabled`` end to end; see ``_DESTINATION_CRUD``.
 
 Rule (6) has the same shape of exception for the same reason: ``GET
 /api/alert-methods`` is admitted because the ``list_alert_methods`` tool needs
-it, even though it discloses unmasked credentials. See ``_ALERT_METHOD_LIST``,
-which is the single most important comment in this module for a reader
-deciding whether a plain gate means "harmless".
+it. When that exception was made the route disclosed unmasked credentials, and
+that was accepted as an open residual. Bead 9kwzp.13 closed it at the RESPONSE
+rather than at the gate, so the admission is unchanged and both reads now mask
+``config``. See ``_ALERT_METHOD_LIST``, which is still the comment to read
+before deciding that a plain gate on this router means "harmless": the
+disposition of that route has never been inferable from its gate name, and
+that is as true now that the response is masked as it was when it was not.
 
 WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE
 -----------------------------------------------------------
 
 Four verdicts below were reached against a plausible case for denying, and are
-recorded here rather than left implicit:
+recorded here rather than left implicit. The sharpest of the four is now
+``_DESTINATION_CRUD``, and it is the only one whose residual survives masking:
+masking bounds what a READ discloses and says nothing whatever about a WRITE
+that repoints where a scheduled job sends the operator's data.
 
-* ``_ALERT_METHOD_LIST`` — ``GET /api/alert-methods`` is ADMITTED and returns
-  ``AlertMethod.config`` UNREDACTED. This is the sharpest residual in the whole
-  inventory and it must not be inferred from the bare gate name. Read that
-  group's comment before touching anything in ``/api/alert-methods``.
+* ``_ALERT_METHOD_LIST`` — ``GET /api/alert-methods`` is ADMITTED on a
+  credential-bearing surface whose five sibling routes are not. Its
+  disposition must not be inferred from the bare gate name IN EITHER
+  DIRECTION: a plain gate here does not mean the route is uninteresting, and
+  it no longer means the route leaks. Until bead 9kwzp.13 (build 0096) this
+  response returned ``AlertMethod.config`` UNREDACTED and was the sharpest
+  residual in this inventory; both reads now serialize through
+  ``AlertMethod.to_dict(include_sensitive=False)``, so no credential VALUE
+  leaves either one. What the principal still gets here is the method
+  inventory plus every config key outside the masking set, which for a
+  Telegram method includes the destination ``chat_id`` that bead 9ej7f
+  withholds from this same principal on GET /api/settings. Read that group's
+  comment before touching anything in ``/api/alert-methods``.
 * ``_DESTINATION_CRUD`` — the cloud-target and sync-target routers are admitted
   END TO END, reads and writes. Do NOT read this as "masked, therefore
   harmless". The reads disclose the destination ``base_url`` /
   ``upload_path``, the ``insecure`` TLS-verification flag, the NAMES of the
-  credential keys, each credential's last four characters,
-  ``credential_version`` and revocation state, and the outcome of past syncs —
-  network topology plus credential fingerprints. The writes do more than that:
+  credential keys, each credential's last four characters (a bare ``***`` for
+  a value of eight characters or fewer, so a short credential discloses no
+  tail at all), ``credential_version`` and revocation state, and the outcome
+  of past syncs — network topology plus credential fingerprints. Re-verified
+  against the shipped serializers under bead 9kwzp.13. The writes do more:
   they repoint where a scheduled job sends the operator's data and under what
   TLS posture. What the masking buys is narrow and specific: no stored secret
   VALUE can be reconstructed from a read, so a read alone cannot authenticate
