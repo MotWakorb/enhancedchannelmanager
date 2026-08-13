@@ -49,7 +49,7 @@ changed. A dry run only ever reads streams and evaluates conditions.
   analyzer**. It catches the "this rule can never match anything" class of
   bug in seconds without needing sample data. See
   [Debugging rules](debugging-rules.md) for the full diagnostic flow and
-  the seven finding codes it checks for.
+  the eight finding codes it checks for.
 - Click the **info** icon on an Execution History entry to see the run's
   details.
 
@@ -73,7 +73,7 @@ interaction matter, not just one rule in isolation.
 
 ## Going deeper
 
-- [Debugging rules](debugging-rules.md): the rule analyzer, its seven
+- [Debugging rules](debugging-rules.md): the rule analyzer, its eight
   finding codes, and when to reach for it instead of (or before) a dry run.
 - [Rules overview](rules-overview.md): the rule dialog and its Logic,
   Targeting, and Output & Run tabs.
