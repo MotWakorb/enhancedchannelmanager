@@ -15,7 +15,11 @@ from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
 import journal
-from auth import RequireAdminIfEnabled, RequireHumanAdminForOutboundTest
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForOutboundTest,
+    RequireHumanAdminForServiceCredential,
+)
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
@@ -2324,8 +2328,24 @@ async def reset_stats():
 # ============================================================================
 
 @router.post("/mcp-api-key")
-async def generate_mcp_api_key():
-    """Generate a new MCP API key (replaces any existing key)."""
+async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
+    """Generate a new MCP API key (replaces any existing key).
+
+    bead 9kwzp.8: this carried NO dependency at all. The key it mints is
+    admin-equivalent — ``auth.dependencies._build_mcp_service_principal`` sets
+    ``is_admin=True`` and the global ``auth_middleware`` accepts the static key
+    instead of a JWT across the whole ``/api/`` surface — so any authenticated
+    non-admin could mint itself admin. That is privilege escalation, and the
+    admin tier is what closes it.
+
+    The gate is the human-admin family, not the plain one, because the MCP
+    principal reaching this route would be the bearer rotating its own
+    credential: the minted key is disclosed only in this response body, so a
+    holder of a leaked key could mint a successor that survives the operator's
+    rotation. See ``RequireHumanAdminForServiceCredential`` for the full
+    reasoning and why it is a sibling of the outbound-test gate rather than a
+    reuse of it.
+    """
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
     save_settings(settings)
@@ -2335,8 +2355,15 @@ async def generate_mcp_api_key():
 
 
 @router.delete("/mcp-api-key")
-async def revoke_mcp_api_key():
-    """Revoke the current MCP API key."""
+async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
+    """Revoke the current MCP API key.
+
+    bead 9kwzp.8, the mirror image of the generate half above: this carried no
+    dependency either, so any authenticated non-admin could break every
+    sidecar integration on the instance with one call. The MCP principal is
+    refused for the same credential-lifecycle reason — revoking the key it
+    authenticates with is a self-inflicted outage with no operator in the loop.
+    """
     settings = get_settings()
     settings.mcp_api_key = ""
     save_settings(settings)

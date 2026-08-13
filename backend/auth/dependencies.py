@@ -398,6 +398,34 @@ RequireHumanAdminForOutboundTest = Depends(
     )
 )
 
+# bead 9kwzp.8 — admin gate for the static MCP key's own lifecycle
+# (POST/DELETE /api/settings/mcp-api-key). Same behaviour as the two gates
+# above, different reason, hence its own denial detail rather than a reuse of
+# ``RequireHumanAdminForOutboundTest``: nothing here reaches the network, so a
+# 403 body naming connection tests would send incident triage at a probe this
+# route never makes.
+#
+# The reason the MCP principal is denied is that it would otherwise be the
+# bearer rotating and revoking its OWN credential. Minting returns the new key
+# in the response body, so the caller is the only party that learns it: a
+# holder of a leaked key could mint a successor that survives the operator's
+# rotation, and revoke is a self-inflicted outage on the sidecar with no
+# operator in the loop. Credential lifecycle belongs to the human operator who
+# owns the credential, which is the same principle
+# :func:`reject_mcp_service_principal_mutation` applies to the self-mutation
+# auth routes.
+RequireHumanAdminForServiceCredential = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot manage the MCP API key. "
+            "Rotating or revoking the key it authenticates with is a "
+            "credential-lifecycle operation and must be driven by a human "
+            "operator admin."
+        ),
+    )
+)
+
 
 def resolve_is_admin_if_enabled():
     """Factory: resolve whether the caller is privileged, WITHOUT rejecting.
