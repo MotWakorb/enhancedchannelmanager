@@ -97,7 +97,8 @@ finally:
 
 ## Testing
 
-- Run: `cd backend && python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1`
+- Run: `cd backend && ../.venv/bin/python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1`
+- Pin the project venv interpreter. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts (`18 skipped` on ambient `python` vs `9 skipped` on the venv).
 - This command suppresses warnings and headers so `tail -1` reliably returns the summary (e.g., `2147 passed in 50s`). Do NOT use `-q` — it suppresses the summary line when all tests pass.
 - In-memory SQLite with `StaticPool` for isolation
 - **Mock at router module level**: `patch("routers.channels.get_client", ...)` — NOT `patch("main.get_client", ...)`

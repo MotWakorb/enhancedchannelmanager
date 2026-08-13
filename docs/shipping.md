@@ -8,12 +8,14 @@ Follow these steps in order:
 
 ```bash
 # Backend (if backend changed)
-python -m py_compile backend/main.py
-cd backend && python -m pytest tests/ -q
+.venv/bin/python -m py_compile backend/main.py
+cd backend && ../.venv/bin/python -m pytest tests/ -q
 
 # Frontend (if frontend changed)
 cd frontend && npm test && npm run build
 ```
+
+Pin the project venv interpreter, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so a green gate can mean 9 fewer tests ran than the command implies.
 
 **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
