@@ -418,7 +418,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `mark_notifications_read` | Mark all as read |
 | `delete_all_notifications` | Clear all notifications |
 | `list_alert_methods` | List configured alert methods (Discord, Telegram, email) |
-| `test_alert_method` | Send a test notification through an alert method |
+| `test_alert_method` | Send a test notification through an alert method. **Not usable over MCP** (build 0089): the endpoint refuses the MCP service key with `403`, by design. An admin runs the test from Settings > Alert Methods |
 | **Profiles (3)** | |
 | `list_channel_profiles` | List channel profiles |
 | `list_stream_profiles` | List stream profiles |

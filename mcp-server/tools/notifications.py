@@ -138,7 +138,30 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def test_alert_method(method_id: int) -> str:
-        """Send a test notification through an alert method.
+        """Send a test notification through an alert method. NOT USABLE OVER MCP.
+
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
+        (bead enhancedchannelmanager-9kwzp.6). The backing endpoint,
+        ``POST /api/alert-methods/{method_id}/test``, carries
+        ``RequireHumanAdminForOutboundTest``, which rejects the static MCP
+        service principal with HTTP 403 and the body "The MCP service
+        principal cannot run connection tests." Calling this tool returns that
+        403 as an error string. It is the designed outcome, not a
+        misconfiguration and not a permission an operator can grant to the MCP
+        key: the test sends with the method's STORED credentials (the Discord
+        webhook URL, the Telegram bot token, the SMTP password held in
+        ``AlertMethod.config``), which the caller never had to know, and
+        reports the upstream verdict back, so it is reserved for a human
+        operator identity.
+
+        HUMAN PATH: an ECM admin runs it from the UI, Settings tab, Alert
+        Methods section, via the "Send test message" button on the method.
+        There is no MCP equivalent. ``list_alert_methods`` still works, so the
+        configured methods remain readable over MCP; only the send is gated.
+
+        The one case where this tool still works is an install with
+        authentication turned off, because the gate no-ops when
+        ``require_auth`` is false or setup is incomplete. Do not rely on that.
 
         Args:
             method_id: The alert method ID to test

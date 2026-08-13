@@ -476,7 +476,7 @@ MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `dele
 | `GET /api/m3u/changes/summary` | Get change summary for a time period |
 | `GET /api/m3u/digest/settings` | Get digest email settings |
 | `PUT /api/m3u/digest/settings` | Update digest email settings |
-| `POST /api/m3u/digest/test` | Send a test digest email |
+| `POST /api/m3u/digest/test` | Send a test digest email, over the stored SMTP credentials and Discord webhook. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 
 ## EPG
 
@@ -601,13 +601,16 @@ result.
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/settings` | Get current settings |
-| `POST /api/settings` | Update settings |
-| `POST /api/settings/test` | Test Dispatcharr connection |
-| `POST /api/settings/test-smtp` | Test SMTP connection |
-| `POST /api/settings/test-discord` | Test Discord webhook |
-| `POST /api/settings/test-telegram` | Test Telegram bot |
-| `POST /api/settings/restart-services` | Restart background services |
+| `GET /api/settings` | Get current settings. Secrets are never returned: API keys, tokens and passwords are reduced to `*_configured` booleans for every caller, and the shared Discord webhook URL plus the Telegram bot token and chat id are additionally withheld (empty string) from any caller not allowed to write them (an ordinary non-admin, or the MCP service key; bead 9ej7f). `discord_configured` / `telegram_configured` still report the integration state. |
+| `POST /api/settings` | Update settings. Admin-only fields are gated per field; a non-admin echoing the redacted (empty) notification credentials back keeps the stored values. |
+| `POST /api/settings/test` | Test Dispatcharr connection. Admin-only when auth is enabled; the MCP service key is refused (bead i4qrp). |
+| `POST /api/settings/test-smtp` | Test SMTP connection. Same gate as `/test`. |
+| `POST /api/settings/test-discord` | Test Discord webhook. Same gate as `/test`. |
+| `POST /api/settings/test-telegram` | Test Telegram bot. Same gate as `/test`. |
+| `POST /api/settings/emby/test-connection` | Test an Emby server with operator-supplied credentials. Same gate as `/test` (bead 9kwzp.7). |
+| `POST /api/settings/plex/test-connection` | Test a Plex server with operator-supplied credentials. Same gate as `/test`. |
+| `POST /api/settings/jellyfin/test-connection` | Test a Jellyfin server with operator-supplied credentials. Same gate as `/test`. |
+| `POST /api/settings/restart-services` | Restart background services. Admin-only when auth is enabled; the MCP service key is still admitted, because this rebuilds the tracker/prober from already-saved settings and reaches no caller-named host (bead 9kwzp.6). |
 | `POST /api/settings/reset-stats` | Reset all statistics |
 
 ## Event Sync Team Aliases
@@ -782,7 +785,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/alert-methods/{id}` | Get alert method details |
 | `PATCH /api/alert-methods/{id}` | Update alert method |
 | `DELETE /api/alert-methods/{id}` | Delete alert method |
-| `POST /api/alert-methods/{id}/test` | Send test notification |
+| `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 
 An **alert method** is one configured channel (Discord webhook, Telegram bot, SMTP recipient list) that ECM uses to notify operators about scheduled-task results, probe failures, M3U/EPG refresh outcomes, and other system events. Each method carries its own per-type `config` blob, four per-severity opt-in flags (`notify_info`, `notify_success`, `notify_warning`, `notify_error`), and an optional granular `alert_sources` filter for per-EPG-source / per-M3U-account routing. **`method_type` uniqueness is NOT enforced**: multiple SMTP methods (or multiple Discord webhooks) can coexist, each with its own recipient set, severity opt-ins, and source filter; this is intentional so operators can route different alert categories to different recipients without collapsing them onto one row.
 
@@ -1249,7 +1252,8 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 | `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
 | `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. |
 | `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. |
-| `POST /api/cloud-targets/{id}/test` | Test connectivity to a cloud storage target. |
+| `POST /api/cloud-targets/{id}/test` | Test connectivity to a saved cloud storage target, using its stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
+| `POST /api/cloud-targets/test` | Test connectivity with inline (not-yet-saved) credentials. Same gate as `/{id}/test`. |
 
 **Supported provider types in v0.18.0:** `s3` (AWS S3, MinIO, Backblaze B2), `gdrive` (Google Drive), `webdav`. Adapters for `onedrive` and `dropbox` exist in the codebase but are deferred. A configured target of a deferred provider type produces a per-target failure on each backup run.
 

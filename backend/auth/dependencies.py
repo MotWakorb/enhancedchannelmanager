@@ -291,7 +291,18 @@ def require_auth_if_enabled():
 RequireAuthIfEnabled = Depends(require_auth_if_enabled())
 
 
-def require_admin_if_enabled(*, reject_mcp_service_principal: bool = False):
+_MCP_DENIAL_DETAIL_DEFAULT = (
+    "The MCP service principal cannot perform this operation. It is a "
+    "channel/stream automation credential, not an operator identity, and this "
+    "route must be driven by a human operator admin."
+)
+
+
+def require_admin_if_enabled(
+    *,
+    reject_mcp_service_principal: bool = False,
+    mcp_denial_detail: str = _MCP_DENIAL_DETAIL_DEFAULT,
+):
     """
     Factory function to create a dependency that requires admin when auth is enabled.
 
@@ -309,6 +320,13 @@ def require_admin_if_enabled(*, reject_mcp_service_principal: bool = False):
     key flip every admin-only field via a restore, bypassing the settings gate).
     The default (False) preserves the historical behaviour for every other
     admin-gated route the MCP key is meant to reach (channel management, etc.).
+
+    ``mcp_denial_detail`` is the 403 body for that MCP rejection. It is
+    per-call-site because the message is operator-facing: a caller refused on
+    ``/api/settings/test-discord`` being told it "cannot perform backup
+    restore" sends incident triage the wrong way. Every message names the MCP
+    principal so a caller can tell this refusal apart from a plain non-admin
+    one.
     """
     async def check_admin(
         request: Request,
@@ -335,11 +353,7 @@ def require_admin_if_enabled(*, reject_mcp_service_principal: bool = False):
         if reject_mcp_service_principal and is_mcp_service_principal(user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "The MCP service principal cannot perform backup restore. "
-                    "Restore rewrites admin-only settings (outbound URLs, "
-                    "secrets) and must be driven by a human operator admin."
-                ),
+                detail=mcp_denial_detail,
             )
         return user
 
@@ -354,7 +368,34 @@ RequireAdminIfEnabled = Depends(require_admin_if_enabled())
 # field-level admin gate ``routers.settings._resolve_settings_admin`` enforces
 # on POST /api/settings.
 RequireHumanAdminIfEnabled = Depends(
-    require_admin_if_enabled(reject_mcp_service_principal=True)
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot perform backup restore. "
+            "Restore rewrites admin-only settings (outbound URLs, "
+            "secrets) and must be driven by a human operator admin."
+        ),
+    )
+)
+
+# bead i4qrp — admin gate for the credential-carrying connection-test endpoints
+# (POST /api/settings/test, /test-smtp, /test-discord, /test-telegram). Those
+# reach the network with operator-supplied or STORED credentials and echo the
+# upstream result back, which is a status-code oracle and an in-band port
+# scanner. The plain ``RequireAdminIfEnabled`` would ADMIT the MCP principal
+# (``_build_mcp_service_principal`` sets is_admin=True) and so would leave the
+# exact principal kgz3k denies on the settings WRITE path able to drive the
+# probe.
+RequireHumanAdminForOutboundTest = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot run connection tests. A "
+            "connection test sends credentials to a caller-named host and "
+            "reports the upstream result; it must be driven by a human "
+            "operator admin."
+        ),
+    )
 )
 
 

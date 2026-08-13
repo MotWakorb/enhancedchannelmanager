@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
 import journal
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, RequireHumanAdminForOutboundTest
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
 from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
@@ -132,6 +132,31 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
     "jellyfin_api_key",
     "smtp_password",
 )
+# bead 9ej7f — admin-only fields whose VALUES are also withheld on READ.
+#
+# These three are outbound notification credentials: a Discord webhook URL is a
+# bearer capability to post into a server, and a Telegram bot token plus chat id
+# is a bearer capability to post into a chat. They were returned verbatim by a
+# GET that carried no dependency at all, so any authenticated non-admin and the
+# static MCP service key could read them, while ``_resolve_settings_admin``
+# goes to real lengths to deny those same principals WRITE on the same fields.
+# Read is now gated by the same predicate as write: a field you may not write,
+# you may not read.
+#
+# They stay in ``_ADMIN_ONLY_SETTINGS_FIELDS`` (compare-based) rather than
+# moving to ``_ADMIN_ONLY_PROTECTED_FIELDS`` (any-non-empty-is-a-change)
+# because an ADMIN must keep literal write semantics: blanking a webhook is how
+# an operator disables the integration, and preserve-on-omit would take that
+# away with no replacement affordance (there is no "clear" endpoint for the
+# protected fields — see the Emby/Plex/Jellyfin keys). What the redaction needs
+# instead is a single carve-out in ``_assert_admin_for_changed_fields``: an
+# EMPTY value from a non-admin is the redacted placeholder coming back, not a
+# request to clear.
+_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
+    "discord_webhook_url",
+    "telegram_bot_token",
+    "telegram_chat_id",
+})
 
 
 async def _resolve_settings_admin(
@@ -186,8 +211,18 @@ def _assert_admin_for_changed_fields(
     for req_field, attr in _ADMIN_ONLY_SETTINGS_FIELDS.items():
         new_value = getattr(request, req_field)
         old_value = getattr(current, attr, None)
-        if new_value != old_value:
-            changed.append(req_field)
+        if new_value == old_value:
+            continue
+        # 9ej7f: GET /api/settings redacts these to "" for a non-admin, so the
+        # Settings UI round-trips "" back on an ordinary preference save. That
+        # is the placeholder returning, not a request to clear the field, and
+        # refusing it would make every non-admin save fail. A NON-empty value
+        # is still a real change attempt and still lands in ``changed``. The
+        # write path separately takes the STORED value for a non-admin, so the
+        # empty round-trip cannot wipe a working webhook either.
+        if req_field in _ADMIN_ONLY_READ_REDACTED_FIELDS and not new_value:
+            continue
+        changed.append(req_field)
     for protected_field in _ADMIN_ONLY_PROTECTED_FIELDS:
         # A non-empty value in the body is always an attempted write; an
         # empty/None value is preserve-on-omit and never a change.
@@ -652,11 +687,36 @@ def _has_discord_alert_method() -> bool:
 
 
 @router.get("")
-async def get_current_settings():
-    """Get current settings (password masked)."""
+async def get_current_settings(
+    is_settings_admin: bool = Depends(_resolve_settings_admin),
+):
+    """Get current settings (secrets masked).
+
+    bead 9ej7f: the response is caller-dependent for exactly one partition,
+    ``_ADMIN_ONLY_READ_REDACTED_FIELDS`` (the Discord webhook and the Telegram
+    bot token + chat id). Those are outbound notification credentials that were
+    returned verbatim to any authenticated caller — an ordinary non-admin, and
+    the static MCP service key — by a handler that carried no dependency at
+    all, while ``_resolve_settings_admin`` explicitly denies those same
+    principals the ability to WRITE them. Reusing that same predicate here
+    makes read and write agree: a field you may not write, you may not read.
+    The ``discord_configured`` / ``telegram_configured`` booleans are NOT
+    redacted, so a non-admin still sees that the integration is set up.
+
+    Every other secret (password, Dispatcharr / Emby / Jellyfin API keys, the
+    Plex token, the SMTP password, the MCP key) is unconditionally reduced to
+    its ``*_configured`` boolean for every caller, as before.
+    """
     logger.debug("[SETTINGS] GET /api/settings")
     settings = get_settings()
     logger.debug("[SETTINGS] Settings retrieved - configured: %s, log level: %s", settings.is_configured(), settings.backend_log_level)
+    # 9ej7f: redact to "" rather than to a partial mask ("***" + tail, the
+    # shape tls/routes.py uses). The Settings UI loads these into text inputs
+    # and POSTs them straight back, so any non-empty placeholder would be
+    # round-tripped and would overwrite a working webhook with the placeholder
+    # on the next save — the hazard backup._merge_settings_preserving_redacted
+    # exists to handle. An empty redaction has nothing to write back.
+    redact = not is_settings_admin
     return SettingsResponse(
         url=settings.url,
         auth_method=settings.auth_method,
@@ -739,13 +799,14 @@ async def get_current_settings():
         smtp_from_name=settings.smtp_from_name,
         smtp_use_tls=settings.smtp_use_tls,
         smtp_use_ssl=settings.smtp_use_ssl,
-        # Shared Discord settings (also check alert methods for Discord webhook)
+        # Shared Discord settings (also check alert methods for Discord webhook).
+        # 9ej7f: the URL itself is withheld from a caller that may not write it.
         discord_configured=settings.is_discord_configured() or _has_discord_alert_method(),
-        discord_webhook_url=settings.discord_webhook_url,
-        # Shared Telegram settings
+        discord_webhook_url="" if redact else settings.discord_webhook_url,
+        # Shared Telegram settings (9ej7f: same redaction as Discord)
         telegram_configured=settings.is_telegram_configured(),
-        telegram_bot_token=settings.telegram_bot_token,
-        telegram_chat_id=settings.telegram_chat_id,
+        telegram_bot_token="" if redact else settings.telegram_bot_token,
+        telegram_chat_id="" if redact else settings.telegram_chat_id,
         stream_preview_mode=settings.stream_preview_mode,
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
@@ -805,6 +866,22 @@ async def update_settings(
     # change any admin-only field BEFORE any validation or write side effect.
     _assert_admin_for_changed_fields(request, current_settings, is_settings_admin)
 
+    # 9ej7f: GET redacts _ADMIN_ONLY_READ_REDACTED_FIELDS to "" for a non-admin,
+    # so a non-admin's ordinary preference save round-trips "" for all three. A
+    # non-admin can never legitimately change them (a non-empty value already
+    # 403'd above), so take the STORED value and the redacted read can never
+    # silently wipe a working webhook / bot token. An admin keeps literal
+    # semantics, which is what preserves "blank the field to disable the
+    # integration" as a working operator action.
+    if is_settings_admin:
+        discord_webhook_url = request.discord_webhook_url
+        telegram_bot_token = request.telegram_bot_token
+        telegram_chat_id = request.telegram_chat_id
+    else:
+        discord_webhook_url = current_settings.discord_webhook_url
+        telegram_bot_token = current_settings.telegram_bot_token
+        telegram_chat_id = current_settings.telegram_chat_id
+
     # kgz3k SSRF-on-save — validate every CHANGED, NON-EMPTY outbound base URL
     # through the canonical mode-aware chokepoint, and the Discord webhook
     # against the Discord allowlist. Empty = operator disabling an integration
@@ -821,8 +898,11 @@ async def update_settings(
         request.plex_base_url = _validate_outbound_base_url_on_save("Plex base URL", request.plex_base_url)
     if request.jellyfin_base_url and request.jellyfin_base_url != current_settings.jellyfin_base_url:
         request.jellyfin_base_url = _validate_outbound_base_url_on_save("Jellyfin base URL", request.jellyfin_base_url)
-    if request.discord_webhook_url != current_settings.discord_webhook_url:
-        _validate_discord_webhook_on_save(request.discord_webhook_url)
+    # Validate the EFFECTIVE webhook resolved above, not the raw request value:
+    # a non-admin's redacted "" resolves back to the stored URL, which is not a
+    # change and must not be re-validated (9ej7f).
+    if discord_webhook_url != current_settings.discord_webhook_url:
+        _validate_discord_webhook_on_save(discord_webhook_url)
 
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
@@ -1007,11 +1087,12 @@ async def update_settings(
         smtp_from_name=request.smtp_from_name,
         smtp_use_tls=request.smtp_use_tls,
         smtp_use_ssl=request.smtp_use_ssl,
-        # Shared Discord settings
-        discord_webhook_url=request.discord_webhook_url,
-        # Shared Telegram settings
-        telegram_bot_token=request.telegram_bot_token,
-        telegram_chat_id=request.telegram_chat_id,
+        # Shared Discord settings (9ej7f: resolved above — stored value for a
+        # non-admin, whose read was redacted; literal for an admin)
+        discord_webhook_url=discord_webhook_url,
+        # Shared Telegram settings (9ej7f: same resolution as Discord)
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
@@ -1287,8 +1368,20 @@ async def update_settings(
 
 
 @router.post("/test")
-async def test_connection(request: TestConnectionRequest):
+async def test_connection(
+    request: TestConnectionRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
     """Test connection to Dispatcharr with provided credentials.
+
+    bead i4qrp: admin-gated, and the MCP service principal is refused. This
+    endpoint carried NO route dependency while the sibling Emby / Plex /
+    Jellyfin test endpoints carried ``RequireAdminIfEnabled``, so it was
+    reachable by any authenticated caller including the static MCP key. The
+    gate no-ops when ``require_auth`` is False or setup is incomplete, so the
+    first-run configuration path is untouched (the only frontend callers are
+    ``SettingsModal`` and the Settings tab, both post-authentication;
+    ``SetupPage`` calls only ``completeSetup``).
 
     GH #754 / bead ``0yh70``: this endpoint used to carry its own inline
     scheme + netloc check and NO host policy at all, while POST /api/settings
@@ -1472,8 +1565,17 @@ async def test_connection(request: TestConnectionRequest):
 
 
 @router.post("/test-smtp")
-async def test_smtp_connection(request: SMTPTestRequest):
-    """Test SMTP connection by sending a test email."""
+async def test_smtp_connection(
+    request: SMTPTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test SMTP connection by sending a test email.
+
+    bead i4qrp: admin-gated, MCP principal refused. This one falls back to the
+    STORED SMTP user + password when the request omits them (bd-air4z), so an
+    ungated caller could drive an authenticated send with credentials it never
+    had to know.
+    """
     import smtplib
     import ssl
     from email.mime.text import MIMEText
@@ -1572,8 +1674,16 @@ You can now use email features like M3U Digest reports.
 
 
 @router.post("/test-discord")
-async def test_discord_webhook(request: DiscordTestRequest):
-    """Test Discord webhook by sending a test message."""
+async def test_discord_webhook(
+    request: DiscordTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test Discord webhook by sending a test message.
+
+    bead i4qrp: admin-gated, MCP principal refused. Pairs with 9ej7f — the
+    webhook URL is no longer readable by a non-admin, and posting to one is no
+    longer drivable by a non-admin either.
+    """
     import aiohttp
 
     webhook_url = request.webhook_url
@@ -1625,8 +1735,15 @@ async def test_discord_webhook(request: DiscordTestRequest):
 
 
 @router.post("/test-telegram")
-async def test_telegram_bot(request: TelegramTestRequest):
-    """Test Telegram bot by sending a test message."""
+async def test_telegram_bot(
+    request: TelegramTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test Telegram bot by sending a test message.
+
+    bead i4qrp: admin-gated, MCP principal refused. Same pairing with 9ej7f as
+    ``test_discord_webhook``.
+    """
     import aiohttp
 
     bot_token = request.bot_token
@@ -1802,9 +1919,16 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
 @router.post("/emby/test-connection")
 async def test_emby_connection(
     request: EmbyTestConnectionRequest,
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminForOutboundTest,
 ):
     """Test connectivity to an Emby server using operator-supplied credentials.
+
+    bead 9kwzp.7: the gate was ``RequireAdminIfEnabled``, which closes the
+    non-admin half but NOT the MCP half — ``_build_mcp_service_principal``
+    sets ``is_admin=True``, so the static MCP key reached this endpoint and
+    could POST a caller-supplied api key to a caller-named host and read the
+    verdict. Swapped to the human-admin outbound-test gate i4qrp introduced
+    for the sibling ``/api/settings/test*`` endpoints.
 
     Wired into the Settings UI 'Test Connection' button (bd-8wc6q). The
     operator may be testing values BEFORE saving them, so this endpoint
@@ -1860,9 +1984,12 @@ async def test_emby_connection(
 @router.post("/plex/test-connection")
 async def test_plex_connection(
     request: PlexTestConnectionRequest,
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminForOutboundTest,
 ):
     """Test connectivity to a Plex server using operator-supplied credentials.
+
+    bead 9kwzp.7: same gate swap as :func:`test_emby_connection`, for the same
+    reason — ``RequireAdminIfEnabled`` admitted the static MCP key.
 
     Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
     :func:`test_emby_connection` exactly — operator may be testing values
@@ -1905,9 +2032,12 @@ async def test_plex_connection(
 @router.post("/jellyfin/test-connection")
 async def test_jellyfin_connection(
     request: JellyfinTestConnectionRequest,
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminForOutboundTest,
 ):
     """Test connectivity to a Jellyfin server using operator-supplied credentials.
+
+    bead 9kwzp.7: same gate swap as :func:`test_emby_connection`, for the same
+    reason — ``RequireAdminIfEnabled`` admitted the static MCP key.
 
     Wired into the Settings UI 'Test Connection' button (bd-r5f0c.4). Mirrors
     :func:`test_emby_connection` exactly — operator may be testing values
@@ -2112,8 +2242,24 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
 
 
 @router.post("/restart-services")
-async def restart_services():
-    """Restart background services (bandwidth tracker and stream prober) to apply new settings."""
+async def restart_services(_admin=RequireAdminIfEnabled):
+    """Restart background services (bandwidth tracker and stream prober) to apply new settings.
+
+    bead 9kwzp.6: this carried no dependency at all, so any authenticated
+    caller could churn the background services. It takes the PLAIN admin gate,
+    not the outbound-test one, and the difference is deliberate.
+
+    It is not a credential sink: it names no host, sends no secret and echoes
+    no upstream status. It is also not destructive — it rebuilds the tracker
+    and prober from ALREADY-SAVED settings, which is precisely the work
+    :func:`update_settings` schedules for itself via
+    ``_rebuild_background_services_after_settings_change`` on any
+    connection-relevant change. So the MCP service principal, a legitimate
+    admin automation surface for ordinary operational work, stays admitted;
+    denying it here would also mean denying the same restart it can already
+    trigger indirectly through a settings write. What was missing is the
+    ordinary admin tier, and that is what this adds.
+    """
     logger.debug("[SETTINGS] POST /api/settings/restart-services")
     settings = get_settings()
     return await _restart_background_services(settings)
