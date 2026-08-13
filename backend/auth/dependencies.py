@@ -427,6 +427,44 @@ RequireHumanAdminForServiceCredential = Depends(
 )
 
 
+# bead 9kwzp.11 — admin gate for the TLS certificate/key material and the
+# HTTPS termination lifecycle (``tls/routes.py``: configure, request-cert,
+# complete-challenge, upload-cert, renew, certificate DELETE, the https
+# start/stop/restart trio, and the settings read that emits masked DNS
+# credentials). That router carried NO route dependency at all, so every one of
+# those was reachable by any authenticated non-admin AND by this principal.
+#
+# A fourth constant rather than a reuse of the three above, for the reason
+# ``mcp_denial_detail`` is a per-call-site parameter at all: none of the
+# existing bodies describes this surface. "cannot perform backup restore" and
+# "cannot manage the MCP API key" both name a subsystem these routes never
+# touch, and "cannot run connection tests" names a probe that only ONE route in
+# the router makes (``/test-dns-provider``, which correctly keeps
+# ``RequireHumanAdminForOutboundTest``). A caller refused on an upload of
+# certificate material must not be pointed at any of the three.
+#
+# The principal is denied because TLS material is operator infrastructure, not
+# channel/stream automation: the router accepts caller-supplied certificate and
+# private-key material and serves it, destroys the operator's own material,
+# writes the plaintext DNS-provider credentials in ``/config/tls_settings.json``
+# (bead 2owpi), and starts or stops the operator's HTTPS listener. None of that
+# is work the MCP sidecar exists to do — it exposes no TLS tool — and the
+# availability half means a leaked key could take the operator's own HTTPS
+# termination down.
+RequireHumanAdminForTLSMaterial = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot manage TLS. Issuing, uploading, "
+            "renewing or deleting certificate material, writing DNS-provider "
+            "credentials, and starting or stopping HTTPS termination are "
+            "operator infrastructure operations and must be driven by a human "
+            "operator admin."
+        ),
+    )
+)
+
+
 def resolve_is_admin_if_enabled():
     """Factory: resolve whether the caller is privileged, WITHOUT rejecting.
 
