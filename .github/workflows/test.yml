@@ -180,6 +180,36 @@ jobs:
             python3 scripts/check_secrets.py --base-ref "origin/$BASE_REF"
           fi
 
+      # ─── Binary-artifact guard (bead enhancedchannelmanager-6mqn5) ──────
+      # The three ratchets above read added LINES. A ChaCha20-Poly1305
+      # ciphertext has no lines and a ZIP central directory has no lines, so
+      # none of them can see the artifact class this one covers: an
+      # `ECMBKENC`-encrypted ECM backup envelope carrying a live provider
+      # credential, copied into the repo working tree because Playwright's
+      # upload sandbox refuses any path outside the repository root. One
+      # drill left 2,321 such files totalling 3.1 GB untracked and unignored.
+      #
+      # The unit of inspection is therefore the added FILE, not the added
+      # line. Runs HEAD's copy of the script rather than the base's, matching
+      # the em-dash and PII ratchets above: pinning to the base would make a
+      # false-positive fix take two pull requests, and a guard whose false
+      # positives are expensive to fix is a guard that gets disabled. What
+      # base-pinning would have bought is bought instead by
+      # `backend/tests/unit/test_check_binary_artifacts.py::TestPolicyIsPinned`
+      # under the required `Backend Tests` context, so weakening the format
+      # list or the size ceilings fails a required check.
+      #
+      # Pull requests only, for the same reason as the ratchets above: a push
+      # to dev/main has no base ref to diff against.
+      - name: Check for added binary artifacts (ratchet)
+        id: binary_artifacts
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          python3 scripts/check_binary_artifacts.py --base-ref "origin/$BASE_REF"
+
       - name: Build the published user-guide site (strict)
         id: site_build
         # --strict turns mkdocs warnings (broken internal links, missing nav
@@ -202,6 +232,7 @@ jobs:
           EM_DASH: ${{ steps.em_dash_ratchet.outcome }}
           PII_RATCHET: ${{ steps.pii_ratchet.outcome }}
           SECRETS_RATCHET: ${{ steps.secrets_ratchet.outcome }}
+          BINARY_ARTIFACTS: ${{ steps.binary_artifacts.outcome }}
           SITE_BUILD: ${{ steps.site_build.outcome }}
         run: |
           {
@@ -210,6 +241,7 @@ jobs:
             echo "- em-dash ratchet (pull requests only): ${EM_DASH:-did not run}"
             echo "- personal-identifier and ECM-credential ratchet (pull requests only): ${PII_RATCHET:-did not run}"
             echo "- generic detect-secrets ratchet (pull requests only): ${SECRETS_RATCHET:-did not run}"
+            echo "- added binary-artifact ratchet (pull requests only): ${BINARY_ARTIFACTS:-did not run}"
             echo "- \`mkdocs build --strict\` on the published user-guide site: ${SITE_BUILD:-did not run}"
           } >> "$GITHUB_STEP_SUMMARY"
 
