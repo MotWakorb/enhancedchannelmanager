@@ -1,0 +1,27 @@
+# Binary artifacts this repository deliberately tracks.
+#
+# Read by `scripts/check_binary_artifacts.py` (bead
+# enhancedchannelmanager-6mqn5). That guard fails a pull request which ADDS a
+# credential-bearing or bulk binary artifact. This file is its escape hatch.
+#
+# FORMAT: one exact repository-relative path per line, followed by a `#` and a
+# reason. The reason is mandatory and the guard rejects an entry without one:
+# it is the review artifact, and an entry nobody had to justify is
+# indistinguishable from turning the guard off for that file.
+#
+#     e2e/fixtures/sample-upload.zip  # 40-byte fixture, no credentials, bd-xxxxx
+#
+# Globs are rejected. `*.zip` would re-open the hole this guard closes in a
+# single line; the value of the hatch is that a human named one file and said
+# what it was.
+#
+# BEFORE ADDING AN ENTRY, check that the artifact is not simply a drill
+# leftover. Playwright's upload sandbox forces artifacts into the repository
+# root during backup/restore drills, and the correct disposition for those is
+# deletion, not an allowlist entry.
+#
+# This file is empty on purpose. The repository tracks no archive, no
+# database, and no binary outside the image types the guard already accepts;
+# `backend/tests/unit/test_check_binary_artifacts.py` asserts that against the
+# live tracked tree, so an entry here would be a real exception rather than
+# routine bookkeeping.

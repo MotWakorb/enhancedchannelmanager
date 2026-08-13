@@ -1010,7 +1010,18 @@
         "jobs",
         "operator-docs",
         "steps",
-        10,
+        9,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "operator-docs",
+        "steps",
+        11,
         "if"
       ],
       "value": "always()"
@@ -1852,7 +1863,7 @@
         "jobs",
         "operator-docs",
         "steps",
-        10,
+        11,
         "continue-on-error"
       ],
       "value": true
