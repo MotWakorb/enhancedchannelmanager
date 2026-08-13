@@ -17,8 +17,10 @@ from urllib.parse import urlparse, urlunparse
 import journal
 from auth import (
     RequireAdminIfEnabled,
+    RequireHumanAdminForOutboundPolicy,
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
+    RequireHumanAdminForStatisticsReset,
 )
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
@@ -2270,8 +2272,22 @@ async def restart_services(_admin=RequireAdminIfEnabled):
 
 
 @router.post("/reset-stats")
-async def reset_stats():
-    """Reset all channel/stream statistics. Use when switching Dispatcharr servers."""
+async def reset_stats(_admin=RequireHumanAdminForStatisticsReset):
+    """Reset all channel/stream statistics. Human-admin only.
+
+    bead 9kwzp.12: this carried NO dependency at all, so any authenticated
+    non-admin could delete every row of seven statistics tables. The admin
+    tier closes that half. ``RequireHumanAdminForStatisticsReset`` closes the
+    other one, and does so DELIBERATELY differently from its sibling
+    ``restart-services``: that endpoint kept admitting the MCP service
+    principal because it rebuilds background services from already-saved
+    settings, which is work a settings write schedules for itself. This one
+    destroys the operator's watch, bandwidth, popularity, telemetry and
+    client-connection history irreversibly — no compensating write, no
+    rollback ledger, and no other route re-derives it. The MCP sidecar exposes
+    no tool for it either. Note the gate no-ops while ``require_auth`` is
+    false or setup is incomplete, so a first-run instance is unaffected.
+    """
     logger.debug("[SETTINGS] POST /api/settings/reset-stats")
     from models import (
         HiddenChannelGroup,
@@ -2375,7 +2391,7 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
 @router.patch("/security")
 async def update_security_settings(
     request: SecuritySettingsRequest,
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminForOutboundPolicy,
 ):
     """Set the DBAS outbound-policy mode (LAN-friendly vs public-only).
 
@@ -2384,6 +2400,19 @@ async def update_security_settings(
     full settings round-trip (mirrors the dedicated mcp-api-key endpoints). The
     mode is a closed enum; the always-on denylist enforced in
     ``security/ssrf.py`` is never operator-togglable (threat model §B6).
+
+    bead 9kwzp.10 item 1: moved off the PLAIN admin tier, which ADMITS the MCP
+    service principal (``_build_mcp_service_principal`` sets ``is_admin=True``).
+    This is the only field-specific writer of ``ssrf_outbound_mode`` — the
+    wholesale-config restore paths can persist the same field without any
+    source-level assignment, and they are human-admin for that reason — and
+    the mode decides which hosts every outbound path in ECM may reach. Leaving
+    it writable by the principal that beads i4qrp / 9kwzp.6 / 9kwzp.7 refused
+    on the outbound sinks made that control partial: the principal could not
+    drive the probe but could move the fence it was measured against. The
+    always-on half (link-local / IMDS / ULA / CGNAT / multicast) is
+    unaffected either way. The gate no-ops while ``require_auth`` is false or
+    setup is incomplete, so the first-run wizard still persists the choice.
     """
     from security.ssrf import SSRFMode
 

@@ -90,8 +90,13 @@ try:
         RequireHumanAdminForOutboundTest,
         RequireHumanAdminForServiceCredential,
         RequireHumanAdminForTLSMaterial,
+        RequireHumanAdminForOutboundPolicy,
+        RequireHumanAdminForNotificationCredential,
+        RequireHumanAdminForStatisticsReset,
         resolve_is_admin_if_enabled,
         ResolveIsAdminIfEnabled,
+        resolve_is_mcp_service_principal_if_enabled,
+        ResolveIsMcpServicePrincipalIfEnabled,
     )
     __all__.extend([
         "AuthenticationError",
@@ -109,8 +114,13 @@ try:
         "RequireHumanAdminForOutboundTest",
         "RequireHumanAdminForServiceCredential",
         "RequireHumanAdminForTLSMaterial",
+        "RequireHumanAdminForOutboundPolicy",
+        "RequireHumanAdminForNotificationCredential",
+        "RequireHumanAdminForStatisticsReset",
         "resolve_is_admin_if_enabled",
         "ResolveIsAdminIfEnabled",
+        "resolve_is_mcp_service_principal_if_enabled",
+        "ResolveIsMcpServicePrincipalIfEnabled",
     ])
 except ImportError as e:
     logger.debug("[AUTH] Suppressed dependencies import error: %s", e)

@@ -200,6 +200,11 @@ class TestRestoreDbasSavedEndpoint:
     async def test_admin_guarded(self, async_client, backups_dir):
         from fastapi import HTTPException, status
         from main import app
+        # bead 9kwzp.10 item 2 (PR #855 review): this route keeps the PLAIN
+        # admin tier at the dependency and refuses only the MCP principal's
+        # APPLY in the handler, so the non-admin half this case pins is still
+        # ``RequireAdminIfEnabled``. Its upload sibling moved to
+        # ``RequireHumanAdminIfEnabled``; see test_o8tbv_restore_dbas_endpoint.
         from auth import RequireAdminIfEnabled as _prebuilt
 
         async def _reject() -> None:

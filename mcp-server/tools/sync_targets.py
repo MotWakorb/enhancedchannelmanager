@@ -9,6 +9,23 @@ full credential value. There is no sync-target connection-test endpoint on
 the backend (unlike cloud-targets) — a live sync run is the only way to
 validate reachability; the sync execution engine's SSRF gate runs at that
 point (see routers/sync_targets.py module docstring).
+
+enhancedchannelmanager-9kwzp.10 item 3 reviewed the gate on all five
+endpoints. They were already admin-gated (``RequireAdminIfEnabled``) and
+they stay that way, reads and writes alike. That gate ADMITS the static MCP
+service principal, so all five tools here continue to work over MCP.
+
+That is a deliberate PO decision against a human-admin gate for the three
+writes, which 9kwzp.10 initially shipped and which returned 403 to
+``create_sync_target``, ``update_sync_target`` and ``delete_sync_target``.
+The residual it accepts, so a caller knows what these tools can do: writing
+a sync target names a remote host, stores the credentials this instance
+authenticates to it with, sets ``insecure`` (which turns off TLS
+verification for that traffic) and registers the target's ``dbas_sync_<id>``
+scheduled task — so an update can silently repoint a push the operator
+already configured, and the authoritative SSRF check does not run until
+execute time. The caller must still be an admin, and the outbound-policy
+write (``PATCH /api/settings/security``) is still refused to this principal.
 """
 import logging
 

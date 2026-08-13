@@ -29,7 +29,11 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from auth import RequireAdminIfEnabled, RequireHumanAdminIfEnabled
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminIfEnabled,
+    ResolveIsMcpServicePrincipalIfEnabled,
+)
 from auth.dependencies import (
     get_current_user,
     get_token_from_request,
@@ -90,7 +94,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0094"
+APP_VERSION = "0.18.1-0095"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2370,6 +2374,59 @@ async def restore_backup_initial(
 DBAS_RESTORE_TASK_ID = "dbas_restore"
 _DBAS_RESTORE_TMP_DIR = CONFIG_DIR / "dbas" / "restore_uploads"
 
+
+# ---------------------------------------------------------------------------
+# bead 9kwzp.10 item 2 (PR #855 review) — the DBAS APPLY carve-out.
+# ---------------------------------------------------------------------------
+# The MCP service principal is refused the DBAS restore because bead …-dfkbn
+# item 4 added ``dbas/importers/ecm_settings.py`` and the restore now writes
+# ECM's own settings blob wholesale, which is the kgz3k bypass bead 6n76m
+# closed on the three legacy /restore* endpoints. That reasoning covers the
+# APPLY. It does not cover the PREVIEW, and the two DBAS routes are NOT
+# symmetric, so they are gated differently on purpose:
+#
+# * ``POST /restore-dbas`` takes a caller-supplied UPLOAD. The artifact is
+#   streamed to the config partition (up to 2 GiB) and decoded before anything
+#   examines ``confirm_apply``, so even a dry run hands this principal a parser
+#   and a disk-consumption surface with an artifact of its own choosing. The
+#   sidecar exposes no tool for it either (there is no file upload over MCP),
+#   so a blanket denial removes no capability. It keeps
+#   ``RequireHumanAdminIfEnabled``.
+#
+# * ``POST /restore-dbas-saved`` names an artifact ALREADY on the server, which
+#   only an admin could have put there (``POST /api/backup/save`` and the saved
+#   listing are both admin-gated). There is no attacker-supplied artifact on
+#   this path, and the sidecar's ``restore_dbas_backup_saved`` tool documents
+#   ``confirm_apply=False`` as its primary safe mode: a counts-only preview.
+#   ``dbas.restore_orchestrator`` forces ``report.is_dry_run = True`` whenever
+#   ``confirm_apply`` is false and treats that as the single choke point a
+#   caller can never opt out of, so the zero-mutation claim is structural
+#   rather than a flag we trust. Refusing it would have been an unrelated,
+#   undocumented capability removal, so the refusal is conditional instead.
+#
+# The conditional half is enforced in the HANDLER rather than in the route
+# dependency, following the kgz3k precedent in ``routers/settings.py``
+# (``_resolve_settings_admin`` resolves a bool; ``_assert_admin_for_changed_
+# fields`` raises on the specific attempt). A dependency cannot see
+# ``confirm_apply`` here without consuming the request body first.
+# ``tests/test_admin_gate_inventory.py`` records the route under
+# ``_DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER`` so the split is not
+# invisible to the inventory.
+_DBAS_APPLY_MCP_DENIAL = (
+    "The MCP service principal cannot APPLY a DBAS restore. Applying rewrites "
+    "ECM's own settings blob wholesale, including the outbound base URLs, the "
+    "notification credentials and the outbound-policy mode, so it must be "
+    "driven by a human operator admin. The counts-only preview "
+    "(confirm_apply=false) remains available."
+)
+
+
+# The predicate itself is ``auth.ResolveIsMcpServicePrincipalIfEnabled``, a
+# sibling of ``resolve_is_admin_if_enabled``. It lives in ``auth/dependencies``
+# rather than here so its setup-mode early return is the SAME one the gate
+# stacked above it makes; a private copy in this router would be one refactor
+# away from drifting from the gate it qualifies.
+
 # Age after which an abandoned restore temp is swept (O8TBV-4). The DbasRestoreTask
 # normally deletes its own temp in a finally; this only catches temps orphaned
 # when the fire-and-forget coroutine returns BEFORE execute() runs (task-not-found
@@ -2508,9 +2565,47 @@ async def restore_dbas_artifact(
             "an absent value from an older client, resolves to 'preserve'."
         ),
     ),
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminIfEnabled,
 ):
-    """Trigger an async DBAS artifact restore. Admin only.
+    """Trigger an async DBAS artifact restore. Human-admin only.
+
+    bead 9kwzp.10 item 2: moved off the PLAIN admin tier onto the same gate the
+    three legacy ``/restore*`` endpoints have carried since bead 6n76m. The
+    plain tier was CORRECT when it was written, and the history says so in
+    three commits:
+
+    * ``21f93e683`` (2026-06-19) shipped this endpoint with the plain admin
+      tier. At that point a DBAS restore applied denylist-filtered settings to
+      the DISPATCHARR upstream and never touched ECM's own ``settings.json``.
+    * ``e83d31b1`` (2026-07-08, bead 6n76m) human-gated the legacy ``/restore``,
+      ``/restore-saved`` and ``/restore-yaml`` paths, which already DID write
+      ECM's settings blob, and deliberately left DBAS on the plain tier for
+      exactly the distinction above.
+    * ``fd63235d`` (2026-08-04, bead …-dfkbn item 4) added
+      ``dbas/importers/ecm_settings.py``: a generic ``setattr`` loop over the
+      archive's settings mapping followed by ``save_settings``. That is what
+      made the distinction stale.
+
+    The importer excludes only the live Dispatcharr connection, install-local
+    bookkeeping and redaction sentinels — NOT ``emby_base_url`` /
+    ``plex_base_url`` / ``jellyfin_base_url``, the notification credentials,
+    the GH #473 safety caps or ``ssrf_outbound_mode``. So a caller supplying
+    its own artifact could set every admin-only field the kgz3k field-level
+    gate on POST /api/settings refuses it, which is the bypass 6n76m closed on
+    the other three endpoints. The gate went stale when the capability grew
+    rather than being wrong when it was written. It no-ops while
+    ``require_auth`` is false or setup is incomplete, as it already did for the
+    legacy trio.
+
+    THE DENIAL HERE IS BLANKET, INCLUDING THE DRY RUN, and that is deliberate
+    rather than an oversight: this route takes a caller-supplied UPLOAD, which
+    is streamed to the config partition and decoded before anything examines
+    ``confirm_apply``, so even a preview hands the principal a parser and a
+    disk-consumption surface with an artifact of its own choosing. The sidecar
+    exposes no tool for it (there is no file upload over MCP), so nothing is
+    lost. Its saved-artifact sibling :func:`restore_dbas_saved` IS split by
+    ``confirm_apply``, because there the artifact was already put on disk by an
+    admin; see the comment above ``_DBAS_APPLY_MCP_DENIAL``.
 
     Streams the uploaded artifact to a temp file on the CONFIG partition, then
     kicks the :class:`tasks.dbas_restore.DbasRestoreTask` in the background and
@@ -4314,8 +4409,32 @@ class RestoreDbasSavedRequest(BaseModel):
 
 
 @router.post("/restore-dbas-saved")
-async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIfEnabled):
-    """Trigger an async DBAS restore from an on-disk SAVED artifact. Admin only.
+async def restore_dbas_saved(
+    req: RestoreDbasSavedRequest,
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
+    """Trigger an async DBAS restore from an on-disk SAVED artifact.
+
+    Admin required. The MCP service principal is admitted for the counts-only
+    PREVIEW and refused for the APPLY.
+
+    bead 9kwzp.10 item 2, as revised by the PR #855 review. The APPLY half is
+    refused for the reason :func:`restore_dbas_artifact` records: bead …-dfkbn
+    item 4 taught the DBAS restore to write ECM's own ``settings.json``, which
+    is the kgz3k bypass bead 6n76m closed on the legacy ``/restore*`` trio. The
+    PREVIEW half is NOT, because that reasoning does not reach a run that
+    writes nothing: ``dbas.restore_orchestrator`` forces
+    ``report.is_dry_run = True`` whenever ``confirm_apply`` is false, as the
+    single choke point a caller can never opt out of. This route also names an
+    artifact ALREADY on the server, which only an admin could have saved there,
+    so nothing here is caller-supplied except the filename. Blanket-denying it
+    would have removed the documented safe mode of the sidecar's
+    ``restore_dbas_backup_saved`` tool as an unremarked side effect.
+
+    The upload sibling ``POST /restore-dbas`` is deliberately NOT split this
+    way; see the module-level comment above ``_DBAS_APPLY_MCP_DENIAL``.
+
 
     Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
     "passphrase": null}``, resolves the filename to its saved
@@ -4334,6 +4453,14 @@ async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIf
     here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
     it MUST survive the restore.
     """
+    # The APPLY carve-out, raised BEFORE the filename is resolved so a refused
+    # caller learns nothing about which artifacts exist on disk.
+    if req.confirm_apply and caller_is_mcp:
+        logger.warning(
+            "[BACKUP] Refused DBAS restore APPLY for the MCP service principal"
+        )
+        raise HTTPException(status_code=403, detail=_DBAS_APPLY_MCP_DENIAL)
+
     filename = req.filename
     reattach_mode = ChannelReattachMode.coerce(req.channel_reattach_mode)
     logger.info(

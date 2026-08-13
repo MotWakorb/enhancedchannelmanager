@@ -465,6 +465,170 @@ RequireHumanAdminForTLSMaterial = Depends(
 )
 
 
+# bead 9kwzp.10 item 1 — admin gate for the outbound-policy write
+# (``PATCH /api/settings/security``, the only field-specific writer of
+# ``ssrf_outbound_mode``; the wholesale-config restore paths can persist the
+# same field without a source-level assignment, which is why they are
+# human-admin too).
+#
+# A fifth constant rather than a reuse, for the reason 9kwzp.8 and 9kwzp.11
+# each needed one: none of the four existing bodies describes this surface.
+# "backup restore", "MCP API key", "connection tests" and "TLS" all name a
+# subsystem this route never touches, and this route is not itself a probe —
+# it is the POLICY the probes are measured against.
+#
+# The principal is denied because this setting decides which hosts every
+# outbound path in ECM may reach. Widening it from ``public_only`` to
+# ``lan_friendly`` re-admits RFC1918 and loopback for the sinks that beads
+# i4qrp, 9kwzp.6 and 9kwzp.7 gated, for the sync and backup-upload
+# destinations, and for the runtime pollers. Gating the sinks while leaving
+# their policy writable by the same principal is a partial control: the
+# principal cannot drive the probe, but it can move the fence the probe would
+# have been measured against. Note the always-on half (link-local / IMDS /
+# ULA / CGNAT / multicast, ``security/ssrf.py``) is NOT operator-togglable and
+# is unaffected either way.
+RequireHumanAdminForOutboundPolicy = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot change the outbound-policy "
+            "mode. That setting decides which hosts every outbound path in "
+            "ECM may reach, so widening it is a security-policy change and "
+            "must be driven by a human operator admin."
+        ),
+    )
+)
+
+
+# NO OUTBOUND-DESTINATION GATE, DELIBERATELY. There was one — this bead built
+# ``RequireHumanAdminForOutboundDestination`` for the write halves of
+# ``/api/cloud-targets`` and ``/api/sync-targets`` — and the PO removed it
+# before it shipped. Recorded here rather than deleted silently, because the
+# argument for it is still sound and the next reader will otherwise re-derive
+# it: a write to either router names the host a SCHEDULED job then sends to
+# (``tasks/dbas_backup.py`` PUTs the operator's archive to a cloud target;
+# ``tasks/dbas_sync.py`` pushes config to a sync target), stores the
+# credentials that job authenticates with, and sets ``insecure``, which turns
+# off TLS verification for that traffic — so an update repoints a flow the
+# operator already configured.
+#
+# It was removed because bead jcj0f ships six MCP tools over exactly those
+# routes and denying the principal broke all six. The capability was judged
+# worth the residual. Both routers therefore run on plain
+# ``RequireAdminIfEnabled`` end to end: admin required, MCP principal
+# admitted. What still refuses the principal on that surface is the outbound
+# POLICY write (``RequireHumanAdminForOutboundPolicy``) and both cloud-target
+# ``/test`` verbs (``RequireHumanAdminForOutboundTest``).
+#
+# If a future change makes a destination write reachable by something weaker
+# than an admin, or removes those tools, this is the gate to bring back.
+
+
+# bead 9kwzp.10 item 4 — admin gate for the alert-method surface
+# (``/api/alert-methods``), which carried NO route dependency on any of its
+# six non-test routes.
+#
+# Scope: the four routes NO MCP tool calls — ``POST ""``, ``GET /{id}``,
+# ``PATCH /{id}`` and ``DELETE /{id}``. An alert method holds the Discord
+# webhook URL, the Telegram bot token and the SMTP password in
+# ``AlertMethod.config``; writing one repoints where ECM's own alerts go, and
+# the reads return that blob verbatim. Denying the principal on these four
+# costs the sidecar nothing, because it has no tool for any of them.
+#
+# ``GET ""`` is NOT here, and that is the residual to be honest about: the
+# shipped ``list_alert_methods`` tool needs it, so it runs on plain
+# ``RequireAdminIfEnabled`` and the automation credential can read every
+# method's unmasked ``config`` through it — including everything ``GET /{id}``
+# would have disclosed, for every method. So this gate does not currently
+# contain the disclosure; it holds the WRITE half and marks the read intent.
+# Bead enhancedchannelmanager-9kwzp.13 is what contains it, by masking
+# ``config`` in both read responses (``models.AlertMethod.to_dict`` already
+# builds the masked form and neither handler calls it).
+#
+# Its own body rather than a reuse: ``RequireHumanAdminForOutboundTest``
+# already gates ``POST /api/alert-methods/{id}/test`` in this same router and
+# correctly names the send; a caller refused on a WRITE being told it cannot
+# run a connection test would describe the neighbouring route, not this one.
+RequireHumanAdminForNotificationCredential = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot read or write alert methods. "
+            "An alert method holds the notification credentials ECM sends "
+            "under (webhook URL, bot token, SMTP password), so both reading "
+            "and changing one must be driven by a human operator admin."
+        ),
+    )
+)
+
+
+# bead 9kwzp.12 — admin gate for ``POST /api/settings/reset-stats``, which
+# carried no dependency at all and deletes every row of seven statistics
+# tables.
+#
+# Decided on its own merits rather than by copying the sibling this bead was
+# split from. ``POST /api/settings/restart-services`` (9kwzp.6) kept the PLAIN
+# admin tier because it rebuilds background services from already-saved
+# settings — work a settings write schedules for itself anyway, so denying it
+# would deny a restart the principal can already trigger indirectly. Nothing
+# about reset-stats is recoverable that way: the seven tables are the
+# operator's own watch, bandwidth, popularity, telemetry and client-connection
+# history, there is no compensating write, no rollback ledger, and no other
+# route re-derives them. An automation credential that can silently erase the
+# observability record is a credential that can erase the evidence of its own
+# activity, which is why this one goes the other way.
+#
+# Its own body for the usual reason: nothing here reaches the network, writes
+# the settings blob, touches the MCP key or touches TLS.
+RequireHumanAdminForStatisticsReset = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot reset statistics. Clearing the "
+            "channel, stream, bandwidth, popularity and telemetry history is "
+            "an irreversible destructive operation with no undo and must be "
+            "driven by a human operator admin."
+        ),
+    )
+)
+
+
+def resolve_is_mcp_service_principal_if_enabled():
+    """Factory: resolve whether the caller IS the MCP principal, WITHOUT rejecting.
+
+    bead 9kwzp.10 item 2 (PR #855 review). Sibling of
+    :func:`resolve_is_admin_if_enabled`: it answers a question and lets the
+    handler decide, for the one case where the verdict depends on something a
+    route dependency cannot see. ``POST /api/backup/restore-dbas-saved``
+    refuses this principal the APPLY and admits it the counts-only preview,
+    and ``confirm_apply`` lives in the request body, so a dependency would have
+    to consume the body to read it.
+
+    It lives HERE rather than in the router deliberately. The router's
+    conditional refusal must no-op in setup mode under EXACTLY the same
+    condition as the gate stacked above it; a private copy of that check in a
+    router is one refactor away from drifting from the gate it qualifies.
+    Returns False whenever ``require_auth`` is false or setup is incomplete,
+    which is the same early return every gate in this module makes.
+    """
+    async def check_mcp(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> bool:
+        settings = get_auth_settings()
+        if not settings.require_auth or not settings.setup_complete:
+            return False
+        user = await get_current_user(request, session)
+        return is_mcp_service_principal(user)
+
+    return check_mcp
+
+
+ResolveIsMcpServicePrincipalIfEnabled = Depends(
+    resolve_is_mcp_service_principal_if_enabled()
+)
+
+
 def resolve_is_admin_if_enabled():
     """Factory: resolve whether the caller is privileged, WITHOUT rejecting.
 

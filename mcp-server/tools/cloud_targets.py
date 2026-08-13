@@ -14,7 +14,26 @@ otherwise echo a full credential value — they only ever forward what the
 caller supplies (to the encrypted-write endpoints) and surface whatever the
 backend's already-masked response contains.
 
-enhancedchannelmanager-9kwzp.6 then moved BOTH connection-test endpoints
+enhancedchannelmanager-9kwzp.10 item 4 closed a real gap on this router:
+all four CRUD endpoints carried NO route dependency at all, so any
+authenticated non-admin could create, change or delete a cloud target.
+They are now admin-gated (``RequireAdminIfEnabled``). All four keep the
+PLAIN admin tier, which ADMITS the static MCP service principal, so
+``list_cloud_targets``, ``create_cloud_target``, ``update_cloud_target``
+and ``delete_cloud_target`` all continue to work over MCP.
+
+That was a deliberate PO decision against a human-admin gate for the three
+writes, which 9kwzp.10 initially shipped and which returned 403 to all
+three tools. The residual it accepts, so a caller knows what these tools
+can do: writing a cloud target names the host ``tasks/dbas_backup.py``
+PUTs the operator's archive to, supplies the credentials it authenticates
+with, and carries the ``insecure`` flag that turns off TLS verification
+for that upload — so an update can silently repoint a destination the
+operator already configured. The caller must still be an admin, and the
+outbound-policy write (``PATCH /api/settings/security``) is still refused
+to this principal.
+
+enhancedchannelmanager-9kwzp.6 had already moved BOTH connection-test endpoints
 (``POST /api/cloud-targets/{target_id}/test`` and
 ``POST /api/cloud-targets/test``) behind ``RequireHumanAdminForOutboundTest``,
 which refuses the static MCP service principal. ``test_cloud_target`` therefore
