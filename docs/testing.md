@@ -27,6 +27,13 @@ This project has comprehensive test coverage at three levels.
 > were given a version-gated skip that names the fix in its reason string.
 > If you see that skip fire, you're not on the venv interpreter.
 
+> **Writing a security test that needs a credential-shaped fixture** (a token,
+> password, or webhook URL)? See "Credential Fixtures in Security Tests" in
+> [`docs/pytest_conventions.md`](pytest_conventions.md) before you write the
+> literal. The secrets ratchet (`scripts/check_secrets.py`) will fail the
+> build otherwise, and the fix it suggests (an inline pragma) is deliberately
+> disabled.
+
 Located in `backend/tests/`, run with `cd backend && ../.venv/bin/python -m pytest tests/ -q`
 
 **Router Tests** (`backend/tests/routers/`): Tests for extracted router modules.
