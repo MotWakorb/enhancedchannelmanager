@@ -1121,6 +1121,8 @@ To reconstruct one batch:
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
+**Authorization (bead `enhancedchannelmanager-9kwzp.11`):** every route above requires an admin when authentication is enabled. `GET /api/tls/status` and `GET /api/tls/https/status` disclose no credential material and accept the static MCP API key. The other eleven refuse it with `403`, because they manage certificate and private-key material, the DNS-provider credentials that issue it, the HTTPS listener that serves it, or (for `GET /api/tls/settings`) a response carrying masked credential fragments. Use an operator admin JWT for those. All of these gates no-op while `require_auth` is false or setup is incomplete, so first-run and auth-disabled instances are unaffected.
+
 ## Cron
 
 | Endpoint | Description |

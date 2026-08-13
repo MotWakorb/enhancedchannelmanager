@@ -9,8 +9,9 @@ ECM has two admin gates that look interchangeable and are not:
   principal IS ADMITTED, because ``_build_mcp_service_principal`` sets
   ``is_admin=True``.
 * ``auth.RequireHumanAdminIfEnabled`` / ``auth.RequireHumanAdminForOutboundTest``
-  / ``auth.RequireHumanAdminForServiceCredential`` — admin required AND the MCP
-  service principal is refused. These three behave identically; they differ
+  / ``auth.RequireHumanAdminForServiceCredential`` /
+  ``auth.RequireHumanAdminForTLSMaterial`` — admin required AND the MCP
+  service principal is refused. These four behave identically; they differ
   only in the 403 body, which names the surface being refused so incident
   triage starts in the right place.
 
@@ -35,7 +36,11 @@ is denied exactly where a route:
    carve-out ``routers.settings._resolve_settings_admin`` applies to
    POST /api/settings (kgz3k / 6n76m); or
 3. manages the lifecycle of the static MCP key itself, which would make the
-   bearer of a credential the party that rotates and revokes it (9kwzp.8).
+   bearer of a credential the party that rotates and revokes it (9kwzp.8); or
+4. manages the TLS certificate and private-key material, the DNS-provider
+   credentials that issue it, or the HTTPS listener that serves it — operator
+   transport infrastructure, which the sidecar exposes no tool for and whose
+   destructive half has no undo (9kwzp.11).
 
 Everything else stays admitted. The groups below record that verdict per site
 so the next reader does not re-derive it.
@@ -62,6 +67,7 @@ from auth import (
     RequireAdminIfEnabled,
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
+    RequireHumanAdminForTLSMaterial,
     RequireHumanAdminIfEnabled,
 )
 
@@ -203,6 +209,18 @@ _SSRF_POLICY_WRITE = {
     ("PATCH", "/api/settings/security"),
 }
 
+# bead 9kwzp.11, decided on their own merits: the two TLS status reads take the
+# PLAIN admin tier. Neither returns credential material — ``/status`` returns
+# the certificate's subject, issuer and validity window (which every TLS client
+# is served anyway) plus domain, port and a running flag, and ``/https/status``
+# returns only the running flag and the port. The rest of that router is in
+# ``_TLS_MATERIAL_LIFECYCLE`` below; GET /api/tls/settings is deliberately NOT
+# here because it emits masked credential fragments.
+_TLS_STATUS_READS = {
+    ("GET", "/api/tls/status"),
+    ("GET", "/api/tls/https/status"),
+}
+
 MCP_ADMITTED: frozenset = frozenset(
     _CHANNEL_AUTOMATION
     | _PIPELINE_AUTOMATION
@@ -212,6 +230,7 @@ MCP_ADMITTED: frozenset = frozenset(
     | _BACKUP_ARCHIVE
     | _SYNC_TARGET_CRUD
     | _SSRF_POLICY_WRITE
+    | _TLS_STATUS_READS
 )
 
 
@@ -245,6 +264,12 @@ _OUTBOUND_CREDENTIAL_TEST = {
     ("POST", "/api/m3u/digest/test"),
     ("POST", "/api/cloud-targets/test"),
     ("POST", "/api/cloud-targets/{target_id}/test"),
+    # 9kwzp.11: the only member of the /api/tls router that is this shape. It
+    # hands DNS-provider credentials to the provider API and reports the
+    # verdict back, and enumerates the operator's zones on the way. It reuses
+    # ``RequireHumanAdminForOutboundTest`` rather than the TLS gate so its 403
+    # reads like the eleven sinks above.
+    ("POST", "/api/tls/test-dns-provider"),
 }
 
 # 9kwzp.8: the static MCP key's own lifecycle. Both halves carried NO
@@ -263,10 +288,40 @@ _SERVICE_CREDENTIAL_LIFECYCLE = {
     ("DELETE", "/api/settings/mcp-api-key"),
 }
 
+# 9kwzp.11: the /api/tls router carried NO route dependency on ANY of its
+# thirteen routes, so all of them were reachable by any authenticated non-admin
+# and by this principal. These nine are the certificate/private-key material and
+# HTTPS-termination lifecycle: ``upload-cert`` accepts caller-supplied key
+# material and serves it, ``DELETE /certificate`` destroys the operator's own
+# with no undo, ``configure`` writes the DNS-provider credentials that bead
+# 2owpi records as plaintext on disk, the ACME trio issues and replaces the live
+# key pair, the https trio is availability of the operator's transport security,
+# and ``GET /settings`` emits the last four characters of three stored
+# credentials plus ``dns_zone_id`` in clear — the class bead 9ej7f withheld from
+# this principal on GET /api/settings.
+#
+# Its own dependency, ``RequireHumanAdminForTLSMaterial``, for the reason
+# 9kwzp.8 needed one: reusing any of the three existing bodies would name a
+# backup restore, an MCP key rotation or a connection test that these routes
+# never perform, and send triage of the refusal to the wrong subsystem.
+_TLS_MATERIAL_LIFECYCLE = {
+    ("GET", "/api/tls/settings"),
+    ("POST", "/api/tls/configure"),
+    ("POST", "/api/tls/request-cert"),
+    ("POST", "/api/tls/complete-challenge"),
+    ("POST", "/api/tls/upload-cert"),
+    ("POST", "/api/tls/renew"),
+    ("POST", "/api/tls/https/start"),
+    ("POST", "/api/tls/https/stop"),
+    ("POST", "/api/tls/https/restart"),
+    ("DELETE", "/api/tls/certificate"),
+}
+
 MCP_DENIED: frozenset = frozenset(
     _WHOLESALE_CONFIG_WRITE
     | _OUTBOUND_CREDENTIAL_TEST
     | _SERVICE_CREDENTIAL_LIFECYCLE
+    | _TLS_MATERIAL_LIFECYCLE
 )
 
 
@@ -330,12 +385,13 @@ def test_classifier_distinguishes_the_two_gates():
 
     If ``_gate_kind`` stopped telling the two gates apart, the set assertions
     below would still pass whenever both sets happened to be classified the
-    same way. Pin the classifier against the four shipped dependencies first.
+    same way. Pin the classifier against the five shipped dependencies first.
     """
     assert _gate_kind(RequireAdminIfEnabled.dependency) == "admitted"
     assert _gate_kind(RequireHumanAdminIfEnabled.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForOutboundTest.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForServiceCredential.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForTLSMaterial.dependency) == "denied"
 
 
 def test_no_route_is_classified_both_ways():

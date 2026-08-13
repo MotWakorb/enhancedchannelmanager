@@ -6,6 +6,32 @@ Provides REST endpoints for:
 - Let's Encrypt certificate issuance (DNS-01 challenge)
 - Manual certificate upload
 - Certificate renewal
+
+AUTHORIZATION (bead 9kwzp.11)
+-----------------------------
+
+This router carried NO route-level dependency on any of its thirteen routes.
+The global ``auth_middleware`` in main.py establishes only that the caller is
+authenticated (no ``/api/tls`` path is or was in ``AUTH_EXEMPT_PATHS``), so
+every route was reachable by any authenticated non-admin AND by the static MCP
+service principal, which ``auth.dependencies._build_mcp_service_principal``
+stamps ``is_admin=True``. Three tiers now apply, per route:
+
+* ``RequireHumanAdminForTLSMaterial`` — the certificate/key material and
+  HTTPS-termination lifecycle, plus the settings read that emits masked DNS
+  credentials. Admin required and the MCP principal refused.
+* ``RequireHumanAdminForOutboundTest`` — ``POST /test-dns-provider`` only. It
+  hands DNS credentials to the provider API and reports the upstream verdict
+  back, which is the credential-oracle class of beads i4qrp / 9kwzp.6 /
+  9kwzp.7, and its 403 body already names that shape.
+* ``RequireAdminIfEnabled`` — the two status reads, which disclose no
+  credential material. Admin required, MCP principal admitted, which is the
+  inventory's default for anything outside the denied classes.
+
+All three no-op when ``require_auth`` is false or setup is incomplete, so a
+first-run or auth-disabled instance is unaffected. Every verdict is pinned in
+``tests/test_admin_gate_inventory.py`` and
+``tests/routers/test_9kwzp11_tls_router_admin_gate.py``.
 """
 import asyncio
 import logging
@@ -15,6 +41,12 @@ from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
+
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForOutboundTest,
+    RequireHumanAdminForTLSMaterial,
+)
 
 from .settings import (
     get_tls_settings,
@@ -121,11 +153,18 @@ class DNSProviderTestRequest(BaseModel):
 
 
 @router.get("/status", response_model=TLSStatusResponse)
-async def get_tls_status():
+async def get_tls_status(_admin=RequireAdminIfEnabled):
     """
     Get current TLS configuration status.
 
     Returns the current TLS settings, certificate status, and expiry information.
+
+    bead 9kwzp.11: the PLAIN admin tier, decided on its own merits. The response
+    carries no credential material — subject, issuer and validity window are
+    served to every TLS client anyway, and domain/port/running-state are
+    configuration disclosure that an authenticated non-admin has no business
+    reading but that the automation credential may. Contrast ``GET /settings``
+    below, which does emit credential fragments and is human-admin.
     """
     settings = get_tls_settings()
     storage = CertificateStorage(TLS_DIR)
@@ -161,11 +200,19 @@ async def get_tls_status():
 
 
 @router.get("/settings", response_model=TLSSettings)
-async def get_tls_settings_endpoint():
+async def get_tls_settings_endpoint(_admin=RequireHumanAdminForTLSMaterial):
     """
     Get TLS settings (for settings form).
 
     Note: Sensitive fields like dns_api_token and AWS credentials are masked in the response.
+
+    bead 9kwzp.11: human-admin rather than the plain admin tier the two status
+    reads take. Masked is not absent — the response discloses the last four
+    characters of ``dns_api_token``, ``aws_access_key_id`` and
+    ``aws_secret_access_key``, and ``dns_zone_id`` and ``acme_email`` in clear.
+    Withholding stored credential values from the automation credential is the
+    posture bead 9ej7f established on GET /api/settings, and this is the same
+    class of read.
     """
     settings = get_tls_settings()
 
@@ -187,12 +234,21 @@ async def get_tls_settings_endpoint():
 
 
 @router.post("/configure")
-async def configure_tls(request: TLSConfigureRequest):
+async def configure_tls(
+    request: TLSConfigureRequest,
+    _admin=RequireHumanAdminForTLSMaterial,
+):
     """
     Configure TLS settings.
 
     This updates the TLS configuration but does not request a certificate.
     Use /api/tls/request-cert to request a Let's Encrypt certificate.
+
+    bead 9kwzp.11: this WRITES the DNS-provider credentials that bead 2owpi
+    records as living in plaintext in /config/tls_settings.json, and its
+    ``enabled`` flag starts or stops HTTPS termination as a side effect below.
+    Both halves are the human-admin shape, for the same reason kgz3k denies
+    this principal the settings blob.
     """
     settings = get_tls_settings()
 
@@ -249,7 +305,7 @@ async def configure_tls(request: TLSConfigureRequest):
 
 
 @router.post("/request-cert", response_model=CertificateRequestResponse)
-async def request_certificate():
+async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
     """
     Request a new certificate from Let's Encrypt using DNS-01 challenge.
 
@@ -257,6 +313,11 @@ async def request_certificate():
     If a DNS provider (Cloudflare/Route53) is configured, the TXT record
     is created automatically. Otherwise, you must create the TXT record
     manually and call /api/tls/complete-challenge.
+
+    bead 9kwzp.11: ACME issuance drives the stored DNS-provider credentials
+    against the provider API, mints a private key, and writes both the key and
+    the certificate to /config/tls/. Certificate-material lifecycle, hence the
+    human-admin tier.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
@@ -435,11 +496,14 @@ async def request_certificate():
 
 
 @router.post("/complete-challenge", response_model=CertificateRequestResponse)
-async def complete_dns_challenge():
+async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
     """
     Complete a pending DNS-01 challenge.
 
     Call this after you have created the required TXT record.
+
+    bead 9kwzp.11: the second half of the issuance above, and it is the half
+    that actually saves the certificate and key. Same tier for the same reason.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
@@ -524,12 +588,19 @@ async def upload_certificate(
     cert_file: UploadFile = File(...),
     key_file: UploadFile = File(...),
     chain_file: UploadFile = File(None),
+    _admin=RequireHumanAdminForTLSMaterial,
 ):
     """
     Upload a certificate and private key manually.
 
     Upload PEM-encoded certificate and key files.
     Optionally upload a chain file for intermediate certificates.
+
+    bead 9kwzp.11: this accepts CALLER-SUPPLIED certificate and private-key
+    material, persists it, flips the instance to ``mode="manual"`` and starts
+    the HTTPS server serving it. It is the sharpest route in the router — an
+    attacker-supplied key pair becomes the operator's transport identity — and
+    it previously carried no dependency at all.
     """
     try:
         cert_content = await cert_file.read()
@@ -593,12 +664,15 @@ async def upload_certificate(
 
 
 @router.post("/renew")
-async def trigger_renewal():
+async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
     """
     Manually trigger certificate renewal.
 
     This will request a new certificate from Let's Encrypt
     using the configured settings.
+
+    bead 9kwzp.11: renewal replaces the live key pair and restarts HTTPS with
+    it, driving the stored DNS credentials to do so. Same class as issuance.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
@@ -642,11 +716,17 @@ async def trigger_renewal():
 
 
 @router.post("/https/start")
-async def start_https_server():
+async def start_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Start the HTTPS server.
 
     Starts the HTTPS server if TLS is enabled and a certificate exists.
+
+    bead 9kwzp.11: the HTTPS lifecycle trio is availability of the operator's
+    own transport security. The stop half is the direct denial of service and
+    the start/restart halves are its recovery, so all three take one tier; a
+    caller able to restart but not stop, or the reverse, would be an arbitrary
+    split. No frontend or MCP caller drives any of the three today.
     """
     settings = get_tls_settings()
 
@@ -669,11 +749,14 @@ async def start_https_server():
 
 
 @router.post("/https/stop")
-async def stop_https_server():
+async def stop_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Stop the HTTPS server.
 
     Stops the HTTPS server. The HTTP server on port 6100 continues running.
+
+    bead 9kwzp.11: the denial-of-service half of the trio above. Falling back
+    to plaintext HTTP on 6100 is precisely the downgrade an attacker wants.
     """
     if not https_server_manager.is_running:
         return {"success": True, "message": "HTTPS server not running"}
@@ -683,11 +766,14 @@ async def stop_https_server():
 
 
 @router.post("/https/restart")
-async def restart_https_server():
+async def restart_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Restart the HTTPS server.
 
     Useful after certificate renewal or configuration changes.
+
+    bead 9kwzp.11: same tier as start/stop — a restart is a stop with a
+    reload, so gating it any weaker would reopen the availability hole.
     """
     settings = get_tls_settings()
 
@@ -707,11 +793,15 @@ async def restart_https_server():
 
 
 @router.get("/https/status")
-async def get_https_server_status():
+async def get_https_server_status(_admin=RequireAdminIfEnabled):
     """
     Get HTTPS server status.
 
     Returns whether the HTTPS server is running and on which port.
+
+    bead 9kwzp.11: the PLAIN admin tier, like ``GET /status``. A running flag
+    and a port number are not credential material, and the port is already
+    observable to anyone who can reach the host.
     """
     return https_server_manager.get_status()
 
@@ -722,11 +812,17 @@ async def get_https_server_status():
 
 
 @router.delete("/certificate")
-async def delete_certificate():
+async def delete_certificate(_admin=RequireHumanAdminForTLSMaterial):
     """
     Delete the stored certificate and disable TLS.
 
     This removes the certificate and key files and disables TLS.
+
+    bead 9kwzp.11: destroys the operator's certificate and key, stops HTTPS,
+    and clears ``enabled``. Unlike the pipeline's rollback/restore-snapshot
+    pair (which the inventory admits this principal to, because they undo a
+    pipeline run against ECM's own rows), there is no undo here: recovering
+    means a fresh ACME issuance or a re-upload.
     """
     storage = CertificateStorage(TLS_DIR)
 
@@ -760,13 +856,22 @@ async def delete_certificate():
 
 
 @router.post("/test-dns-provider")
-async def test_dns_provider(request: DNSProviderTestRequest):
+async def test_dns_provider(
+    request: DNSProviderTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
     """
     Test DNS provider credentials.
 
     Verifies that the API token is valid and can access the zone.
     For Cloudflare, provide api_token.
     For Route53, provide aws_access_key_id and aws_secret_access_key (or use IAM role).
+
+    bead 9kwzp.11: the one route here that is the i4qrp shape verbatim — it
+    hands credentials to an upstream and reports the verdict back, which is a
+    credential-validity oracle, and it enumerates the operator's DNS zones on
+    the way. It reuses ``RequireHumanAdminForOutboundTest`` rather than the TLS
+    gate precisely so its 403 reads like the other eleven sinks.
     """
     if not _acme_available or get_dns_provider is None:
         raise HTTPException(503, "DNS provider functionality not available (josepy not installed)")

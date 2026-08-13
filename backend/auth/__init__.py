@@ -89,6 +89,7 @@ try:
         RequireHumanAdminIfEnabled,
         RequireHumanAdminForOutboundTest,
         RequireHumanAdminForServiceCredential,
+        RequireHumanAdminForTLSMaterial,
         resolve_is_admin_if_enabled,
         ResolveIsAdminIfEnabled,
     )
@@ -107,6 +108,7 @@ try:
         "RequireHumanAdminIfEnabled",
         "RequireHumanAdminForOutboundTest",
         "RequireHumanAdminForServiceCredential",
+        "RequireHumanAdminForTLSMaterial",
         "resolve_is_admin_if_enabled",
         "ResolveIsAdminIfEnabled",
     ])
