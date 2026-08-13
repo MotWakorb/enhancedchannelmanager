@@ -44,6 +44,12 @@ MCP_KEY = "mcp-secret-key-9kwzp8"
 
 MCP_API_KEY_PATH = "/api/settings/mcp-api-key"
 
+# The key the ROUTER reads as already stored. An angle-bracket placeholder
+# rather than a credential-shaped literal: nothing here depends on its shape,
+# only on it being distinct from whatever the handler mints, so it follows the
+# placeholder half of the convention in ``tests/unit/test_check_pii.py``.
+STORED_KEY_PLACEHOLDER = "<stored-mcp-key-9kwzp8>"
+
 # The two halves of the credential lifecycle, exercised identically.
 LIFECYCLE_METHODS = ["POST", "DELETE"]
 
@@ -66,7 +72,7 @@ def _stored_settings():
         url="http://dispatcharr:8000",
         username="u",
         password="p",
-        mcp_api_key="pre-existing-key-9kwzp8",
+        mcp_api_key=STORED_KEY_PLACEHOLDER,
     )
 
 
@@ -173,7 +179,7 @@ async def test_admin_reaches_mcp_api_key_generate_handler(async_client):
 
     assert response.status_code == 200, response.json()
     minted = response.json()["mcp_api_key"]
-    assert minted and minted != "pre-existing-key-9kwzp8"
+    assert minted and minted != STORED_KEY_PLACEHOLDER
     save_settings.assert_called_once()
 
 
