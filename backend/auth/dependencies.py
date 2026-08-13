@@ -600,6 +600,42 @@ RequireHumanAdminForStatisticsReset = Depends(
 )
 
 
+def resolve_is_mcp_service_principal_if_enabled():
+    """Factory: resolve whether the caller IS the MCP principal, WITHOUT rejecting.
+
+    bead 9kwzp.10 item 2 (PR #855 review). Sibling of
+    :func:`resolve_is_admin_if_enabled`: it answers a question and lets the
+    handler decide, for the one case where the verdict depends on something a
+    route dependency cannot see. ``POST /api/backup/restore-dbas-saved``
+    refuses this principal the APPLY and admits it the counts-only preview,
+    and ``confirm_apply`` lives in the request body, so a dependency would have
+    to consume the body to read it.
+
+    It lives HERE rather than in the router deliberately. The router's
+    conditional refusal must no-op in setup mode under EXACTLY the same
+    condition as the gate stacked above it; a private copy of that check in a
+    router is one refactor away from drifting from the gate it qualifies.
+    Returns False whenever ``require_auth`` is false or setup is incomplete,
+    which is the same early return every gate in this module makes.
+    """
+    async def check_mcp(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> bool:
+        settings = get_auth_settings()
+        if not settings.require_auth or not settings.setup_complete:
+            return False
+        user = await get_current_user(request, session)
+        return is_mcp_service_principal(user)
+
+    return check_mcp
+
+
+ResolveIsMcpServicePrincipalIfEnabled = Depends(
+    resolve_is_mcp_service_principal_if_enabled()
+)
+
+
 def resolve_is_admin_if_enabled():
     """Factory: resolve whether the caller is privileged, WITHOUT rejecting.
 

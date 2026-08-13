@@ -20,17 +20,29 @@ THE FIVE VERDICTS
 
 2. ``POST /api/backup/restore-dbas`` and ``/restore-dbas-saved`` (item 2)
    carried the plain tier while the three legacy ``/restore*`` endpoints
-   carried the human-admin one. Reading beads kgz3k and 6n76m shows the plain
-   tier was CORRECT when it was written: 6n76m's changelog entry names the
-   DBAS restore as deliberately unchanged because it applied denylist-filtered
-   settings to the DISPATCHARR upstream and never touched ECM's own
-   ``settings.json``. Bead …-dfkbn item 4 then added
-   ``dbas/importers/ecm_settings.py`` and the DBAS restore began writing ECM's
-   own blob — excluding only the live Dispatcharr connection, install-local
-   bookkeeping and redaction sentinels, so NOT the media-server base URLs, the
-   notification credentials, the GH #473 safety caps or ``ssrf_outbound_mode``.
-   The gate went stale when the capability grew. -> ``RequireHumanAdminIfEnabled``,
-   reused: its 403 body already says "restore rewrites admin-only settings".
+   carried the human-admin one. The history says the plain tier was CORRECT
+   when it was written, in three commits: ``21f93e683`` (2026-06-19) shipped
+   ``/restore-dbas`` on the plain tier, when a DBAS restore only reached the
+   DISPATCHARR upstream; ``e83d31b1`` (2026-07-08, bead 6n76m) human-gated the
+   legacy trio, which already DID write ECM's settings blob, and deliberately
+   left DBAS alone for exactly that distinction; ``fd63235d`` (2026-08-04,
+   bead …-dfkbn item 4) added ``dbas/importers/ecm_settings.py``, a generic
+   ``setattr`` loop plus ``save_settings``, which is what made the distinction
+   stale. That importer excludes only the live Dispatcharr connection,
+   install-local bookkeeping and redaction sentinels, so NOT the media-server
+   base URLs, the notification credentials, the GH #473 safety caps or
+   ``ssrf_outbound_mode``.
+
+   THE TWO ROUTES ARE GATED DIFFERENTLY, on the PR #855 review's point that
+   the staleness argument reaches the APPLY and not a preview that writes
+   nothing. ``/restore-dbas`` takes a caller-supplied UPLOAD, streamed to the
+   config partition and decoded before anything reads ``confirm_apply``, and
+   the sidecar has no tool for it, so it is blanket
+   ``RequireHumanAdminIfEnabled``. ``/restore-dbas-saved`` names an artifact
+   only an admin could have saved there, and the sidecar's
+   ``restore_dbas_backup_saved`` tool documents ``confirm_apply=False`` as its
+   primary safe mode, so it keeps ``RequireAdminIfEnabled`` at the route and
+   refuses the APPLY in the handler. See ``TestDbasSavedApplyCarveOut``.
 
 3. Sync-target CRUD (item 3) was filed as a DECISION, not a defect: all five
    routes were already admin-gated. Verdict — deny the WRITES, admit the
@@ -190,8 +202,11 @@ CASES = (
         request={"files": {"file": ("artifact.zip", b"<synthetic-artifact>",
                                     "application/zip")}},
     ),
+    # ADMITTED for the PREVIEW only. ``confirm_apply`` is False here, and the
+    # APPLY half is refused in the handler; see
+    # ``TestDbasSavedApplyCarveOut`` below, which is where that is proved.
     _Case(
-        "POST", "/api/backup/restore-dbas-saved", DENIED,
+        "POST", "/api/backup/restore-dbas-saved", ADMITTED,
         witness="task_engine.get_engine",
         extra=(("routers.backup.BACKUPS_DIR", _saved_backups_dir),),
         request={"json": {"filename": SAVED_ARTIFACT, "confirm_apply": False}},
@@ -511,7 +526,6 @@ async def test_mcp_principal_still_reaches_the_admitted_routes(async_client, cas
 _EXPECTED_DENIAL_PHRASE = {
     "/api/settings/security": "outbound-policy mode",
     "/api/backup/restore-dbas": "backup restore",
-    "/api/backup/restore-dbas-saved": "backup restore",
     "/api/sync-targets": "outbound destination",
     f"/api/sync-targets/{ABSENT_ID}": "outbound destination",
     "/api/cloud-targets": "outbound destination",
@@ -591,6 +605,147 @@ async def test_admin_reaches_every_handler(async_client, case):
 
         assert response.status_code != 403, response.text
         gate.witness.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# The DBAS apply carve-out (PR #855 review)
+# ---------------------------------------------------------------------------
+_DBAS_SAVED_PATH = "/api/backup/restore-dbas-saved"
+_DBAS_UPLOAD_PATH = "/api/backup/restore-dbas"
+
+_PREVIEW_CASE = next(c for c in CASES if c.path == _DBAS_SAVED_PATH)
+_APPLY_CASE = _PREVIEW_CASE._replace(
+    request={"json": {"filename": SAVED_ARTIFACT, "confirm_apply": True}},
+)
+
+
+class TestDbasSavedApplyCarveOut:
+    """``/restore-dbas-saved`` is split by ``confirm_apply``, not blanket-denied.
+
+    The justification for re-tiering the DBAS routes is that bead …-dfkbn item
+    4 taught them to write ECM's settings blob wholesale. That reaches the
+    APPLY. It does not reach a run that writes nothing:
+    ``dbas.restore_orchestrator`` forces ``report.is_dry_run = True`` whenever
+    ``confirm_apply`` is false, and its own comment calls that the single choke
+    point a caller can never opt out of, so the zero-mutation property is
+    structural rather than a flag we are trusting.
+
+    The first review of this bead denied both halves, which would have removed
+    the documented safe mode of the sidecar's ``restore_dbas_backup_saved``
+    tool as an unremarked side effect. These four cases pin the split so that
+    collapsing it in either direction fails.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_is_refused_on_apply(self, async_client):
+        with _Gate(async_client, _APPLY_CASE) as gate, \
+                patch("auth.dependencies.get_settings",
+                      return_value=_mcp_runtime_settings()), \
+                patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request(
+                headers={"Authorization": f"Bearer {MCP_KEY}"}
+            )
+
+            assert response.status_code == 403, response.text
+            detail = response.json()["detail"]
+            assert "cannot APPLY a DBAS restore" in detail
+            # The refusal must name the recovery, or an operator reads it as a
+            # total loss of the tool rather than as a loss of one mode.
+            assert "confirm_apply=false" in detail
+            # Refused BEFORE the artifact is resolved, so a denied caller
+            # learns nothing about what is on disk.
+            gate.witness.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mcp_principal_reaches_the_preview(self, async_client):
+        with _Gate(async_client, _PREVIEW_CASE) as gate, \
+                patch("auth.dependencies.get_settings",
+                      return_value=_mcp_runtime_settings()), \
+                patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request(
+                headers={"Authorization": f"Bearer {MCP_KEY}"}
+            )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["is_dry_run"] is True
+            gate.witness.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_reaches_the_apply(self, async_client):
+        """The carve-out refuses one principal, not the operation."""
+        with _Gate(async_client, _APPLY_CASE) as gate, \
+                patch("auth.dependencies.get_auth_settings") as auth_mock, \
+                patch("auth.dependencies.get_current_user",
+                      new=AsyncMock(return_value=_admin_user())):
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request()
+
+            assert response.status_code == 200, response.text
+            assert response.json()["is_dry_run"] is False
+            gate.witness.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_setup_mode_reaches_the_apply(self, async_client):
+        """``_caller_is_mcp_service_principal`` returns False before setup
+        completes, so the carve-out cannot become a first-run refusal."""
+        with _Gate(async_client, _APPLY_CASE) as gate, \
+                patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = False
+            response = await gate.request()
+
+            assert response.status_code == 200, response.text
+            gate.witness.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_sibling_is_blanket_denied_including_the_preview(
+        self, async_client
+    ):
+        """The asymmetry is deliberate and must stay asserted.
+
+        ``/restore-dbas`` streams a CALLER-SUPPLIED artifact to the config
+        partition and decodes it before anything examines ``confirm_apply``, so
+        even a preview hands this principal a parser and a disk-consumption
+        surface with an artifact of its own choosing. The sidecar exposes no
+        upload tool, so the blanket denial removes no capability.
+        """
+        upload_case = next(c for c in CASES if c.path == _DBAS_UPLOAD_PATH)
+        with _Gate(async_client, upload_case) as gate, \
+                patch("auth.dependencies.get_settings",
+                      return_value=_mcp_runtime_settings()), \
+                patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request(
+                headers={"Authorization": f"Bearer {MCP_KEY}"}
+            )
+
+            # confirm_apply defaults to False on this route, so this IS the
+            # preview, and it is refused.
+            assert response.status_code == 403, response.text
+            assert "backup restore" in response.json()["detail"]
+            gate.witness.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_refused_on_the_apply_too(self, async_client):
+        """The carve-out is about the MCP principal only; a non-admin is still
+        refused by the route dependency, before ``confirm_apply`` is read."""
+        with _Gate(async_client, _APPLY_CASE) as gate, \
+                patch("auth.dependencies.get_auth_settings") as auth_mock, \
+                patch("auth.dependencies.get_current_user",
+                      new=AsyncMock(return_value=_non_admin_user())):
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request()
+
+            assert response.status_code == 403, response.text
+            assert response.json()["detail"] == "Admin access required"
+            gate.witness.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

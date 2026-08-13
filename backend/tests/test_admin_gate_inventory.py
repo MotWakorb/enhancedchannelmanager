@@ -67,19 +67,61 @@ so the next reader does not re-derive it.
 WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE
 -----------------------------------------------------------
 
-Two verdicts below were reached against a plausible case for denying, and are
+Three verdicts below were reached against a plausible case for denying, and are
 recorded here rather than left implicit:
 
 * ``_DESTINATION_READS`` — the list/get halves of the cloud-target and
-  sync-target routers stay admitted while their write halves are denied. Their
-  responses mask every credential to its last four characters, so they bound
-  disclosure the way the write half does not bound redirection; and admitting
-  them is what keeps the sidecar's inventory tools usable. This diverges from
-  ``GET /api/tls/settings``, which IS denied despite masking, because that
-  route additionally emits ``dns_zone_id`` and ``acme_email`` in clear and
-  belongs to a router the sidecar has no tool for at all.
+  sync-target routers stay admitted while their write halves are denied. Do
+  NOT read this as "masked, therefore harmless". These responses still
+  disclose the destination ``base_url`` / ``upload_path``, the ``insecure``
+  TLS-verification flag, the NAMES of the credential keys, each credential's
+  last four characters, ``credential_version`` and revocation state, and the
+  outcome of past syncs. That is network topology plus credential fingerprints,
+  handed to the exact principal the write verdict declares untrusted to manage
+  those destinations, and it would materially help someone deciding which
+  destination to attack by another route.
+
+  The verdict is a JUDGEMENT that this residual is worth the sidecar keeping a
+  usable inventory, not a claim that the residual is nil. What the masking
+  does buy is narrow and specific: no stored secret VALUE can be reconstructed
+  from a read, so a read alone cannot authenticate to the destination. Revisit
+  this the moment the read surface grows a field that is not already implied by
+  the destination's existence.
+
+  It diverges from ``GET /api/tls/settings``, which IS denied despite masking,
+  on two counts: that route additionally emits ``dns_zone_id`` and
+  ``acme_email`` in clear, and the sidecar has no TLS tool at all, so denying
+  it costs nothing.
 * ``_ALERT_METHOD_TYPES`` — a static catalogue of the method types this build
   supports. No install data, no stored value.
+* ``_DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER`` — see its own comment.
+
+WHERE THIS INVENTORY IS DELIBERATELY COARSER THAN ITS OWN PROSE
+---------------------------------------------------------------
+
+The rule above describes the DANGEROUS member of each denied group, and the
+gates are coarser than that description. Stated plainly rather than left for a
+reader to discover:
+
+* A rename-only update to a sync target or a cloud target is denied exactly
+  like a ``base_url``, credential or ``insecure`` change, even though it
+  repoints nothing.
+* A display-name or severity-filter change on an alert method is denied
+  exactly like a credential replacement.
+* TIGHTENING ``ssrf_outbound_mode`` from ``lan_friendly`` to ``public_only`` is
+  denied exactly like widening it, even though it can only shrink what the
+  outbound sinks may reach.
+
+That is a deliberate trade, not an oversight. A gate that branches on which
+FIELDS a request changes is the ``routers.settings._resolve_settings_admin``
+shape, and that machinery exists because ``POST /api/settings`` mixes admin
+configuration with per-user display preferences in one blob and could not be
+split. None of these routes has that problem: nothing on them is a per-user
+preference, so the entire route is admin work and a coarse gate costs an
+automation credential nothing it had a legitimate claim to. Coarse also fails
+in the safe direction and is far easier to verify — the one place this bead
+did branch, the DBAS ``confirm_apply`` split, needed six dedicated cases to
+pin. Add field-level branching here only when a concrete caller needs it.
 
 KNOWN GAP, DELIBERATELY NOT CHANGED HERE
 ----------------------------------------
@@ -220,14 +262,17 @@ _BACKUP_ARCHIVE = {
     ("POST", "/api/backup/validate"),
 }
 
-# bead 9kwzp.10 items 3 and 4, decided against a plausible case for denying.
-# The READ halves of the two outbound-destination routers stay admitted: every
-# credential in these responses is masked to its last four characters
-# (``_mask_credentials`` in both routers), so no stored secret is recoverable
-# through them, and admitting them is what keeps the sidecar's
-# ``list_cloud_targets`` / ``list_sync_targets`` inventory tools working. The
-# WRITE halves are in ``_OUTBOUND_DESTINATION_WRITE`` below, because masking
-# bounds disclosure and says nothing about redirection.
+# bead 9kwzp.10 items 3 and 4, decided against a plausible case for denying,
+# and NOT on the grounds that these reads are harmless. See the module
+# docstring, "WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE":
+# they still disclose the destination URL, the ``insecure`` flag, credential
+# key names and last-4, credential version and revocation state, and past sync
+# outcomes. What ``_mask_credentials`` buys is only that no stored secret VALUE
+# is recoverable, so a read alone cannot authenticate to the destination. The
+# verdict trades that residual for the sidecar keeping a usable inventory
+# (``list_cloud_targets`` / ``list_sync_targets``). The WRITE halves are in
+# ``_OUTBOUND_DESTINATION_WRITE`` below, because masking bounds disclosure and
+# says nothing about redirection.
 _DESTINATION_READS = {
     ("GET", "/api/cloud-targets"),
     ("GET", "/api/sync-targets"),
@@ -239,6 +284,42 @@ _DESTINATION_READS = {
 # supports and their field descriptors. No install data, no stored value.
 _ALERT_METHOD_TYPES = {
     ("GET", "/api/alert-methods/types"),
+}
+
+# READ THIS ONE CAREFULLY: the route dependency admits the principal, and the
+# HANDLER refuses half of what it does. The inventory classifies by route
+# dependency, so this entry would otherwise read as a plain admitted route and
+# understate the contract.
+#
+# bead 9kwzp.10 item 2, as revised by the PR #855 review.
+# ``POST /api/backup/restore-dbas-saved`` is split by ``confirm_apply``:
+#
+#   confirm_apply=false  -> counts-only PREVIEW, admitted.
+#   confirm_apply=true   -> APPLY, refused in the handler with
+#                           ``routers.backup._DBAS_APPLY_MCP_DENIAL``.
+#
+# The reason the blanket denial was wrong here: the justification for
+# re-tiering the DBAS routes is that bead …-dfkbn item 4 taught them to write
+# ECM's settings blob wholesale, and that reaches the apply, not a run that
+# writes nothing. ``dbas.restore_orchestrator`` forces
+# ``report.is_dry_run = True`` whenever ``confirm_apply`` is false and calls
+# that the single choke point a caller can never opt out of, so the
+# zero-mutation property is structural. This route also names an artifact
+# ALREADY on disk, which only an admin could have saved there, and the
+# sidecar's ``restore_dbas_backup_saved`` tool documents the preview as its
+# primary safe mode. Denying it would have been an unrelated capability
+# removal.
+#
+# Its upload sibling ``POST /restore-dbas`` is NOT split and stays wholly in
+# ``_WHOLESALE_CONFIG_WRITE``: it takes a caller-supplied artifact that is
+# streamed to disk and decoded before anything reads ``confirm_apply``, and no
+# MCP tool exists for it.
+#
+# The apply refusal is proved in
+# ``tests/routers/test_9kwzp10_12_gate_verdicts.py``, NOT here: this module
+# only walks dependencies.
+_DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER = {
+    ("POST", "/api/backup/restore-dbas-saved"),
 }
 
 # bead 9kwzp.11, decided on their own merits: the two TLS status reads take the
@@ -262,6 +343,7 @@ MCP_ADMITTED: frozenset = frozenset(
     | _BACKUP_ARCHIVE
     | _DESTINATION_READS
     | _ALERT_METHOD_TYPES
+    | _DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER
     | _TLS_STATUS_READS
 )
 
@@ -291,7 +373,6 @@ _WHOLESALE_CONFIG_WRITE = {
     ("POST", "/api/backup/restore-saved"),
     ("POST", "/api/backup/restore-yaml"),
     ("POST", "/api/backup/restore-dbas"),
-    ("POST", "/api/backup/restore-dbas-saved"),
 }
 
 # bead 9kwzp.10 item 1: the outbound POLICY write. ``ssrf_outbound_mode``
@@ -304,6 +385,11 @@ _WHOLESALE_CONFIG_WRITE = {
 # drive the probe but it could move the fence the probe was measured against.
 # The always-on denylist (link-local / IMDS / ULA / CGNAT / multicast) is not
 # operator-togglable and is unaffected either way.
+#
+# COARSE ON PURPOSE: TIGHTENING the mode from lan_friendly to public_only is
+# denied exactly like widening it, even though it can only shrink what the
+# sinks may reach. One closed enum with one writer is not worth a
+# direction-aware gate.
 _OUTBOUND_POLICY_WRITE = {
     ("PATCH", "/api/settings/security"),
 }
@@ -326,6 +412,12 @@ _OUTBOUND_POLICY_WRITE = {
 # routers are documented around bounds DISCLOSURE of a stored credential — not
 # redirection, not replacement, not the TLS downgrade. The list/get halves stay
 # admitted; see ``_DESTINATION_READS``.
+#
+# COARSE ON PURPOSE: a rename-only update is denied exactly like a base_url,
+# credential or ``insecure`` change. Nothing on these routes is a per-user
+# preference, so the whole route is admin work and the coarse gate costs the
+# automation credential nothing it had a legitimate claim to. See the module
+# docstring, "WHERE THIS INVENTORY IS DELIBERATELY COARSER THAN ITS OWN PROSE".
 _OUTBOUND_DESTINATION_WRITE = {
     ("POST", "/api/cloud-targets"),
     ("PATCH", "/api/cloud-targets/{target_id}"),
@@ -352,6 +444,9 @@ _OUTBOUND_DESTINATION_WRITE = {
 # ``test_alert_method`` already did (9kwzp.6). The response bodies are
 # UNCHANGED — the absence of a masking layer on ``config`` is a separate
 # concern and is not addressed by this authorization fix.
+#
+# COARSE ON PURPOSE: a display-name or severity-filter change is denied
+# exactly like a credential replacement.
 _NOTIFICATION_CREDENTIAL = {
     ("GET", "/api/alert-methods"),
     ("POST", "/api/alert-methods"),

@@ -403,6 +403,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   }, [initialSettingsPage]);
   const notifications = useNotifications();
   const { user } = useAuth();
+  // bead enhancedchannelmanager-9kwzp.10: "may act as admin", the same
+  // predicate BackupRestoreSection is given. `user` is null on an
+  // auth-disabled or setup-incomplete instance, where every gate this bead
+  // added no-ops, so null must read as PERMITTED rather than as denied.
+  // (`user?.is_admin ?? false` would wrongly lock a single-operator install
+  // out of its own settings.) ProtectedRoute renders a spinner until the auth
+  // check settles, so this tab never mounts with an unresolved user.
+  const isAdminUser = !user || user.is_admin;
   const restartToastIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -430,6 +438,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       window.removeEventListener('beforeunload', beforeUnload);
       window.removeEventListener('ecm:before-route-change', protectRouteNavigation);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listener lifecycle is owned by `hasPendingChanges`; `loadSettings` is called from inside the confirm branch of the handler, so its identity must not re-arm and re-remove these two window listeners on every render
   }, [hasPendingChanges]);
 
   useEffect(() => {
@@ -877,6 +886,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     loadProbeHistory();
     checkForOngoingProbe();
     loadM3UAccountsMaxStreams();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial page load, deliberately once per mount; `loadSettings` is rebuilt every render and ProtectedRoute renders a spinner until auth settles, so the `isAdminUser` it closes over is already final when this tab first mounts
   }, []);
 
   // Load M3U digest settings when that page is activated. The !digestError
@@ -1168,6 +1178,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setNeedsRestart(false);
 
       // Load SMTP alert recipients from Alert Methods (used by task email alerts).
+      //
+      // bead enhancedchannelmanager-9kwzp.10 item 4: GET /api/alert-methods is
+      // human-admin now, because its response carries every method's `config`
+      // in clear (webhook URL, bot token, SMTP password). A non-admin must not
+      // fire the request at all: it is a guaranteed 403 on every Settings load,
+      // and the catch below would leave the persisted-recipients baseline
+      // holding whatever a previous admin session left in it. Clear the state
+      // explicitly instead, so the control renders as empty and read-only.
+      if (!isAdminUser) {
+        setSmtpAlertMethodId(null);
+        setSmtpAlertRecipients('');
+        setSmtpAlertRecipientsPersisted({ methodId: null, recipients: '' });
+        setSmtpAlertRecipientsLoading(false);
+        setSettingsBaselineVersion((version) => version + 1);
+        return;
+      }
       setSmtpAlertRecipientsLoading(true);
       try {
         const extractToEmails = (config: Record<string, unknown>): string | null => {
@@ -1218,6 +1244,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   });
 
   const handleSaveSmtpRecipients = async () => {
+    // bead enhancedchannelmanager-9kwzp.10 item 4: POST/PATCH /api/alert-methods
+    // are human-admin. The control below is already disabled for a non-admin;
+    // this is the belt to that brace, so no code path can present a save that
+    // is guaranteed to 403.
+    if (!isAdminUser) return;
     setSmtpAlertRecipientsSaving(true);
     try {
       setSmtpAlertRecipientsError(null);
@@ -2272,7 +2303,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <button
             className="btn-reset-stats"
             onClick={handleResetStats}
-            disabled={resettingStats || !user?.is_admin}
+            disabled={resettingStats || !isAdminUser}
             title="Clear all statistics when switching Dispatcharr servers"
           >
             <span className="material-icons">{resettingStats ? 'sync' : 'refresh'}</span>
@@ -2280,7 +2311,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </button>
           <span className="form-description">
             Clear all channel/stream statistics when switching servers.
-            {!user?.is_admin && ' Only an administrator can reset statistics.'}
+            {!isAdminUser && ' Only an administrator can reset statistics.'}
           </span>
         </div>
       </div>
@@ -3755,14 +3786,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 }
               }}
               placeholder={smtpAlertRecipientsLoading ? 'Loading recipients…' : 'you@example.com, another@example.com'}
-              disabled={smtpAlertRecipientsLoading}
+              disabled={smtpAlertRecipientsLoading || !isAdminUser}
               aria-invalid={smtpAlertRecipientsError ? 'true' : 'false'}
               className={`${smtpAlertRecipientsError ? 'is-error' : ''} ${smtpAlertRecipientsFlashState === 'success' ? 'is-success' : ''}`.trim()}
             />
             <button
               className="btn-test"
               onClick={handleSaveSmtpRecipients}
-              disabled={smtpAlertRecipientsSaving || smtpAlertRecipientsLoading}
+              disabled={smtpAlertRecipientsSaving || smtpAlertRecipientsLoading || !isAdminUser}
             >
               {smtpAlertRecipientsSaving ? (
                 <>
@@ -3785,6 +3816,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <p className="field-hint">
             Comma-separated list (`,`). Requires SMTP settings above to be configured.
             {smtpAlertRecipientsLoading ? ' Loading recipients…' : ''}
+            {!isAdminUser && ' Only an administrator can view or change alert recipients.'}
           </p>
         </div>
       </div>
@@ -3901,7 +3933,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       </div>
 
-      <AlertMethodsSection isAdmin={user?.is_admin ?? false} />
+      <AlertMethodsSection isAdmin={isAdminUser} />
 
       <div className="settings-actions">
         <button

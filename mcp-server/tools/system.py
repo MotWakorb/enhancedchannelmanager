@@ -347,6 +347,22 @@ def register(mcp: FastMCP):
         This is destructive and cannot be undone except by restoring another
         backup. Confirm with the operator before applying.
 
+        THE APPLY IS REFUSED FOR THE MCP CREDENTIAL whenever ECM
+        authentication is enabled (bead enhancedchannelmanager-9kwzp.10 item
+        2); the PREVIEW is not. ``confirm_apply=True`` returns HTTP 403 with
+        the body "The MCP service principal cannot APPLY a DBAS restore",
+        because bead …-dfkbn item 4 taught the restore to write ECM's own
+        settings blob wholesale — the outbound base URLs, the notification
+        credentials and the outbound-policy mode included — which is the
+        field-level gate on POST /api/settings bypassed in one call. That
+        reasoning does not reach a run that writes nothing, so this tool
+        remains fully usable in its default preview mode. HUMAN PATH for the
+        apply: an ECM admin runs it from the UI, Settings > Backup & Restore.
+
+        The upload-based sibling endpoint refuses this credential in BOTH
+        modes, because it decodes a caller-supplied artifact before it ever
+        reads ``confirm_apply``. There is no MCP tool for it.
+
         ENCRYPTED ARTIFACTS: a passphrase-encrypted backup (created via
         create_dbas_backup with a passphrase) requires that SAME passphrase here
         to decrypt. Omit ``passphrase`` for a plain/redacted artifact.
