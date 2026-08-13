@@ -115,16 +115,21 @@ def register(mcp: FastMCP):
         reversed it, because the tool is the operator's inventory of their
         own alert methods.
 
-        HANDLE THE RESPONSE AS SECRET. The endpoint returns each method's
-        ``config`` VERBATIM, with no masking — that is where the Discord
-        webhook URL, the Telegram bot token and the SMTP password live, and
-        they are the exact values bead 9ej7f withholds from this same
-        principal on ``GET /api/settings``. This tool prints only the name,
-        id, type, enabled flag and severity filters, and deliberately does
-        NOT print ``config``; do not add it, and do not echo a raw response
-        from this endpoint into a transcript. Bead
-        enhancedchannelmanager-9kwzp.13 removes the exposure at the source by
-        masking ``config`` in the response.
+        THE RESPONSE IS MASKED AT THE SOURCE (bead
+        enhancedchannelmanager-9kwzp.13). The endpoint used to return each
+        method's ``config`` VERBATIM, which handed this principal the Discord
+        webhook URL, the Telegram bot token and the SMTP password, the exact
+        values bead 9ej7f withholds from it on ``GET /api/settings``. The
+        handler now serializes through
+        ``models.AlertMethod.to_dict(include_sensitive=False)``, so those keys
+        come back as ``********`` and no credential VALUE reaches this tool.
+
+        The response is still operator configuration rather than public data:
+        it carries the non-credential config keys, which for Telegram includes
+        the destination ``chat_id`` and for SMTP the recipient list. This tool
+        prints only the name, id, type, enabled flag and severity filters, and
+        deliberately does NOT print ``config``. Keep it that way, and do not
+        echo a raw response from this endpoint into a transcript.
 
         The four write/single-read routes on this router (create, get by id,
         update, delete) DO refuse this principal, and ``test_alert_method``

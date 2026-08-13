@@ -535,15 +535,19 @@ RequireHumanAdminForOutboundPolicy = Depends(
 # the reads return that blob verbatim. Denying the principal on these four
 # costs the sidecar nothing, because it has no tool for any of them.
 #
-# ``GET ""`` is NOT here, and that is the residual to be honest about: the
-# shipped ``list_alert_methods`` tool needs it, so it runs on plain
-# ``RequireAdminIfEnabled`` and the automation credential can read every
-# method's unmasked ``config`` through it — including everything ``GET /{id}``
-# would have disclosed, for every method. So this gate does not currently
-# contain the disclosure; it holds the WRITE half and marks the read intent.
-# Bead enhancedchannelmanager-9kwzp.13 is what contains it, by masking
-# ``config`` in both read responses (``models.AlertMethod.to_dict`` already
-# builds the masked form and neither handler calls it).
+# ``GET ""`` is NOT here: the shipped ``list_alert_methods`` tool needs it, so
+# it runs on plain ``RequireAdminIfEnabled`` and the automation credential can
+# read every method through it — including everything ``GET /{id}`` returns,
+# for every method. So this gate never contained the disclosure; it holds the
+# WRITE half and marks the read intent.
+#
+# What contains the disclosure is the RESPONSE, and it landed under bead
+# enhancedchannelmanager-9kwzp.13: both read handlers now serialize through
+# ``models.AlertMethod.to_dict(include_sensitive=False)``, so the webhook URL,
+# the bot token and the SMTP password come back as ``'********'`` to every
+# caller including this one. This gate is unchanged by that and still worth
+# holding — the three writes here can repoint or end the operator's alerts,
+# which masking does nothing about.
 #
 # Its own body rather than a reuse: ``RequireHumanAdminForOutboundTest``
 # already gates ``POST /api/alert-methods/{id}/test`` in this same router and

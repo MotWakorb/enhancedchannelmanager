@@ -71,13 +71,15 @@ THE FIVE VERDICTS
    reason: three shipped tools over the three write routes.
 
    Alert methods SPLIT. ``GET /api/alert-methods`` is ADMITTED because the
-   shipped ``list_alert_methods`` tool calls it — and it returns
-   ``AlertMethod.config`` VERBATIM, so the automation credential can read the
-   Discord webhook URL, the Telegram bot token and the SMTP password, the
-   exact families 9ej7f withheld from this principal on GET /api/settings.
-   That disclosure is a PO-accepted residual whose real fix is masking the
-   response, tracked as bead enhancedchannelmanager-9kwzp.13; see the
-   ``_ALERT_METHOD_LIST`` comment in ``tests/test_admin_gate_inventory.py``.
+   shipped ``list_alert_methods`` tool calls it. When this bead shipped, that
+   route returned ``AlertMethod.config`` VERBATIM, so the automation
+   credential could read the Discord webhook URL, the Telegram bot token and
+   the SMTP password, the exact families 9ej7f withheld from this principal on
+   GET /api/settings. Bead enhancedchannelmanager-9kwzp.13 closed that at the
+   response rather than at this gate: both read handlers now serialize through
+   ``AlertMethod.to_dict(include_sensitive=False)``. The admission is
+   unchanged; see the ``_ALERT_METHOD_LIST`` comment in
+   ``tests/test_admin_gate_inventory.py``.
    The other four non-test routes stay DENIED — no MCP tool calls them, so it
    costs nothing — though note the single-method read is disclosure-vacuous
    against this principal while the list is admitted. ``GET /types`` is a
@@ -535,10 +537,14 @@ async def test_mcp_principal_still_reaches_the_admitted_routes(async_client, cas
       credential to its last four characters, so no secret VALUE is
       recoverable; the writes repoint scheduled outbound traffic, which the
       masking does nothing about. Accepted for the six tools over them.
-    * ``GET /api/alert-methods`` — discloses ``AlertMethod.config`` UNREDACTED
-      (webhook URL, bot token, SMTP password). Accepted by the PO for the
-      ``list_alert_methods`` tool; the real fix is masking the response, bead
-      enhancedchannelmanager-9kwzp.13.
+    * ``GET /api/alert-methods`` — admitted for the ``list_alert_methods``
+      tool. It used to disclose ``AlertMethod.config`` UNREDACTED (webhook
+      URL, bot token, SMTP password); bead enhancedchannelmanager-9kwzp.13
+      masked the response, so what it now discloses is the inventory plus the
+      non-credential config keys. The masking is pinned separately in
+      ``tests/routers/test_9kwzp13_alert_method_masking.py`` — this case is
+      about REACHABILITY only, and must not be read as evidence about the
+      body.
 
     Pinning them here means demoting any of them is a deliberate edit rather
     than a copied dependency.

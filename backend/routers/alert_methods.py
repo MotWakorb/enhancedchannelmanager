@@ -149,29 +149,38 @@ async def list_alert_methods(_admin=RequireAdminIfEnabled):
     authenticated non-admin and by the static MCP service principal. The
     non-admin half is closed here and on every sibling below.
 
-    THE MCP HALF IS A DELIBERATE, DOCUMENTED RESIDUAL — read this before
-    concluding from the plain gate that the route is uninteresting. This
-    response returns ``AlertMethod.config`` VERBATIM, with no masking of any
-    kind, and that blob is where the Discord webhook URL, the Telegram bot
-    token and the SMTP password live. Those are the same families bead 9ej7f
-    withheld from this principal on GET /api/settings. Admitting the principal
-    here therefore lets the automation credential read those secrets in clear.
+    THE MCP HALF IS A DELIBERATE ADMISSION, AND THE RESPONSE IS MASKED. The
+    shipped MCP tool ``list_alert_methods`` is the operator's inventory of
+    their own alert methods, and refusing it removed a capability the sidecar
+    was built to provide, so the principal stays admitted. What used to make
+    that admission expensive was the RESPONSE, not the gate: this handler
+    hand-rolled its dict and emitted ``AlertMethod.config`` VERBATIM, and that
+    blob is where the Discord webhook URL, the Telegram bot token and the SMTP
+    password live — the same families bead 9ej7f withheld from this principal
+    on GET /api/settings, handed out in clear through a second table.
 
-    That is an accepted product decision, not an oversight: the shipped MCP
-    tool ``list_alert_methods`` is the operator's inventory of their own alert
-    methods, and refusing it removed a capability the sidecar was built to
-    provide. The disclosure is bounded by fixing the RESPONSE rather than the
-    gate — ``models.AlertMethod.to_dict(include_sensitive=False)`` already
-    builds a masked ``config`` and this handler simply does not call it. That
-    is tracked as bead enhancedchannelmanager-9kwzp.13, and closing it removes
-    the residual without touching this dependency.
+    Bead enhancedchannelmanager-9kwzp.13 closed that at the response. This
+    handler now serializes through
+    ``models.AlertMethod.to_dict(include_sensitive=False)``, which substitutes
+    ``'********'`` for ``password``, ``bot_token``, ``webhook_url`` and
+    ``api_key``, so an admitted caller — human admin or automation credential
+    — receives the inventory without any credential VALUE. No caller is
+    permitted ``include_sensitive=True`` over HTTP; there is no route, query
+    parameter or header that reaches it, and adding one would reopen exactly
+    this hole.
+
+    DO NOT REINTRODUCE A HAND-ROLLED RESPONSE DICT HERE. ``to_dict`` is the
+    single masking implementation this route shares with
+    :func:`get_alert_method`, and ``routers/backup.py`` keeps its DBAS
+    redaction denylist in lock-step with the same key set; a second
+    implementation is how those two drift apart.
+    ``tests/routers/test_9kwzp13_alert_method_masking.py`` pins that neither
+    read route emits a raw credential value.
 
     The five sibling routes below keep
     ``RequireHumanAdminForNotificationCredential``: no MCP tool calls any of
     them, so denying the principal there costs nothing and holds the line on
     the write half and on the single-method read.
-
-    This response body is UNCHANGED: nothing here adds or removes masking.
     """
     from models import AlertMethod as AlertMethodModel
 
@@ -180,29 +189,7 @@ async def list_alert_methods(_admin=RequireAdminIfEnabled):
     try:
         methods = session.query(AlertMethodModel).all()
         logger.debug("[ALERTS] Found %s alert methods in database", len(methods))
-        result = []
-        for m in methods:
-            alert_sources = None
-            if m.alert_sources:
-                try:
-                    alert_sources = json.loads(m.alert_sources)
-                except (json.JSONDecodeError, TypeError):
-                    pass  # Malformed alert_sources JSON; fall back to None
-            result.append({
-                "id": m.id,
-                "name": m.name,
-                "method_type": m.method_type,
-                "enabled": m.enabled,
-                "config": json.loads(m.config) if m.config else {},
-                "notify_info": m.notify_info,
-                "notify_success": m.notify_success,
-                "notify_warning": m.notify_warning,
-                "notify_error": m.notify_error,
-                "alert_sources": alert_sources,
-                "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
-                "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
-            })
-        return result
+        return [m.to_dict(include_sensitive=False) for m in methods]
     except Exception as e:
         logger.exception("[ALERTS] Failed to list alert methods")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -309,16 +296,22 @@ async def get_alert_method(
 ):
     """Get a specific alert method. Human-admin only.
 
-    bead 9kwzp.10 item 4: returns ``config`` verbatim, credentials included.
-    See :func:`create_alert_method` for the group verdict.
+    bead 9kwzp.10 item 4: see :func:`create_alert_method` for the group
+    verdict on the gate.
 
-    Note honestly what this gate does and does not buy while bead
-    enhancedchannelmanager-9kwzp.13 is open. :func:`list_alert_methods` is on
-    the plain admin tier and returns exactly these fields for EVERY method, so
-    against the MCP service principal this route discloses nothing the list
-    does not already. The gate here is held because no MCP tool needs the
-    route, not because it is currently containing the disclosure — 9kwzp.13,
-    which masks ``config`` in both responses, is what does that.
+    Note honestly what this gate does and does not buy. :func:`list_alert_methods`
+    is on the plain admin tier and returns exactly these fields for EVERY
+    method, so against the MCP service principal this route discloses nothing
+    the list does not already. The gate here is held because no MCP tool needs
+    the route, not because it is containing a disclosure.
+
+    What contains the disclosure is bead
+    enhancedchannelmanager-9kwzp.13, which landed: this handler serializes
+    through ``models.AlertMethod.to_dict(include_sensitive=False)`` instead of
+    hand-rolling a dict that emitted ``config`` verbatim, so the webhook URL,
+    the bot token and the SMTP password come back as ``'********'`` for every
+    caller. No caller receives ``include_sensitive=True`` over HTTP. See
+    :func:`list_alert_methods` for why the hand-rolled dict must not come back.
     """
     from models import AlertMethod as AlertMethodModel
 
@@ -334,26 +327,7 @@ async def get_alert_method(
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         logger.debug("[ALERTS] Found alert method: id=%s name=%s", method.id, method.name)
-        alert_sources = None
-        if method.alert_sources:
-            try:
-                alert_sources = json.loads(method.alert_sources)
-            except (json.JSONDecodeError, TypeError):
-                pass  # Malformed alert_sources JSON; fall back to None
-        return {
-            "id": method.id,
-            "name": method.name,
-            "method_type": method.method_type,
-            "enabled": method.enabled,
-            "config": json.loads(method.config) if method.config else {},
-            "notify_info": method.notify_info,
-            "notify_success": method.notify_success,
-            "notify_warning": method.notify_warning,
-            "notify_error": method.notify_error,
-            "alert_sources": alert_sources,
-            "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
-            "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
-        }
+        return method.to_dict(include_sensitive=False)
     except HTTPException:
         raise
     except Exception as e:
