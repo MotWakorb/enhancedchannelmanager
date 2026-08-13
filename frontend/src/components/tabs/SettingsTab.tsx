@@ -2272,7 +2272,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <button
             className="btn-reset-stats"
             onClick={handleResetStats}
-            disabled={resettingStats}
+            disabled={resettingStats || !user?.is_admin}
             title="Clear all statistics when switching Dispatcharr servers"
           >
             <span className="material-icons">{resettingStats ? 'sync' : 'refresh'}</span>
@@ -2280,6 +2280,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </button>
           <span className="form-description">
             Clear all channel/stream statistics when switching servers.
+            {!user?.is_admin && ' Only an administrator can reset statistics.'}
           </span>
         </div>
       </div>
@@ -3900,7 +3901,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       </div>
 
-      <AlertMethodsSection />
+      <AlertMethodsSection isAdmin={user?.is_admin ?? false} />
 
       <div className="settings-actions">
         <button

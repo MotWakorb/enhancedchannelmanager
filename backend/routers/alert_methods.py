@@ -11,7 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from alert_methods import get_alert_manager, get_method_types, create_method
-from auth import RequireHumanAdminForOutboundTest
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForNotificationCredential,
+    RequireHumanAdminForOutboundTest,
+)
 from database import get_session
 
 logger = logging.getLogger(__name__)
@@ -112,8 +116,16 @@ def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
 
 
 @router.get("/types")
-async def get_alert_method_types():
-    """Get available alert method types and their configuration fields."""
+async def get_alert_method_types(_admin=RequireAdminIfEnabled):
+    """Get available alert method types and their configuration fields. Admin only.
+
+    bead 9kwzp.10 item 4: the only route in this router that takes the PLAIN
+    admin tier. It returns a static catalogue of the method types this build
+    supports and their field descriptors — no install data, no stored value,
+    nothing per-operator — so admitting the MCP service principal costs
+    nothing. Every other non-test route in the router discloses or writes
+    notification credentials and is human-admin; see :func:`list_alert_methods`.
+    """
     logger.debug("[ALERTS] GET /types")
     try:
         types = get_method_types()
@@ -125,8 +137,26 @@ async def get_alert_method_types():
 
 
 @router.get("")
-async def list_alert_methods():
-    """List all configured alert methods."""
+async def list_alert_methods(_admin=RequireHumanAdminForNotificationCredential):
+    """List all configured alert methods. Human-admin only.
+
+    bead 9kwzp.10 item 4. This router carried NO route dependency on any of its
+    six non-test routes, so every one of them was reachable by any
+    authenticated non-admin and by the static MCP service principal.
+
+    The READ is the sharper half. This response and
+    :func:`get_alert_method` return ``AlertMethod.config`` verbatim, with no
+    masking of any kind, and that blob is where the Discord webhook URL, the
+    Telegram bot token and the SMTP password live. Those are precisely the
+    families bead 9ej7f withheld from this principal on GET /api/settings and
+    kgz3k denies it on the settings WRITE — handed out in clear through a
+    second table. A field you may not write, you may not read, so the reads
+    take the same gate as the writes.
+
+    This response body is UNCHANGED: the fix here is authorization only. The
+    absence of a masking layer on ``config`` is a separate concern and is not
+    addressed in this router.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] GET /alert-methods")
@@ -165,8 +195,15 @@ async def list_alert_methods():
 
 
 @router.post("")
-async def create_alert_method(data: AlertMethodCreate):
-    """Create a new alert method."""
+async def create_alert_method(
+    data: AlertMethodCreate,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Create a new alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: writes the notification credentials ECM later sends
+    under. See :func:`list_alert_methods` for the verdict.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] POST /alert-methods - name=%s type=%s", data.name, data.method_type)
@@ -236,8 +273,15 @@ async def create_alert_method(data: AlertMethodCreate):
 
 
 @router.get("/{method_id}")
-async def get_alert_method(method_id: int):
-    """Get a specific alert method."""
+async def get_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Get a specific alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: returns ``config`` verbatim, credentials included.
+    See :func:`list_alert_methods`.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] GET /alert-methods/%s", method_id)
@@ -282,8 +326,16 @@ async def get_alert_method(method_id: int):
 
 
 @router.patch("/{method_id}")
-async def update_alert_method(method_id: int, data: AlertMethodUpdate):
-    """Update an alert method."""
+async def update_alert_method(
+    method_id: int,
+    data: AlertMethodUpdate,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Update an alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: can replace the stored notification credentials, so
+    it can repoint where ECM sends alerts. See :func:`list_alert_methods`.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] PATCH /alert-methods/%s", method_id)
@@ -345,8 +397,16 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
 
 
 @router.delete("/{method_id}")
-async def delete_alert_method(method_id: int):
-    """Delete an alert method."""
+async def delete_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Delete an alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: silently ends the operator's alert delivery, which
+    is the availability half of the same control. See
+    :func:`list_alert_methods`.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] DELETE /alert-methods/%s", method_id)

@@ -200,7 +200,10 @@ class TestRestoreDbasSavedEndpoint:
     async def test_admin_guarded(self, async_client, backups_dir):
         from fastapi import HTTPException, status
         from main import app
-        from auth import RequireAdminIfEnabled as _prebuilt
+        # bead 9kwzp.10 item 2: moved onto ``RequireHumanAdminIfEnabled`` once
+        # bead …-dfkbn item 4 taught the DBAS restore to write ECM's own
+        # settings.json. This case pins the non-admin half either way.
+        from auth import RequireHumanAdminIfEnabled as _prebuilt
 
         async def _reject() -> None:
             raise HTTPException(

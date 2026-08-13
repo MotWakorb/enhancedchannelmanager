@@ -611,7 +611,7 @@ result.
 | `POST /api/settings/plex/test-connection` | Test a Plex server with operator-supplied credentials. Same gate as `/test`. |
 | `POST /api/settings/jellyfin/test-connection` | Test a Jellyfin server with operator-supplied credentials. Same gate as `/test`. |
 | `POST /api/settings/restart-services` | Restart background services. Admin-only when auth is enabled; the MCP service key is still admitted, because this rebuilds the tracker/prober from already-saved settings and reaches no caller-named host (bead 9kwzp.6). |
-| `POST /api/settings/reset-stats` | Reset all statistics |
+| `POST /api/settings/reset-stats` | Reset all statistics. Admin-only when auth is enabled; the MCP service key is refused, because the wipe is irreversible and has no rollback (bead 9kwzp.12). |
 
 ## Event Sync Team Aliases
 
@@ -779,12 +779,12 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/alert-methods` | List all alert methods |
-| `GET /api/alert-methods/types` | Get available alert method types |
-| `POST /api/alert-methods` | Create alert method |
-| `GET /api/alert-methods/{id}` | Get alert method details |
-| `PATCH /api/alert-methods/{id}` | Update alert method |
-| `DELETE /api/alert-methods/{id}` | Delete alert method |
+| `GET /api/alert-methods` | List all alert methods. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `GET /api/alert-methods/types` | Get available alert method types. Admin-only when auth is enabled; the MCP service key is admitted, since the catalogue is static and holds no install data (bead 9kwzp.10). |
+| `POST /api/alert-methods` | Create alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `GET /api/alert-methods/{id}` | Get alert method details. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `PATCH /api/alert-methods/{id}` | Update alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `DELETE /api/alert-methods/{id}` | Delete alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 
 An **alert method** is one configured channel (Discord webhook, Telegram bot, SMTP recipient list) that ECM uses to notify operators about scheduled-task results, probe failures, M3U/EPG refresh outcomes, and other system events. Each method carries its own per-type `config` blob, four per-severity opt-in flags (`notify_info`, `notify_success`, `notify_warning`, `notify_error`), and an optional granular `alert_sources` filter for per-EPG-source / per-M3U-account routing. **`method_type` uniqueness is NOT enforced**: multiple SMTP methods (or multiple Discord webhooks) can coexist, each with its own recipient set, severity opt-ins, and source filter; this is intentional so operators can route different alert categories to different recipients without collapsing them onto one row.
@@ -1173,8 +1173,8 @@ These endpoints operate on the new-format `.zip` artifacts produced by the `dbas
 
 | Endpoint | Description |
 |-|-|
-| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (`success`, `completed_with_failures`, `partial_failed_rolled_back`, `failed_rollback_incomplete`). |
-| `POST /api/backup/restore-dbas-saved` | Restore a saved DBAS artifact by filename (artifact must be in `/config/backups/`). Same dry-run/apply semantics as `/restore-dbas`. The saved file is not deleted. |
+| `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (`success`, `completed_with_failures`, `partial_failed_rolled_back`, `failed_rollback_incomplete`).  Admin-only when auth is enabled; the MCP service key is refused, since the restore writes ECM's own settings blob wholesale (bead 9kwzp.10).|
+| `POST /api/backup/restore-dbas-saved` | Restore a saved DBAS artifact by filename (artifact must be in `/config/backups/`). Same dry-run/apply semantics as `/restore-dbas`. The saved file is not deleted.  Admin-only when auth is enabled; the MCP service key is refused, since the restore writes ECM's own settings blob wholesale (bead 9kwzp.10).|
 | `GET /api/backup/saved` | List saved DBAS backup artifacts under `/config/backups/`. Returns filename, size, and creation time. |
 | `GET /api/backup/saved/{filename}` | Download a saved backup artifact (streamed). |
 | `DELETE /api/backup/saved/{filename}` | Delete a saved backup artifact. |
@@ -1249,11 +1249,11 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). |
-| `POST /api/cloud-targets` | Create a cloud storage target. |
+| `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). Admin-only when auth is enabled; the MCP service key is admitted, since every credential in the response is masked (bead 9kwzp.10). |
+| `POST /api/cloud-targets` | Create a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
 | `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
-| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. |
-| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. |
+| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
+| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
 | `POST /api/cloud-targets/{id}/test` | Test connectivity to a saved cloud storage target, using its stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 | `POST /api/cloud-targets/test` | Test connectivity with inline (not-yet-saved) credentials. Same gate as `/{id}/test`. |
 

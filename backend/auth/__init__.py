@@ -90,6 +90,10 @@ try:
         RequireHumanAdminForOutboundTest,
         RequireHumanAdminForServiceCredential,
         RequireHumanAdminForTLSMaterial,
+        RequireHumanAdminForOutboundPolicy,
+        RequireHumanAdminForOutboundDestination,
+        RequireHumanAdminForNotificationCredential,
+        RequireHumanAdminForStatisticsReset,
         resolve_is_admin_if_enabled,
         ResolveIsAdminIfEnabled,
     )
@@ -109,6 +113,10 @@ try:
         "RequireHumanAdminForOutboundTest",
         "RequireHumanAdminForServiceCredential",
         "RequireHumanAdminForTLSMaterial",
+        "RequireHumanAdminForOutboundPolicy",
+        "RequireHumanAdminForOutboundDestination",
+        "RequireHumanAdminForNotificationCredential",
+        "RequireHumanAdminForStatisticsReset",
         "resolve_is_admin_if_enabled",
         "ResolveIsAdminIfEnabled",
     ])

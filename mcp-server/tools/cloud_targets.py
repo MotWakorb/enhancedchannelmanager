@@ -14,7 +14,24 @@ otherwise echo a full credential value — they only ever forward what the
 caller supplies (to the encrypted-write endpoints) and surface whatever the
 backend's already-masked response contains.
 
-enhancedchannelmanager-9kwzp.6 then moved BOTH connection-test endpoints
+enhancedchannelmanager-9kwzp.10 item 4 then moved create/update/delete
+behind ``RequireHumanAdminForOutboundDestination``, which refuses the
+static MCP service principal. Those three tools therefore CANNOT succeed
+over MCP on any install with authentication enabled; each returns the
+backend's 403 as an error string. That is the designed outcome, not a
+misconfiguration and not a permission an operator can grant to the MCP
+key: writing a cloud target names the host ``tasks/dbas_backup.py`` PUTs
+the operator's archive to, supplies the credentials it authenticates with,
+and carries the ``insecure`` flag that turns off TLS verification for that
+upload — so an update can silently repoint a destination the operator
+already configured. jcj0f exposing the tools established product intent,
+not least privilege, and encryption-at-rest plus last-4 masking bound
+DISCLOSURE rather than redirection. HUMAN PATH: an ECM admin manages cloud
+targets from the UI, Settings > Backup & Restore. ``list_cloud_targets``
+is UNAFFECTED — the read half keeps the plain admin tier because its
+response masks every credential.
+
+enhancedchannelmanager-9kwzp.6 had already moved BOTH connection-test endpoints
 (``POST /api/cloud-targets/{target_id}/test`` and
 ``POST /api/cloud-targets/test``) behind ``RequireHumanAdminForOutboundTest``,
 which refuses the static MCP service principal. ``test_cloud_target`` therefore
@@ -65,6 +82,10 @@ def register(mcp: FastMCP):
     ) -> str:
         """Create a cloud storage target (a DBAS backup upload destination).
 
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
+        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
+        module's docstring. Calling it returns that 403 as an error string.
+
         Credentials are encrypted at rest and NEVER echoed back in full —
         only a masked (last-4-chars) preview is shown, per the backend's
         response shape. Credentials CANNOT be pre-validated over MCP:
@@ -113,6 +134,10 @@ def register(mcp: FastMCP):
     ) -> str:
         """Update a cloud storage target — only provided fields change.
 
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
+        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
+        module's docstring. Calling it returns that 403 as an error string.
+
         Credentials, if provided, are re-encrypted wholesale (the new dict
         REPLACES the stored one; it is not merged field-by-field).
 
@@ -154,6 +179,10 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def delete_cloud_target(target_id: int, confirm: bool = False) -> str:
         """Delete a cloud storage target.
+
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
+        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
+        module's docstring. Calling it returns that 403 as an error string.
 
         CONFIRM GATING (bd-onazy convention): the first call (confirm=False,
         the default) looks up the target by name/provider and returns a

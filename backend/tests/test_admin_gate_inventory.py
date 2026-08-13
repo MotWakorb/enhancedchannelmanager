@@ -10,10 +10,18 @@ ECM has two admin gates that look interchangeable and are not:
   ``is_admin=True``.
 * ``auth.RequireHumanAdminIfEnabled`` / ``auth.RequireHumanAdminForOutboundTest``
   / ``auth.RequireHumanAdminForServiceCredential`` /
-  ``auth.RequireHumanAdminForTLSMaterial`` — admin required AND the MCP
-  service principal is refused. These four behave identically; they differ
+  ``auth.RequireHumanAdminForTLSMaterial`` /
+  ``auth.RequireHumanAdminForOutboundPolicy`` /
+  ``auth.RequireHumanAdminForOutboundDestination`` /
+  ``auth.RequireHumanAdminForNotificationCredential`` /
+  ``auth.RequireHumanAdminForStatisticsReset`` — admin required AND the MCP
+  service principal is refused. These eight behave identically; they differ
   only in the 403 body, which names the surface being refused so incident
   triage starts in the right place.
+
+Every gate in both families no-ops while ``require_auth`` is false or setup is
+incomplete, so nothing here is reachable-only-by-an-admin on a first-run or
+auth-disabled instance. Read every verdict below with that condition attached.
 
 Reaching for the first when you meant the second closes the non-admin half of
 a hole and leaves the MCP half wide open, which reads as fixed in review. That
@@ -40,33 +48,59 @@ is denied exactly where a route:
 4. manages the TLS certificate and private-key material, the DNS-provider
    credentials that issue it, or the HTTPS listener that serves it — operator
    transport infrastructure, which the sidecar exposes no tool for and whose
-   destructive half has no undo (9kwzp.11).
+   destructive half has no undo (9kwzp.11); or
+5. writes the outbound POLICY the routes in (1) are measured against, which is
+   the fence rather than the probe (9kwzp.10 item 1); or
+6. writes an outbound DESTINATION — a backup-upload target or a sync target —
+   which repoints scheduled, credential-bearing traffic to a caller-named host
+   and carries the TLS-verification flag it travels under (9kwzp.10 items 3
+   and 4); or
+7. reads or writes a notification credential, because the alert-method
+   ``config`` blob holds the webhook URL, bot token and SMTP password in clear
+   (9kwzp.10 item 4); or
+8. irreversibly destroys operator data with no compensating write and no
+   rollback ledger (9kwzp.12).
 
 Everything else stays admitted. The groups below record that verdict per site
 so the next reader does not re-derive it.
 
-KNOWN GAPS, DELIBERATELY NOT CHANGED HERE
------------------------------------------
+WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE
+-----------------------------------------------------------
 
-The audit turned up sites that are arguably on the wrong side of the rule but
-are outside 9kwzp.6 / .7 scope and are recorded as backlog candidates rather
-than silently re-gated: the backup read/export paths (which emit
-``discord_webhook_url`` and ``telegram_chat_id`` in clear, the very values
-bead 9ej7f just withheld from this same principal on GET /api/settings),
-PATCH /api/settings/security (which lets the principal widen the SSRF outbound
-policy that guards the routes above), and the sync-target CRUD (which writes an
-outbound base URL plus credentials, a thing kgz3k denies the principal on
-POST /api/settings). They are listed in ``MCP_ADMITTED`` under their own
-group names so the inventory stays honest about what is pinned versus what is
-merely current.
+Two verdicts below were reached against a plausible case for denying, and are
+recorded here rather than left implicit:
+
+* ``_DESTINATION_READS`` — the list/get halves of the cloud-target and
+  sync-target routers stay admitted while their write halves are denied. Their
+  responses mask every credential to its last four characters, so they bound
+  disclosure the way the write half does not bound redirection; and admitting
+  them is what keeps the sidecar's inventory tools usable. This diverges from
+  ``GET /api/tls/settings``, which IS denied despite masking, because that
+  route additionally emits ``dns_zone_id`` and ``acme_email`` in clear and
+  belongs to a router the sidecar has no tool for at all.
+* ``_ALERT_METHOD_TYPES`` — a static catalogue of the method types this build
+  supports. No install data, no stored value.
+
+KNOWN GAP, DELIBERATELY NOT CHANGED HERE
+----------------------------------------
+
+The backup read/export paths (``_BACKUP_ARCHIVE``) emit
+``discord_webhook_url`` and ``telegram_chat_id`` in clear — the very values
+bead 9ej7f withheld from this same principal on GET /api/settings. That is
+tracked as bead 9kwzp.9 and is pinned below as CURRENT behaviour, not as
+correct.
 """
 import pytest
 from fastapi.routing import APIRoute
 
 from auth import (
     RequireAdminIfEnabled,
+    RequireHumanAdminForNotificationCredential,
+    RequireHumanAdminForOutboundDestination,
+    RequireHumanAdminForOutboundPolicy,
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
+    RequireHumanAdminForStatisticsReset,
     RequireHumanAdminForTLSMaterial,
     RequireHumanAdminIfEnabled,
 )
@@ -166,14 +200,15 @@ _OPERATIONAL_RESTART = {
     ("POST", "/api/settings/restart-services"),
 }
 
-# BACKLOG CANDIDATE, not pinned as correct — pinned as CURRENT. The archive
-# these emit carries ``discord_webhook_url`` and ``telegram_chat_id`` in clear
-# (``routers.backup._gather_settings`` redacts only
-# ``_SETTINGS_CREDENTIAL_FIELDS``, which does not include them), so the MCP
-# principal can read through this path the exact values bead 9ej7f withholds
-# from it on GET /api/settings. The restore-dbas pair additionally writes
-# config wholesale, which is the kgz3k class the three /api/backup/restore*
-# endpoints are already human-admin for. Out of scope for 9kwzp.6 / .7.
+# BACKLOG CANDIDATE, not pinned as correct — pinned as CURRENT (bead 9kwzp.9).
+# The archive these emit carries ``discord_webhook_url`` and
+# ``telegram_chat_id`` in clear (``routers.backup._gather_settings`` redacts
+# only ``_SETTINGS_CREDENTIAL_FIELDS``, which does not include them), so the
+# MCP principal can read through this path the exact values bead 9ej7f
+# withholds from it on GET /api/settings.
+#
+# The restore-dbas pair used to be listed here too. Bead 9kwzp.10 item 2 moved
+# both to ``_WHOLESALE_CONFIG_WRITE``; see that group for why.
 _BACKUP_ARCHIVE = {
     ("GET", "/api/backup/create"),
     ("GET", "/api/backup/export"),
@@ -183,30 +218,27 @@ _BACKUP_ARCHIVE = {
     ("DELETE", "/api/backup/saved/{filename}"),
     ("POST", "/api/backup/save"),
     ("POST", "/api/backup/validate"),
-    ("POST", "/api/backup/restore-dbas"),
-    ("POST", "/api/backup/restore-dbas-saved"),
 }
 
-# BACKLOG CANDIDATE, pinned as current. Sync-target CRUD writes an outbound
-# base URL plus credentials — the same shape kgz3k denies this principal on
-# POST /api/settings — but bead jcj0f exposed create/update/delete as MCP
-# tools deliberately. Responses mask credentials (last 4 chars). Flagged for
-# the PO rather than re-gated here.
-_SYNC_TARGET_CRUD = {
+# bead 9kwzp.10 items 3 and 4, decided against a plausible case for denying.
+# The READ halves of the two outbound-destination routers stay admitted: every
+# credential in these responses is masked to its last four characters
+# (``_mask_credentials`` in both routers), so no stored secret is recoverable
+# through them, and admitting them is what keeps the sidecar's
+# ``list_cloud_targets`` / ``list_sync_targets`` inventory tools working. The
+# WRITE halves are in ``_OUTBOUND_DESTINATION_WRITE`` below, because masking
+# bounds disclosure and says nothing about redirection.
+_DESTINATION_READS = {
+    ("GET", "/api/cloud-targets"),
     ("GET", "/api/sync-targets"),
-    ("POST", "/api/sync-targets"),
     ("GET", "/api/sync-targets/{target_id}"),
-    ("PUT", "/api/sync-targets/{target_id}"),
-    ("DELETE", "/api/sync-targets/{target_id}"),
 }
 
-# BACKLOG CANDIDATE, pinned as current. This is the only writer of
-# ``ssrf_outbound_mode`` (POST /api/settings carries the stored value forward
-# untouched), so the MCP principal can widen the outbound policy from
-# public-only to LAN-friendly — weakening the control that constrains WHICH
-# hosts the routes in MCP_DENIED may reach. Flagged for the PO.
-_SSRF_POLICY_WRITE = {
-    ("PATCH", "/api/settings/security"),
+# bead 9kwzp.10 item 4. The one route in ``/api/alert-methods`` that is not
+# credential-bearing: a static catalogue of the method types this build
+# supports and their field descriptors. No install data, no stored value.
+_ALERT_METHOD_TYPES = {
+    ("GET", "/api/alert-methods/types"),
 }
 
 # bead 9kwzp.11, decided on their own merits: the two TLS status reads take the
@@ -228,8 +260,8 @@ MCP_ADMITTED: frozenset = frozenset(
     | _EMBY_LOGO_MAINTENANCE
     | _OPERATIONAL_RESTART
     | _BACKUP_ARCHIVE
-    | _SYNC_TARGET_CRUD
-    | _SSRF_POLICY_WRITE
+    | _DESTINATION_READS
+    | _ALERT_METHOD_TYPES
     | _TLS_STATUS_READS
 )
 
@@ -241,10 +273,110 @@ MCP_ADMITTED: frozenset = frozenset(
 # kgz3k / 6n76m: restore rewrites the settings blob wholesale, which would let
 # the automation credential flip every admin-only field in one call and bypass
 # the field-level gate on POST /api/settings.
+#
+# bead 9kwzp.10 item 2 added the restore-dbas pair, and the reason it was not
+# already here is worth keeping. When 6n76m drew this line, a DBAS restore
+# applied denylist-filtered settings to the DISPATCHARR upstream and never
+# touched ECM's own settings.json — 6n76m's changelog entry names it as
+# deliberately unchanged for exactly that reason, so the plain admin tier was
+# CORRECT as written. Bead …-dfkbn item 4 then added
+# ``dbas/importers/ecm_settings.py``, and the DBAS restore now writes ECM's own
+# blob, excluding only the live Dispatcharr connection, install-local
+# bookkeeping and redaction sentinels — not the media-server base URLs, the
+# notification credentials, the GH #473 safety caps or ``ssrf_outbound_mode``.
+# The gate went stale when the capability grew. That is a failure mode this
+# inventory cannot catch on its own: nothing about the ROUTE changed.
 _WHOLESALE_CONFIG_WRITE = {
     ("POST", "/api/backup/restore"),
     ("POST", "/api/backup/restore-saved"),
     ("POST", "/api/backup/restore-yaml"),
+    ("POST", "/api/backup/restore-dbas"),
+    ("POST", "/api/backup/restore-dbas-saved"),
+}
+
+# bead 9kwzp.10 item 1: the outbound POLICY write. ``ssrf_outbound_mode``
+# decides which hosts every outbound path in ECM may reach, and this is its
+# only field-specific writer — POST /api/settings carries the stored value
+# forward untouched, though the wholesale-restore paths above can persist it
+# without any source-level assignment, which is one more reason they are here
+# too. Gating the eleven sinks in ``_OUTBOUND_CREDENTIAL_TEST`` while leaving
+# this writable by the same principal was a partial control: it could not
+# drive the probe but it could move the fence the probe was measured against.
+# The always-on denylist (link-local / IMDS / ULA / CGNAT / multicast) is not
+# operator-togglable and is unaffected either way.
+_OUTBOUND_POLICY_WRITE = {
+    ("PATCH", "/api/settings/security"),
+}
+
+# bead 9kwzp.10 items 3 and 4: the WRITE halves of the two outbound-destination
+# routers. A cloud target is where ``tasks/dbas_backup.py`` PUTs the operator's
+# archive; a sync target is the remote instance ``tasks/dbas_sync.py`` pushes
+# config to on a timer, and creating one registers its ``dbas_sync_<id>`` task.
+# Both accept a caller-named host, store the credentials the job authenticates
+# with, and expose ``insecure``, which turns off TLS verification for that
+# traffic. Updating either repoints a flow the operator already configured.
+# That is the kgz3k shape — rewriting an outbound base URL a background job
+# will then contact — deferred onto a schedule, which makes it quieter rather
+# than safer: no operator sees a result and the redirect repeats every cycle.
+#
+# Bead jcj0f DID ship create/update/delete for both as MCP tools, and those
+# three tools now receive a clean 403 on an auth-enabled instance. That is the
+# deliberate outcome. A deliberately-exposed tool establishes product intent,
+# not least privilege, and the encryption-at-rest plus last-4 masking these
+# routers are documented around bounds DISCLOSURE of a stored credential — not
+# redirection, not replacement, not the TLS downgrade. The list/get halves stay
+# admitted; see ``_DESTINATION_READS``.
+_OUTBOUND_DESTINATION_WRITE = {
+    ("POST", "/api/cloud-targets"),
+    ("PATCH", "/api/cloud-targets/{target_id}"),
+    ("DELETE", "/api/cloud-targets/{target_id}"),
+    ("POST", "/api/sync-targets"),
+    ("PUT", "/api/sync-targets/{target_id}"),
+    ("DELETE", "/api/sync-targets/{target_id}"),
+}
+
+# bead 9kwzp.10 item 4: ``/api/alert-methods``, which carried NO route
+# dependency on any of its six non-test routes — reachable by any
+# authenticated non-admin AND by this principal.
+#
+# The READ half is the sharper one, and is why these are denied rather than
+# merely admin-gated. ``list_alert_methods`` and ``get_alert_method`` return
+# ``AlertMethod.config`` verbatim with no masking of any kind, and that blob is
+# where the Discord webhook URL, the Telegram bot token and the SMTP password
+# live. Those are the exact three families bead 9ej7f withheld from this
+# principal on GET /api/settings and kgz3k denies it on the settings WRITE,
+# handed out in clear through a second table. A field you may not write, you
+# may not read.
+#
+# The sidecar's ``list_alert_methods`` tool therefore now receives a 403;
+# ``test_alert_method`` already did (9kwzp.6). The response bodies are
+# UNCHANGED — the absence of a masking layer on ``config`` is a separate
+# concern and is not addressed by this authorization fix.
+_NOTIFICATION_CREDENTIAL = {
+    ("GET", "/api/alert-methods"),
+    ("POST", "/api/alert-methods"),
+    ("GET", "/api/alert-methods/{method_id}"),
+    ("PATCH", "/api/alert-methods/{method_id}"),
+    ("DELETE", "/api/alert-methods/{method_id}"),
+}
+
+# bead 9kwzp.12: POST /api/settings/reset-stats carried no dependency at all
+# and deletes every row of seven statistics tables.
+#
+# Decided on its own merits rather than by copying the sibling it was split
+# from. ``restart-services`` (in ``_OPERATIONAL_RESTART`` above) kept the plain
+# admin tier because it rebuilds background services from already-saved
+# settings — work a settings write schedules for itself, so denying it would
+# deny a restart the principal can already trigger indirectly. Nothing about
+# reset-stats is recoverable that way: the seven tables are the operator's own
+# watch, bandwidth, popularity, telemetry and client-connection history, there
+# is no compensating write, no rollback ledger, and no other route re-derives
+# them. Note the contrast with the pipeline rollback/restore-snapshot routes,
+# which ARE admitted precisely because they are the pipeline's own reversal
+# mechanism. An automation credential that can silently erase the observability
+# record is one that can erase the evidence of its own activity.
+_DESTRUCTIVE_DATA_RESET = {
+    ("POST", "/api/settings/reset-stats"),
 }
 
 # i4qrp / 9kwzp.6 / 9kwzp.7: every one of these reaches the network with
@@ -322,6 +454,10 @@ MCP_DENIED: frozenset = frozenset(
     | _OUTBOUND_CREDENTIAL_TEST
     | _SERVICE_CREDENTIAL_LIFECYCLE
     | _TLS_MATERIAL_LIFECYCLE
+    | _OUTBOUND_POLICY_WRITE
+    | _OUTBOUND_DESTINATION_WRITE
+    | _NOTIFICATION_CREDENTIAL
+    | _DESTRUCTIVE_DATA_RESET
 )
 
 
@@ -350,6 +486,17 @@ def _gate_kind(call):
         )
     )
     return "denied" if captured.get("reject_mcp_service_principal") else "admitted"
+
+
+def _mcp_denial_detail(call) -> str:
+    """Read the 403 body one gate closure was built with."""
+    captured = dict(
+        zip(
+            call.__code__.co_freevars,
+            (cell.cell_contents for cell in call.__closure__ or ()),
+        )
+    )
+    return captured["mcp_denial_detail"]
 
 
 def _walk(dependant):
@@ -385,13 +532,45 @@ def test_classifier_distinguishes_the_two_gates():
 
     If ``_gate_kind`` stopped telling the two gates apart, the set assertions
     below would still pass whenever both sets happened to be classified the
-    same way. Pin the classifier against the five shipped dependencies first.
+    same way. Pin the classifier against the nine shipped dependencies first.
     """
     assert _gate_kind(RequireAdminIfEnabled.dependency) == "admitted"
     assert _gate_kind(RequireHumanAdminIfEnabled.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForOutboundTest.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForServiceCredential.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForTLSMaterial.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForOutboundPolicy.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForOutboundDestination.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForNotificationCredential.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForStatisticsReset.dependency) == "denied"
+
+
+def test_every_human_admin_gate_names_its_own_surface():
+    """No two human-admin gates may share a 403 body.
+
+    The eight denial gates behave identically; the ONLY thing that
+    distinguishes them is the operator-facing message, which exists so a
+    refusal points triage at the right subsystem. A copy-paste that reused a
+    neighbour's body would leave every behavioural test in the suite green
+    while sending every incident the wrong way.
+    """
+    details = [
+        _mcp_denial_detail(dep.dependency)
+        for dep in (
+            RequireHumanAdminIfEnabled,
+            RequireHumanAdminForOutboundTest,
+            RequireHumanAdminForServiceCredential,
+            RequireHumanAdminForTLSMaterial,
+            RequireHumanAdminForOutboundPolicy,
+            RequireHumanAdminForOutboundDestination,
+            RequireHumanAdminForNotificationCredential,
+            RequireHumanAdminForStatisticsReset,
+        )
+    ]
+    assert len(set(details)) == len(details)
+    # Every one of them names the principal, so a caller can tell this refusal
+    # apart from a plain non-admin one.
+    assert all("MCP service principal" in detail for detail in details)
 
 
 def test_no_route_is_classified_both_ways():

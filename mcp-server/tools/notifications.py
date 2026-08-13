@@ -105,7 +105,33 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def list_alert_methods() -> str:
-        """List all configured alert methods (Discord, Telegram, email)."""
+        """List all configured alert methods. NOT USABLE OVER MCP.
+
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
+        (bead enhancedchannelmanager-9kwzp.10 item 4). The backing endpoint,
+        ``GET /api/alert-methods``, carried no route dependency at all and
+        returns each method's ``config`` VERBATIM — which is where the Discord
+        webhook URL, the Telegram bot token and the SMTP password live. Those
+        are the exact values bead 9ej7f withheld from this same principal on
+        ``GET /api/settings``, so leaving them readable here made that
+        redaction pointless. The route now carries
+        ``RequireHumanAdminForNotificationCredential``, which rejects the
+        static MCP service principal with HTTP 403 and the body "The MCP
+        service principal cannot read or write alert methods." Calling this
+        tool returns that 403 as an error string.
+
+        It is the designed outcome, not a misconfiguration and not a
+        permission an operator can grant to the MCP key: a field you may not
+        write, you may not read.
+
+        HUMAN PATH: an ECM admin views the configured methods in the UI,
+        Settings tab, Alert Methods section. There is no MCP equivalent, and
+        ``test_alert_method`` has been refused since bead 9kwzp.6.
+
+        The one case where this tool still works is an install with
+        authentication turned off, because the gate no-ops when
+        ``require_auth`` is false or setup is incomplete. Do not rely on that.
+        """
         try:
             client = get_ecm_client()
             methods = await client.call_endpoint(ENDPOINTS["alert_methods_list"])

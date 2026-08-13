@@ -29,8 +29,20 @@ function methodTypeLabel(type: string): string {
  * create/edit forms — those remain via the existing SMTP/Discord/Telegram
  * settings sections; building a full alert-method editor was out of scope
  * for this bead.
+ *
+ * ADMIN-ONLY (bead enhancedchannelmanager-9kwzp.10 item 4). Every backing
+ * endpoint — the list, the per-method read, create, update and delete — is now
+ * gated on the backend, because an alert method's `config` blob holds the
+ * Discord webhook URL, the Telegram bot token and the SMTP password. Mirrors
+ * BackupRestoreSection: render the lock notice rather than let a non-admin
+ * watch the list 403.
  */
-export function AlertMethodsSection() {
+interface AlertMethodsSectionProps {
+  /** Whether the signed-in user is an administrator. */
+  isAdmin: boolean;
+}
+
+export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
   const notifications = useNotifications();
   const [methods, setMethods] = useState<api.AlertMethod[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +51,7 @@ export function AlertMethodsSection() {
   const [deleting, setDeleting] = useState(false);
 
   const loadMethods = useCallback(async () => {
+    if (!isAdmin) return;
     setLoading(true);
     try {
       const result = await api.listAlertMethods();
@@ -48,7 +61,7 @@ export function AlertMethodsSection() {
     } finally {
       setLoading(false);
     }
-  }, [notifications]);
+  }, [isAdmin, notifications]);
 
   useEffect(() => {
     loadMethods();
@@ -84,6 +97,21 @@ export function AlertMethodsSection() {
       setDeleting(false);
     }
   };
+
+  if (!isAdmin) {
+    return (
+      <div className="settings-section alert-methods-section">
+        <div className="settings-section-header">
+          <span className="material-icons">notifications_active</span>
+          <h3>Alert Methods</h3>
+        </div>
+        <div className="alert-methods-empty empty-inline">
+          <span className="material-icons">lock</span>
+          Only administrators can view or manage alert methods.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="settings-section alert-methods-section">

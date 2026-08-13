@@ -16,7 +16,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from auth import RequireHumanAdminForOutboundTest
+from auth import RequireAdminIfEnabled, RequireHumanAdminForOutboundDestination, RequireHumanAdminForOutboundTest
 from cloud_storage import SUPPORTED_PROVIDERS, get_adapter
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from cloud_storage.onedrive_adapter import _validate_tenant_id, _validate_drive_id
@@ -147,8 +147,17 @@ def _mask_credentials(creds: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("")
-async def list_cloud_targets():
-    """List all cloud storage targets with masked credentials."""
+async def list_cloud_targets(_admin=RequireAdminIfEnabled):
+    """List all cloud storage targets with masked credentials. Admin only.
+
+    bead 9kwzp.10 item 4: this router carried no dependency on any of its four
+    CRUD routes, so any authenticated non-admin reached them. The read takes
+    the PLAIN admin tier — the MCP service principal stays admitted, which is
+    what keeps the shipped ``list_cloud_targets`` tool working — because every
+    credential in the response is masked to its last four characters and no
+    stored secret can be recovered through it. The three WRITES below are a
+    different verdict; see :func:`create_cloud_target`.
+    """
     db = get_session()
     try:
         targets = db.query(CloudStorageTarget).order_by(CloudStorageTarget.name).all()
@@ -168,8 +177,33 @@ async def list_cloud_targets():
 
 
 @router.post("", status_code=201)
-async def create_cloud_target(req: CloudTargetCreateRequest):
-    """Create a new cloud storage target with encrypted credentials."""
+async def create_cloud_target(
+    req: CloudTargetCreateRequest,
+    _admin=RequireHumanAdminForOutboundDestination,
+):
+    """Create a new cloud storage target with encrypted credentials. Human-admin only.
+
+    bead 9kwzp.10 item 4. Two halves to the verdict.
+
+    The missing admin tier is the plain defect: this route wrote Fernet-encrypted
+    credentials for any authenticated non-admin, while bead 9kwzp.6 had already
+    put both ``/test`` verbs behind the human-admin gate — so a caller could
+    create a credential-bearing target and not be allowed to test it.
+
+    The MCP half is decided on the evidence rather than on precedent. Bead jcj0f
+    did expose ``create_cloud_target`` / ``update_cloud_target`` /
+    ``delete_cloud_target`` as MCP tools, but a deliberately-shipped tool
+    establishes product intent, not least privilege. What a write here actually
+    does is name the host ``tasks/dbas_backup.py`` PUTs the operator's archive
+    to, supply the credentials it authenticates with, and set ``insecure``,
+    which turns off TLS verification for that upload. Updating an EXISTING
+    target repoints a flow the operator already configured. That is the shape
+    kgz3k denies this principal on POST /api/settings — rewriting an outbound
+    base URL a background job will then contact — deferred onto a schedule,
+    which makes it quieter rather than safer. Encryption at rest and the
+    last-4 masking bound disclosure of a stored credential; they say nothing
+    about redirection, replacement or the TLS downgrade.
+    """
     db = get_session()
     try:
         existing = db.query(CloudStorageTarget).filter(CloudStorageTarget.name == req.name).first()
@@ -212,8 +246,18 @@ async def create_cloud_target(req: CloudTargetCreateRequest):
 
 
 @router.patch("/{target_id}")
-async def update_cloud_target(target_id: int, req: CloudTargetUpdateRequest):
-    """Update a cloud storage target. Credentials are re-encrypted if provided."""
+async def update_cloud_target(
+    target_id: int,
+    req: CloudTargetUpdateRequest,
+    _admin=RequireHumanAdminForOutboundDestination,
+):
+    """Update a cloud storage target. Human-admin only.
+
+    bead 9kwzp.10 item 4, and the sharpest member of the group: this is the
+    route that can repoint a destination the operator ALREADY configured and
+    that the backup task ALREADY uploads to. Credentials are re-encrypted if
+    provided. See :func:`create_cloud_target` for the full verdict.
+    """
     db = get_session()
     try:
         target = db.query(CloudStorageTarget).filter(CloudStorageTarget.id == target_id).first()
@@ -276,8 +320,17 @@ async def update_cloud_target(target_id: int, req: CloudTargetUpdateRequest):
 
 
 @router.delete("/{target_id}", status_code=204)
-async def delete_cloud_target(target_id: int):
-    """Delete a cloud storage target."""
+async def delete_cloud_target(
+    target_id: int,
+    _admin=RequireHumanAdminForOutboundDestination,
+):
+    """Delete a cloud storage target. Human-admin only.
+
+    bead 9kwzp.10 item 4. Same gate as its create/update siblings: removing the
+    destination the backup task uploads to silently ends off-box retention of
+    the operator's archives, which is the availability half of the same
+    control. See :func:`create_cloud_target`.
+    """
     db = get_session()
     try:
         target = db.query(CloudStorageTarget).filter(CloudStorageTarget.id == target_id).first()

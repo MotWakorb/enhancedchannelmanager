@@ -90,7 +90,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0094"
+APP_VERSION = "0.18.1-0095"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2508,9 +2508,27 @@ async def restore_dbas_artifact(
             "an absent value from an older client, resolves to 'preserve'."
         ),
     ),
-    _admin=RequireAdminIfEnabled,
+    _admin=RequireHumanAdminIfEnabled,
 ):
-    """Trigger an async DBAS artifact restore. Admin only.
+    """Trigger an async DBAS artifact restore. Human-admin only.
+
+    bead 9kwzp.10 item 2: moved off the PLAIN admin tier onto the same gate the
+    three legacy ``/restore*`` endpoints have carried since bead 6n76m. The
+    plain tier was CORRECT when 6n76m drew the line — at that point a DBAS
+    restore applied denylist-filtered settings to the DISPATCHARR upstream and
+    never touched ECM's own ``settings.json``, which is exactly why 6n76m's
+    changelog entry names it as deliberately unchanged. Bead …-dfkbn item 4
+    then added ``dbas/importers/ecm_settings.py``, and a DBAS restore now
+    writes ECM's own settings blob wholesale. It excludes only the live
+    Dispatcharr connection, install-local bookkeeping and redaction sentinels
+    — NOT ``emby_base_url`` / ``plex_base_url`` / ``jellyfin_base_url``, the
+    notification credentials, the GH #473 safety caps or
+    ``ssrf_outbound_mode``. So a caller supplying its own artifact could set
+    every admin-only field the kgz3k field-level gate on POST /api/settings
+    refuses it, which is the bypass 6n76m closed on the other three endpoints.
+    The gate went stale when the capability grew rather than being wrong when
+    it was written. It no-ops while ``require_auth`` is false or setup is
+    incomplete, as it already did for the legacy trio.
 
     Streams the uploaded artifact to a temp file on the CONFIG partition, then
     kicks the :class:`tasks.dbas_restore.DbasRestoreTask` in the background and
@@ -4314,8 +4332,14 @@ class RestoreDbasSavedRequest(BaseModel):
 
 
 @router.post("/restore-dbas-saved")
-async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireAdminIfEnabled):
-    """Trigger an async DBAS restore from an on-disk SAVED artifact. Admin only.
+async def restore_dbas_saved(req: RestoreDbasSavedRequest, _admin=RequireHumanAdminIfEnabled):
+    """Trigger an async DBAS restore from an on-disk SAVED artifact. Human-admin only.
+
+    bead 9kwzp.10 item 2: the saved-file half of the same move. See
+    :func:`restore_dbas_artifact` for why the plain admin tier stopped being
+    correct once bead …-dfkbn item 4 taught the DBAS restore to write ECM's own
+    ``settings.json``. Same path, same importer, same verdict.
+
 
     Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
     "passphrase": null}``, resolves the filename to its saved
