@@ -45,22 +45,43 @@ THE FIVE VERDICTS
    refuses the APPLY in the handler. See ``TestDbasSavedApplyCarveOut``.
 
 3. Sync-target CRUD (item 3) was filed as a DECISION, not a defect: all five
-   routes were already admin-gated. Verdict — deny the WRITES, admit the
-   reads. Bead jcj0f did ship create/update/delete as MCP tools, but a
-   deliberately-exposed tool establishes product intent, not least privilege.
-   A write names a remote host, stores the credentials this instance
-   authenticates to it with, sets ``insecure``, and registers the target's
-   ``dbas_sync_<id>`` scheduled task; the router's own docstring says the
-   authoritative SSRF check runs at EXECUTE time, not at write time.
+   routes were already admin-gated, so the only question was the MCP principal.
+   Verdict — ADMITTED on all five, writes included. Bead jcj0f ships
+   ``create_sync_target`` / ``update_sync_target`` / ``delete_sync_target`` as
+   MCP tools over exactly those write routes, and denying the principal broke
+   all three outright.
 
-4. Cloud-target and alert-method CRUD (item 4) carried no dependency at all.
-   Cloud targets take the same split as sync targets and for the same reason.
-   Alert methods are denied on BOTH halves, because ``list_alert_methods`` and
-   ``get_alert_method`` return ``AlertMethod.config`` verbatim and that blob
-   holds the Discord webhook URL, the Telegram bot token and the SMTP password
-   — the exact families 9ej7f withheld from this principal on GET
-   /api/settings. ``GET /types`` is the lone plain-admin route: a static
-   catalogue with no install data.
+   This bead first denied them, via a ``RequireHumanAdminForOutboundDestination``
+   gate that no longer exists; the PO reversed it. The residual accepted by
+   that reversal, so the cases below are read for what they are: a write names
+   a remote host, stores the credentials this instance authenticates to it
+   with, sets ``insecure``, and registers the target's ``dbas_sync_<id>``
+   scheduled task, and the router's own docstring says the authoritative SSRF
+   check runs at EXECUTE time, not at write time. What still holds is the
+   admin requirement (the plain gate closes the non-admin half — see
+   ``test_non_admin_is_refused``, which covers every one of these routes) and
+   verdict 1, which keeps ``ssrf_outbound_mode`` un-writable by this principal.
+
+4. Cloud-target and alert-method CRUD (item 4) carried NO dependency at all, so
+   every route was reachable by any authenticated non-admin. All of them now
+   require admin; that half of the fix is unchanged and is what
+   ``test_non_admin_is_refused`` pins.
+
+   Cloud targets take the same MCP verdict as sync targets, for the same
+   reason: three shipped tools over the three write routes.
+
+   Alert methods SPLIT. ``GET /api/alert-methods`` is ADMITTED because the
+   shipped ``list_alert_methods`` tool calls it — and it returns
+   ``AlertMethod.config`` VERBATIM, so the automation credential can read the
+   Discord webhook URL, the Telegram bot token and the SMTP password, the
+   exact families 9ej7f withheld from this principal on GET /api/settings.
+   That disclosure is a PO-accepted residual whose real fix is masking the
+   response, tracked as bead enhancedchannelmanager-9kwzp.13; see the
+   ``_ALERT_METHOD_LIST`` comment in ``tests/test_admin_gate_inventory.py``.
+   The other four non-test routes stay DENIED — no MCP tool calls them, so it
+   costs nothing — though note the single-method read is disclosure-vacuous
+   against this principal while the list is admitted. ``GET /types`` is a
+   static catalogue with no install data and is admitted unarguably.
 
 5. ``POST /api/settings/reset-stats`` (9kwzp.12) carried no dependency and
    deletes every row of seven statistics tables. Decided against its sibling
@@ -221,7 +242,7 @@ CASES = (
         witness="routers.sync_targets.get_session", extra=(), request={},
     ),
     _Case(
-        "POST", "/api/sync-targets", DENIED,
+        "POST", "/api/sync-targets", ADMITTED,
         witness="routers.sync_targets.get_session",
         extra=(("routers.sync_targets.encrypt_credentials",
                 lambda: MagicMock(return_value=b"<ciphertext>")),),
@@ -232,12 +253,12 @@ CASES = (
         }},
     ),
     _Case(
-        "PUT", f"/api/sync-targets/{ABSENT_ID}", DENIED,
+        "PUT", f"/api/sync-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.sync_targets.get_session", extra=(),
         request={"json": {"enabled": False}},
     ),
     _Case(
-        "DELETE", f"/api/sync-targets/{ABSENT_ID}", DENIED,
+        "DELETE", f"/api/sync-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.sync_targets.get_session", extra=(), request={},
     ),
     # --- 9kwzp.10 item 4, cloud targets --------------------------------
@@ -246,7 +267,7 @@ CASES = (
         witness="routers.cloud_targets.get_session", extra=(), request={},
     ),
     _Case(
-        "POST", "/api/cloud-targets", DENIED,
+        "POST", "/api/cloud-targets", ADMITTED,
         witness="routers.cloud_targets.get_session",
         extra=(("routers.cloud_targets.encrypt_credentials",
                 lambda: MagicMock(return_value=b"<ciphertext>")),),
@@ -261,12 +282,12 @@ CASES = (
         }},
     ),
     _Case(
-        "PATCH", f"/api/cloud-targets/{ABSENT_ID}", DENIED,
+        "PATCH", f"/api/cloud-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.cloud_targets.get_session", extra=(),
         request={"json": {"enabled": False}},
     ),
     _Case(
-        "DELETE", f"/api/cloud-targets/{ABSENT_ID}", DENIED,
+        "DELETE", f"/api/cloud-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.cloud_targets.get_session", extra=(), request={},
     ),
     # --- 9kwzp.10 item 4, alert methods --------------------------------
@@ -276,7 +297,7 @@ CASES = (
         extra=(), request={},
     ),
     _Case(
-        "GET", "/api/alert-methods", DENIED,
+        "GET", "/api/alert-methods", ADMITTED,
         witness="routers.alert_methods.get_session", extra=(), request={},
     ),
     _Case(
@@ -497,14 +518,30 @@ async def test_mcp_principal_is_refused(async_client, case):
 @pytest.mark.parametrize("case", ADMITTED_CASES, ids=_case_id)
 @pytest.mark.asyncio
 async def test_mcp_principal_still_reaches_the_admitted_routes(async_client, case):
-    """The reads stay on the plain admin tier, deliberately.
+    """Every route a shipped MCP tool calls must still REACH ITS HANDLER.
 
-    The two destination routers mask every credential to its last four
-    characters and ``GET /api/alert-methods/types`` is a static catalogue, so
-    none of these three discloses a recoverable secret — and admitting them is
-    what keeps the sidecar's inventory tools working while its create / update
-    / delete tools are refused. Pinning it here means demoting either half is a
-    deliberate edit rather than a copied dependency.
+    This is the case that would have caught the regression this file was
+    rewritten for: eleven of these routes back a shipped bead-jcj0f tool, and
+    gating them with a human-admin dependency returned 403 to the tool while
+    leaving every non-admin assertion in this module green. Asserting the
+    witness, not just the status code, is what makes it proof the handler ran
+    rather than proof of a lucky error code.
+
+    The admissions are NOT uniform in how comfortable they are, and the
+    difference must not be flattened:
+
+    * ``GET /api/alert-methods/types`` — a static catalogue. Discloses nothing.
+    * The nine cloud-target and sync-target routes — reads mask every
+      credential to its last four characters, so no secret VALUE is
+      recoverable; the writes repoint scheduled outbound traffic, which the
+      masking does nothing about. Accepted for the six tools over them.
+    * ``GET /api/alert-methods`` — discloses ``AlertMethod.config`` UNREDACTED
+      (webhook URL, bot token, SMTP password). Accepted by the PO for the
+      ``list_alert_methods`` tool; the real fix is masking the response, bead
+      enhancedchannelmanager-9kwzp.13.
+
+    Pinning them here means demoting any of them is a deliberate edit rather
+    than a copied dependency.
     """
     with _Gate(async_client, case) as gate, \
             patch("auth.dependencies.get_settings",
@@ -526,10 +563,7 @@ async def test_mcp_principal_still_reaches_the_admitted_routes(async_client, cas
 _EXPECTED_DENIAL_PHRASE = {
     "/api/settings/security": "outbound-policy mode",
     "/api/backup/restore-dbas": "backup restore",
-    "/api/sync-targets": "outbound destination",
-    f"/api/sync-targets/{ABSENT_ID}": "outbound destination",
-    "/api/cloud-targets": "outbound destination",
-    f"/api/cloud-targets/{ABSENT_ID}": "outbound destination",
+    # Only POST reaches here; GET /api/alert-methods is ADMITTED.
     "/api/alert-methods": "alert methods",
     f"/api/alert-methods/{ABSENT_ID}": "alert methods",
     "/api/settings/reset-stats": "reset statistics",
@@ -542,7 +576,7 @@ async def test_denial_names_its_own_surface(async_client, case):
     """Reusing a sibling dependency would leave every assertion above green
     while sending every triage of the refusal at the wrong subsystem. That is
     the whole reason ``mcp_denial_detail`` is a per-call-site parameter, and
-    the reason this bead added four constants rather than reusing one."""
+    the reason this bead added three constants rather than reusing one."""
     with _Gate(async_client, case) as gate, \
             patch("auth.dependencies.get_settings",
                   return_value=_mcp_runtime_settings()), \
@@ -557,14 +591,13 @@ async def test_denial_names_its_own_surface(async_client, case):
     assert _EXPECTED_DENIAL_PHRASE[case.path] in detail
 
     # ...and must be a body no OTHER shipped gate would have produced. A
-    # substring hunt would false-positive (the outbound-destination body
-    # legitimately mentions TLS verification), so compare against the actual
-    # bodies instead: whichever gate this route carries, the eight are
-    # pairwise distinct and only one of them may match.
+    # substring hunt would false-positive (several bodies legitimately mention
+    # outbound hosts or credentials), so compare against the actual bodies
+    # instead: whichever gate this route carries, the seven are pairwise
+    # distinct and only one of them may match.
     from tests.test_admin_gate_inventory import _mcp_denial_detail
     from auth import (
         RequireHumanAdminForNotificationCredential,
-        RequireHumanAdminForOutboundDestination,
         RequireHumanAdminForOutboundPolicy,
         RequireHumanAdminForOutboundTest,
         RequireHumanAdminForServiceCredential,
@@ -581,7 +614,6 @@ async def test_denial_names_its_own_surface(async_client, case):
             RequireHumanAdminForServiceCredential,
             RequireHumanAdminForTLSMaterial,
             RequireHumanAdminForOutboundPolicy,
-            RequireHumanAdminForOutboundDestination,
             RequireHumanAdminForNotificationCredential,
             RequireHumanAdminForStatisticsReset,
         )

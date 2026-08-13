@@ -105,32 +105,32 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def list_alert_methods() -> str:
-        """List all configured alert methods. NOT USABLE OVER MCP.
+        """List all configured alert methods.
 
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
-        (bead enhancedchannelmanager-9kwzp.10 item 4). The backing endpoint,
-        ``GET /api/alert-methods``, carried no route dependency at all and
-        returns each method's ``config`` VERBATIM — which is where the Discord
-        webhook URL, the Telegram bot token and the SMTP password live. Those
-        are the exact values bead 9ej7f withheld from this same principal on
-        ``GET /api/settings``, so leaving them readable here made that
-        redaction pointless. The route now carries
-        ``RequireHumanAdminForNotificationCredential``, which rejects the
-        static MCP service principal with HTTP 403 and the body "The MCP
-        service principal cannot read or write alert methods." Calling this
-        tool returns that 403 as an error string.
+        The backing endpoint, ``GET /api/alert-methods``, carried no route
+        dependency at all until bead enhancedchannelmanager-9kwzp.10 item 4,
+        which gated it as ADMIN — plain ``RequireAdminIfEnabled``, which
+        admits the MCP service principal, so this tool keeps working. That
+        bead briefly human-admin-gated the route (403 to this tool); the PO
+        reversed it, because the tool is the operator's inventory of their
+        own alert methods.
 
-        It is the designed outcome, not a misconfiguration and not a
-        permission an operator can grant to the MCP key: a field you may not
-        write, you may not read.
+        HANDLE THE RESPONSE AS SECRET. The endpoint returns each method's
+        ``config`` VERBATIM, with no masking — that is where the Discord
+        webhook URL, the Telegram bot token and the SMTP password live, and
+        they are the exact values bead 9ej7f withholds from this same
+        principal on ``GET /api/settings``. This tool prints only the name,
+        id, type, enabled flag and severity filters, and deliberately does
+        NOT print ``config``; do not add it, and do not echo a raw response
+        from this endpoint into a transcript. Bead
+        enhancedchannelmanager-9kwzp.13 removes the exposure at the source by
+        masking ``config`` in the response.
 
-        HUMAN PATH: an ECM admin views the configured methods in the UI,
-        Settings tab, Alert Methods section. There is no MCP equivalent, and
-        ``test_alert_method`` has been refused since bead 9kwzp.6.
-
-        The one case where this tool still works is an install with
-        authentication turned off, because the gate no-ops when
-        ``require_auth`` is false or setup is incomplete. Do not rely on that.
+        The four write/single-read routes on this router (create, get by id,
+        update, delete) DO refuse this principal, and ``test_alert_method``
+        has been refused since bead 9kwzp.6. There are no MCP tools for them;
+        an ECM admin manages alert methods in the UI, Settings tab, Alert
+        Methods section.
         """
         try:
             client = get_ecm_client()
@@ -182,7 +182,7 @@ def register(mcp: FastMCP):
 
         HUMAN PATH: an ECM admin runs it from the UI, Settings tab, Alert
         Methods section, via the "Send test message" button on the method.
-        There is no MCP equivalent. ``list_alert_methods`` still works, so the
+        There is no MCP equivalent. ``list_alert_methods`` works, so the
         configured methods remain readable over MCP; only the send is gated.
 
         The one case where this tool still works is an install with

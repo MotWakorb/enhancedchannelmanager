@@ -500,61 +500,54 @@ RequireHumanAdminForOutboundPolicy = Depends(
 )
 
 
-# bead 9kwzp.10 item 4 / the sync-target half of item 3 — admin gate for the
-# WRITE half of the two outbound-destination routers
-# (``/api/cloud-targets`` and ``/api/sync-targets``).
+# NO OUTBOUND-DESTINATION GATE, DELIBERATELY. There was one — this bead built
+# ``RequireHumanAdminForOutboundDestination`` for the write halves of
+# ``/api/cloud-targets`` and ``/api/sync-targets`` — and the PO removed it
+# before it shipped. Recorded here rather than deleted silently, because the
+# argument for it is still sound and the next reader will otherwise re-derive
+# it: a write to either router names the host a SCHEDULED job then sends to
+# (``tasks/dbas_backup.py`` PUTs the operator's archive to a cloud target;
+# ``tasks/dbas_sync.py`` pushes config to a sync target), stores the
+# credentials that job authenticates with, and sets ``insecure``, which turns
+# off TLS verification for that traffic — so an update repoints a flow the
+# operator already configured.
 #
-# A destination is not a probe and not a settings blob, so none of the five
-# bodies above fits: "connection tests" names the ``/test`` verbs these
-# routers already carry (correctly, via ``RequireHumanAdminForOutboundTest``),
-# and a caller refused on a CRUD write being told it cannot run a connection
-# test would send triage at the wrong half of its own router.
+# It was removed because bead jcj0f ships six MCP tools over exactly those
+# routes and denying the principal broke all six. The capability was judged
+# worth the residual. Both routers therefore run on plain
+# ``RequireAdminIfEnabled`` end to end: admin required, MCP principal
+# admitted. What still refuses the principal on that surface is the outbound
+# POLICY write (``RequireHumanAdminForOutboundPolicy``) and both cloud-target
+# ``/test`` verbs (``RequireHumanAdminForOutboundTest``).
 #
-# The principal is denied because writing a destination REPOINTS scheduled,
-# credential-bearing outbound traffic. A cloud target is where
-# ``tasks/dbas_backup.py`` PUTs the operator's archive; a sync target is the
-# remote instance ``tasks/dbas_sync.py`` pushes config to on a timer, and
-# creating one registers its ``dbas_sync_<id>`` task. Both accept a
-# caller-named host, store credentials, and expose an ``insecure`` flag that
-# turns off TLS verification for that traffic. That is the same shape kgz3k
-# denies this principal on ``POST /api/settings`` — rewriting an outbound base
-# URL a background job will then contact — deferred onto a schedule rather
-# than issued in-request, which makes it quieter, not safer: no operator sees
-# a result and the redirect repeats every cycle.
-#
-# Encryption at rest and the last-4 masking on responses bound DISCLOSURE of a
-# stored credential; they do nothing about redirection, replacement or the TLS
-# downgrade, which is why the READ half of both routers keeps the plain admin
-# tier and only the writes are here.
-RequireHumanAdminForOutboundDestination = Depends(
-    require_admin_if_enabled(
-        reject_mcp_service_principal=True,
-        mcp_denial_detail=(
-            "The MCP service principal cannot create, change or delete an "
-            "outbound destination. A backup-upload target or sync target "
-            "names the host ECM's scheduled jobs then send to, and carries "
-            "the credentials and TLS-verification flag they send under, so "
-            "writing one must be driven by a human operator admin."
-        ),
-    )
-)
+# If a future change makes a destination write reachable by something weaker
+# than an admin, or removes those tools, this is the gate to bring back.
 
 
 # bead 9kwzp.10 item 4 — admin gate for the alert-method surface
 # (``/api/alert-methods``), which carried NO route dependency on any of its
 # six non-test routes.
 #
-# The principal is denied on both halves, and the READ half is the sharper
-# one: ``list_alert_methods`` and ``get_alert_method`` return
-# ``AlertMethod.config`` verbatim, and that blob holds the Discord webhook
-# URL, the Telegram bot token and the SMTP password. Those are the exact three
-# families bead 9ej7f withheld from this principal on ``GET /api/settings``
-# and kgz3k denies it on the settings WRITE — handed out unmasked through a
-# second table. A field you may not write, you may not read.
+# Scope: the four routes NO MCP tool calls — ``POST ""``, ``GET /{id}``,
+# ``PATCH /{id}`` and ``DELETE /{id}``. An alert method holds the Discord
+# webhook URL, the Telegram bot token and the SMTP password in
+# ``AlertMethod.config``; writing one repoints where ECM's own alerts go, and
+# the reads return that blob verbatim. Denying the principal on these four
+# costs the sidecar nothing, because it has no tool for any of them.
+#
+# ``GET ""`` is NOT here, and that is the residual to be honest about: the
+# shipped ``list_alert_methods`` tool needs it, so it runs on plain
+# ``RequireAdminIfEnabled`` and the automation credential can read every
+# method's unmasked ``config`` through it — including everything ``GET /{id}``
+# would have disclosed, for every method. So this gate does not currently
+# contain the disclosure; it holds the WRITE half and marks the read intent.
+# Bead enhancedchannelmanager-9kwzp.13 is what contains it, by masking
+# ``config`` in both read responses (``models.AlertMethod.to_dict`` already
+# builds the masked form and neither handler calls it).
 #
 # Its own body rather than a reuse: ``RequireHumanAdminForOutboundTest``
 # already gates ``POST /api/alert-methods/{id}/test`` in this same router and
-# correctly names the send; a caller refused on a LIST being told it cannot
+# correctly names the send; a caller refused on a WRITE being told it cannot
 # run a connection test would describe the neighbouring route, not this one.
 RequireHumanAdminForNotificationCredential = Depends(
     require_admin_if_enabled(

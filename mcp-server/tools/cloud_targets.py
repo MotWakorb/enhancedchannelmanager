@@ -14,22 +14,24 @@ otherwise echo a full credential value — they only ever forward what the
 caller supplies (to the encrypted-write endpoints) and surface whatever the
 backend's already-masked response contains.
 
-enhancedchannelmanager-9kwzp.10 item 4 then moved create/update/delete
-behind ``RequireHumanAdminForOutboundDestination``, which refuses the
-static MCP service principal. Those three tools therefore CANNOT succeed
-over MCP on any install with authentication enabled; each returns the
-backend's 403 as an error string. That is the designed outcome, not a
-misconfiguration and not a permission an operator can grant to the MCP
-key: writing a cloud target names the host ``tasks/dbas_backup.py`` PUTs
-the operator's archive to, supplies the credentials it authenticates with,
-and carries the ``insecure`` flag that turns off TLS verification for that
-upload — so an update can silently repoint a destination the operator
-already configured. jcj0f exposing the tools established product intent,
-not least privilege, and encryption-at-rest plus last-4 masking bound
-DISCLOSURE rather than redirection. HUMAN PATH: an ECM admin manages cloud
-targets from the UI, Settings > Backup & Restore. ``list_cloud_targets``
-is UNAFFECTED — the read half keeps the plain admin tier because its
-response masks every credential.
+enhancedchannelmanager-9kwzp.10 item 4 closed a real gap on this router:
+all four CRUD endpoints carried NO route dependency at all, so any
+authenticated non-admin could create, change or delete a cloud target.
+They are now admin-gated (``RequireAdminIfEnabled``). All four keep the
+PLAIN admin tier, which ADMITS the static MCP service principal, so
+``list_cloud_targets``, ``create_cloud_target``, ``update_cloud_target``
+and ``delete_cloud_target`` all continue to work over MCP.
+
+That was a deliberate PO decision against a human-admin gate for the three
+writes, which 9kwzp.10 initially shipped and which returned 403 to all
+three tools. The residual it accepts, so a caller knows what these tools
+can do: writing a cloud target names the host ``tasks/dbas_backup.py``
+PUTs the operator's archive to, supplies the credentials it authenticates
+with, and carries the ``insecure`` flag that turns off TLS verification
+for that upload — so an update can silently repoint a destination the
+operator already configured. The caller must still be an admin, and the
+outbound-policy write (``PATCH /api/settings/security``) is still refused
+to this principal.
 
 enhancedchannelmanager-9kwzp.6 had already moved BOTH connection-test endpoints
 (``POST /api/cloud-targets/{target_id}/test`` and
@@ -82,10 +84,6 @@ def register(mcp: FastMCP):
     ) -> str:
         """Create a cloud storage target (a DBAS backup upload destination).
 
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
-        module's docstring. Calling it returns that 403 as an error string.
-
         Credentials are encrypted at rest and NEVER echoed back in full —
         only a masked (last-4-chars) preview is shown, per the backend's
         response shape. Credentials CANNOT be pre-validated over MCP:
@@ -134,10 +132,6 @@ def register(mcp: FastMCP):
     ) -> str:
         """Update a cloud storage target — only provided fields change.
 
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
-        module's docstring. Calling it returns that 403 as an error string.
-
         Credentials, if provided, are re-encrypted wholesale (the new dict
         REPLACES the stored one; it is not merged field-by-field).
 
@@ -179,10 +173,6 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def delete_cloud_target(target_id: int, confirm: bool = False) -> str:
         """Delete a cloud storage target.
-
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 4) — see this
-        module's docstring. Calling it returns that 403 as an error string.
 
         CONFIRM GATING (bd-onazy convention): the first call (confirm=False,
         the default) looks up the target by name/provider and returns a

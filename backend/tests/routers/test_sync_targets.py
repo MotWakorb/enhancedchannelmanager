@@ -254,11 +254,7 @@ class TestSyncTargetAdminGate:
     async def test_non_admin_is_forbidden_when_auth_enabled(self, async_client):
         from fastapi import HTTPException, status
         from main import app
-        # bead 9kwzp.10 item 3: the WRITES moved off the plain admin tier onto
-        # ``RequireHumanAdminForOutboundDestination``, which additionally
-        # refuses the MCP service principal. This case still pins the
-        # non-admin half, so it must override the gate the route now carries.
-        from auth import RequireHumanAdminForOutboundDestination as _prebuilt
+        from auth import RequireAdminIfEnabled as _prebuilt
 
         async def _reject() -> None:
             raise HTTPException(

@@ -12,10 +12,9 @@ ECM has two admin gates that look interchangeable and are not:
   / ``auth.RequireHumanAdminForServiceCredential`` /
   ``auth.RequireHumanAdminForTLSMaterial`` /
   ``auth.RequireHumanAdminForOutboundPolicy`` /
-  ``auth.RequireHumanAdminForOutboundDestination`` /
   ``auth.RequireHumanAdminForNotificationCredential`` /
   ``auth.RequireHumanAdminForStatisticsReset`` — admin required AND the MCP
-  service principal is refused. These eight behave identically; they differ
+  service principal is refused. These seven behave identically; they differ
   only in the 403 body, which names the surface being refused so incident
   triage starts in the right place.
 
@@ -51,50 +50,77 @@ is denied exactly where a route:
    destructive half has no undo (9kwzp.11); or
 5. writes the outbound POLICY the routes in (1) are measured against, which is
    the fence rather than the probe (9kwzp.10 item 1); or
-6. writes an outbound DESTINATION — a backup-upload target or a sync target —
-   which repoints scheduled, credential-bearing traffic to a caller-named host
-   and carries the TLS-verification flag it travels under (9kwzp.10 items 3
-   and 4); or
-7. reads or writes a notification credential, because the alert-method
-   ``config`` blob holds the webhook URL, bot token and SMTP password in clear
-   (9kwzp.10 item 4); or
-8. irreversibly destroys operator data with no compensating write and no
+6. writes a notification credential, or reads a SINGLE one, because the
+   alert-method ``config`` blob holds the webhook URL, bot token and SMTP
+   password in clear (9kwzp.10 item 4, as amended — see the residual note
+   below, because the LIST read is admitted and discloses the same blob); or
+7. irreversibly destroys operator data with no compensating write and no
    rollback ledger (9kwzp.12).
 
 Everything else stays admitted. The groups below record that verdict per site
 so the next reader does not re-derive it.
 
+RULE (6) HAS A DELIBERATE EXCEPTION, AND ONE RULE WAS WITHDRAWN
+---------------------------------------------------------------
+
+This bead originally added an eighth rule — "writes an outbound DESTINATION (a
+backup-upload target or a sync target), which repoints scheduled,
+credential-bearing traffic to a caller-named host and carries the
+TLS-verification flag it travels under" — and a
+``RequireHumanAdminForOutboundDestination`` gate implementing it over the write
+halves of ``/api/cloud-targets`` and ``/api/sync-targets``. The PO WITHDREW it
+before it shipped, and the gate is gone from ``auth/dependencies.py``.
+
+The reason is capability, not a change of view on the risk: bead jcj0f ships
+six MCP tools over exactly those six routes (``create`` / ``update`` /
+``delete`` for each router), and the denial broke all six. Both routers now run
+on plain ``RequireAdminIfEnabled`` end to end; see ``_DESTINATION_CRUD``.
+
+Rule (6) has the same shape of exception for the same reason: ``GET
+/api/alert-methods`` is admitted because the ``list_alert_methods`` tool needs
+it, even though it discloses unmasked credentials. See ``_ALERT_METHOD_LIST``,
+which is the single most important comment in this module for a reader
+deciding whether a plain gate means "harmless".
+
 WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE
 -----------------------------------------------------------
 
-Three verdicts below were reached against a plausible case for denying, and are
+Four verdicts below were reached against a plausible case for denying, and are
 recorded here rather than left implicit:
 
-* ``_DESTINATION_READS`` — the list/get halves of the cloud-target and
-  sync-target routers stay admitted while their write halves are denied. Do
-  NOT read this as "masked, therefore harmless". These responses still
-  disclose the destination ``base_url`` / ``upload_path``, the ``insecure``
-  TLS-verification flag, the NAMES of the credential keys, each credential's
-  last four characters, ``credential_version`` and revocation state, and the
-  outcome of past syncs. That is network topology plus credential fingerprints,
-  handed to the exact principal the write verdict declares untrusted to manage
-  those destinations, and it would materially help someone deciding which
-  destination to attack by another route.
+* ``_ALERT_METHOD_LIST`` — ``GET /api/alert-methods`` is ADMITTED and returns
+  ``AlertMethod.config`` UNREDACTED. This is the sharpest residual in the whole
+  inventory and it must not be inferred from the bare gate name. Read that
+  group's comment before touching anything in ``/api/alert-methods``.
+* ``_DESTINATION_CRUD`` — the cloud-target and sync-target routers are admitted
+  END TO END, reads and writes. Do NOT read this as "masked, therefore
+  harmless". The reads disclose the destination ``base_url`` /
+  ``upload_path``, the ``insecure`` TLS-verification flag, the NAMES of the
+  credential keys, each credential's last four characters,
+  ``credential_version`` and revocation state, and the outcome of past syncs —
+  network topology plus credential fingerprints. The writes do more than that:
+  they repoint where a scheduled job sends the operator's data and under what
+  TLS posture. What the masking buys is narrow and specific: no stored secret
+  VALUE can be reconstructed from a read, so a read alone cannot authenticate
+  to the destination. It buys nothing at all against a write.
 
-  The verdict is a JUDGEMENT that this residual is worth the sidecar keeping a
-  usable inventory, not a claim that the residual is nil. What the masking
-  does buy is narrow and specific: no stored secret VALUE can be reconstructed
-  from a read, so a read alone cannot authenticate to the destination. Revisit
-  this the moment the read surface grows a field that is not already implied by
-  the destination's existence.
+  The verdict is a PRODUCT JUDGEMENT that six shipped MCP tools are worth that
+  residual, not a claim that the residual is nil.
 
   It diverges from ``GET /api/tls/settings``, which IS denied despite masking,
   on two counts: that route additionally emits ``dns_zone_id`` and
   ``acme_email`` in clear, and the sidecar has no TLS tool at all, so denying
   it costs nothing.
 * ``_ALERT_METHOD_TYPES`` — a static catalogue of the method types this build
-  supports. No install data, no stored value.
+  supports. No install data, no stored value. The one unarguable member of
+  this list.
 * ``_DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER`` — see its own comment.
+
+The through-line of the first two: on this surface the MCP principal is denied
+where denying it costs no shipped tool, and admitted where it would break one.
+That is the rule actually in force. It is not the same rule as "denied wherever
+a credential is reachable", and a reader who assumes the latter will
+misread every entry in ``MCP_ADMITTED``.
 
 WHERE THIS INVENTORY IS DELIBERATELY COARSER THAN ITS OWN PROSE
 ---------------------------------------------------------------
@@ -103,9 +129,6 @@ The rule above describes the DANGEROUS member of each denied group, and the
 gates are coarser than that description. Stated plainly rather than left for a
 reader to discover:
 
-* A rename-only update to a sync target or a cloud target is denied exactly
-  like a ``base_url``, credential or ``insecure`` change, even though it
-  repoints nothing.
 * A display-name or severity-filter change on an alert method is denied
   exactly like a credential replacement.
 * TIGHTENING ``ssrf_outbound_mode`` from ``lan_friendly`` to ``public_only`` is
@@ -138,7 +161,6 @@ from fastapi.routing import APIRoute
 from auth import (
     RequireAdminIfEnabled,
     RequireHumanAdminForNotificationCredential,
-    RequireHumanAdminForOutboundDestination,
     RequireHumanAdminForOutboundPolicy,
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
@@ -263,20 +285,51 @@ _BACKUP_ARCHIVE = {
 }
 
 # bead 9kwzp.10 items 3 and 4, decided against a plausible case for denying,
-# and NOT on the grounds that these reads are harmless. See the module
-# docstring, "WHERE THIS INVENTORY DELIBERATELY ADMITS SOMETHING ARGUABLE":
-# they still disclose the destination URL, the ``insecure`` flag, credential
-# key names and last-4, credential version and revocation state, and past sync
-# outcomes. What ``_mask_credentials`` buys is only that no stored secret VALUE
-# is recoverable, so a read alone cannot authenticate to the destination. The
-# verdict trades that residual for the sidecar keeping a usable inventory
-# (``list_cloud_targets`` / ``list_sync_targets``). The WRITE halves are in
-# ``_OUTBOUND_DESTINATION_WRITE`` below, because masking bounds disclosure and
-# says nothing about redirection.
-_DESTINATION_READS = {
+# and NOT on the grounds that any of it is harmless.
+#
+# BEFORE THIS BEAD: ``/api/cloud-targets`` had no route dependency at all on
+# its four CRUD routes, so any authenticated non-admin reached them;
+# ``/api/sync-targets`` was already admin-gated on all five. What this bead
+# fixes is the cloud-target half — every route in both routers now requires
+# admin.
+#
+# THE MCP PRINCIPAL IS ADMITTED ON ALL NINE, WRITES INCLUDED. This bead first
+# denied the six writes via a ``RequireHumanAdminForOutboundDestination`` gate;
+# the PO withdrew that before it shipped and the gate no longer exists. The
+# reason is capability: bead jcj0f ships ``create_cloud_target``,
+# ``update_cloud_target``, ``delete_cloud_target``, ``create_sync_target``,
+# ``update_sync_target`` and ``delete_sync_target`` as MCP tools over exactly
+# these six routes, and the denial returned 403 to all six.
+#
+# The residual that buys, stated so nobody has to re-derive it. READS disclose
+# the destination URL, the ``insecure`` flag, credential key names and last-4,
+# credential version and revocation state, and past sync outcomes — network
+# topology plus credential fingerprints. WRITES do materially more: a cloud
+# target is where ``tasks/dbas_backup.py`` PUTs the operator's archive, a sync
+# target is the remote instance ``tasks/dbas_sync.py`` pushes config to on a
+# timer (creating one registers its ``dbas_sync_<id>`` task), and both carry
+# ``insecure``, which turns off TLS verification for that traffic. So the
+# principal can repoint scheduled, credential-bearing outbound traffic to a
+# host it names. ``routers/sync_targets.py`` is explicit that the
+# authoritative SSRF check runs at EXECUTE time, not at write time.
+#
+# What ``_mask_credentials`` buys is only that no stored secret VALUE is
+# recoverable from a read; it buys nothing against a write. What still holds
+# the line is that the caller must be an admin, that the outbound POLICY write
+# stays denied (``_OUTBOUND_POLICY_WRITE``), and that both cloud-target
+# ``/test`` verbs stay denied (``_OUTBOUND_CREDENTIAL_TEST``).
+#
+# Bring the gate back if these tools are withdrawn.
+_DESTINATION_CRUD = {
     ("GET", "/api/cloud-targets"),
+    ("POST", "/api/cloud-targets"),
+    ("PATCH", "/api/cloud-targets/{target_id}"),
+    ("DELETE", "/api/cloud-targets/{target_id}"),
     ("GET", "/api/sync-targets"),
     ("GET", "/api/sync-targets/{target_id}"),
+    ("POST", "/api/sync-targets"),
+    ("PUT", "/api/sync-targets/{target_id}"),
+    ("DELETE", "/api/sync-targets/{target_id}"),
 }
 
 # bead 9kwzp.10 item 4. The one route in ``/api/alert-methods`` that is not
@@ -284,6 +337,45 @@ _DESTINATION_READS = {
 # supports and their field descriptors. No install data, no stored value.
 _ALERT_METHOD_TYPES = {
     ("GET", "/api/alert-methods/types"),
+}
+
+# ===========================================================================
+# STOP. THIS ROUTE DISCLOSES UNREDACTED CREDENTIALS TO THE MCP PRINCIPAL.
+# ===========================================================================
+# bead 9kwzp.10 item 4, amended by the PO. Do not read the plain
+# ``RequireAdminIfEnabled`` on ``routers/alert_methods.py::list_alert_methods``
+# and conclude the route is uninteresting. It is the opposite.
+#
+# WHAT IT DISCLOSES. The handler hand-rolls its response dict and emits
+# ``"config": json.loads(m.config)`` for every configured method, with NO
+# masking of any kind. That blob is where the Discord webhook URL, the Telegram
+# bot token and the SMTP password live. Those are the exact three families bead
+# 9ej7f withheld from this same principal on ``GET /api/settings``, so as long
+# as this route is admitted, that redaction is reachable around. Note this also
+# makes the human-admin gate on ``GET /api/alert-methods/{method_id}`` (in
+# ``_NOTIFICATION_CREDENTIAL``) disclosure-vacuous against the MCP principal:
+# the list returns the same fields for every method, so denying the single-read
+# withholds nothing the list does not already hand over. That gate is held
+# because no tool needs the route, not because it is containing anything.
+#
+# WHY IT IS ADMITTED ANYWAY. The shipped ``list_alert_methods`` MCP tool is the
+# operator's inventory of their own alert methods and calls exactly this route.
+# This bead denied it; the PO reversed that, accepting the disclosure, because
+# refusing it removed a capability the sidecar was built to provide.
+#
+# WHAT ACTUALLY FIXES IT — and this is the point of recording it here rather
+# than leaving it to the gate name. The right fix is the RESPONSE, not the
+# gate. ``models.AlertMethod.to_dict(include_sensitive=False)`` already builds
+# a masked ``config`` and substitutes ``********`` for sensitive keys; this
+# handler simply never calls it. That is bead
+# enhancedchannelmanager-9kwzp.13 (P1, open). Closing it removes this residual
+# without touching this dependency and without taking the tool away — which is
+# why the authorization verdict here is not the place to fight it.
+#
+# If you are here because you are about to widen this router, the question to
+# ask is whether 9kwzp.13 has landed yet.
+_ALERT_METHOD_LIST = {
+    ("GET", "/api/alert-methods"),
 }
 
 # READ THIS ONE CAREFULLY: the route dependency admits the principal, and the
@@ -341,8 +433,9 @@ MCP_ADMITTED: frozenset = frozenset(
     | _EMBY_LOGO_MAINTENANCE
     | _OPERATIONAL_RESTART
     | _BACKUP_ARCHIVE
-    | _DESTINATION_READS
+    | _DESTINATION_CRUD
     | _ALERT_METHOD_TYPES
+    | _ALERT_METHOD_LIST
     | _DBAS_PREVIEW_ADMITTED_APPLY_DENIED_IN_HANDLER
     | _TLS_STATUS_READS
 )
@@ -394,61 +487,33 @@ _OUTBOUND_POLICY_WRITE = {
     ("PATCH", "/api/settings/security"),
 }
 
-# bead 9kwzp.10 items 3 and 4: the WRITE halves of the two outbound-destination
-# routers. A cloud target is where ``tasks/dbas_backup.py`` PUTs the operator's
-# archive; a sync target is the remote instance ``tasks/dbas_sync.py`` pushes
-# config to on a timer, and creating one registers its ``dbas_sync_<id>`` task.
-# Both accept a caller-named host, store the credentials the job authenticates
-# with, and expose ``insecure``, which turns off TLS verification for that
-# traffic. Updating either repoints a flow the operator already configured.
-# That is the kgz3k shape — rewriting an outbound base URL a background job
-# will then contact — deferred onto a schedule, which makes it quieter rather
-# than safer: no operator sees a result and the redirect repeats every cycle.
+# bead 9kwzp.10 item 4: the four routes of ``/api/alert-methods`` that NO MCP
+# tool calls. The router carried NO route dependency on any of its six non-test
+# routes, so every one of them was reachable by any authenticated non-admin AND
+# by this principal.
 #
-# Bead jcj0f DID ship create/update/delete for both as MCP tools, and those
-# three tools now receive a clean 403 on an auth-enabled instance. That is the
-# deliberate outcome. A deliberately-exposed tool establishes product intent,
-# not least privilege, and the encryption-at-rest plus last-4 masking these
-# routers are documented around bounds DISCLOSURE of a stored credential — not
-# redirection, not replacement, not the TLS downgrade. The list/get halves stay
-# admitted; see ``_DESTINATION_READS``.
+# An alert method holds the Discord webhook URL, the Telegram bot token and the
+# SMTP password in ``AlertMethod.config``. The three WRITES here can repoint
+# where ECM's own alerts go, or end them — that is the kgz3k shape, and the
+# reason for denying is the same one that denies ``POST /api/settings``. The
+# single READ, ``GET /{method_id}``, returns that blob verbatim.
 #
-# COARSE ON PURPOSE: a rename-only update is denied exactly like a base_url,
-# credential or ``insecure`` change. Nothing on these routes is a per-user
-# preference, so the whole route is admin work and the coarse gate costs the
-# automation credential nothing it had a legitimate claim to. See the module
-# docstring, "WHERE THIS INVENTORY IS DELIBERATELY COARSER THAN ITS OWN PROSE".
-_OUTBOUND_DESTINATION_WRITE = {
-    ("POST", "/api/cloud-targets"),
-    ("PATCH", "/api/cloud-targets/{target_id}"),
-    ("DELETE", "/api/cloud-targets/{target_id}"),
-    ("POST", "/api/sync-targets"),
-    ("PUT", "/api/sync-targets/{target_id}"),
-    ("DELETE", "/api/sync-targets/{target_id}"),
-}
-
-# bead 9kwzp.10 item 4: ``/api/alert-methods``, which carried NO route
-# dependency on any of its six non-test routes — reachable by any
-# authenticated non-admin AND by this principal.
+# BE PRECISE ABOUT WHAT THE READ HALF OF THIS GATE ACHIEVES TODAY: nothing,
+# against the MCP principal. ``GET /api/alert-methods`` is ADMITTED (see
+# ``_ALERT_METHOD_LIST``) and returns the same unmasked ``config`` for EVERY
+# method, so the principal can read through the list exactly what this gate
+# withholds on the single-method route. ``GET /{method_id}`` is kept here
+# because no tool needs it and the group is coherent, not because it is
+# containing a disclosure. Bead enhancedchannelmanager-9kwzp.13 is what
+# contains it, by masking ``config`` in both read responses.
 #
-# The READ half is the sharper one, and is why these are denied rather than
-# merely admin-gated. ``list_alert_methods`` and ``get_alert_method`` return
-# ``AlertMethod.config`` verbatim with no masking of any kind, and that blob is
-# where the Discord webhook URL, the Telegram bot token and the SMTP password
-# live. Those are the exact three families bead 9ej7f withheld from this
-# principal on GET /api/settings and kgz3k denies it on the settings WRITE,
-# handed out in clear through a second table. A field you may not write, you
-# may not read.
-#
-# The sidecar's ``list_alert_methods`` tool therefore now receives a 403;
-# ``test_alert_method`` already did (9kwzp.6). The response bodies are
-# UNCHANGED — the absence of a masking layer on ``config`` is a separate
-# concern and is not addressed by this authorization fix.
+# ``test_alert_method`` was denied separately by 9kwzp.6 and lives in
+# ``_OUTBOUND_CREDENTIAL_TEST``. The response bodies are UNCHANGED — this bead
+# adds authorization, not masking.
 #
 # COARSE ON PURPOSE: a display-name or severity-filter change is denied
 # exactly like a credential replacement.
 _NOTIFICATION_CREDENTIAL = {
-    ("GET", "/api/alert-methods"),
     ("POST", "/api/alert-methods"),
     ("GET", "/api/alert-methods/{method_id}"),
     ("PATCH", "/api/alert-methods/{method_id}"),
@@ -550,7 +615,6 @@ MCP_DENIED: frozenset = frozenset(
     | _SERVICE_CREDENTIAL_LIFECYCLE
     | _TLS_MATERIAL_LIFECYCLE
     | _OUTBOUND_POLICY_WRITE
-    | _OUTBOUND_DESTINATION_WRITE
     | _NOTIFICATION_CREDENTIAL
     | _DESTRUCTIVE_DATA_RESET
 )
@@ -627,7 +691,7 @@ def test_classifier_distinguishes_the_two_gates():
 
     If ``_gate_kind`` stopped telling the two gates apart, the set assertions
     below would still pass whenever both sets happened to be classified the
-    same way. Pin the classifier against the nine shipped dependencies first.
+    same way. Pin the classifier against the eight shipped dependencies first.
     """
     assert _gate_kind(RequireAdminIfEnabled.dependency) == "admitted"
     assert _gate_kind(RequireHumanAdminIfEnabled.dependency) == "denied"
@@ -635,7 +699,6 @@ def test_classifier_distinguishes_the_two_gates():
     assert _gate_kind(RequireHumanAdminForServiceCredential.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForTLSMaterial.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForOutboundPolicy.dependency) == "denied"
-    assert _gate_kind(RequireHumanAdminForOutboundDestination.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForNotificationCredential.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForStatisticsReset.dependency) == "denied"
 
@@ -643,7 +706,7 @@ def test_classifier_distinguishes_the_two_gates():
 def test_every_human_admin_gate_names_its_own_surface():
     """No two human-admin gates may share a 403 body.
 
-    The eight denial gates behave identically; the ONLY thing that
+    The seven denial gates behave identically; the ONLY thing that
     distinguishes them is the operator-facing message, which exists so a
     refusal points triage at the right subsystem. A copy-paste that reused a
     neighbour's body would leave every behavioural test in the suite green
@@ -657,7 +720,6 @@ def test_every_human_admin_gate_names_its_own_surface():
             RequireHumanAdminForServiceCredential,
             RequireHumanAdminForTLSMaterial,
             RequireHumanAdminForOutboundPolicy,
-            RequireHumanAdminForOutboundDestination,
             RequireHumanAdminForNotificationCredential,
             RequireHumanAdminForStatisticsReset,
         )

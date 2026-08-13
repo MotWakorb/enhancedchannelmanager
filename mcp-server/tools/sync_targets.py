@@ -10,23 +10,22 @@ the backend (unlike cloud-targets) — a live sync run is the only way to
 validate reachability; the sync execution engine's SSRF gate runs at that
 point (see routers/sync_targets.py module docstring).
 
-enhancedchannelmanager-9kwzp.10 item 3 moved create/update/delete behind
-``RequireHumanAdminForOutboundDestination``, which refuses the static MCP
-service principal. Those three tools therefore CANNOT succeed over MCP on
-any install with authentication enabled; each returns the backend's 403 as
-an error string. That is the designed outcome, not a misconfiguration and
-not a permission an operator can grant to the MCP key: writing a sync
-target names a remote host, stores the credentials this instance
+enhancedchannelmanager-9kwzp.10 item 3 reviewed the gate on all five
+endpoints. They were already admin-gated (``RequireAdminIfEnabled``) and
+they stay that way, reads and writes alike. That gate ADMITS the static MCP
+service principal, so all five tools here continue to work over MCP.
+
+That is a deliberate PO decision against a human-admin gate for the three
+writes, which 9kwzp.10 initially shipped and which returned 403 to
+``create_sync_target``, ``update_sync_target`` and ``delete_sync_target``.
+The residual it accepts, so a caller knows what these tools can do: writing
+a sync target names a remote host, stores the credentials this instance
 authenticates to it with, sets ``insecure`` (which turns off TLS
 verification for that traffic) and registers the target's ``dbas_sync_<id>``
 scheduled task — so an update can silently repoint a push the operator
 already configured, and the authoritative SSRF check does not run until
-execute time. jcj0f exposing the tools established product intent, not
-least privilege, and encryption-at-rest plus last-4 masking bound
-DISCLOSURE rather than redirection. HUMAN PATH: an ECM admin manages sync
-targets from the UI, Settings > Backup & Restore. ``list_sync_targets`` and
-``get_sync_target`` are UNAFFECTED — the read half keeps the plain admin
-tier because its response masks every credential.
+execute time. The caller must still be an admin, and the outbound-policy
+write (``PATCH /api/settings/security``) is still refused to this principal.
 """
 import logging
 
@@ -75,10 +74,6 @@ def register(mcp: FastMCP):
     ) -> str:
         """Create a sync target — a remote instance this instance can push
         config to.
-
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 3) — see this
-        module's docstring. Calling it returns that 403 as an error string.
 
         Credentials are encrypted at rest and NEVER echoed back in full —
         only a masked (last-4-chars) preview is shown, per the backend's
@@ -133,10 +128,6 @@ def register(mcp: FastMCP):
     ) -> str:
         """Update a sync target — only provided fields change.
 
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 3) — see this
-        module's docstring. Calling it returns that 403 as an error string.
-
         Credentials, if provided, are re-encrypted wholesale (the new dict
         REPLACES the stored one). The backend bumps credential_version only
         when credentials are actually written — a rename or enable-toggle
@@ -178,10 +169,6 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def delete_sync_target(target_id: int, confirm: bool = False) -> str:
         """Delete a sync target.
-
-        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is
-        enabled (bead enhancedchannelmanager-9kwzp.10 item 3) — see this
-        module's docstring. Calling it returns that 403 as an error string.
 
         CONFIRM GATING (bd-onazy convention): the first call (confirm=False,
         the default) fetches the target and returns a preview naming it —

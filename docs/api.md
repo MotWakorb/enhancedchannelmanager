@@ -779,10 +779,10 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/alert-methods` | List all alert methods. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `GET /api/alert-methods` | List all alert methods. Admin-only when auth is enabled; the MCP service key is **admitted**, so the shipped `list_alert_methods` tool keeps working. **The response carries each method's `config` UNMASKED** (webhook URL, bot token, SMTP password), so this route discloses those to the automation credential. Accepted residual; masking the response is bead 9kwzp.13 (beads 9kwzp.10, 9kwzp.13). |
 | `GET /api/alert-methods/types` | Get available alert method types. Admin-only when auth is enabled; the MCP service key is admitted, since the catalogue is static and holds no install data (bead 9kwzp.10). |
 | `POST /api/alert-methods` | Create alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
-| `GET /api/alert-methods/{id}` | Get alert method details. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
+| `GET /api/alert-methods/{id}` | Get alert method details. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password. No MCP tool calls this route. Note the refusal withholds nothing today, since `GET /api/alert-methods` returns the same fields for every method (beads 9kwzp.10, 9kwzp.13). |
 | `PATCH /api/alert-methods/{id}` | Update alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `DELETE /api/alert-methods/{id}` | Delete alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
@@ -1250,10 +1250,10 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 | Endpoint | Description |
 |-|-|
 | `GET /api/cloud-targets` | List configured cloud storage targets (credentials masked). Admin-only when auth is enabled; the MCP service key is admitted, since every credential in the response is masked (bead 9kwzp.10). |
-| `POST /api/cloud-targets` | Create a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
+| `POST /api/cloud-targets` | Create a cloud storage target. Admin-only when auth is enabled; the MCP service key is admitted, because bead jcj0f ships a `create_cloud_target` tool over this route. Note a write repoints scheduled credential-bearing uploads and sets the `insecure` TLS-verification flag (bead 9kwzp.10). |
 | `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
-| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
-| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. Admin-only when auth is enabled; the MCP service key is refused, because writing a destination repoints scheduled credential-bearing uploads (bead 9kwzp.10). |
+| `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. Admin-only when auth is enabled; the MCP service key is admitted, because bead jcj0f ships an `update_cloud_target` tool over this route. Same residual as `POST` (bead 9kwzp.10). |
+| `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. Admin-only when auth is enabled; the MCP service key is admitted, because bead jcj0f ships a `delete_cloud_target` tool over this route (bead 9kwzp.10). |
 | `POST /api/cloud-targets/{id}/test` | Test connectivity to a saved cloud storage target, using its stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 | `POST /api/cloud-targets/test` | Test connectivity with inline (not-yet-saved) credentials. Same gate as `/{id}/test`. |
 

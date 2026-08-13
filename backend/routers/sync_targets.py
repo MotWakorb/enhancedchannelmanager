@@ -9,10 +9,9 @@ A SyncTarget is a remote Dispatcharr-B instance ECM can push config to
 * ``credential_version`` bumps same-txn on a credentials write via the ORM
   before_update listener on the model (``export_models.py``) — a rename or
   enable-toggle does NOT bump it;
-* every READ is admin-gated (``auth.RequireAdminIfEnabled``) and every WRITE is
-  human-admin-gated (``auth.RequireHumanAdminForOutboundDestination``), which
-  additionally refuses the static MCP service principal — see
-  :func:`create_sync_target` for why the two halves differ (bead 9kwzp.10).
+* every route is admin-gated (``auth.RequireAdminIfEnabled``), reads and writes
+  alike, and that gate ADMITS the static MCP service principal — see
+  :func:`create_sync_target` for why (bead 9kwzp.10).
 
 base_url validation
 -------------------
@@ -38,7 +37,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from auth import RequireAdminIfEnabled, RequireHumanAdminForOutboundDestination
+from auth import RequireAdminIfEnabled
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from database import get_session
 from export_models import SyncTarget
@@ -222,39 +221,35 @@ def _remove_sync_task_best_effort(target_id: int) -> None:
 @router.post("", status_code=201)
 async def create_sync_target(
     req: SyncTargetCreate,
-    _admin=RequireHumanAdminForOutboundDestination,
+    _admin=RequireAdminIfEnabled,
 ):
-    """Create a new sync target with encrypted credentials. Human-admin only.
+    """Create a new sync target with encrypted credentials. Admin only.
 
     bead 9kwzp.10 item 3, which was filed as a DECISION rather than a defect:
     all five routes were already admin-gated, so the only question was whether
-    admitting the MCP service principal is intended. Verdict: not on the
-    writes.
+    admitting the MCP service principal is intended. Verdict: yes, on all five,
+    writes included.
 
-    Bead jcj0f did ship ``create_sync_target`` / ``update_sync_target`` /
-    ``delete_sync_target`` as MCP tools, and that is real product intent — but
-    intent is not a least-privilege argument, and a tool can be overprivileged.
-    What a write here does is name a remote host, store the credentials this
-    instance authenticates to it with, set ``insecure`` (which turns off TLS
-    verification for that traffic), and register or refresh the target's
-    ``dbas_sync_<id>`` scheduled task. Updating an existing target repoints a
-    push the operator already configured. That is the shape kgz3k denies this
-    principal on POST /api/settings, and the module docstring above is explicit
-    that the AUTHORITATIVE SSRF check runs at sync EXECUTE time, not here — so
-    the config write is not itself constrained by the outbound policy at the
-    moment it is made.
+    Bead jcj0f shipped ``create_sync_target`` / ``update_sync_target`` /
+    ``delete_sync_target`` as MCP tools deliberately, and managing
+    cross-instance sync destinations is work the sidecar exists to do. Denying
+    the principal here breaks those three tools outright, and that capability
+    loss is not worth what the denial buys.
 
-    Two things that do NOT rescue the write half, because they address a
-    different property: the credentials are Fernet-encrypted at rest and every
-    response masks them to the last four characters (that bounds DISCLOSURE,
-    not redirection or replacement), and the sync payload is run through
-    ``_redact_credentials_deep`` before it goes on the wire (that bounds what
-    leaks to a hostile destination, not the fact that ECM keeps connecting to
-    one on a timer).
+    Recorded so the residual is visible rather than implied: a write names a
+    remote host, stores the credentials this instance authenticates to it with,
+    sets ``insecure`` (which turns off TLS verification for that traffic), and
+    registers or refreshes the target's ``dbas_sync_<id>`` scheduled task, so
+    an update can repoint a push the operator already configured. The module
+    docstring above is explicit that the AUTHORITATIVE SSRF check runs at sync
+    EXECUTE time, not here. Encryption at rest, the last-4 masking on responses
+    and ``_redact_credentials_deep`` on the outbound payload all bound
+    DISCLOSURE, not redirection.
 
-    The READS keep the plain admin tier for the opposite reason: they disclose
-    only masked credentials, and leaving them admitted is what keeps the
-    sidecar's ``list_sync_targets`` inventory tool working.
+    What remains in force is that the caller must be an admin — the plain gate
+    closes the non-admin half completely — and that the outbound POLICY write
+    (``PATCH /api/settings/security``, which is what would widen
+    ``ssrf_outbound_mode``) still refuses this principal.
     """
     db = get_session()
     try:
@@ -323,9 +318,9 @@ async def get_sync_target(target_id: int, _admin=RequireAdminIfEnabled):
 async def update_sync_target(
     target_id: int,
     req: SyncTargetUpdate,
-    _admin=RequireHumanAdminForOutboundDestination,
+    _admin=RequireAdminIfEnabled,
 ):
-    """Update a sync target. Human-admin only.
+    """Update a sync target. Admin only.
 
     Credentials are re-encrypted only if provided. The credential_version bumps
     (same-txn, via the ORM listener) ONLY when ``credentials`` is actually
@@ -334,7 +329,8 @@ async def update_sync_target(
     bead 9kwzp.10 item 3, and the sharpest member of the group: this is the
     route that can repoint a ``base_url``, replace the credentials and clear
     ``insecure`` on a target the operator ALREADY configured and that a
-    scheduled task ALREADY pushes to. See :func:`create_sync_target`.
+    scheduled task ALREADY pushes to. See :func:`create_sync_target` for the
+    full verdict, including why the MCP service principal is admitted anyway.
     """
     db = get_session()
     try:
@@ -392,9 +388,9 @@ async def update_sync_target(
 @router.delete("/{target_id}", status_code=204)
 async def delete_sync_target(
     target_id: int,
-    _admin=RequireHumanAdminForOutboundDestination,
+    _admin=RequireAdminIfEnabled,
 ):
-    """Delete a sync target. Human-admin only.
+    """Delete a sync target. Admin only.
 
     bead 9kwzp.10 item 3. Same gate as its create/update siblings: deleting a
     target unregisters its ``dbas_sync_<id>`` task, silently ending the
