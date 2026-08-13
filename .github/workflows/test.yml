@@ -69,12 +69,50 @@ jobs:
         id: classify
         uses: ./.github/actions/classify-changed-paths
 
-  # Not a required context, but deliberately UNGATED: a documentation-only
-  # change is precisely what this job checks, and this workflow now runs on
-  # every event, so it needs no `detect` dependency at all. Until bead
-  # enhancedchannelmanager-5rwzy this job existed twice, once here and once
-  # in docs-only-pass.yml, with a "keep the step byte-identical" comment
-  # holding the two copies together. There is now one copy.
+  # ─── Operator Docs ────────────────────────────────────────────────────
+  # REQUIRED CONTEXT on `dev`, as `Operator Docs`. Read this before editing
+  # the job; the constraints below are not stylistic.
+  #
+  # Branch protection on `dev` is classic with enforce_admins=true, and it
+  # matches a required check by the DISPLAYED job name. GitHub reports no
+  # conclusion at all for a job it skips. So a required-context job that
+  # skips, or that reports under any other name, leaves protection waiting
+  # forever for a context nothing emits, and every open pull request wedges
+  # with no admin bypass. Failing one PR is a working guard; wedging all of
+  # them is an outage.
+  #
+  # Concretely, do NOT:
+  #   * add a job-level `if:` or `needs:` here (either can skip the job);
+  #   * add `strategy:` (a matrix renames the context to
+  #     `Operator Docs (<value>)`, exactly as it does for CodeQL Analysis in
+  #     build.yml) or convert it to a reusable-workflow `uses:` call (which
+  #     reports as `Operator Docs / <inner job>`);
+  #   * change `name:`, delete it, or rename the `operator-docs` job key;
+  #   * add `continue-on-error: true`, which makes it green regardless;
+  #   * add a path filter to this workflow (see the invariant at the top).
+  #
+  # Gating individual STEPS is fine and is how this job already works: a
+  # skipped step still leaves the job reporting a conclusion. The four
+  # ratchets below are pull-request-only for that reason.
+  #
+  # This job hosts six gates: `npm run docs:check`, the em-dash ratchet, the
+  # PII/ECM-credential ratchet, the detect-secrets ratchet, the
+  # binary-artifact ratchet, and `mkdocs build --strict`. Moving one out of
+  # this job silently removes it from the required check even if it still
+  # runs somewhere else.
+  #
+  # `backend/tests/unit/test_classify_changed_paths.py::
+  # TestOperatorDocsRequiredContext` fails the pull request on any of the
+  # above, so the branch cannot be wedged by an edit here. If you need to
+  # change one of these properties, change branch protection first, then that
+  # test, then this job.
+  #
+  # Deliberately UNGATED: a documentation-only change is precisely what this
+  # job checks, and this workflow runs on every event, so it needs no
+  # `detect` dependency at all. Until bead enhancedchannelmanager-5rwzy this
+  # job existed twice, once here and once in docs-only-pass.yml, with a "keep
+  # the step byte-identical" comment holding the two copies together. There
+  # is now one copy.
   operator-docs:
     name: Operator Docs
     runs-on: ubuntu-latest
