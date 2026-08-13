@@ -32,18 +32,25 @@ from models import User
 MCP_KEY = "mcp-secret-key-9kwzp7"
 
 # (path, body) for the three media-server test-connection endpoints.
+#
+# The credential VALUES below are angle-bracket placeholders, not
+# credential-shaped strings. The refusal tests assert on the gate, which
+# answers first, and the positive control rewrites ``base_url`` so the SSRF
+# guard answers before any client is built, so no value is ever consumed;
+# writing them as visible placeholders keeps that fact obvious to a reader and
+# keeps the file free of anything a scanner has to reason about.
 MEDIA_SERVER_ENDPOINTS = [
     (
         "/api/settings/emby/test-connection",
-        {"base_url": "http://emby.example.com:8096", "api_key": "emby-secret"},
+        {"base_url": "http://emby.example.com:8096", "api_key": "<synthetic-emby-key>"},
     ),
     (
         "/api/settings/plex/test-connection",
-        {"base_url": "http://plex.example.com:32400", "token": "plex-secret"},
+        {"base_url": "http://plex.example.com:32400", "token": "<synthetic-plex-token>"},
     ),
     (
         "/api/settings/jellyfin/test-connection",
-        {"base_url": "http://jellyfin.example.com:8096", "api_key": "jf-secret"},
+        {"base_url": "http://jellyfin.example.com:8096", "api_key": "<synthetic-jellyfin-key>"},
     ),
 ]
 

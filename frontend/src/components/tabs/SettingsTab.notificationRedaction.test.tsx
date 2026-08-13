@@ -119,7 +119,12 @@ import * as api from '../../services/api';
 import { SettingsTab } from './SettingsTab';
 
 const WEBHOOK = 'https://discord.com/api/webhooks/1/abcdefghijklmnop';
-const BOT_TOKEN = '123456789:AAEabcdefghijklmnopqrstuvwxyz012345';
+// Telegram issues `<bot id>:<exactly 35 characters>`. The 35 characters here
+// are just the alphabet followed by digits, and the value is assembled from
+// parts so no token-shaped literal exists on any single line. Same convention
+// as backend `tests/unit/test_check_pii.py`: keep the real SHAPE, look like
+// nothing.
+const BOT_TOKEN = '123456789:' + 'AAEabcdefghijklmno' + 'pqrstuvwxyz012345';
 const CHAT_ID = '-1001234567890';
 
 const settingsBase = {

@@ -43,6 +43,12 @@ from models import User
 MCP_KEY = "mcp-secret-key-i4qrp"
 
 # (path, body) for each of the four ungated sinks.
+#
+# The credential VALUES below are angle-bracket placeholders, not
+# credential-shaped strings. Every test here asserts on the gate, which
+# answers before the handler ever reads a body field, so no value is
+# consumed; writing them as visible placeholders keeps that fact obvious to a
+# reader and keeps the file free of anything a scanner has to reason about.
 TEST_ENDPOINTS = [
     (
         "/api/settings/test",
@@ -50,7 +56,7 @@ TEST_ENDPOINTS = [
             "url": "http://dispatcharr:8000",
             "auth_method": "password",
             "username": "admin",
-            "password": "secret",
+            "password": "<synthetic-dispatcharr-password>",
         },
     ),
     (
@@ -59,7 +65,7 @@ TEST_ENDPOINTS = [
             "smtp_host": "smtp.example.com",
             "smtp_port": 587,
             "smtp_user": "alerts@example.com",
-            "smtp_password": "hunter2",
+            "smtp_password": "<synthetic-smtp-password>",
             "smtp_from_email": "alerts@example.com",
             "smtp_from_name": "ECM",
             "smtp_use_tls": True,
@@ -194,7 +200,7 @@ class TestAdminStillAllowed:
                     "url": "ftp://dispatcharr:8000",
                     "auth_method": "password",
                     "username": "admin",
-                    "password": "secret",
+                    "password": "<synthetic-dispatcharr-password>",
                 },
             )
 

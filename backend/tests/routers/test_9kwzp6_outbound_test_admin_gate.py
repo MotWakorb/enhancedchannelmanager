@@ -54,13 +54,25 @@ from models import User
 MCP_KEY = "mcp-secret-key-9kwzp6"
 
 # (path, body) for each of the four ungated outbound sinks.
+#
+# The credential VALUES below are angle-bracket placeholders, not
+# credential-shaped strings. Both tests that use this table assert on the
+# gate, which answers before the handler ever reads a body field, so no value
+# is consumed; writing them as visible placeholders keeps that fact obvious to
+# a reader and keeps the file free of anything a scanner has to reason about.
 OUTBOUND_ENDPOINTS = [
     ("/api/alert-methods/1/test", None),
     ("/api/m3u/digest/test", None),
     ("/api/cloud-targets/1/test", None),
     (
         "/api/cloud-targets/test",
-        {"provider_type": "s3", "credentials": {"access_key": "AKIA", "secret_key": "s3cr3t"}},
+        {
+            "provider_type": "s3",
+            "credentials": {
+                "access_key": "<synthetic-s3-access-key>",
+                "secret_key": "<synthetic-s3-secret-key>",
+            },
+        },
     ),
 ]
 

@@ -45,7 +45,11 @@ from .test_settings import _full_payload, _mock_settings, _save_mocks
 
 
 WEBHOOK = "https://discord.com/api/webhooks/1/abcdefghijklmnop"
-BOT_TOKEN = "123456789:AAEabcdefghijklmnopqrstuvwxyz012345"
+# Telegram issues ``<bot id>:<exactly 35 characters>``. The 35 characters here
+# are just the alphabet followed by digits, and the value is assembled from
+# parts so no token-shaped literal exists on any single line. Same convention
+# as ``tests/unit/test_check_pii.py``: keep the real SHAPE, look like nothing.
+BOT_TOKEN = "123456789:" + "AAEabcdefghijklmno" + "pqrstuvwxyz012345"
 CHAT_ID = "-1001234567890"
 
 MCP_KEY = "mcp-secret-key-9ej7f"
