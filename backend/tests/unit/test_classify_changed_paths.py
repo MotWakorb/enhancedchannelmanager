@@ -1828,7 +1828,10 @@ OPERATOR_DOCS_GATES = {
     ),
     "secrets_ratchet": (
         "the generic detect-secrets ratchet",
-        ('python3 "$RUNNER_TEMP/check_secrets.py"', "python3 scripts/check_secrets.py"),
+        (
+            'python3 "$RUNNER_TEMP/check_secrets.py"',
+            "python3 scripts/check_secrets.py",
+        ),
         PULL_REQUEST_ONLY,
     ),
     "binary_artifacts": (
@@ -1861,7 +1864,16 @@ OPERATOR_DOCS_GATES = {
 # The last two rename or hollow the context rather than skipping it, which is
 # the same outcome for branch protection: the stored name never goes green.
 SAFE_OPERATOR_DOCS_JOB_KEYS = frozenset(
-    {"name", "runs-on", "steps", "permissions", "timeout-minutes", "env", "defaults", "container"}
+    {
+        "name",
+        "runs-on",
+        "steps",
+        "permissions",
+        "timeout-minutes",
+        "env",
+        "defaults",
+        "container",
+    }
 )
 
 _STEP_OUTCOME_REFERENCE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome")
