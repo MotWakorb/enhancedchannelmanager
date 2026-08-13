@@ -27,7 +27,7 @@ This project has comprehensive test coverage at three levels.
 > were given a version-gated skip that names the fix in its reason string.
 > If you see that skip fire, you're not on the venv interpreter.
 
-Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
+Located in `backend/tests/`, run with `cd backend && ../.venv/bin/python -m pytest tests/ -q`
 
 **Router Tests** (`backend/tests/routers/`): Tests for extracted router modules.
 - `test_channels.py`, `test_channel_groups.py` - Channel management
@@ -647,11 +647,13 @@ the build pipeline.
 
 ```bash
 # Backend
-python -m py_compile backend/main.py && cd backend && python -m pytest tests/ -q
+.venv/bin/python -m py_compile backend/main.py && cd backend && ../.venv/bin/python -m pytest tests/ -q
 
 # Frontend
 cd frontend && npm test && npm run build
 ```
+
+Pin the project venv interpreter for both backend commands, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so the gate reports success either way. See the callout under "Backend Tests" above for the measured skip-count difference.
 
 ## Mock Patch Targets
 

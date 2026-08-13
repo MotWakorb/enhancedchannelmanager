@@ -1,9 +1,11 @@
 # Pytest Conventions
 
-When running backend tests, use this exact command:
+When running backend tests, use this exact command (from `backend/`):
 ```bash
-python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1
+../.venv/bin/python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1
 ```
+
+Pin the project venv interpreter, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so a passing tail line looks identical either way. The only tell is the skip count.
 
 Do NOT use `-q`. It suppresses the summary line (`2147 passed in 50s`) when all tests pass, leaving only dots and `[100%]`. Without `-q`, the summary is always the last line.
 

@@ -106,3 +106,61 @@ frontend/test-results/
 /snap-*.yaml
 /*-snap.yml
 /*-snap.yaml
+
+# Root-level agent scratch output (bead enhancedchannelmanager-6mqn5,
+# confirmed by the backlog validity audit enhancedchannelmanager-bewu9).
+#
+# `.playwright-mcp/` is the Playwright MCP server's working directory. It is
+# written to the repo root, it was not ignored, and it currently holds 2,321
+# files totalling 3.1 GB. One of them is `enc-artifact.zip`, a passphrase
+# encrypted ECM backup envelope (magic bytes `ECMBKENC`, chacha20poly1305).
+# A single `git add -A` would stage all of it, that envelope included, into a
+# public repository. The sibling `std-artifact.zip` was inspected read only
+# and is genuinely `redacted: true`, so credential exposure is confined to
+# the encrypted file, but neither one belongs in git history.
+#
+# The h9av3 block above anchors on the `snap-` prefix and the `-snap` suffix.
+# That was right for the files it had seen and too narrow for the class: the
+# audit found `uliyr-post-reload.yml` untracked in the root, an a11y snapshot
+# dump of exactly the kind h9av3 was written to catch, matching none of its
+# four patterns. Two more sat beside it, `dashboard-1920.png` and
+# `es-current.md`. Prefix and suffix matching cannot keep up with names an
+# agent invents at debug time, so the rule below inverts the default: ignore
+# the scratch-prone extensions at the repo root, then re-admit the files that
+# are genuinely tracked.
+#
+# h9av3's four patterns stay exactly as written. Do not widen them into a
+# substring glob such as `*snap*.yml`; "snapshot" is a live word in this
+# repository and that glob would eventually swallow a real config like
+# `snapshot-policy.yml`.
+#
+# Every pattern is anchored with a leading `/`, so only the repo root is
+# affected. Nothing under docs/, e2e/, backend/, frontend/, or .github/
+# changes behaviour.
+#
+# MAINTENANCE: a new root-level .yml, .yaml, .png, or .md file needs a
+# matching negation line here, or git will silently ignore it. Prefer putting
+# new documentation under docs/, where none of these patterns reach. The
+# negation list was derived from `git ls-files`. The docker-compose entry is
+# a glob on purpose: a bare `!/docker-compose.yml` would not have re-admitted
+# the tracked `docker-compose.mcp.yml`, and a future
+# `docker-compose.<variant>.yml` would have been lost the same way.
+.playwright-mcp/
+
+/*.yml
+/*.yaml
+/*.png
+/*.md
+!/.semgrep.yml
+!/docker-compose*.yml
+!/docker-compose*.yaml
+!/mkdocs.yml
+!/AGENTS.md
+!/CHANGELOG.md
+!/CLAUDE.md
+!/COMPONENTS.md
+!/CONTRIBUTING.md
+!/README.md
+!/SECURITY.md
+!/USER_GUIDE.md
+!/rebuild-instructions.md
