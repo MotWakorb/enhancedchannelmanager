@@ -73,6 +73,7 @@ from auth import (
     RequireHumanAdminForTLSMaterial,
 )
 
+from .redaction import redact_secret_values
 from .settings import (
     get_tls_settings,
     save_tls_settings,
@@ -97,6 +98,35 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _redact(settings, text: str) -> str:
+    """Strip the stored DNS credentials out of an error string (bead 2owpi).
+
+    The renewal path redacts before it persists, and the DNS providers redact
+    before they raise. This is the last line: it also covers a
+    ``last_renewal_error`` that was written to disk BEFORE those fixes landed,
+    which no upstream redaction can reach.
+    """
+    return redact_secret_values(text, (
+        settings.dns_api_token,
+        settings.aws_access_key_id,
+        settings.aws_secret_access_key,
+    ))
+
+
+def _redact_request(request, text: str) -> str:
+    """Strip a ``/test-dns-provider`` request body's credentials from a string.
+
+    That route is the one place the credentials come from the caller rather
+    than from stored settings (bead 2owpi).
+    """
+    return redact_secret_values(text, (
+        request.api_token,
+        request.aws_access_key_id,
+        request.aws_secret_access_key,
+    ))
+
 
 router = APIRouter(prefix="/api/tls", tags=["TLS"])
 
@@ -205,7 +235,11 @@ async def get_tls_status(_admin=RequireAdminIfEnabled):
         cert_issuer=settings.cert_issuer,
         auto_renew=settings.auto_renew,
         last_renewal_attempt=settings.last_renewal_attempt,
-        last_renewal_error=settings.last_renewal_error,
+        # Bead 2owpi: renewal errors are free text composed from third-party
+        # exceptions. The renewal path masks before persisting, but a value
+        # written before that fix may already be on disk, and this route is
+        # the weakest-gated one in the router.
+        last_renewal_error=_redact(settings, settings.last_renewal_error or "") or None,
         has_certificate=storage.has_certificate(),
         https_server_running=https_server_manager.is_running,
     )
@@ -249,6 +283,9 @@ async def get_tls_settings_endpoint(_admin=RequireHumanAdminForTLSMaterial):
         response.aws_access_key_id = "***" + response.aws_access_key_id[-4:]
     if response.aws_secret_access_key:
         response.aws_secret_access_key = "***" + response.aws_secret_access_key[-4:]
+    # Bead 2owpi: ``last_renewal_error`` is free text, not a masked field.
+    if response.last_renewal_error:
+        response.last_renewal_error = _redact(settings, response.last_renewal_error)
 
     return response
 
@@ -500,7 +537,7 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
             except DNSProviderError as e:
                 return CertificateRequestResponse(
                     success=False,
-                    message=f"DNS provider error: {e}",
+                    message=_redact(settings, f"DNS provider error: {e}"),
                 )
 
         else:
@@ -513,10 +550,11 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
             )
 
     except Exception as e:
-        logger.error("[TLS] Certificate request failed: %s", e)
+        error = _redact(settings, f"Certificate request failed: {e}")
+        logger.error("[TLS] %s", error)
         return CertificateRequestResponse(
             success=False,
-            message=f"Certificate request failed: {e}",
+            message=error,
         )
 
 
@@ -596,10 +634,11 @@ async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
             )
 
     except Exception as e:
-        logger.error("[TLS] Challenge completion failed: %s", e)
+        error = _redact(settings, f"Challenge failed: {e}")
+        logger.error("[TLS] Challenge completion failed: %s", error)
         return CertificateRequestResponse(
             success=False,
-            message=f"Challenge failed: {e}",
+            message=error,
         )
 
 
@@ -731,7 +770,7 @@ async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
     else:
         return {
             "success": False,
-            "message": f"Renewal failed: {result.error}",
+            "message": _redact(settings, f"Renewal failed: {result.error}"),
         }
 
 
@@ -914,7 +953,10 @@ async def test_dns_provider(
         # Verify credentials
         valid, error = await provider.verify_credentials()
         if not valid:
-            logger.warning("[TLS] DNS provider credential verification failed: %s", error)
+            logger.warning(
+                "[TLS] DNS provider credential verification failed: %s",
+                _redact_request(request, error or ""),
+            )
             return {"success": False, "message": "Invalid credentials. Verify your API token and permissions."}
 
         # Try to get zone if domain provided
@@ -937,10 +979,15 @@ async def test_dns_provider(
     except ValueError as e:
         raise HTTPException(400, "Invalid provider configuration")
     except DNSProviderError as e:
-        logger.warning("[TLS] DNS provider test failed: %s", e)
+        logger.warning(
+            "[TLS] DNS provider test failed: %s", _redact_request(request, str(e)),
+        )
         return {"success": False, "message": "DNS provider test failed. Check API token and zone configuration."}
     except Exception as e:
-        logger.error("[TLS] DNS provider test unexpected error: %s", e)
+        logger.error(
+            "[TLS] DNS provider test unexpected error: %s",
+            _redact_request(request, str(e)),
+        )
         return {"success": False, "message": "DNS provider test failed unexpectedly. Check logs for details."}
 
 

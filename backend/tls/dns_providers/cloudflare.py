@@ -1,11 +1,32 @@
 """
 Cloudflare DNS provider for ACME DNS-01 challenges.
+
+CREDENTIAL REDACTION (bead enhancedchannelmanager-2owpi)
+--------------------------------------------------------
+
+The API token is carried in an ``Authorization: Bearer`` header, so any
+exception whose text quotes that header quotes the whole token. This is not
+hypothetical: a token with a trailing newline (the shape a copy-paste
+produces, and nothing here strips it) makes h11 raise ``LocalProtocolError``
+with ``Illegal header value b'Bearer <the whole token>'``. That string used to
+travel to three places at once, since callers use it as a log line, as the
+persisted ``last_renewal_error``, and as an HTTP response message.
+
+Every string this module derives from a caught exception therefore goes
+through :func:`tls.redaction.redact_secret_values` first, which deletes THIS
+provider's own token by identity before running the generic pattern sweep, so
+the redaction does not depend on the token's charset. The point is NOT that
+today's exceptions are known to carry a token: it is that a future one does
+not get to. Errors this module composes itself from validated components (zone
+names, record IDs) are left alone.
 """
 import logging
 import re
 from typing import Optional
 
 import httpx
+
+from ..redaction import redact_secret_values
 
 from .base import DNSProvider, DNSProviderError
 
@@ -47,6 +68,10 @@ class CloudflareDNS(DNSProvider):
             "Content-Type": "application/json",
         }
 
+    def _redact(self, text: str) -> str:
+        """Strip this provider's token out of an error string (bead 2owpi)."""
+        return redact_secret_values(text, (self.api_token,))
+
     def _client(self) -> httpx.AsyncClient:
         """Create an httpx client with fixed base URL."""
         return httpx.AsyncClient(
@@ -62,7 +87,7 @@ class CloudflareDNS(DNSProvider):
             error_msg = "; ".join(
                 e.get("message", "Unknown error") for e in errors
             )
-            raise DNSProviderError(f"Cloudflare API error: {error_msg}")
+            raise DNSProviderError(self._redact(f"Cloudflare API error: {error_msg}"))
         return data
 
     async def verify_credentials(self) -> tuple[bool, Optional[str]]:
@@ -73,9 +98,9 @@ class CloudflareDNS(DNSProvider):
                 self._parse_response(resp.json())
             return True, None
         except DNSProviderError as e:
-            return False, str(e)
+            return False, self._redact(str(e))
         except Exception as e:
-            return False, f"Connection error: {e}"
+            return False, self._redact(f"Connection error: {e}")
 
     async def get_zone_id(self, domain: str) -> Optional[str]:
         """
@@ -108,7 +133,7 @@ class CloudflareDNS(DNSProvider):
         except DNSProviderError:
             raise
         except Exception as e:
-            raise DNSProviderError(f"Failed to get zone ID: {e}")
+            raise DNSProviderError(self._redact(f"Failed to get zone ID: {e}"))
 
     async def create_txt_record(
         self,
@@ -160,7 +185,7 @@ class CloudflareDNS(DNSProvider):
         except DNSProviderError:
             raise
         except Exception as e:
-            raise DNSProviderError(f"Failed to create TXT record: {e}")
+            raise DNSProviderError(self._redact(f"Failed to create TXT record: {e}"))
 
     async def delete_txt_record(self, record_id: str) -> bool:
         """
@@ -198,7 +223,7 @@ class CloudflareDNS(DNSProvider):
                 return True
             raise
         except Exception as e:
-            raise DNSProviderError(f"Failed to delete TXT record: {e}")
+            raise DNSProviderError(self._redact(f"Failed to delete TXT record: {e}"))
 
     async def create_and_get_zone(
         self,

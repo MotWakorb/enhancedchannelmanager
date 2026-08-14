@@ -833,6 +833,51 @@ async def get_request_rates():
     }
 
 
+# Request-path prefixes whose bodies carry credential material and must never
+# be logged or echoed back verbatim by the validation-error handler below.
+#
+# Bead enhancedchannelmanager-2owpi. This used to be the single prefix
+# "/api/auth", on the reasoning that only login bodies hold passwords. That
+# missed /api/tls: POST /configure and POST /test-dns-provider both take
+# dns_api_token, aws_access_key_id and aws_secret_access_key in the body, so
+# any TLS configure request that failed validation for an unrelated reason (a
+# bad https_port, a missing field) wrote those credentials in clear into the
+# application log at ERROR and echoed them back in the 422. Logs get pasted
+# into GitHub issues.
+#
+# Note that cloud_storage.upload_security.mask_secrets does NOT rescue this
+# path: its key/value rule needs the key name adjacent to the separator, and
+# JSON puts a closing quote in between, so {"aws_secret_access_key": "..."}
+# passes through it untouched. Path-based redaction is the control.
+#
+# This list is deliberately a constant rather than an inline check: other
+# routers take credentials in request bodies too, and adding them belongs in
+# one place. It must stay specific — widening it to "/api" would pass every
+# test here while destroying the diagnostics the handler exists for.
+CREDENTIAL_BEARING_BODY_PREFIXES: tuple[str, ...] = (
+    "/api/auth",
+    "/api/tls",
+)
+
+_BODY_REDACTED = "[REDACTED — credential-bearing endpoint]"
+
+
+def _redact_validation_errors(errors: list) -> list:
+    """Strip pydantic's per-error ``input`` echo from validation errors.
+
+    ``exc.errors()`` carries the offending input alongside each message, and
+    for a missing-field error that input is the ENTIRE request body, so
+    redacting the body alone would not have been enough (bead 2owpi).
+    """
+    redacted = []
+    for err in errors:
+        safe = dict(err)
+        if "input" in safe:
+            safe["input"] = _BODY_REDACTED
+        redacted.append(safe)
+    return redacted
+
+
 # Custom validation error handler to log details
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -848,24 +893,30 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     }
     logger.error("[VALIDATION-ERROR] Request headers: %s", safe_headers)
 
-    # Log body but redact on auth paths (may contain passwords)
-    is_auth_path = request.url.path.startswith("/api/auth")
+    # Log body but redact on credential-bearing paths (passwords, DNS-provider
+    # tokens, AWS keys)
+    is_credential_path = request.url.path.startswith(CREDENTIAL_BEARING_BODY_PREFIXES)
     try:
         body = await request.body()
-        if is_auth_path:
-            logger.error("[VALIDATION-ERROR] Request body: [REDACTED — auth endpoint]")
+        if is_credential_path:
+            logger.error("[VALIDATION-ERROR] Request body: %s", _BODY_REDACTED)
         else:
             logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
     except Exception as e:
         logger.error("[VALIDATION-ERROR] Could not read body: %s", e)
 
-    logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
-    logger.error("[VALIDATION-ERROR] Validation body: %s", "[REDACTED]" if is_auth_path else exc.body)
+    raw_errors = exc.errors()
+    logged_errors = _redact_validation_errors(raw_errors) if is_credential_path else raw_errors
+    logger.error("[VALIDATION-ERROR] Validation errors: %s", logged_errors)
+    logger.error(
+        "[VALIDATION-ERROR] Validation body: %s",
+        _BODY_REDACTED if is_credential_path else exc.body,
+    )
 
     # Sanitize errors for JSON serialization — ctx.error may contain
     # non-serializable ValueError objects from field_validator
     safe_errors = []
-    for err in exc.errors():
+    for err in logged_errors:
         safe_err = dict(err)
         if "ctx" in safe_err and isinstance(safe_err["ctx"], dict):
             safe_err["ctx"] = {k: str(v) for k, v in safe_err["ctx"].items()}
@@ -873,7 +924,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     return JSONResponse(
         status_code=422,
-        content={"detail": safe_errors, "body": str(exc.body)},
+        content={
+            "detail": safe_errors,
+            "body": _BODY_REDACTED if is_credential_path else str(exc.body),
+        },
     )
 
 
@@ -960,18 +1014,24 @@ async def startup_event():
     except Exception as _gauge_seed_err:
         logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
 
-    # Probe the cloud-backup encryption key's integrity at startup (bead
-    # m40pn): mode/ownership violations surface at every container start
-    # instead of at the first scheduled backup. Log-loudly-but-boot — the
-    # probe never raises (it logs an unmissable ERROR itself), and actual
-    # crypto use remains fail-closed inside cloud_storage.crypto. The outer
-    # try only guards an unexpected import/probe crash.
+    # Probe the credential-bearing config files' integrity at startup (bead
+    # m40pn for the cloud-backup Fernet key, extended by bead 2owpi to
+    # tls_settings.json, which holds the DNS-01 provider credentials in clear
+    # because ECM must renew unattended). Mode/ownership violations surface at
+    # every container start instead of at the first scheduled backup or the
+    # first renewal. Log-loudly-but-boot — neither probe raises (each logs an
+    # unmissable ERROR itself), and actual crypto use remains fail-closed
+    # inside cloud_storage.crypto. The outer try only guards an unexpected
+    # import/probe crash.
     try:
         from cloud_storage.crypto import verify_key_integrity_at_startup
         verify_key_integrity_at_startup()
+
+        from tls.settings import verify_tls_settings_integrity_at_startup
+        verify_tls_settings_integrity_at_startup()
     except Exception as _key_probe_err:
         logger.error(
-            "[MAIN] Cloud-backup key integrity startup probe crashed: %s",
+            "[MAIN] Config secret-file integrity startup probe crashed: %s",
             _key_probe_err,
         )
 

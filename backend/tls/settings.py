@@ -7,11 +7,12 @@ manual certificate paths, and renewal status.
 import json
 import logging
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,13 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 TLS_CONFIG_FILE = CONFIG_DIR / "tls_settings.json"
 TLS_DIR = CONFIG_DIR / "tls"
+
+# tls_settings.json holds DNS-01 provider credentials in clear (bead 2owpi:
+# the PO declined at-rest encryption on 2026-08-13 because ECM must decrypt
+# unattended, which would put the key in this same directory). Owner-only is
+# therefore the control that actually holds, and the startup probe below is
+# what notices when it stops holding.
+_REQUIRED_MODE = 0o600
 
 
 def _utcnow_naive() -> datetime:
@@ -205,8 +213,28 @@ def load_tls_settings() -> TLSSettings:
                 _cached_tls_settings.enabled, _cached_tls_settings.mode,
             )
             return _cached_tls_settings
+        except ValidationError as e:
+            # Bead 2owpi: pydantic v2 puts ``input_value=<the value>`` in its
+            # error text, so formatting this exception would print a stored
+            # credential into the log whenever the file holds one of these
+            # fields with the wrong JSON type. Name the fields, not the
+            # values: that is what makes the failure diagnosable anyway.
+            logger.error(
+                "[TLS-SETTINGS] Failed to load TLS settings: %d invalid field(s): %s",
+                e.error_count(),
+                ", ".join(sorted({
+                    ".".join(str(part) for part in err.get("loc", ())) or "<root>"
+                    for err in e.errors()
+                })),
+            )
         except Exception as e:
-            logger.error("[TLS-SETTINGS] Failed to load TLS settings: %s", e)
+            # Non-validation failures (unreadable file, malformed JSON) carry
+            # no field values. json.JSONDecodeError reports a position, not
+            # content.
+            logger.error(
+                "[TLS-SETTINGS] Failed to load TLS settings: %s: %s",
+                type(e).__name__, e,
+            )
 
     logger.info("[TLS-SETTINGS] Using default TLS settings (no config file found)")
     _cached_tls_settings = TLSSettings()
@@ -248,3 +276,98 @@ def clear_tls_settings_cache() -> None:
 def get_tls_settings() -> TLSSettings:
     """Get the current TLS settings."""
     return load_tls_settings()
+
+
+def verify_tls_settings_integrity_at_startup() -> bool:
+    """Probe tls_settings.json mode and ownership at container startup.
+
+    Bead 2owpi, extending the startup integrity probe bead m40pn built for the
+    cloud-backup Fernet key (``cloud_storage.crypto.verify_key_integrity_at_startup``)
+    to the second credential-bearing file in the same config directory. Both
+    are called from one startup block in ``main.py``.
+
+    ``save_tls_settings`` already chmods 0600 on every write, so drift comes
+    from outside ECM: a manual edit, a restore, a volume copied without
+    permissions. That is precisely the misconfiguration this probe exists to
+    surface, and it was previously invisible until somebody thought to look.
+    The PO chose this over at-rest encryption on 2026-08-13 for exactly that
+    reason.
+
+    Posture matches m40pn:
+
+    * **Mode** is the real control. Drift is REPAIRED with chmod and reported
+      at WARNING. A repair that fails is an ERROR.
+    * **Ownership** is a weak control under root, because root reads any file
+      regardless of owner, so a foreign owner is advisory when we are root and
+      an unmissable ERROR when we are not and therefore actually exposed.
+    * **Log loudly, but boot.** This never raises. ECM's core is channel
+      management and a TLS-config permission problem must not take the app
+      down. Nothing here reads the file's CONTENTS, only its metadata.
+
+    Returns:
+        True if the file is absent or ends the probe at mode 0600 with no
+        exploitable ownership mismatch, False on an unrepaired violation.
+    """
+    try:
+        if not TLS_CONFIG_FILE.exists():
+            # TLS is optional. An instance that never configured it has
+            # nothing to protect here.
+            return True
+
+        st = os.stat(TLS_CONFIG_FILE)
+        current_mode = stat.S_IMODE(st.st_mode)
+
+        healthy = True
+
+        if current_mode != _REQUIRED_MODE:
+            try:
+                os.chmod(TLS_CONFIG_FILE, _REQUIRED_MODE)
+                logger.warning(
+                    "[TLS-SETTINGS] %s has mode %#o, expected %#o — repaired to "
+                    "0600. This file holds DNS-01 provider credentials in clear; "
+                    "treat them as disclosed to anyone who could read it "
+                    "(tls_settings_status=mode_repaired)",
+                    TLS_CONFIG_FILE, current_mode, _REQUIRED_MODE,
+                )
+            except OSError as chmod_err:
+                healthy = False
+                logger.error(
+                    "[TLS-SETTINGS] %s has mode %#o, expected %#o, and the "
+                    "repair failed: %s. DNS-01 provider credentials are "
+                    "readable beyond their owner until this is fixed "
+                    "(tls_settings_status=mode_repair_failed)",
+                    TLS_CONFIG_FILE, current_mode, _REQUIRED_MODE, chmod_err,
+                )
+
+        process_uid = os.getuid()
+        file_uid = st.st_uid
+        if file_uid != process_uid:
+            if process_uid == 0:
+                logger.info(
+                    "[TLS-SETTINGS] %s owned by uid=%s but process is root "
+                    "(uid=0); ownership is advisory in a root context, mode is "
+                    "the control (tls_settings_status=ownership_advisory)",
+                    TLS_CONFIG_FILE, file_uid,
+                )
+            else:
+                healthy = False
+                logger.error(
+                    "[TLS-SETTINGS] %s is owned by uid=%s but the process runs "
+                    "as uid=%s and cannot take ownership. Another account owns "
+                    "the file holding this instance's DNS-01 provider "
+                    "credentials; rotate them and fix ownership "
+                    "(tls_settings_status=ownership_unfixable)",
+                    TLS_CONFIG_FILE, file_uid, process_uid,
+                )
+
+        return healthy
+
+    except Exception as e:
+        # Log-loudly-but-boot. A probe that cannot run is reported, never
+        # fatal, and never quotes the file's contents.
+        logger.error(
+            "[TLS-SETTINGS] STARTUP INTEGRITY PROBE FAILED for %s: %s: %s "
+            "(tls_settings_status=startup_probe_failed)",
+            TLS_CONFIG_FILE, type(e).__name__, e,
+        )
+        return False
