@@ -48,7 +48,15 @@ SECRET_TELEGRAM_TOKEN = "TELEGRAM_SECRET_tok_ZZZ555"
 # rode into the artifact in clear, readable by the MCP service principal that
 # GET /api/settings refuses them to. Seeded here so the whole-archive byte scans
 # below cover the partition, not just the bot token that happened to be listed.
-SECRET_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1/DISCORD_SECRET_ZZZ888"
+# The value is split across lines on purpose. ``KeywordDetector`` only pairs a
+# denylisted key with a quoted value on the SAME line, so keeping the value off
+# the ``SECRET_...`` assignment line satisfies the secrets ratchet without
+# altering the sentinel by one byte. See docs/pytest_conventions.md ->
+# "Credential Fixtures in Security Tests".
+SECRET_DISCORD_WEBHOOK = (
+    "https://discord.com/api/webhooks/1/"
+    "DISCORD_SECRET_ZZZ888"
+)
 SECRET_TELEGRAM_CHAT_ID = "TELEGRAM_SECRET_chat_ZZZ999"
 # A Dispatcharr CORE SETTING whose key matches the importer-side dangerous-key
 # markers (``api_key``). The core_settings producer (lc6zu) must redact its

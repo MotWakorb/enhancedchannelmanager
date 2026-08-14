@@ -31,8 +31,10 @@ from auth import tokens
 class _StubJwt:
     def __init__(self, access_minutes: int, refresh_days: int):
         # get_jwt_secret_key() reads the same settings object the lifetimes
-        # come from, so the stub has to carry a signing key too.
-        self.secret_key = "bd-suuoh-unit-test-signing-key"
+        # come from, so the stub has to carry a signing key too. Nothing here
+        # depends on its shape, so it is an angle-bracket placeholder per
+        # docs/pytest_conventions.md -> "Credential Fixtures in Security Tests".
+        self.secret_key = "<bd-suuoh-unit-test-signing-key>"
         self.access_token_expire_minutes = access_minutes
         self.refresh_token_expire_days = refresh_days
 

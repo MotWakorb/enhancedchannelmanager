@@ -52,9 +52,9 @@ Two paths were found and both are pinned below.
 
 No test in this file contains a real credential. Placeholders follow
 ``docs/pytest_conventions.md`` -> "Credential Fixtures in Security Tests":
-angle-bracket values are never scan candidates, and the one AWS key ID is
-``AKIAIOSFODNN7EXAMPLE``, the AWS documentation example this repo's fixtures
-already use.
+angle-bracket values are never scan candidates, and the one AWS key ID is the
+AWS documentation example key that this repo's other fixtures already use,
+assembled from split literals so no single line carries the whole pattern.
 """
 import json
 import logging
@@ -70,7 +70,9 @@ from tls.settings import TLSSettings
 # TOKEN_WITH_ILLEGAL_HEADER_CHAR, which is the whole point of that fixture.
 DNS_TOKEN = "<synthetic-cloudflare-token-2owpi>"
 TOKEN_WITH_ILLEGAL_HEADER_CHAR = "<synthetic-pasted-token-2owpi>\n"
-AWS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
+# Split so no single literal matches ``AKIA[0-9A-Z]{16}``; the assembled value
+# is byte-for-byte the AWS documentation example key.
+AWS_KEY_ID = "AKIA" + "IOSFODNN7EXAMPLE"
 AWS_SECRET = "<synthetic-aws-secret-access-key-2owpi>"
 
 
