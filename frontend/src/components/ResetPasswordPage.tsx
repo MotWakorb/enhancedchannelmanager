@@ -182,8 +182,10 @@ export function ResetPasswordPage() {
               autoFocus
               onKeyDown={handleKeyDown}
             />
+            {/* Same enforced policy as SetupPage; see bead enhancedchannelmanager-mkocf. */}
             <p className="login-field-hint">
-              At least 8 characters with uppercase, lowercase, and number
+              At least 8 characters. Common and previously breached passwords are
+              rejected, and it cannot contain your username.
             </p>
           </div>
 

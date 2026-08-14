@@ -130,8 +130,18 @@ export function SetupPage({ onSetupComplete }: SetupPageProps) {
               disabled={isSubmitting}
               autoComplete="new-password"
             />
+            {/*
+              States what backend/auth/password.py::validate_password actually
+              enforces, and nothing else (bead
+              enhancedchannelmanager-mkocf). The old hint asked for uppercase,
+              lowercase and a number: rules that policy deliberately dropped on
+              NIST 800-63B grounds, and it omitted the two rules that do reject
+              a password, which an operator could otherwise only discover by
+              being refused.
+            */}
             <span className="setup-hint">
-              At least 8 characters with uppercase, lowercase, and number
+              At least 8 characters. Common and previously breached passwords are
+              rejected, and it cannot contain your username.
             </span>
           </div>
 

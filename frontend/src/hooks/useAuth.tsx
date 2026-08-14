@@ -259,25 +259,71 @@ export function useAuth(): AuthContextState {
 }
 
 /**
- * Hook to check if auth is required for the app.
+ * What the server said about whether this app needs an authenticated session.
  *
- * Returns true if:
- * - Auth settings are loaded AND
- * - require_auth is true AND
- * - setup is complete
+ * `'resolving'` is a real third answer, not a transient nicety. GET
+ * /api/auth/status is fetched exactly once at mount, and when that fetch fails
+ * `authStatus` stays null forever. Collapsing that into `false` (bead
+ * enhancedchannelmanager-p388h) made an unreachable backend indistinguishable
+ * from a deliberately auth-disabled instance, so ProtectedRoute rendered the
+ * whole app shell with no session, no login prompt, and no way back: its
+ * `!authRequired` branch also rewrote /login to / so typing the URL did not
+ * help either.
+ */
+export type AuthRequirement = 'resolving' | 'required' | 'not-required';
+
+/**
+ * Hook reporting whether auth is required for the app.
  *
- * Returns false if:
- * - Still loading OR
- * - Auth is disabled OR
- * - Setup not complete
+ * - `'resolving'` while the initial check is in flight, AND after it has
+ *   failed. Both are the same fact: the server has not told us. Callers must
+ *   treat this as unknown and must NOT fall through to rendering the app.
+ * - `'required'` when the server reports require_auth AND setup_complete.
+ * - `'not-required'` when the server answered and one of those is false.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention
-export function useAuthRequired(): boolean {
+export function useAuthRequirement(): AuthRequirement {
   const { authStatus, isLoading } = useAuth();
 
+  // isLoading covers the in-flight case. A null authStatus once loading has
+  // finished means the fetch threw and was swallowed in checkAuth's inner
+  // catch, which is unknown, not "no".
   if (isLoading || !authStatus) {
-    return false;
+    return 'resolving';
   }
 
-  return authStatus.require_auth && authStatus.setup_complete;
+  return authStatus.require_auth && authStatus.setup_complete ? 'required' : 'not-required';
+}
+
+/**
+ * Whether admin-only navigation destinations should be offered to this viewer.
+ *
+ * The other half of bead enhancedchannelmanager-p388h (absorbed from ee5f1),
+ * with the opposite polarity. Nav visibility was `Boolean(user?.is_admin)`,
+ * which resolves "no identity" to "not an admin" and hides the Administration
+ * settings group. On a `require_auth: false` instance there is never a user
+ * row in the client, so that group stayed hidden permanently while the backend
+ * served it to anyone: `auth.dependencies.require_admin_if_enabled` returns
+ * early when auth is disabled. The UI was strictly less permissive than the
+ * API, which is a usability defect and not a control.
+ *
+ * This is navigation only. Backend enforcement is independent, so showing a
+ * destination never grants anything; hiding one only prevented an operator
+ * from reaching what they were already allowed to use.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention
+export function useAdminNavVisible(): boolean {
+  const { user } = useAuth();
+  const requirement = useAuthRequirement();
+
+  // Auth off: the backend admits anonymous callers to its admin gates, so the
+  // nav must not be narrower than the API.
+  if (requirement === 'not-required') {
+    return true;
+  }
+
+  // 'resolving' lands here and yields false. ProtectedRoute does not render
+  // the app in that state at all, so this is a defensive default rather than a
+  // reachable one.
+  return Boolean(user?.is_admin);
 }

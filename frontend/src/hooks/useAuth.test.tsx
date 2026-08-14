@@ -17,8 +17,25 @@ vi.mock('../services/api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   getCurrentUser: vi.fn(),
-  // Default: throw so the catch block falls through to getCurrentUser (matching original behaviour)
-  getAuthStatus: vi.fn().mockRejectedValue(new Error('not mocked')),
+  // Default: an ordinary auth-on, setup-complete instance.
+  //
+  // This used to be `mockRejectedValue(new Error('not mocked'))`, which pinned
+  // EVERY test in this file to the exact failure mode bead
+  // enhancedchannelmanager-p388h is about: a rejected status probe leaves
+  // `authStatus` null, and the old `useAuthRequired()` read that as "auth is
+  // not required". The suite therefore ran permanently in the fail-open state
+  // and could never have asserted against it. The resolved default still falls
+  // through to getCurrentUser (require_auth AND setup_complete are both true,
+  // so checkAuth does not take its early return), which is what the rejecting
+  // default was actually being relied on for. Tests that want the probe to
+  // fail now say so explicitly.
+  getAuthStatus: vi.fn().mockResolvedValue({
+    require_auth: true,
+    setup_complete: true,
+    enabled_providers: ['local'],
+    primary_auth_mode: 'local',
+    smtp_configured: false,
+  }),
   dispatcharrLogin: vi.fn(),
 }));
 
@@ -335,6 +352,177 @@ describe('Login Page', () => {
 
     // authStatus is populated — the Login component reads auth_methods from it
     expect(result.current.authStatus).not.toBeNull();
+  });
+});
+
+describe('useAuthRequirement (bead enhancedchannelmanager-p388h)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const AUTH_ON = {
+    require_auth: true,
+    setup_complete: true,
+    enabled_providers: ['local'],
+    primary_auth_mode: 'local' as const,
+    smtp_configured: false,
+  };
+
+  // Mounts AuthProvider and drains its mount-effect promise chain inside
+  // act(), so the hook's value is final on return and no state update lands
+  // after the test body. AuthProvider issues its two probes in separate
+  // continuations, so a bare waitFor on the value can return while the second
+  // batch is still pending.
+  async function renderSettled() {
+    const { useAuthRequirement, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    let rendered!: ReturnType<typeof renderHook<string, unknown>>;
+    await act(async () => {
+      rendered = renderHook(() => useAuthRequirement(), { wrapper });
+    });
+    return rendered;
+  }
+
+  it("reports 'resolving' before the status probe settles", async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_ON);
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('Unauthorized'));
+
+    const { useAuthRequirement, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+
+    // Deliberately NOT settled: read the very first synchronous render.
+    const { result } = renderHook(() => useAuthRequirement(), { wrapper });
+    expect(result.current).toBe('resolving');
+
+    // Drain, so the mount effect does not update state after the test ends.
+    await act(async () => {});
+  });
+
+  // THE REGRESSION THIS BEAD IS ABOUT. A failed probe must not read as
+  // "auth is not required": that is what let ProtectedRoute render the whole
+  // app shell with no session and no way to reach /login.
+  it("stays 'resolving' when the status probe fails, rather than falling back to 'not-required'", async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockRejectedValue(new Error('backend unreachable'));
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('backend unreachable'));
+
+    const { result } = await renderSettled();
+
+    // Both probes have finished failing, so this is the settled answer and not
+    // just the in-flight one being read a second time.
+    expect(getCurrentUser).toHaveBeenCalled();
+    expect(result.current).toBe('resolving');
+    expect(result.current).not.toBe('not-required');
+  });
+
+  it("reports 'required' when the server requires auth and setup is complete", async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_ON);
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('Unauthorized'));
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe('required');
+  });
+
+  it("reports 'not-required' when the server has auth switched off", async () => {
+    const { getAuthStatus } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...AUTH_ON, require_auth: false });
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe('not-required');
+  });
+
+  it("reports 'not-required' when setup has not been completed", async () => {
+    const { getAuthStatus } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...AUTH_ON, setup_complete: false });
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe('not-required');
+  });
+});
+
+describe('useAdminNavVisible (bead enhancedchannelmanager-p388h, absorbing ee5f1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const AUTH_ON = {
+    require_auth: true,
+    setup_complete: true,
+    enabled_providers: ['local'],
+    primary_auth_mode: 'local' as const,
+    smtp_configured: false,
+  };
+
+  const ADMIN = {
+    id: 1, username: 'admin', is_admin: true, email: null, display_name: null,
+    is_active: true, auth_provider: 'local', external_id: null,
+  };
+  const OPERATOR = { ...ADMIN, id: 2, username: 'operator', is_admin: false };
+
+  // act-wrapped for the same reason as renderSettled above.
+  async function renderSettled() {
+    const { useAdminNavVisible, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    let rendered!: ReturnType<typeof renderHook<boolean, unknown>>;
+    await act(async () => {
+      rendered = renderHook(() => useAdminNavVisible(), { wrapper });
+    });
+    return rendered;
+  }
+
+  // The fail-closed half: `user` is permanently null on an auth-disabled
+  // instance, and the backend serves its admin gates to anyone there, so
+  // hiding the Administration group made the UI narrower than the API.
+  it('shows admin navigation on an auth-disabled instance, where there is no user at all', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue({ ...AUTH_ON, require_auth: false });
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('Unauthorized'));
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe(true);
+  });
+
+  it('shows admin navigation to a signed-in admin', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_ON);
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: ADMIN });
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe(true);
+  });
+
+  it('hides admin navigation from a signed-in non-admin', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_ON);
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: OPERATOR });
+
+    const { result } = await renderSettled();
+
+    expect(result.current).toBe(false);
+  });
+
+  it('hides admin navigation while the posture is unresolved', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockRejectedValue(new Error('backend unreachable'));
+    vi.mocked(getCurrentUser).mockRejectedValue(new Error('backend unreachable'));
+
+    const { result } = await renderSettled();
+
+    expect(getCurrentUser).toHaveBeenCalled();
+    expect(result.current).toBe(false);
   });
 });
 

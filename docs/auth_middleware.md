@@ -101,14 +101,17 @@ instance is treated as owned.
 - **You can still sign in.** `POST /api/auth/login` and `get_current_user`
   carry no `require_auth` short-circuit, so an operator can authenticate
   normally on an auth-disabled instance and reach all three surfaces.
-- **The web UI will not offer you a login.** When `require_auth` is false,
-  `useAuth` never resolves a user and `ProtectedRoute` renders the app without
-  a login page. The TLS and MCP settings sections are handed
-  `isAdmin={user?.is_admin ?? false}` and already render as non-admin in this
-  mode, so nothing that worked before stops working — but if you need to *use*
-  those sections on an auth-off instance, turn `require_auth` back on. This is
-  also why `PUT /api/auth/admin/settings`, the route that toggles the mode, has
-  always required a token.
+- **The web UI offers you a login at `/login`.** When `require_auth` is false,
+  `ProtectedRoute` renders the app without demanding a session, so you are
+  anonymous by default and the TLS and MCP settings sections render as
+  non-admin. Browse to `/login` and sign in, and they become usable without
+  turning `require_auth` back on. Bead `enhancedchannelmanager-p388h` added
+  that route; before it, `/login` was rewritten to `/` in this mode, which left
+  the three surfaces above reachable by API but not by UI. The login form is
+  offered only once the instance holds an operator identity, since there is
+  nothing to sign in to before that. This is also why
+  `PUT /api/auth/admin/settings`, the route that toggles the mode, has always
+  required a token.
 - **Known residual, deliberately left open.** `POST
   /api/tls/test-dns-provider` stays anonymous in this mode. It runs on
   `RequireHumanAdminForOutboundTest` alongside eleven other connection-test

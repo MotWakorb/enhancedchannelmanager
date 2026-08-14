@@ -10,7 +10,6 @@ vi.mock('../services/api', () => ({
   changePassword: (...args: unknown[]) => changePassword(...args),
 }));
 vi.mock('../hooks/useAuth', () => ({
-  useAuthRequired: () => true,
   useAuth: () => ({
     user: { username: 'operator', display_name: 'Operator', email: '', is_admin: true, auth_provider: 'local' },
     logout: vi.fn(),

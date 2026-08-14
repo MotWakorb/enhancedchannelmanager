@@ -78,6 +78,7 @@ function submitSetupForm() {
 describe('ProtectedRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
   });
 
   describe('first-run setup', () => {
@@ -146,15 +147,138 @@ describe('ProtectedRoute', () => {
   });
 
   describe('auth disabled', () => {
+    const STATUS_AUTH_OFF = { ...STATUS_AFTER_SETUP, require_auth: false };
+
+    beforeEach(() => {
+      vi.mocked(api.checkSetupRequired).mockResolvedValue({ required: false });
+      vi.mocked(api.getAuthStatus).mockResolvedValue(STATUS_AUTH_OFF);
+      vi.mocked(api.getCurrentUser).mockRejectedValue(new HttpError('Unauthorized', 401));
+    });
+
     it('renders children without a login page', async () => {
+      renderProtected();
+
+      expect(await screen.findByText(APP_CONTENT)).toBeInTheDocument();
+    });
+
+    // Bead enhancedchannelmanager-jy006 made three identity primitives
+    // (initial restore, the MCP API key, TLS key material) require an
+    // authenticated human admin even while require_auth is false, on an
+    // instance that already holds an operator identity. The API accepts a
+    // login in that mode, but ProtectedRoute used to rewrite /login to / here,
+    // so those surfaces had no reachable way in.
+    it('serves the login page at /login when the instance has an operator identity', async () => {
+      window.history.replaceState({}, '', '/login');
+
+      renderProtected();
+
+      expect(await screen.findByRole('button', { name: 'Sign In' })).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/login');
+    });
+
+    // The carve-out: setup_complete false means there is no account to sign
+    // in to, so /login would be a dead end. Keep the old rewrite there.
+    it('still rewrites /login away when no operator identity exists', async () => {
+      vi.mocked(api.getAuthStatus).mockResolvedValue({
+        ...STATUS_AUTH_OFF,
+        setup_complete: false,
+      });
+      window.history.replaceState({}, '', '/login');
+
+      renderProtected();
+
+      expect(await screen.findByText(APP_CONTENT)).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/');
+    });
+  });
+
+  // Bead enhancedchannelmanager-p388h. Both probes used to resolve their own
+  // failure to a permissive answer: useAuthRequired() returned false on a null
+  // authStatus, and the setup check's catch set setupRequired=false under the
+  // comment "if we can't check, assume setup is not required". Together they
+  // rendered the full app shell against a backend that had answered nothing,
+  // and the !authRequired branch rewrote /login to / so the operator could not
+  // reach a sign-in page even by typing the URL.
+  describe('backend unreachable', () => {
+    const unreachable = () => new HttpError('Service Unavailable', 503);
+
+    it('shows the cannot-reach screen instead of the app when the auth status probe fails', async () => {
+      vi.mocked(api.checkSetupRequired).mockResolvedValue({ required: false });
+      vi.mocked(api.getAuthStatus).mockRejectedValue(unreachable());
+      vi.mocked(api.getCurrentUser).mockRejectedValue(unreachable());
+
+      renderProtected();
+
+      expect(await screen.findByText('Cannot reach ECM')).toBeInTheDocument();
+      expect(screen.queryByText(APP_CONTENT)).not.toBeInTheDocument();
+    });
+
+    // When only the setup probe dies, auth status still carries the same fact
+    // (setup_complete is the server's own answer to "does a user exist"), so
+    // the app loads rather than wedging on a single flaky endpoint. The old
+    // code reached the same screen here for the wrong reason: it ASSUMED
+    // setup was not required rather than reading an answer.
+    it('falls back to auth status when only the setup probe fails', async () => {
+      vi.mocked(api.checkSetupRequired).mockRejectedValue(unreachable());
+      vi.mocked(api.getAuthStatus).mockResolvedValue(STATUS_AFTER_SETUP);
+      vi.mocked(api.getCurrentUser).mockResolvedValue({ user: ADMIN_USER });
+
+      renderProtected();
+
+      expect(await screen.findByText(APP_CONTENT)).toBeInTheDocument();
+    });
+
+    // ... and the fallback carries the OTHER answer too: a status response
+    // reporting setup_complete=false still routes to the setup wizard.
+    it('shows the setup page when the setup probe fails but auth status says setup is incomplete', async () => {
+      vi.mocked(api.checkSetupRequired).mockRejectedValue(unreachable());
+      vi.mocked(api.getAuthStatus).mockResolvedValue(STATUS_BEFORE_SETUP);
+      vi.mocked(api.getCurrentUser).mockRejectedValue(new HttpError('Unauthorized', 401));
+
+      renderProtected();
+
+      expect(await screen.findByRole('button', { name: 'Create Admin Account' })).toBeInTheDocument();
+      expect(screen.queryByText(APP_CONTENT)).not.toBeInTheDocument();
+    });
+
+    it('shows the cannot-reach screen when both probes fail', async () => {
+      vi.mocked(api.checkSetupRequired).mockRejectedValue(unreachable());
+      vi.mocked(api.getAuthStatus).mockRejectedValue(unreachable());
+      vi.mocked(api.getCurrentUser).mockRejectedValue(unreachable());
+
+      renderProtected();
+
+      expect(await screen.findByText('Cannot reach ECM')).toBeInTheDocument();
+      expect(screen.queryByText(APP_CONTENT)).not.toBeInTheDocument();
+    });
+
+    // The recoverability defect, pinned: the Log in link has to actually get
+    // the operator to a login form.
+    it('reaches the login page from the Log in link', async () => {
+      vi.mocked(api.checkSetupRequired).mockResolvedValue({ required: false });
+      vi.mocked(api.getAuthStatus).mockRejectedValue(unreachable());
+      vi.mocked(api.getCurrentUser).mockRejectedValue(unreachable());
+
+      renderProtected();
+      fireEvent.click(await screen.findByRole('link', { name: 'Log in' }));
+
+      expect(await screen.findByRole('button', { name: 'Sign In' })).toBeInTheDocument();
+    });
+
+    it('renders the app after Retry re-reads both probes successfully', async () => {
+      vi.mocked(api.checkSetupRequired).mockRejectedValue(unreachable());
+      vi.mocked(api.getAuthStatus).mockRejectedValue(unreachable());
+      vi.mocked(api.getCurrentUser).mockRejectedValue(unreachable());
+
+      renderProtected();
+      await screen.findByText('Cannot reach ECM');
+
       vi.mocked(api.checkSetupRequired).mockResolvedValue({ required: false });
       vi.mocked(api.getAuthStatus).mockResolvedValue({
         ...STATUS_AFTER_SETUP,
         require_auth: false,
       });
-      vi.mocked(api.getCurrentUser).mockRejectedValue(new HttpError('Unauthorized', 401));
-
-      renderProtected();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
       expect(await screen.findByText(APP_CONTENT)).toBeInTheDocument();
     });

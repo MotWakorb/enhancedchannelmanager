@@ -2,11 +2,11 @@
  * User menu component for header.
  *
  * Shows current user info, profile editing, password change, and logout.
- * Hidden when auth is not required or user not logged in.
+ * Hidden when there is no signed-in user.
  */
 import { logger } from '../utils/logger';
 import React, { useState, useRef, useEffect } from 'react';
-import { useAuth, useAuthRequired } from '../hooks/useAuth';
+import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../contexts/NotificationContext';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
@@ -15,7 +15,6 @@ import './UserMenu.css';
 
 export function UserMenu() {
   const { user, logout, isLoading, refreshUser } = useAuth();
-  const authRequired = useAuthRequired();
   const notifications = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -65,8 +64,18 @@ export function UserMenu() {
     }
   }, [showProfileModal, user]);
 
-  // Don't show if loading, auth not required, or user not logged in
-  if (isLoading || !authRequired || !user) {
+  // Show whenever there is a real session to act on.
+  //
+  // This used to also require useAuthRequired(), which was harmless only
+  // because `user` was necessarily null whenever auth was not required. That
+  // is no longer true: bead enhancedchannelmanager-p388h makes /login
+  // reachable on an auth-disabled instance that holds an operator identity,
+  // so an operator can now hold a genuine session in that mode (which is how
+  // bead jy006's three gated surfaces are meant to be reached). Keeping the
+  // extra condition would have shown that operator no identity and, worse, no
+  // way to sign out. `user` alone is the correct gate, and it already covers
+  // the unresolved and auth-disabled cases, where it stays null.
+  if (isLoading || !user) {
     return null;
   }
 
@@ -305,7 +314,11 @@ export function UserMenu() {
                     required
                     minLength={8}
                   />
-                  <p className="user-modal-hint">Minimum 8 characters</p>
+                  {/* Same enforced policy as SetupPage; bead enhancedchannelmanager-mkocf. */}
+                  <p className="user-modal-hint">
+                    At least 8 characters. Common and previously breached passwords are
+                    rejected, and it cannot contain your username.
+                  </p>
                 </div>
                 <div className="user-modal-field">
                   <label htmlFor="confirm-password">Confirm New Password</label>

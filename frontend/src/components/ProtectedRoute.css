@@ -18,6 +18,59 @@
 }
 
 
+/* Auth posture could not be determined (bead enhancedchannelmanager-p388h) */
+.protected-route-unreachable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: center;
+  padding: 2rem;
+}
+
+.protected-route-unreachable .material-icons {
+  font-size: 48px;
+  color: var(--text-secondary);
+}
+
+.protected-route-unreachable h2 {
+  margin: 1rem 0 0.5rem;
+}
+
+.protected-route-unreachable p {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--text-secondary);
+}
+
+.protected-route-unreachable-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.protected-route-unreachable-actions button {
+  padding: 0.5rem 1.25rem;
+  border: 1px solid var(--border-color, rgb(63, 63, 70));
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.protected-route-unreachable-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.protected-route-unreachable-actions a {
+  color: var(--accent-color, rgb(59, 130, 246));
+}
+
 .protected-route-denied {
   display: flex;
   flex-direction: column;
