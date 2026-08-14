@@ -301,6 +301,62 @@ class TestAccessTokenExpiryMetadata:
         assert data["access_token_expires_in"] > 0
 
 
+class TestRefreshedAccessTokenIdentity:
+    """bd-suuoh: the access token minted by /auth/refresh identifies the
+    account, not a ``user_<id>`` placeholder.
+
+    ``rotate_refresh_token`` used to fabricate the ``username`` claim from the
+    subject id because it never loaded the user. The refresh handler already
+    has the real ``User`` row in hand, so it now passes the name through. The
+    claim is not an authorization input (``get_current_user`` resolves the
+    caller from ``sub``), but ``main.py``'s deprecated-admin-router warning
+    logs it verbatim as the acting operator, so the placeholder misattributed
+    every post-refresh request in that security log.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refreshed_access_token_carries_real_username(
+        self, async_client, admin_user
+    ):
+        from auth.tokens import decode_token
+
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+
+        response = await async_client.post("/api/auth/refresh")
+        assert response.status_code == 200
+
+        refreshed = async_client.cookies.get("access_token")
+        assert decode_token(refreshed)["username"] == "admin"
+
+    @pytest.mark.asyncio
+    async def test_graced_refresh_also_carries_real_username(
+        self, async_client, admin_user, test_session
+    ):
+        """The rotation-grace path mints its own access token too."""
+        from auth.tokens import decode_token
+
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+        pre_rotation = async_client.cookies.get("refresh_token")
+
+        assert (await async_client.post("/api/auth/refresh")).status_code == 200
+
+        # Replay the immediately-prior token: answered inside the grace window.
+        async_client.cookies.set("refresh_token", pre_rotation)
+        graced = await async_client.post("/api/auth/refresh")
+        assert graced.status_code == 200
+
+        refreshed = async_client.cookies.get("access_token")
+        assert decode_token(refreshed)["username"] == "admin"
+
+
 class TestRefreshRotationGraceWindow:
     """bd-x67qe: server-side rotation grace window for the cross-tab refresh
     race.

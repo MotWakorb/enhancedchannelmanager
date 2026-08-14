@@ -923,8 +923,13 @@ async def refresh_tokens(
         if not user or not user.is_active:
             raise AuthenticationError("User not found or disabled")
 
-        # Rotate tokens
-        new_access_token, new_refresh_token = rotate_refresh_token(refresh_token)
+        # Rotate tokens. Pass the real username so the refreshed access
+        # token keeps identifying the account rather than a ``user_<id>``
+        # placeholder (bd-suuoh) — that claim is what main.py's
+        # deprecated-admin-router warning logs as the acting operator.
+        new_access_token, new_refresh_token = rotate_refresh_token(
+            refresh_token, username=user.username
+        )
 
         # Guarded rotation (bd-x67qe): the UPDATE only applies while the row
         # still holds the pre-rotation hash, so exactly ONE of two racing
