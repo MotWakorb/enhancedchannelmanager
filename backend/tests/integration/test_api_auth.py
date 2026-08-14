@@ -333,11 +333,17 @@ class TestRefreshedAccessTokenIdentity:
         assert decode_token(refreshed)["username"] == "admin"
 
     @pytest.mark.asyncio
-    async def test_graced_refresh_also_carries_real_username(
+    async def test_predecessor_refresh_also_carries_real_username(
         self, async_client, admin_user, test_session
     ):
-        """The rotation-grace path mints its own access token too."""
+        """The predecessor path mints its own access token too.
+
+        Property 5. The rotation is aged well past the deleted 10-second
+        window so this exercises rotation confirmation, not the old grace.
+        """
+        from datetime import datetime, timedelta
         from auth.tokens import decode_token
+        from models import UserSession
 
         login_response = await async_client.post(
             "/api/auth/login",
@@ -348,32 +354,52 @@ class TestRefreshedAccessTokenIdentity:
 
         assert (await async_client.post("/api/auth/refresh")).status_code == 200
 
-        # Replay the immediately-prior token: answered inside the grace window.
+        test_session.expire_all()
+        row = (
+            test_session.query(UserSession)
+            .filter(UserSession.user_id == admin_user.id)
+            .one()
+        )
+        row.rotated_at = datetime.utcnow() - timedelta(hours=6)
+        test_session.commit()
+
+        # Replay the immediately-prior token: its successor was never used.
         async_client.cookies.set("refresh_token", pre_rotation)
-        graced = await async_client.post("/api/auth/refresh")
-        assert graced.status_code == 200
+        from_predecessor = await async_client.post("/api/auth/refresh")
+        assert from_predecessor.status_code == 200
 
         refreshed = async_client.cookies.get("access_token")
         assert decode_token(refreshed)["username"] == "admin"
 
 
-class TestRefreshRotationGraceWindow:
-    """bd-x67qe: server-side rotation grace window for the cross-tab refresh
-    race.
+class TestRefreshRotationConfirmation:
+    """bead upkp1 (replacing bd-x67qe's 10-second wall-clock grace window):
+    the immediately-prior refresh token stays acceptable until its successor
+    is actually used.
 
-    /auth/refresh rotates the refresh token one-time-use. Two tabs of one
-    session crossing the access-token expiry boundary can both POST
-    /auth/refresh with the same pre-rotation cookie; without a grace window
-    the loser gets 'Session not found or revoked' and hard-logs-out the tab.
+    /auth/refresh rotates the refresh token one-time-use. The wall-clock
+    window this suite used to pin stranded any client whose rotated response
+    never arrived: a tab that navigated mid-flight, an aborted request, or
+    browser automation, all of which lose the response while the server has
+    already rotated. Ten seconds later that client was locked out with no
+    non-interactive way back.
 
-    Grace semantics under test:
-    - the immediately-prior token is accepted for a short window after
-      rotation and answered idempotently (fresh access token, SAME session,
-      NO second rotation, NO refresh cookie)
-    - the grace window never extends total session lifetime
-    - the graced token cannot chain (only one generation is kept)
-    - revocation (logout) kills current AND graced tokens immediately
-    - the window itself expires
+    Rotation confirmation replaces the clock with the row itself. Accepting a
+    successor overwrites ``prior_refresh_token_hash``, which is precisely
+    when the predecessor stops matching. So:
+
+    - the predecessor is accepted for as long as its successor goes unused,
+      and answered idempotently (fresh access token, SAME session, NO second
+      rotation, NO refresh cookie)
+    - it never extends total session lifetime, which is the outer bound that
+      replaces the window
+    - it cannot chain: exactly one generation is retained
+    - revocation (logout) kills the current token and its predecessor at once
+    - a predecessor whose successor HAS been used is refused
+
+    Tests that need to prove independence from the deleted window age
+    ``rotated_at`` into the past, which is exactly the condition the removed
+    code compared against. One test (the QA reproduction) sleeps for real.
     """
 
     async def _login(self, async_client):
@@ -405,6 +431,21 @@ class TestRefreshRotationGraceWindow:
             .one()
         )
 
+    def _age_rotation(self, test_session, user_id, seconds):
+        """Push ``rotated_at`` into the past.
+
+        This is the wall-clock condition the fix deletes, so aging the row is
+        equivalent to waiting that long for every assertion about it, without
+        the test sleeping. ``expires_at`` is deliberately left alone: it is a
+        separate bound and still applies.
+        """
+        from datetime import datetime, timedelta
+
+        row = self._session_row(test_session, user_id)
+        row.rotated_at = datetime.utcnow() - timedelta(seconds=seconds)
+        test_session.commit()
+        return row
+
     @pytest.mark.asyncio
     async def test_concurrent_double_refresh_both_succeed_one_session(
         self, async_client, admin_user, test_session
@@ -430,8 +471,9 @@ class TestRefreshRotationGraceWindow:
         assert second.status_code == 200, second.text
 
         # Exactly ONE rotation happened: one response carries a new refresh
-        # cookie (the winner), the graced loser gets an access token only —
-        # it must NOT push a stale refresh token back into the shared jar.
+        # cookie (the winner), the loser is answered from the predecessor and
+        # gets an access token only. It must NOT push a superseded refresh
+        # token back into the shared jar.
         refresh_cookie_count = sum(
             1 for r in (first, second) if "refresh_token" in r.cookies
         )
@@ -450,10 +492,10 @@ class TestRefreshRotationGraceWindow:
         assert len(live_sessions) == 1
 
     @pytest.mark.asyncio
-    async def test_winner_token_still_works_after_graced_refresh(
+    async def test_winner_token_still_works_after_a_predecessor_answer(
         self, async_client, admin_user
     ):
-        """A graced (loser) refresh must not invalidate the winner's chain."""
+        """A predecessor answer must not invalidate the successor's chain."""
         old_token = await self._login(async_client)
 
         winner = await self._refresh_with(async_client, old_token)
@@ -468,29 +510,109 @@ class TestRefreshRotationGraceWindow:
         assert "refresh_token" in follow_up.cookies
 
     @pytest.mark.asyncio
-    async def test_graced_token_fails_after_window_expiry(
-        self, async_client, admin_user, test_session
+    async def test_qa_reproduction_succeeds_well_past_the_deleted_window(
+        self, async_client, admin_user
     ):
-        """The prior token is only honored INSIDE the grace window."""
-        from datetime import datetime, timedelta
+        """Property 1, the acceptance test for bead upkp1.
 
-        old_token = await self._login(async_client)
-        response = await self._refresh_with(async_client, old_token)
-        assert response.status_code == 200
+        This is QA's reproduction verbatim: login, capture R1, refresh with
+        R1 and DISCARD the response (which is what a navigation or an aborted
+        request does to a browser), then retry R1 at t+1s and again well
+        past the ten seconds the deleted window allowed. Both retries must
+        now return 200; the second one used to return 401 'Session not found
+        or revoked', and the delay was the only variable between them.
 
-        # Age the rotation far past the grace window.
-        row = self._session_row(test_session, admin_user.id)
-        row.rotated_at = datetime.utcnow() - timedelta(seconds=300)
-        test_session.commit()
+        The sleep is real, not an aged row, precisely because a fix that
+        merely widened the constant would still pass an aged-row test.
+        """
+        import asyncio
 
-        expired_grace = await self._refresh_with(async_client, old_token)
-        assert expired_grace.status_code == 401
+        r1 = await self._login(async_client)
+
+        discarded = await self._refresh_with(async_client, r1)
+        assert discarded.status_code == 200  # the client never sees this
+
+        early_retry = await self._refresh_with(async_client, r1)
+        assert early_retry.status_code == 200, early_retry.text
+
+        await asyncio.sleep(13)
+
+        late_retry = await self._refresh_with(async_client, r1)
+        assert late_retry.status_code == 200, late_retry.text
+        assert "refresh_token" not in late_retry.cookies
 
     @pytest.mark.asyncio
-    async def test_graced_token_cannot_chain(self, async_client, admin_user):
-        """Grace covers only the LATEST predecessor — one generation deep.
-        After a second rotation, the oldest token must fail even though it
-        was graced a moment ago."""
+    async def test_predecessor_accepted_after_an_arbitrarily_long_wait(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 2: no wall-clock bound remains on predecessor acceptance.
+
+        Thirty days of age on the rotation, far beyond any window anyone
+        would configure, and the answer is still 200 because the successor
+        was never used. The session's own ``expires_at`` is untouched and
+        still applies (property 9 pins that half).
+        """
+        r1 = await self._login(async_client)
+        assert (await self._refresh_with(async_client, r1)).status_code == 200
+
+        self._age_rotation(test_session, admin_user.id, 30 * 24 * 3600)
+
+        response = await self._refresh_with(async_client, r1)
+        assert response.status_code == 200, response.text
+
+    @pytest.mark.asyncio
+    async def test_predecessor_answer_carries_an_access_cookie_only(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 3: access-token cookie, and no refresh cookie at all.
+
+        Issuing a refresh cookie here would fork the chain: the server does
+        not hold the plaintext successor, so it could only mint a NEW one and
+        strand whoever holds the real successor.
+        """
+        r1 = await self._login(async_client)
+        assert (await self._refresh_with(async_client, r1)).status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
+
+        response = await self._refresh_with(async_client, r1)
+        assert response.status_code == 200, response.text
+        assert "access_token" in response.cookies
+        assert "refresh_token" not in response.cookies
+
+    @pytest.mark.asyncio
+    async def test_predecessor_refused_once_the_successor_has_been_used(
+        self, async_client, admin_user
+    ):
+        """Property 6, the security assertion of the set.
+
+        The predecessor's whole lease is 'until the successor is used'. Use
+        it: rotate R1 to R2 and then R2 to R3, and R1 must be refused. The
+        second rotation is what overwrites R1's hash out of the row, which is
+        the mechanism, not a window elapsing.
+        """
+        r1 = await self._login(async_client)
+
+        first = await self._refresh_with(async_client, r1)
+        assert first.status_code == 200
+        r2 = first.cookies["refresh_token"]
+
+        second = await self._refresh_with(async_client, r2)
+        assert second.status_code == 200
+        assert "refresh_token" in second.cookies
+
+        replayed = await self._refresh_with(async_client, r1)
+        assert replayed.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_predecessor_cannot_chain(self, async_client, admin_user):
+        """Property 7: exactly one generation is retained.
+
+        After a second rotation the oldest token is refused. The MECHANISM is
+        the point: gen0 fails because gen1's use overwrote
+        ``prior_refresh_token_hash``, not because any window elapsed. Under
+        the deleted rule this test could pass for the wrong reason, since it
+        runs inside ten seconds.
+        """
         gen0 = await self._login(async_client)
 
         first = await self._refresh_with(async_client, gen0)
@@ -504,11 +626,186 @@ class TestRefreshRotationGraceWindow:
         assert chained.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_logout_revokes_current_and_graced_tokens_immediately(
+    async def test_predecessor_survives_its_own_jti_blacklisting(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 16: the ``ignore_revocation=True`` fallback is the normal
+        path now, and this test fails if anyone tidies it away.
+
+        Rotation adds the presented jti to the in-process blacklist, so the
+        predecessor's jti is revoked in ``auth.tokens`` the instant its
+        successor is minted. The test asserts that membership directly, so
+        the acceptance below can only be reached through the fallback, and
+        the C-5 regression cannot hide behind a decode that happened to
+        succeed.
+        """
+        from auth.tokens import _revoked_tokens, decode_token
+
+        r1 = await self._login(async_client)
+        jti = decode_token(r1, ignore_revocation=True)["jti"]
+
+        assert (await self._refresh_with(async_client, r1)).status_code == 200
+        assert jti in _revoked_tokens, (
+            "precondition: rotation must blacklist the presented jti, "
+            "otherwise this test proves nothing about the fallback"
+        )
+
+        self._age_rotation(test_session, admin_user.id, 7200)
+
+        response = await self._refresh_with(async_client, r1)
+        assert response.status_code == 200, response.text
+
+    @pytest.mark.asyncio
+    async def test_repeated_predecessor_answers_are_idempotent(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 21: presenting the predecessor N times accumulates no
+        state. Same single row, same hash pair, same rotation timestamp."""
+        from models import UserSession
+
+        r1 = await self._login(async_client)
+        assert (await self._refresh_with(async_client, r1)).status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
+
+        row = self._session_row(test_session, admin_user.id)
+        before = (
+            row.refresh_token_hash,
+            row.prior_refresh_token_hash,
+            row.rotated_at,
+            row.expires_at,
+        )
+
+        for attempt in range(5):
+            response = await self._refresh_with(async_client, r1)
+            assert response.status_code == 200, f"attempt {attempt}: {response.text}"
+            assert "refresh_token" not in response.cookies
+
+        row = self._session_row(test_session, admin_user.id)
+        assert (
+            row.refresh_token_hash,
+            row.prior_refresh_token_hash,
+            row.rotated_at,
+            row.expires_at,
+        ) == before
+
+        test_session.expire_all()
+        assert (
+            test_session.query(UserSession)
+            .filter(UserSession.user_id == admin_user.id)
+            .count()
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_predecessor_answers_over_time_leave_the_successor_chain_intact(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 15: any number of predecessor answers, spread over time,
+        leave the successor able to keep rotating normally."""
+        r1 = await self._login(async_client)
+
+        winner = await self._refresh_with(async_client, r1)
+        assert winner.status_code == 200
+        r2 = winner.cookies["refresh_token"]
+
+        for elapsed in (60, 3600, 86400):
+            self._age_rotation(test_session, admin_user.id, elapsed)
+            answer = await self._refresh_with(async_client, r1)
+            assert answer.status_code == 200, f"at {elapsed}s: {answer.text}"
+            assert "refresh_token" not in answer.cookies
+
+        follow_up = await self._refresh_with(async_client, r2)
+        assert follow_up.status_code == 200
+        assert "refresh_token" in follow_up.cookies
+
+    @pytest.mark.asyncio
+    async def test_second_refresh_long_after_the_first_still_gets_an_answer(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 14, long-separation variant of the concurrency case.
+
+        The two requests that share a pre-rotation token no longer have to be
+        simultaneous: separated by an hour, the second still gets 200 with an
+        access cookie only, and exactly one live session row remains.
+        """
+        from models import UserSession
+
+        r1 = await self._login(async_client)
+
+        first = await self._refresh_with(async_client, r1)
+        assert first.status_code == 200
+        assert "refresh_token" in first.cookies
+
+        self._age_rotation(test_session, admin_user.id, 3600)
+
+        second = await self._refresh_with(async_client, r1)
+        assert second.status_code == 200, second.text
+        assert "access_token" in second.cookies
+        assert "refresh_token" not in second.cookies
+
+        test_session.expire_all()
+        live = (
+            test_session.query(UserSession)
+            .filter(
+                UserSession.user_id == admin_user.id,
+                UserSession.is_revoked == False,  # noqa: E712
+            )
+            .all()
+        )
+        assert len(live) == 1
+
+    @pytest.mark.asyncio
+    async def test_predecessor_of_a_different_user_is_refused(
+        self, async_client, admin_user, regular_user, test_session
+    ):
+        """Property 11: the predecessor lookup is filtered by ``user_id``, so
+        a token whose subject is another account cannot match a session row
+        even when the stored hash does."""
+        from datetime import datetime
+        from auth.tokens import create_refresh_token, hash_token
+
+        await self._login(async_client)
+
+        other_users_token = create_refresh_token(user_id=regular_user.id)
+        row = self._session_row(test_session, admin_user.id)
+        row.prior_refresh_token_hash = hash_token(other_users_token)
+        row.rotated_at = datetime.utcnow()
+        test_session.commit()
+
+        response = await self._refresh_with(async_client, other_users_token)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_predecessor_of_a_deactivated_user_is_refused(
+        self, async_client, admin_user, test_session
+    ):
+        """Property 12: deactivating the account refuses the predecessor,
+        however long its successor stays unused.
+
+        The positive control matters: without it this test would pass under a
+        build that refuses the aged predecessor for the wrong reason.
+        """
+        r1 = await self._login(async_client)
+        assert (await self._refresh_with(async_client, r1)).status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
+
+        while_active = await self._refresh_with(async_client, r1)
+        assert while_active.status_code == 200, while_active.text
+
+        admin_user.is_active = False
+        test_session.commit()
+
+        response = await self._refresh_with(async_client, r1)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_revokes_current_and_predecessor_tokens_immediately(
         self, async_client, admin_user
     ):
-        """Logout kills the session for BOTH the rotated token and its
-        graced predecessor — revocation always beats grace."""
+        """Property 8: logout kills the session for BOTH the current token
+        and its predecessor. Revocation always wins, and it is what bounds a
+        predecessor that now outlives any window: one row is the whole chain,
+        so revoking it refuses both tokens together."""
         old_token = await self._login(async_client)
         rotated = await self._refresh_with(async_client, old_token)
         assert rotated.status_code == 200
@@ -520,8 +817,10 @@ class TestRefreshRotationGraceWindow:
         )
         assert logout.status_code == 200
 
-        graced_after_logout = await self._refresh_with(async_client, old_token)
-        assert graced_after_logout.status_code == 401
+        predecessor_after_logout = await self._refresh_with(
+            async_client, old_token
+        )
+        assert predecessor_after_logout.status_code == 401
 
         current_after_logout = await self._refresh_with(
             async_client, current_token
@@ -529,11 +828,11 @@ class TestRefreshRotationGraceWindow:
         assert current_after_logout.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_logout_with_graced_token_also_revokes_session(
+    async def test_logout_with_the_predecessor_token_also_revokes_session(
         self, async_client, admin_user, test_session
     ):
-        """Logout presented with the graced PREDECESSOR still revokes the
-        session — a stale tab logging out must not leave the session live."""
+        """Logout presented with the PREDECESSOR still revokes the session:
+        a stale tab logging out must not leave the session live."""
         old_token = await self._login(async_client)
         rotated = await self._refresh_with(async_client, old_token)
         assert rotated.status_code == 200
@@ -551,43 +850,372 @@ class TestRefreshRotationGraceWindow:
         assert current_after_logout.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_grace_respects_session_expiry(
+    async def test_predecessor_refused_when_the_session_has_expired(
         self, async_client, admin_user, test_session
     ):
-        """An expired session is not resurrected by the grace window."""
+        """Property 9: an expired session is not resurrected by presenting
+        the predecessor. This is half of the outer bound that replaces the
+        deleted window, so the positive control below is part of the claim:
+        the same aged predecessor is accepted right up until ``expires_at``
+        passes, and refused after."""
         from datetime import datetime, timedelta
 
         old_token = await self._login(async_client)
         response = await self._refresh_with(async_client, old_token)
         assert response.status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
+
+        while_live = await self._refresh_with(async_client, old_token)
+        assert while_live.status_code == 200, while_live.text
 
         row = self._session_row(test_session, admin_user.id)
         row.expires_at = datetime.utcnow() - timedelta(minutes=1)
         test_session.commit()
 
-        graced = await self._refresh_with(async_client, old_token)
-        assert graced.status_code == 401
+        refused = await self._refresh_with(async_client, old_token)
+        assert refused.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_graced_refresh_does_not_extend_session_lifetime(
+    async def test_predecessor_refresh_does_not_extend_session_lifetime(
         self, async_client, admin_user, test_session
     ):
-        """The grace path answers idempotently: no second rotation, and
-        expires_at (total session lifetime) is untouched."""
+        """Property 4: the predecessor answer mutates nothing that decides
+        acceptance. ``refresh_token_hash``, ``prior_refresh_token_hash``,
+        ``rotated_at`` and ``expires_at`` all come back identical.
+
+        ``expires_at`` staying put is what guarantees a client living on
+        predecessor answers is eventually sent back through interactive
+        login: rotation slides the session forward, this path never does.
+        """
         old_token = await self._login(async_client)
         response = await self._refresh_with(async_client, old_token)
         assert response.status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
 
         row = self._session_row(test_session, admin_user.id)
-        expires_before = row.expires_at
-        hash_before = row.refresh_token_hash
+        before = (
+            row.refresh_token_hash,
+            row.prior_refresh_token_hash,
+            row.rotated_at,
+            row.expires_at,
+        )
+        last_used_before = row.last_used_at
 
-        graced = await self._refresh_with(async_client, old_token)
-        assert graced.status_code == 200
+        answered = await self._refresh_with(async_client, old_token)
+        assert answered.status_code == 200
 
         row = self._session_row(test_session, admin_user.id)
-        assert row.expires_at == expires_before
-        assert row.refresh_token_hash == hash_before
+        assert (
+            row.refresh_token_hash,
+            row.prior_refresh_token_hash,
+            row.rotated_at,
+            row.expires_at,
+        ) == before
+        # last_used_at is the one field this path is allowed to advance.
+        assert row.last_used_at >= last_used_before
+
+
+class TestRefreshCryptographicGate:
+    """bead upkp1: signature and expiry are decided BEFORE any session lookup,
+    and rotation confirmation does not soften that.
+
+    The predecessor now lives for the session's lifetime rather than ten
+    seconds, so the checks that run before the row is ever consulted are
+    carrying more weight than they used to. These tests assert both the 401
+    and the absence of a ``user_sessions`` query, because 'refused' and
+    'refused without touching the database' are different claims.
+    """
+
+    @staticmethod
+    def _refresh_token_with_exp(user_id, delta):
+        """A signed refresh token whose ``exp`` is ``delta`` from now."""
+        import secrets
+        from datetime import datetime, timedelta
+        from jose import jwt
+        from auth.tokens import ALGORITHM, _get_secret_key
+
+        now = datetime.utcnow()
+        return jwt.encode(
+            {
+                "sub": str(user_id),
+                "type": "refresh",
+                "exp": now + delta,
+                "iat": now - timedelta(minutes=1),
+                "jti": secrets.token_urlsafe(16),
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+    @staticmethod
+    def _session_statements(test_engine):
+        """Context manager collecting SQL that touches ``user_sessions``."""
+        import contextlib
+        from sqlalchemy import event
+
+        @contextlib.contextmanager
+        def _collect():
+            seen = []
+
+            def _record(conn, cursor, statement, parameters, context, many):
+                if "user_sessions" in statement.lower():
+                    seen.append(statement)
+
+            event.listen(test_engine, "before_cursor_execute", _record)
+            try:
+                yield seen
+            finally:
+                event.remove(test_engine, "before_cursor_execute", _record)
+
+        return _collect()
+
+    @pytest.mark.asyncio
+    async def test_expired_refresh_token_refused_before_any_session_lookup(
+        self, async_client, admin_user, test_engine
+    ):
+        """Property 10: the presented JWT's own ``exp`` is one of the two
+        bounds that replace the deleted window, and it is enforced first."""
+        from datetime import timedelta
+
+        expired = self._refresh_token_with_exp(
+            admin_user.id, timedelta(days=-1)
+        )
+
+        async_client.cookies.clear()
+        with self._session_statements(test_engine) as statements:
+            response = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": expired}
+            )
+
+        assert response.status_code == 401
+        assert statements == []
+
+    @pytest.mark.asyncio
+    async def test_tampered_signature_refused_before_any_session_lookup(
+        self, async_client, admin_user, test_engine
+    ):
+        """Property 13."""
+        login = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login.status_code == 200
+        tampered = login.cookies["refresh_token"][:-6] + "AAAAAA"
+
+        async_client.cookies.clear()
+        with self._session_statements(test_engine) as statements:
+            response = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": tampered}
+            )
+
+        assert response.status_code == 401
+        assert statements == []
+
+    @pytest.mark.asyncio
+    async def test_token_signed_with_a_foreign_key_refused_at_the_signature(
+        self, async_client, admin_user, test_engine
+    ):
+        """Property 20: a well-formed, unexpired refresh token minted by a
+        different signing key never reaches the session lookup."""
+        import secrets
+        from datetime import datetime, timedelta
+        from jose import jwt
+        from auth.tokens import ALGORITHM
+
+        now = datetime.utcnow()
+        foreign = jwt.encode(
+            {
+                "sub": str(admin_user.id),
+                "type": "refresh",
+                "exp": now + timedelta(days=7),
+                "iat": now,
+                "jti": secrets.token_urlsafe(16),
+            },
+            "<synthetic-signing-key-that-is-not-the-configured-one>",
+            algorithm=ALGORITHM,
+        )
+
+        async_client.cookies.clear()
+        with self._session_statements(test_engine) as statements:
+            response = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": foreign}
+            )
+
+        assert response.status_code == 401
+        assert statements == []
+
+
+class TestRefreshFailureLogging:
+    """bead yhk3r: /api/auth/refresh used to refuse in complete silence.
+
+    38 hours of container logs held zero refresh lines of any kind, success
+    or failure, which is the direct reason bead upkp1 had to be diagnosed
+    from a browser's error body rather than from the server that produced the
+    401. This matters more under rotation confirmation than it did before:
+    the design deliberately trades an automated response to a replayed token
+    (there is none: unknown credentials are refused and logged, never
+    revoked) for the ability to SEE one, and that visibility is these lines.
+    """
+
+    LOGGER = "auth.routes"
+
+    @pytest.fixture(autouse=True)
+    def _clear_denial_dedupe(self):
+        """Refusal logging is deduped per (reason, client) in module-global
+        state, so a test asserting on it must not inherit another test's."""
+        from auth import routes as auth_routes
+
+        auth_routes._reset_refresh_denial_log_state()
+        yield
+        auth_routes._reset_refresh_denial_log_state()
+
+    def _warnings(self, caplog):
+        import logging
+
+        return [
+            r
+            for r in caplog.records
+            if r.name == self.LOGGER and r.levelno == logging.WARNING
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_emits_exactly_one_warning_naming_reason_and_client(
+        self, async_client, caplog
+    ):
+        """Property 17."""
+        import logging
+
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            response = await async_client.post("/api/auth/refresh")
+
+        assert response.status_code == 401
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        message = warnings[0].getMessage()
+        assert "no_credential" in message
+        assert "client=127.0.0.1" in message
+
+    @pytest.mark.asyncio
+    async def test_unknown_credential_refusal_has_its_own_message(
+        self, async_client, admin_user, caplog
+    ):
+        """Property 18: valid signature but no matching session gets a
+        message of its own, distinct from 'no token' and from a malformed
+        one, because it is the only replay-shaped signal this server can
+        emit."""
+        import logging
+        from auth.tokens import create_refresh_token
+
+        orphan = create_refresh_token(user_id=admin_user.id)
+
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            unknown = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": orphan}
+            )
+        assert unknown.status_code == 401
+        unknown_messages = [r.getMessage() for r in self._warnings(caplog)]
+        assert len(unknown_messages) == 1
+        assert "unknown_session" in unknown_messages[0]
+        assert "matches no live session" in unknown_messages[0]
+
+        caplog.clear()
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            malformed = await async_client.post(
+                "/api/auth/refresh",
+                cookies={"refresh_token": "not.a.jwt"},
+            )
+        assert malformed.status_code == 401
+        malformed_messages = [r.getMessage() for r in self._warnings(caplog)]
+        assert len(malformed_messages) == 1
+        assert "unknown_session" not in malformed_messages[0]
+        assert "matches no live session" not in malformed_messages[0]
+
+    @pytest.mark.asyncio
+    async def test_repeated_refusals_are_deduped_and_counted_not_dropped(
+        self, async_client, caplog
+    ):
+        """L-5: this endpoint is unauthenticated and unrate-limited, so one
+        WARNING per refusal is a disk-fill vector. Repeats inside the
+        interval are counted rather than emitted, and the count rides on the
+        next line that is emitted."""
+        import logging
+        from auth import routes as auth_routes
+
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            for _ in range(5):
+                assert (
+                    await async_client.post("/api/auth/refresh")
+                ).status_code == 401
+
+        assert len(self._warnings(caplog)) == 1
+        assert "skipped_since_last=0" in self._warnings(caplog)[0].getMessage()
+
+        # Roll the interval over and the skipped four are reported, not lost.
+        state = auth_routes._refresh_denial_log_state
+        key = next(iter(state))
+        state[key] = (
+            state[key][0] - auth_routes._REFRESH_DENIAL_LOG_INTERVAL_SECONDS - 1,
+            state[key][1],
+        )
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            assert (
+                await async_client.post("/api/auth/refresh")
+            ).status_code == 401
+
+        assert "skipped_since_last=4" in self._warnings(caplog)[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_no_refresh_log_line_carries_a_token_or_its_hash(
+        self, async_client, admin_user, caplog
+    ):
+        """Property 19, asserted as a negative over every captured record.
+
+        Covers all three outcomes in one run: a successful rotation, a
+        predecessor answer, and a refusal.
+        """
+        import logging
+        from auth.tokens import hash_token
+
+        login = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login.status_code == 200
+        r1 = login.cookies["refresh_token"]
+
+        with caplog.at_level(logging.DEBUG):
+            async_client.cookies.clear()
+            rotated = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": r1}
+            )
+            assert rotated.status_code == 200
+            r2 = rotated.cookies["refresh_token"]
+
+            async_client.cookies.clear()
+            answered = await async_client.post(
+                "/api/auth/refresh", cookies={"refresh_token": r1}
+            )
+            assert answered.status_code == 200
+
+            async_client.cookies.clear()
+            refused = await async_client.post(
+                "/api/auth/refresh",
+                cookies={"refresh_token": "not.a.jwt"},
+            )
+            assert refused.status_code == 401
+
+        messages = [r.getMessage() for r in caplog.records]
+        # Non-vacuous: the refresh path did log during this block.
+        assert any("[AUTH] Refresh" in m or "Token refreshed" in m for m in messages)
+
+        for secret_value in (r1, r2, hash_token(r1), hash_token(r2)):
+            for message in messages:
+                assert secret_value not in message
 
 
 class TestProtectedEndpoints:

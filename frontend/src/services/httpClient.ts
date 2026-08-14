@@ -120,9 +120,11 @@ async function performTokenRefresh(): Promise<boolean> {
  * POST /auth/refresh with the same pre-rotation cookie — the rotated-away
  * loser used to hard-logout its tab. Holding a browser-wide lock serializes
  * the tabs (the second one refreshes with the winner's already-rotated
- * cookie); the server-side rotation grace window covers whatever the lock
- * cannot (e.g. two different browsers). Falls back silently to the direct
- * path on browsers without the Locks API.
+ * cookie); server-side, the superseded token stays acceptable until its
+ * successor is actually used (rotation confirmation, bead upkp1), which
+ * covers whatever the lock cannot: two different browsers, or a response
+ * this tab never received because it navigated mid-flight. Falls back
+ * silently to the direct path on browsers without the Locks API.
  */
 async function refreshHoldingCrossTabLock(): Promise<boolean> {
   const locks =

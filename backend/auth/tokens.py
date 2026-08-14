@@ -193,10 +193,12 @@ def decode_token(token: str, ignore_revocation: bool = False) -> dict:
         token: The JWT token string to decode.
         ignore_revocation: Skip the in-process jti revocation check while
             still enforcing signature and expiry. Used ONLY by the refresh
-            rotation grace window (bd-x67qe): a rotated-away predecessor's
-            jti is blacklisted the moment the winner rotates, but the token
-            may still be honored by the DB-side grace check. Never use this
-            for authorization decisions.
+            predecessor path (bd-x67qe, bead upkp1): rotation blacklists the
+            presented jti immediately, but the predecessor stays acceptable
+            until its successor is used, so the DB row and not this set is
+            what decides. Every predecessor acceptance depends on this flag;
+            it is the normal path there, not an edge case. Never use it for
+            authorization decisions.
 
     Returns:
         The decoded token claims.
