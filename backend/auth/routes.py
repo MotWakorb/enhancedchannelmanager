@@ -3,9 +3,11 @@ Authentication API endpoints.
 
 Provides login, logout, token refresh, and password management.
 """
+import ipaddress
 import logging
 import os
 import fcntl
+import re
 import secrets
 import smtplib
 import ssl
@@ -641,7 +643,7 @@ async def login(
         # Fallback to direct user lookup for backwards compatibility
         user = session.query(User).filter(User.username == login_request.username).first()
 
-    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    client_ip = _client_address(request)
 
     if user is None:
         logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", login_request.username, client_ip)
@@ -864,12 +866,103 @@ def _refresh_denials_skipped_since_last(reason: str, client: str) -> Optional[in
     return entry[1] if entry is not None else 0
 
 
+def _forwarded_address(value: str) -> Optional[str]:
+    """Return ``value`` as a canonical IP literal, or ``None`` if it is not one.
+
+    ``X-Forwarded-For`` is caller-supplied and is only ever supposed to hold
+    an IP address (proxies may append a port, and IPv6 is bracketed when a
+    port is present). Anything else is discarded rather than trimmed: see
+    :func:`_client_address` for why the difference matters.
+    """
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("["):
+        # "[2001:db8::1]:41234" — the bracketed form, with or without a port.
+        host, closed, _ = candidate.partition("]")
+        if not closed:
+            return None
+        candidate = host[1:]
+    elif candidate.count(":") == 1:
+        # "203.0.113.7:41234". A bare IPv6 address has more than one colon,
+        # so this cannot truncate one.
+        candidate = candidate.split(":")[0]
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
 def _client_address(request: Request) -> str:
-    """Best-effort client address for an auth log line."""
-    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    """Best-effort client address for an auth log line.
+
+    The returned value is ALWAYS either an IP literal this function itself
+    rendered from :mod:`ipaddress`, the socket peer address, or the constant
+    ``"unknown"`` — never a substring of a request header.
+
+    That is the whole point of the function, and it is stricter than
+    truncating on purpose. ``X-Forwarded-For`` is set by whoever sent the
+    request; before this, its first comma-separated field was logged verbatim
+    and unbounded by the refusal lines in :func:`_deny_refresh` and by the
+    login-failure lines. A caller could therefore choose the text that landed
+    in an auth log: a refresh token, its full sha256 hash (which L-4 of the
+    upkp1 security spec says must never be logged, and which is separately a
+    CodeQL finding), or padding to fill the disk. Truncating would have
+    bounded the length while still emitting attacker-chosen text; validating
+    the shape means there is no attacker-chosen text to emit, which also
+    closes forged-log-line injection at this layer regardless of what the
+    HTTP parser in front of it accepts in a header value.
+
+    A header that does not parse as an address falls back to the socket peer
+    silently. The peer is the more truthful answer in that case, and the
+    alternative — logging that a bad header arrived — would hand the same
+    unauthenticated caller a second way to generate lines.
+    """
+    forwarded = _forwarded_address(
+        request.headers.get("X-Forwarded-For", "").split(",")[0]
+    )
     if forwarded:
         return forwarded
     return request.client.host if request.client else "unknown"
+
+
+# A run this long of token-alphabet characters does not occur in a real
+# User-Agent (its longest such run is a product token like "AppleWebKit"),
+# but it is exactly the shape of a secret: a sha256 hex digest is 64
+# characters and each dot-separated segment of a JWT is longer still.
+_SECRET_SHAPED_RUN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
+
+# Cap on the User-Agent as logged. Long enough to keep the platform and
+# browser tokens that make the field worth logging at all.
+_LOGGED_AGENT_CHARS = 80
+
+
+def _log_safe_agent(value: Optional[str]) -> str:
+    """Render a caller-supplied User-Agent as a single safe log field.
+
+    Unlike an address, a User-Agent is free-form, so there is no shape to
+    validate it against and the defence has to be applied to the value
+    itself. Three things happen, in this order:
+
+    1. secret-shaped runs are redacted, so a caller cannot get a refresh
+       token or its hash into an auth log by putting it here instead of in
+       ``X-Forwarded-For`` (a 64-character hash fits inside the cap below
+       intact, so truncation alone would not stop it);
+    2. everything outside printable ASCII is dropped, so no newline,
+       carriage return or terminal escape can forge a second log line or
+       rewrite the operator's console;
+    3. the result is truncated.
+
+    Redaction runs before truncation so a secret cannot survive by sitting
+    across the cut.
+    """
+    if not value:
+        return ""
+    redacted = _SECRET_SHAPED_RUN.sub("[redacted]", value)
+    printable = "".join(c for c in redacted if " " <= c <= "~")
+    return printable[:_LOGGED_AGENT_CHARS]
 
 
 def _deny_refresh(
@@ -893,6 +986,13 @@ def _deny_refresh(
     and a truncated User-Agent. NEVER the presented credential and never the
     stored hash of one. The ``jti`` names the token without being usable as
     one, and a full hash in a log line would additionally be a CodeQL finding.
+
+    That guarantee has to survive the two caller-supplied fields as well, or
+    it is only a guarantee about the arguments this function happens to pass:
+    an unauthenticated caller who put a token or its hash in ``X-Forwarded-For``
+    or ``User-Agent`` would otherwise have written it into the log itself.
+    :func:`_client_address` and :func:`_log_safe_agent` are what close that,
+    and property 19 asserts it over both headers.
     """
     client = _client_address(request)
     subject = None
@@ -900,7 +1000,7 @@ def _deny_refresh(
     if claims:
         subject = claims.get("sub")
         jti = claims.get("jti")
-    agent = (request.headers.get("User-Agent") or "")[:80]
+    agent = _log_safe_agent(request.headers.get("User-Agent"))
 
     skipped = _refresh_denials_skipped_since_last(reason, client)
     if skipped is None:
@@ -971,6 +1071,24 @@ def _refresh_via_predecessor(
     disagree with the hashes, and it would cost a migration to say nothing
     new.
 
+    Acceptance conditions, in the order enforced below. All five must hold;
+    this list is the authority on how many there are, because a pre-merge
+    review of an earlier draft found a normative "four conditions and nothing
+    else" phrasing that omitted the last one while a required test demanded
+    it:
+
+    1. the row's ``prior_refresh_token_hash`` matches the presented token,
+    2. the row belongs to the ``sub`` in the verified claims,
+    3. the row is not revoked,
+    4. the row's ``expires_at`` is still in the future,
+    5. the user the row belongs to still exists and is still active.
+
+    (5) is not redundant with the others. Deactivating an account has to take
+    effect on this path too, or a stranded client would keep collecting
+    access tokens for a disabled user until the session expired on its own,
+    and nothing else here consults the user row for anything but the username
+    on the minted token.
+
     Security invariants:
     - Only the LATEST predecessor is honored, one generation deep. A normal
       rotation overwrites ``prior_refresh_token_hash``, so predecessors never
@@ -1005,7 +1123,11 @@ def _refresh_via_predecessor(
             claims=claims,
         )
 
-    if prior_session.expires_at < now:
+    # ``<=``, not ``<``: the rule is that the session is live while
+    # ``expires_at > now``, so an instant that lands exactly on the expiry is
+    # already outside it. Matches the current-token check in
+    # :func:`refresh_tokens`.
+    if prior_session.expires_at <= now:
         raise _deny_refresh(
             request,
             "predecessor_session_expired",
@@ -1119,7 +1241,10 @@ async def refresh_tokens(
                 session, request, response, token_hash, int(user_id), claims
             )
 
-        if user_session.expires_at < datetime.utcnow():
+        # ``<=``, not ``<``: a session is live while ``expires_at > now``, so
+        # the expiry instant itself is outside the session. Same predicate on
+        # the predecessor path in :func:`_refresh_via_predecessor`.
+        if user_session.expires_at <= datetime.utcnow():
             raise _deny_refresh(
                 request, "session_expired", "Session expired", claims=claims
             )
@@ -1503,7 +1628,7 @@ async def dispatcharr_login(
                 login_request.password,
             )
     except DispatcharrRateLimitError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1511,14 +1636,14 @@ async def dispatcharr_login(
             headers={"Retry-After": "60"},
         )
     except DispatcharrNetworkPolicyError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(e),
         )
     except DispatcharrAuthenticationError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

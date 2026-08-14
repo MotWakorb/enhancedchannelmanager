@@ -914,6 +914,75 @@ class TestRefreshRotationConfirmation:
         # last_used_at is the one field this path is allowed to advance.
         assert row.last_used_at >= last_used_before
 
+    def _freeze_now(self, monkeypatch, instant):
+        """Pin ``datetime.utcnow()`` as the auth router sees it.
+
+        The expiry boundary is one microsecond wide, so it is not observable
+        against a running clock. The token's own ``exp`` is decided in
+        ``auth.tokens`` against the real clock and is deliberately left
+        alone, so these tests turn on the session row and nothing else.
+        """
+        from datetime import datetime as real_datetime
+        from auth import routes as auth_routes
+
+        class _FrozenDatetime(real_datetime):
+            @classmethod
+            def utcnow(cls):
+                return instant
+
+        monkeypatch.setattr(auth_routes, "datetime", _FrozenDatetime)
+
+    @pytest.mark.asyncio
+    async def test_a_session_expiring_exactly_now_is_refused_as_current(
+        self, async_client, admin_user, test_session, monkeypatch
+    ):
+        """The session is live while ``expires_at > now``, so the expiry
+        instant itself is outside it and the current token is refused there.
+
+        The handler compared ``expires_at < now``, which accepts the
+        boundary. Nothing observable turned on it against a real clock, but
+        the predicate is what the rule is written in, and the two refresh
+        paths have to agree on it.
+        """
+        from datetime import timedelta
+
+        current = await self._login(async_client)
+        instant = self._session_row(test_session, admin_user.id).expires_at
+
+        self._freeze_now(monkeypatch, instant)
+        refused = await self._refresh_with(async_client, current)
+        assert refused.status_code == 401
+
+        # Positive control: one microsecond earlier the same request is fine,
+        # so the 401 above is the boundary and not a broken fixture.
+        self._freeze_now(monkeypatch, instant - timedelta(microseconds=1))
+        allowed = await self._refresh_with(async_client, current)
+        assert allowed.status_code == 200, allowed.text
+
+    @pytest.mark.asyncio
+    async def test_a_session_expiring_exactly_now_is_refused_as_predecessor(
+        self, async_client, admin_user, test_session, monkeypatch
+    ):
+        """The same boundary on the predecessor path, which is the one that
+        now matters: this path can be reached for the session's whole life
+        rather than for ten seconds after a rotation."""
+        from datetime import timedelta
+
+        old_token = await self._login(async_client)
+        assert (await self._refresh_with(async_client, old_token)).status_code == 200
+        self._age_rotation(test_session, admin_user.id, 3600)
+        instant = self._session_row(test_session, admin_user.id).expires_at
+
+        # Positive control first: the answer is available right up to the
+        # boundary, and this path mutates nothing that the 401 below needs.
+        self._freeze_now(monkeypatch, instant - timedelta(microseconds=1))
+        allowed = await self._refresh_with(async_client, old_token)
+        assert allowed.status_code == 200, allowed.text
+
+        self._freeze_now(monkeypatch, instant)
+        refused = await self._refresh_with(async_client, old_token)
+        assert refused.status_code == 401
+
 
 class TestRefreshCryptographicGate:
     """bead upkp1: signature and expiry are decided BEFORE any session lookup,
@@ -1177,6 +1246,17 @@ class TestRefreshFailureLogging:
 
         Covers all three outcomes in one run: a successful rotation, a
         predecessor answer, and a refusal.
+
+        Every request here also puts the secrets in the two log fields the
+        CALLER controls, which is the hole the first version of this test
+        missed: it only ever placed secrets in the cookie, so it proved that
+        ECM does not log the values it chose to read and proved nothing about
+        the values someone else chose to send. ``X-Forwarded-For`` was logged
+        verbatim and unbounded, and the sha256 hex digest used below is 64
+        characters, so it fits inside the 80-character ``User-Agent`` cut
+        whole. Both are asserted on every outcome, not only on the refusal,
+        because a caller does not get to pick which branch their request
+        takes.
         """
         import logging
         from auth.tokens import hash_token
@@ -1187,18 +1267,28 @@ class TestRefreshFailureLogging:
         )
         assert login.status_code == 200
         r1 = login.cookies["refresh_token"]
+        # Chosen so the header carries the secret in the shape that actually
+        # fits: the digest, not the (much longer) token.
+        smuggled = {
+            "X-Forwarded-For": hash_token(r1),
+            "User-Agent": hash_token(r1),
+        }
 
         with caplog.at_level(logging.DEBUG):
             async_client.cookies.clear()
             rotated = await async_client.post(
-                "/api/auth/refresh", cookies={"refresh_token": r1}
+                "/api/auth/refresh",
+                cookies={"refresh_token": r1},
+                headers=smuggled,
             )
             assert rotated.status_code == 200
             r2 = rotated.cookies["refresh_token"]
 
             async_client.cookies.clear()
             answered = await async_client.post(
-                "/api/auth/refresh", cookies={"refresh_token": r1}
+                "/api/auth/refresh",
+                cookies={"refresh_token": r1},
+                headers=smuggled,
             )
             assert answered.status_code == 200
 
@@ -1206,6 +1296,10 @@ class TestRefreshFailureLogging:
             refused = await async_client.post(
                 "/api/auth/refresh",
                 cookies={"refresh_token": "not.a.jwt"},
+                headers={
+                    "X-Forwarded-For": hash_token(r2),
+                    "User-Agent": hash_token(r2),
+                },
             )
             assert refused.status_code == 401
 
@@ -1216,6 +1310,155 @@ class TestRefreshFailureLogging:
         for secret_value in (r1, r2, hash_token(r1), hash_token(r2)):
             for message in messages:
                 assert secret_value not in message
+
+    @pytest.mark.asyncio
+    async def test_a_forged_forwarded_address_is_not_echoed_into_the_log(
+        self, async_client, caplog
+    ):
+        """L-4 over the address field specifically.
+
+        The refusal line's ``client=`` value must be an address ECM rendered
+        or the socket peer, never a substring of the header. A header that is
+        not an address is discarded rather than trimmed, so the fallback
+        value appears instead — which also means no caller-chosen text can
+        reach the line to forge a second one.
+        """
+        import logging
+
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            refused = await async_client.post(
+                "/api/auth/refresh",
+                headers={"X-Forwarded-For": "not-an-address-" + "A" * 400},
+            )
+
+        assert refused.status_code == 401
+        message = self._warnings(caplog)[0].getMessage()
+        assert "not-an-address" not in message
+        assert "AAAA" not in message
+        assert "client=127.0.0.1" in message
+
+    @pytest.mark.asyncio
+    async def test_a_well_formed_forwarded_address_is_still_reported(
+        self, async_client, caplog
+    ):
+        """The positive control for the test above.
+
+        Discarding malformed values would be worthless if it also discarded
+        real ones: the field exists so an operator behind a reverse proxy
+        sees the LAN client rather than the proxy. Without this, a
+        ``_client_address`` that always returned the peer would pass.
+        """
+        import logging
+
+        async_client.cookies.clear()
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            refused = await async_client.post(
+                "/api/auth/refresh",
+                headers={"X-Forwarded-For": "192.168.4.31, 10.0.0.1"},
+            )
+
+        assert refused.status_code == 401
+        assert "client=192.168.4.31" in self._warnings(caplog)[0].getMessage()
+
+
+# A sha256 hex digest's shape (64 characters, hex alphabet) with none of its
+# entropy: built from a repeated run per docs/pytest_conventions.md, so the
+# secrets ratchet does not have to distinguish it from a real one.
+_FAKE_DIGEST = "abcdef0123" * 6 + "abcd"
+
+
+class TestAuthLogFieldSanitization:
+    """The two auth-log fields the caller supplies, tested at the helper.
+
+    The integration tests above prove the end-to-end behaviour but cannot
+    reach every input: ``h11`` rejects a header value containing CR or LF
+    before the application sees it, so the forged-log-line case is not
+    expressible through a real request. Asserting it here means the guarantee
+    does not rest on the HTTP parser in front of ECM continuing to reject
+    that byte, and it covers the address forms a proxy actually emits.
+
+    These helpers also feed the login-failure lines, which have read the same
+    unchecked header since long before rotation confirmation.
+    """
+
+    @pytest.mark.parametrize(
+        "header,expected",
+        [
+            ("192.168.4.31", "192.168.4.31"),
+            ("  192.168.4.31  ", "192.168.4.31"),
+            # A proxy that appends the source port, v4 and bracketed v6.
+            ("192.168.4.31:41234", "192.168.4.31"),
+            ("[2001:db8::1]:41234", "2001:db8::1"),
+            ("[2001:db8::1]", "2001:db8::1"),
+            # Bare IPv6 has more than one colon, so port-stripping must not
+            # eat it.
+            ("2001:db8::1", "2001:db8::1"),
+            # Canonicalized from the parsed value, never echoed.
+            ("2001:0db8:0000:0000:0000:0000:0000:0001", "2001:db8::1"),
+        ],
+    )
+    def test_real_forwarded_addresses_survive(self, header, expected):
+        from auth.routes import _forwarded_address
+
+        assert _forwarded_address(header) == expected
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "",
+            "   ",
+            "localhost",
+            "192.168.4.999",
+            # The finding: a credential's digest, and a whole JWT. Both are
+            # assembled from patterned runs per docs/pytest_conventions.md so
+            # they carry the shape without resembling a real secret.
+            _FAKE_DIGEST,
+            "eyJ" + "a" * 24 + "." + "b" * 24 + "." + "c" * 24,
+            # Forged log line. Unreachable through h11, rejected here anyway.
+            "192.168.4.31\nWARNING [AUTH] Login succeeded for admin",
+            "192.168.4.31\r\n[AUTH] fabricated",
+            # Unbounded padding, the disk-fill shape.
+            "1" * 10000,
+        ],
+    )
+    def test_anything_that_is_not_an_address_is_discarded(self, header):
+        from auth.routes import _forwarded_address
+
+        assert _forwarded_address(header) is None
+
+    def test_a_user_agent_cannot_smuggle_a_digest_or_a_newline(self):
+        from auth.routes import _log_safe_agent
+
+        assert len(_FAKE_DIGEST) == 64  # the shape that fits inside the cap
+        agent = _log_safe_agent(
+            "Mozilla/5.0 " + _FAKE_DIGEST + "\nWARNING [AUTH] fabricated\r\x1b[2J"
+        )
+
+        assert _FAKE_DIGEST not in agent
+        assert "[redacted]" in agent
+        assert "\n" not in agent and "\r" not in agent and "\x1b" not in agent
+        assert len(agent) <= 80
+
+    def test_a_real_user_agent_survives_redaction(self):
+        """Positive control: a helper that redacted everything would pass the
+        test above and destroy the field's only reason to exist."""
+        from auth.routes import _log_safe_agent
+
+        real = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        )
+        agent = _log_safe_agent(real)
+
+        assert "[redacted]" not in agent
+        assert agent == real[:80]
+
+    def test_a_missing_user_agent_is_empty_not_none(self):
+        from auth.routes import _log_safe_agent
+
+        assert _log_safe_agent(None) == ""
+        assert _log_safe_agent("") == ""
 
 
 class TestProtectedEndpoints:
