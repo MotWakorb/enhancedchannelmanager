@@ -1825,6 +1825,13 @@ class TestZipExportRedaction:
         ``dispatcharr_api_key`` (canonical) was added in v0.17.1. The legacy
         ``api_key`` stays in the seed dict so the back-compat mirror in
         ``save_settings()`` is also covered.
+
+        bead …-9kwzp.9: extended to 8 when the tuple started DERIVING
+        ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``. The seed dict has to keep
+        pace with the tuple or this docstring's "every credential field" claim
+        goes quietly false, which is precisely how the two missing fields
+        stayed invisible. The dedicated derivation tests live in
+        ``test_9kwzp9_backup_settings_read_parity.py``.
         """
         settings_file = tmp_path / "settings.json"
         # Distinctive values so we can search the ZIP for raw leaks.
@@ -1835,6 +1842,8 @@ class TestZipExportRedaction:
             "smtp_password": "raw-smtp-VOLTUM",
             "telegram_bot_token": "raw-tg-bot-NIXAR",
             "mcp_api_key": "raw-mcp-MERLIN",
+            "discord_webhook_url": "https://discord.com/api/webhooks/1/raw-KELVAR",
+            "telegram_chat_id": "raw-tg-chat-OSMIRE",
         }
         settings_dict = {"url": "http://test:9191", "username": "admin", **raw_creds}
         # File must exist for the CONFIG_FILE.exists() guard, but the actual

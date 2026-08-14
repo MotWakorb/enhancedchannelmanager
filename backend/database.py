@@ -1225,7 +1225,37 @@ def init_db() -> None:
         database_url = get_database_url()
         logger.info("[DATABASE] Initializing journal database at %s", JOURNAL_DB_FILE)
 
-        # Create engine with SQLite-specific settings
+        # Create engine with SQLite-specific settings.
+        #
+        # ``poolclass=StaticPool`` IS LOAD-BEARING FOR RESTORE CORRECTNESS, not
+        # only for connection economy (bead …-9kwzp.5). Read this before
+        # changing it for a concurrency reason.
+        #
+        # ``routers.backup.restore_backup_initial`` takes
+        # ``session: Session = Depends(get_session)`` (it needs the users table
+        # to decide whether an anonymous restore is allowed — bead lf29s), so
+        # FastAPI holds that session OPEN, with a live SQLite read transaction,
+        # across ``_restore_from_zip``'s ``close_db()`` ->
+        # ``JOURNAL_DB_FILE.write_bytes()`` -> ``init_db()`` sequence.
+        #
+        # ``close_db()`` calls ``engine.dispose()``. StaticPool holds exactly
+        # ONE shared connection and disposes it regardless of checkout state,
+        # so the old connection and its WAL are gone before the new journal.db
+        # bytes land. Under SQLAlchemy's DEFAULT QueuePool that is not true: a
+        # CHECKED-OUT connection survives ``dispose()``, keeps the pre-restore
+        # WAL alive, and replays it over the freshly written database. The
+        # security review of the lf29s branch reproduced exactly that — the
+        # restore returned 200 with ``integrity_check=ok`` while the instance
+        # silently reverted to its pre-restore data. A restore that reports
+        # success and discards the backup is the worst failure mode this
+        # endpoint has.
+        #
+        # So this is a real coupling between an engine-configuration choice made
+        # here and a correctness property enforced in ``routers/backup.py``.
+        # ``tests/unit/test_9kwzp5_staticpool_restore_coupling.py`` fails if this
+        # kwarg changes; if you need a different pool, fix restore-initial first
+        # (resolve the identity gate without holding a session across the file
+        # swap, e.g. open and close a short-lived session inside the guard).
         _engine = create_engine(
             database_url,
             connect_args={"check_same_thread": False},

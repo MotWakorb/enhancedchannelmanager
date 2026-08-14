@@ -24,7 +24,14 @@ from auth import (
 )
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
-from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
+from config import (
+    ADMIN_ONLY_READ_REDACTED_FIELDS,
+    get_settings,
+    save_settings,
+    clear_settings_cache,
+    set_log_level,
+    DispatcharrSettings,
+)
 from dispatcharr_client import (
     DispatcharrClient,
     clamp_dispatcharr_version,
@@ -140,6 +147,15 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
 )
 # bead 9ej7f — admin-only fields whose VALUES are also withheld on READ.
 #
+# The set itself now lives in ``config`` as ``ADMIN_ONLY_READ_REDACTED_FIELDS``
+# and is re-exported here under its historical private name (bead 9kwzp.9): the
+# backup artifact producer has to redact exactly the same partition, and while
+# the literal lived in this module it did not, so the MCP service principal read
+# two of the three straight out of a standard backup. Both enforcement points
+# derive from the one definition now — add a field in ``config`` and it is
+# withheld on GET /api/settings AND redacted out of every artifact. The
+# rationale for the READ gate stays here, where the gate is.
+#
 # These three are outbound notification credentials: a Discord webhook URL is a
 # bearer capability to post into a server, and a Telegram bot token plus chat id
 # is a bearer capability to post into a chat. They were returned verbatim by a
@@ -158,11 +174,7 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
 # instead is a single carve-out in ``_assert_admin_for_changed_fields``: an
 # EMPTY value from a non-admin is the redacted placeholder coming back, not a
 # request to clear.
-_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
-    "discord_webhook_url",
-    "telegram_bot_token",
-    "telegram_chat_id",
-})
+_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = ADMIN_ONLY_READ_REDACTED_FIELDS
 
 
 async def _resolve_settings_admin(

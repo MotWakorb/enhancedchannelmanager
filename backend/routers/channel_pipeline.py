@@ -4351,15 +4351,22 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     from routers.backup import _SETTINGS_CREDENTIAL_FIELDS as _BACKUP_CREDS
     settings_obj = get_config_settings()
     settings_dict = settings_obj.model_dump()
-    # Redact sensitive fields. The set is the union of the backup router's
-    # ``_SETTINGS_CREDENTIAL_FIELDS`` (password, dispatcharr_api_key, api_key,
-    # smtp_password, telegram_bot_token, mcp_api_key) plus debug-bundle-only
-    # additions (discord_webhook_url, telegram_chat_id) that aren't credential-
-    # class in the backup contract but are still PII operators wouldn't want
-    # shared in a debug bundle.
+    # Redact sensitive fields, using the backup router's
+    # ``_SETTINGS_CREDENTIAL_FIELDS`` verbatim.
+    #
+    # This used to append a local ``_DEBUG_BUNDLE_EXTRA = ("discord_webhook_url",
+    # "telegram_chat_id")`` with the note that those two "aren't credential-class
+    # in the backup contract but are still PII". That note described a real
+    # defect rather than a real distinction: bead …-9kwzp.9 established that the
+    # backup contract must redact them too (they are the ``9ej7f`` read-redaction
+    # partition, withheld from the MCP principal on GET /api/settings), and
+    # ``_SETTINGS_CREDENTIAL_FIELDS`` now derives them from
+    # ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``. The local extension is gone so
+    # this bundle cannot drift from the artifact contract in either direction —
+    # note the debug bundle was the STRICTER of the two, which is exactly how the
+    # backup-side gap stayed invisible.
     _REDACTED = "***REDACTED***"
-    _DEBUG_BUNDLE_EXTRA = ("discord_webhook_url", "telegram_chat_id")
-    for key in (*_BACKUP_CREDS, *_DEBUG_BUNDLE_EXTRA):
+    for key in _BACKUP_CREDS:
         if settings_dict.get(key):
             settings_dict[key] = _REDACTED
     # Redact Dispatcharr URL credentials (keep host/port for debugging)

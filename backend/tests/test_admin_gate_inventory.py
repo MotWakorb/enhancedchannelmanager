@@ -192,14 +192,18 @@ in the safe direction and is far easier to verify — the one place this bead
 did branch, the DBAS ``confirm_apply`` split, needed six dedicated cases to
 pin. Add field-level branching here only when a concrete caller needs it.
 
-KNOWN GAP, DELIBERATELY NOT CHANGED HERE
-----------------------------------------
+CLOSED SINCE (bead 9kwzp.9)
+---------------------------
 
-The backup read/export paths (``_BACKUP_ARCHIVE``) emit
-``discord_webhook_url`` and ``telegram_chat_id`` in clear — the very values
-bead 9ej7f withheld from this same principal on GET /api/settings. That is
-tracked as bead 9kwzp.9 and is pinned below as CURRENT behaviour, not as
-correct.
+This docstring used to record a KNOWN GAP: the backup read/export paths
+(``_BACKUP_ARCHIVE``) emitted ``discord_webhook_url`` and ``telegram_chat_id``
+in clear — the very values bead 9ej7f withheld from this same principal on GET
+/api/settings — and the group below pinned that as CURRENT behaviour, not as
+correct. Bead 9kwzp.9 closed it at the source rather than at the gate: the
+artifact producer's denylist now DERIVES the read-redaction partition from
+``config.ADMIN_ONLY_READ_REDACTED_FIELDS``, so the coarse gate on these routes
+is no longer papering over a read-parity hole. The gate itself is unchanged and
+is still the coarse ``RequireAdminIfEnabled``, for the reasons above.
 """
 import pytest
 from fastapi.routing import APIRoute
@@ -310,12 +314,15 @@ _OPERATIONAL_RESTART = {
     ("POST", "/api/settings/restart-services"),
 }
 
-# BACKLOG CANDIDATE, not pinned as correct — pinned as CURRENT (bead 9kwzp.9).
-# The archive these emit carries ``discord_webhook_url`` and
-# ``telegram_chat_id`` in clear (``routers.backup._gather_settings`` redacts
-# only ``_SETTINGS_CREDENTIAL_FIELDS``, which does not include them), so the
-# MCP principal can read through this path the exact values bead 9ej7f
-# withholds from it on GET /api/settings.
+# Pinned as CORRECT since bead 9kwzp.9. These routes admit the MCP service
+# principal (``RequireAdminIfEnabled`` accepts it), which is only acceptable
+# because the artifact they emit no longer carries anything GET /api/settings
+# withholds from that principal: ``routers.backup._SETTINGS_CREDENTIAL_FIELDS``
+# derives ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``, so
+# ``discord_webhook_url`` and ``telegram_chat_id`` are redacted alongside
+# ``telegram_bot_token``. If that derivation is ever unwound into a literal
+# tuple, this group goes back to being a read-parity hole and the gate here is
+# NOT what stops it.
 #
 # The restore-dbas pair used to be listed here too. Bead 9kwzp.10 item 2 moved
 # both to ``_WHOLESALE_CONFIG_WRITE``; see that group for why.
