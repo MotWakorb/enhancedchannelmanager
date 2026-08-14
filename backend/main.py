@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0101",
+    version="0.18.1-0102",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -895,7 +895,7 @@ async def get_request_rates():
 # value, and on a missing-field error that ``input`` is the whole request body
 # anyway (which is why redacting ``exc.body`` alone was never sufficient).
 #
-# Note also that cloud_storage.upload_security.mask_secrets does NOT rescue
+# Note also that cloud_storage.upload_security.redact_secrets does NOT rescue
 # this path and never did: its key/value rule needs the key name adjacent to
 # the separator, and JSON puts a closing quote in between, so
 # {"aws_secret_access_key": "..."} passes through it untouched.

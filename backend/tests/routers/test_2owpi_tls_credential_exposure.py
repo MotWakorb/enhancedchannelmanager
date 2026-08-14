@@ -35,7 +35,7 @@ Two paths were found and both are pinned below.
   stored into ``last_renewal_error`` and served back out of ``GET /status``.
   *Mechanism absent is not defect fixed*: the fix is not "no exception in the
   current code carries a token", it is that every provider error string now
-  goes through ``mask_secrets`` before any caller can log, persist or return
+  goes through ``redact_secrets`` before any caller can log, persist or return
   it, so a future exception carrying one is redacted too.
 
 * ``main.py``'s ``RequestValidationError`` handler logs the raw request body,
@@ -44,7 +44,7 @@ Two paths were found and both are pinned below.
   ``POST /api/tls/configure`` that fails validation for any unrelated reason
   therefore wrote ``aws_secret_access_key`` and ``dns_api_token`` in clear to
   the application log. Logs get pasted into GitHub issues. Note that
-  ``mask_secrets`` does NOT save this path: its key/value rule needs the key
+  ``redact_secrets`` does NOT save this path: its key/value rule needs the key
   name adjacent to the separator, and a JSON body puts a closing quote between
   them, so ``{"aws_secret_access_key": "..."}`` passes through it untouched.
   The fix WAS path-based redaction with the path list held in a module

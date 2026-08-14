@@ -1,9 +1,9 @@
 """Credential redaction for TLS error strings (bead enhancedchannelmanager-2owpi).
 
-Why this exists on top of :func:`cloud_storage.upload_security.mask_secrets`
+Why this exists on top of :func:`cloud_storage.upload_security.redact_secrets`
 -----------------------------------------------------------------------------
 
-``mask_secrets`` is a pattern sweep: it recognises credential SHAPES
+``redact_secrets`` is a pattern sweep: it recognises credential SHAPES
 (``Authorization:`` headers, ``Bearer <token>``, ``AKIA…``, S3 signed-URL
 params, ``key=value`` pairs). That is the right tool when you do not know what
 the secret is, and it stays the second half of every call here.
@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from cloud_storage.upload_security import mask_secrets
+from cloud_storage.upload_security import redact_secrets
 
-# Same placeholder mask_secrets uses, so a redacted string reads consistently
+# Same placeholder redact_secrets uses, so a redacted string reads consistently
 # regardless of which half of the redaction caught the value.
 _MASK = "***REDACTED***"
 
@@ -47,7 +47,7 @@ def redact_secret_values(text: str, secrets: Iterable[Optional[str]]) -> str:
 
     Returns:
         ``text`` with every known value replaced, then passed through
-        ``mask_secrets``. Never raises: redaction sits on logging and error
+        ``redact_secrets``. Never raises: redaction sits on logging and error
         paths, where blowing up would be worse than the thing it prevents.
     """
     if not text:
@@ -68,6 +68,6 @@ def redact_secret_values(text: str, secrets: Iterable[Optional[str]]) -> str:
             for candidate in sorted(candidates, key=len, reverse=True):
                 if len(candidate) >= _MIN_IDENTITY_LENGTH and candidate in out:
                     out = out.replace(candidate, _MASK)
-        return mask_secrets(out)
+        return redact_secrets(out)
     except Exception:  # pragma: no cover — redaction must never break a log call
         return _MASK

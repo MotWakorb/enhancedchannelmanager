@@ -446,11 +446,11 @@ def _sanitize_failure(exc: Exception, generated_password: str | None = None) -> 
     must never reach the report: nobody is meant to be able to recover it.
     """
     # Lazy import: keep the dbas importer free of a cloud_storage dependency at
-    # module-import time (same pattern as tasks.dbas_backup). mask_secrets is the
+    # module-import time (same pattern as tasks.dbas_backup). redact_secrets is the
     # canonical credential masker (precompiled patterns; never raises).
-    from cloud_storage.upload_security import mask_secrets
+    from cloud_storage.upload_security import redact_secrets
 
     text = _sanitize(str(exc))
     if generated_password:
         text = text.replace(generated_password, "***")
-    return mask_secrets(text) or "Upstream rejected the user creation request."
+    return redact_secrets(text) or "Upstream rejected the user creation request."

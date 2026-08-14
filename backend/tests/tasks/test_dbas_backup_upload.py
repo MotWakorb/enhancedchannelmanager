@@ -397,7 +397,7 @@ async def test_upload_seam_exception_reason_is_masked(
     from tasks import dbas_backup
     from tasks.dbas_backup import DbasBackupTask
 
-    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key-id shape masked by mask_secrets
+    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key-id shape masked by redact_secrets
 
     def _raise_with_secret(*_a, **_k):
         raise RuntimeError(

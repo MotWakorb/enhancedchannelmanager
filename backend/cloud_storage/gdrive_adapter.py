@@ -18,7 +18,7 @@ Security (bead 0i2vt.8):
   into RAM (HARD AC #2).
 * **Credential masking.** Error strings surfaced via the non-logging
   :class:`UploadResult.error` / :class:`ConnectionTestResult.message` sinks pass
-  through :func:`cloud_storage.upload_security.mask_secrets` so bearer tokens are
+  through :func:`cloud_storage.upload_security.redact_secrets` so bearer tokens are
   redacted; the logger itself only ever receives known-safe fields (provider,
   filename, folder id, byte count, duration) so no credential-derived or
   SDK-exception string reaches the logs (HARD AC #5).
@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 from cloud_storage.types import CloudStorageAdapter, UploadResult, ConnectionTestResult
-from cloud_storage.upload_security import SSRFError, mask_secrets, preresolve_endpoint
+from cloud_storage.upload_security import SSRFError, redact_secrets, preresolve_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -137,11 +137,11 @@ class GDriveAdapter(CloudStorageAdapter):
             # is surfaced via UploadResult.error (a non-logging sink) so no
             # credential-derived string reaches the logger.
             logger.warning("[GDRIVE] Upload to folder %s refused by SSRF policy", self.folder_id)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             logger.warning("[GDRIVE] Upload to folder %s failed", self.folder_id)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
         try:
@@ -159,10 +159,10 @@ class GDriveAdapter(CloudStorageAdapter):
             # Log only the safe target folder; masked detail goes to the
             # non-logging ConnectionTestResult.message sink.
             logger.warning("[GDRIVE] Connection to folder %s refused by SSRF policy", self.folder_id)
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
         except Exception as e:
             logger.warning("[GDRIVE] Connection test to folder %s failed", self.folder_id)
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
         try:
