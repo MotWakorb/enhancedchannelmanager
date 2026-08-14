@@ -3176,7 +3176,7 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.getByRole('button', { name: /Retry loading logos/i })).toHaveCount(0)
   })
 
-  test('staged contextual navigation keeps editing or discards before landing on the exact settings page', async ({ page }) => {
+  test('staged settings navigation keeps editing or discards before landing on the exact settings page', async ({ page }) => {
     await page.addInitScript(() => localStorage.clear())
     await page.route(/\/api\/settings(?:\/|\?|$)/, async (route) => {
       await route.fulfill({
@@ -3246,14 +3246,23 @@ test.describe('operator shell navigation behavior', () => {
     await nameInput.press('Enter')
     await expect(page.getByText('1 change', { exact: true })).toBeVisible()
 
-    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    // Channel Manager gave up its own contextual settings link (bead
+    // enhancedchannelmanager-mer2o), so the primary rail is what leaves the
+    // route now. Selecting Settings drills the rail into its sections without
+    // navigating while the guard is pending, which is what keeps a deep
+    // settings destination reachable from a staged edit session.
+    // Keep Editing here cancels a TOP-LEVEL pending route. Cancelling a DEEP
+    // one is covered separately, by `Keep Editing cancels a deep settings
+    // request and leaves the rail drilled in` below.
+    await page.getByRole('link', { name: 'Settings' }).click()
     await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
     await page.getByRole('button', { name: 'Keep Editing' }).click()
     await expect(page).toHaveURL(/#channel-manager$/)
     await expect(page.getByText('1 change', { exact: true })).toBeVisible()
     await expect(page.locator('.channel-item', { hasText: 'Seeded News Updated' })).toBeVisible()
 
-    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    await page.getByRole('link', { name: 'Channel Defaults' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
     await page.getByRole('button', { name: 'Discard' }).click()
     await expect(page).toHaveURL(/#settings\/channel-defaults$/)
     await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
@@ -3298,28 +3307,141 @@ test.describe('operator shell navigation behavior', () => {
 
   test('contextual settings links use stable current hashes', async ({ appPage }) => {
     await dismissFirstRunPromptIfPresent(appPage)
-    const link = appPage.getByRole('link', { name: 'Channel default settings' })
-    await expect(link).toHaveAttribute('href', '#settings/channel-defaults')
-    await link.click()
-    await expect(appPage).toHaveURL(/#settings\/channel-defaults$/)
-    await expect(appPage.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
+    // Channel Manager and M3U Manager gave up their contextual links (beads
+    // enhancedchannelmanager-mer2o and -hmr0e), leaving these two routes as the
+    // only ones that still render the header's "Related settings" nav. Pinned
+    // per route, and by rendered label as well as hash, so dropping or
+    // relabelling either one fails here instead of quietly shrinking the nav.
+    const expected: Array<[string, string, string, string]> = [
+      ['Channel Pipeline', 'Channel Pipeline settings', '#settings/channel-pipeline', 'SYSTEM / SETTINGS / CHANNEL PIPELINE'],
+      ['M3U Changes', 'M3U digest settings', '#settings/m3u-digest', 'SYSTEM / SETTINGS / M3U CHANGE DIGEST'],
+    ]
+    for (const [route, label, href, heading] of expected) {
+      await appPage.getByRole('link', { name: route }).click()
+      const relatedLinks = appPage.getByRole('navigation', { name: 'Related settings' })
+      await expect(relatedLinks.getByRole('link')).toHaveText([label])
+      const link = relatedLinks.getByRole('link', { name: label })
+      await expect(link).toHaveAttribute('href', href)
+      await link.click()
+      await expect(appPage).toHaveURL(new RegExp(`${href}$`))
+      await expect(appPage.locator('#main-content h1')).toHaveText(heading)
+      // Landing in Settings drills the sidebar in; Back returns the primary
+      // destinations so the next route is reachable the same way.
+      await appPage.getByRole('button', { name: 'Back to main navigation' }).click()
+    }
   })
 
-  test('contextual settings navigation cleanly exits an edit session with no staged changes', async ({ page }) => {
+  test('settings navigation cleanly exits an edit session with no staged changes', async ({ page }) => {
     await seedChannelWorkspace(page, true)
     await openShellWithPipelineFixture(page)
     await dismissFirstRunPromptIfPresent(page)
     await page.getByRole('button', { name: 'Edit Mode' }).click()
     await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
-    await page.getByRole('link', { name: 'Channel default settings' }).click()
+    // Channel Manager's contextual settings link is gone (bead
+    // enhancedchannelmanager-mer2o), so the rail's Settings destination is the
+    // entry point that leaves the route. With nothing staged it must exit edit
+    // mode and navigate outright rather than prompting.
+    await page.getByRole('link', { name: 'Settings' }).click()
+    await expect(page).toHaveURL(/#settings$/)
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0)
+    // Entering Settings drills the sidebar in, so the exact settings
+    // destination stays one activation away.
+    await page.getByRole('link', { name: 'Channel Defaults' }).click()
     await expect(page).toHaveURL(/#settings\/channel-defaults$/)
     await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
-    await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0)
-    // Contextual links land in Settings with the sidebar drilled in; Back
-    // restores the primary destinations without leaving the Settings route.
+    // Back restores the primary destinations without leaving the Settings route.
     await page.getByRole('button', { name: 'Back to main navigation' }).click()
     await page.getByRole('link', { name: 'Channel Manager' }).click()
     await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
+  })
+
+  test('a deep settings destination exits an emptied edit session without prompting', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    await page.getByText('Sports', { exact: true }).click()
+    const channelName = page.locator('.channels-pane .channel-item .channel-name').first()
+    await expect(channelName).toBeVisible()
+    await channelName.dblclick()
+    const nameInput = page.locator('.channel-name-input')
+    await nameInput.fill('Renamed while the guard is armed')
+    await nameInput.press('Enter')
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+
+    // This arc exists because the rail otherwise forces Settings-then-section,
+    // which exits edit mode on the first activation and can never reach
+    // handleRouteChange with BOTH a settingsPage argument and edit mode still
+    // active. A guard-blocked Settings activation is the one path that does:
+    // TabNavigation drills the rail into its sections before the guard defers
+    // the navigation, so the rail is left showing Settings sections while the
+    // route is still Channel Manager. Undoing back to nothing staged then makes
+    // the next section activation the deep-route `exit-and-navigate` case.
+    await page.getByRole('link', { name: 'Settings' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+    await expect(page).toHaveURL(/#channel-manager$/)
+
+    await page.getByRole('button', { name: 'Undo staged change (Cmd+Z)' }).click()
+    await expect(page.getByText('1 change', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+
+    // Deep settings target, edit mode active, nothing staged: exit and
+    // navigate, with no prompt, landing on the exact page and not on #settings.
+    await page.getByRole('link', { name: 'Channel Defaults' }).click()
+    await expect(page).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toHaveCount(0)
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
+    await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Back to main navigation' }).click()
+    await page.getByRole('link', { name: 'Channel Manager' }).click()
+    await expect(page.getByRole('button', { name: 'Edit Mode' })).toBeVisible()
+  })
+
+  test('Keep Editing cancels a deep settings request and leaves the rail drilled in', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    await page.getByText('Sports', { exact: true }).click()
+    const channelName = page.locator('.channels-pane .channel-item .channel-name').first()
+    await expect(channelName).toBeVisible()
+    await channelName.dblclick()
+    const nameInput = page.locator('.channel-name-input')
+    await nameInput.fill('Renamed before the deep request')
+    await nameInput.press('Enter')
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+
+    // Drill the rail in. This first request is top-level; cancelling it is what
+    // leaves the Settings sections on screen while the route is still Channel
+    // Manager, which is the only way to reach a section activation from inside
+    // the edit session.
+    await page.getByRole('link', { name: 'Settings' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+    await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible()
+
+    // The request under test: a settings SECTION, so handleRouteChange receives
+    // a settingsPage and the pending route is deep.
+    await page.getByRole('link', { name: 'Channel Defaults' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+
+    // Cancelling a deep request keeps the edit session, the staged work and the
+    // route.
+    await expect(page).toHaveURL(/#channel-manager$/)
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+    await expect(page.locator('.channel-item', { hasText: 'Renamed before the deep request' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+
+    // Post-cancellation rail state, pinned rather than assumed: still the
+    // Settings sections and not the primary destinations, and the current
+    // section is General rather than the cancelled target, because the rail
+    // reads the route's settings page and the route never moved.
+    await expect(page.getByRole('navigation', { name: 'Settings sections' })).toBeVisible()
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0)
+    await expect(page.locator('.settings-nav-item[aria-current="page"]')).toHaveAttribute('data-settings-page', 'general')
   })
 
   test('the Channel Manager primary action belongs to its page header', async ({ appPage }) => {
