@@ -529,7 +529,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()):
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()):
             response = await async_client.post(
                 "/api/backup/restore-initial",
                 files={"file": ("backup.zip", backup, "application/zip")},
@@ -549,7 +549,7 @@ class TestRestoreInitialIdentityGate:
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
              patch(
-                 "routers.backup.get_auth_settings",
+                 "auth.dependencies.get_auth_settings",
                  return_value=self._auth_settings(setup_complete=True),
              ):
             response = await async_client.post(
@@ -573,7 +573,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
              patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
@@ -616,7 +616,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
              patch(
                  "routers.backup.get_current_user",
@@ -646,7 +646,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
              patch(
                  "routers.backup.get_current_user",
@@ -673,7 +673,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.get_token_from_request", return_value="the-mcp-key"), \
              patch(
                  "routers.backup.get_current_user",
@@ -700,7 +700,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = False
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.get_token_from_request", return_value="forged"), \
              patch(
                  "routers.backup.get_current_user",
@@ -714,16 +714,28 @@ class TestRestoreInitialIdentityGate:
         assert response.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_allows_anonymous_when_operator_disabled_auth(
-        self, async_client, test_session, tmp_path
+    async def test_refuses_anonymous_when_operator_disabled_auth(
+        self, async_client, test_session
     ):
-        """With ``require_auth`` off the endpoint is no stricter than its siblings.
+        """bead jy006, PO decision 2026-08-13 — REVERSED from what shipped here.
 
-        ``RequireAdminIfEnabled`` (and therefore POST /api/backup/restore, GET
-        /api/backup/create, POST /api/settings) already serves anonymous callers
-        on such an instance, so refusing here would break the operator's own
-        restore without closing anything. Tracked separately as bead
-        enhancedchannelmanager-jy006.
+        This test asserted 200 until bead jy006. The reasoning then was that
+        ``RequireAdminIfEnabled`` already serves anonymous callers on an
+        auth-disabled instance, so refusing only here would break the
+        operator's own restore without closing anything.
+
+        The PO decided that question the other way. ``require_auth: false``
+        stays open for ordinary data and configuration routes, but this one is
+        an IDENTITY PRIMITIVE: the ZIP replaces ``journal.db`` wholesale, the
+        ``users`` table and every admin password hash with it, so an anonymous
+        caller who lands one owns the instance afterwards — including after the
+        operator turns authentication back on. That is categorically unlike
+        POST /api/settings, which is merely open while the mode is on.
+
+        The paired positive control is
+        ``test_allows_admin_when_operator_disabled_auth``: the operator with a
+        session still restores, so this is a refusal of anonymity, not of the
+        mode.
         """
         self._seed_user(test_session)
         backup = _make_backup_zip()
@@ -732,7 +744,75 @@ class TestRestoreInitialIdentityGate:
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
              patch(
-                 "routers.backup.get_auth_settings",
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(require_auth=False),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_allows_admin_when_operator_disabled_auth(
+        self, async_client, test_session, tmp_path
+    ):
+        """The positive control for the refusal above (bead jy006).
+
+        ``get_current_user`` has no ``require_auth`` short-circuit of any kind,
+        so an operator holding a session cookie authenticates normally on an
+        auth-disabled instance and reaches the handler. Without this case the
+        refusal above could not be distinguished from a hard lockout.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(require_auth=False),
+             ), \
+             patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user()),
+             ), \
+             patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
+             patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_allows_anonymous_when_auth_disabled_and_no_identity(
+        self, async_client, test_session, tmp_path
+    ):
+        """The carve-out that keeps bead jy006 from being a lockout.
+
+        A headless auth-disabled deployment that never created a user has
+        nothing for a caller to take over, and refusing here would leave it no
+        in-band way to restore at all — the only route to an admin would be the
+        setup wizard, which changes the very posture the operator chose.
+        """
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
                  return_value=self._auth_settings(require_auth=False),
              ), \
              patch("routers.backup.CONFIG_DIR", tmp_path), \
@@ -760,7 +840,7 @@ class TestRestoreInitialIdentityGate:
         mock_settings.is_configured.return_value = True
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
-             patch("routers.backup.get_auth_settings", return_value=self._auth_settings()), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
              patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
              patch(
                  "routers.backup.get_current_user",
@@ -1745,6 +1825,13 @@ class TestZipExportRedaction:
         ``dispatcharr_api_key`` (canonical) was added in v0.17.1. The legacy
         ``api_key`` stays in the seed dict so the back-compat mirror in
         ``save_settings()`` is also covered.
+
+        bead …-9kwzp.9: extended to 8 when the tuple started DERIVING
+        ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``. The seed dict has to keep
+        pace with the tuple or this docstring's "every credential field" claim
+        goes quietly false, which is precisely how the two missing fields
+        stayed invisible. The dedicated derivation tests live in
+        ``test_9kwzp9_backup_settings_read_parity.py``.
         """
         settings_file = tmp_path / "settings.json"
         # Distinctive values so we can search the ZIP for raw leaks.
@@ -1755,6 +1842,8 @@ class TestZipExportRedaction:
             "smtp_password": "raw-smtp-VOLTUM",
             "telegram_bot_token": "raw-tg-bot-NIXAR",
             "mcp_api_key": "raw-mcp-MERLIN",
+            "discord_webhook_url": "https://discord.com/api/webhooks/1/raw-KELVAR",
+            "telegram_chat_id": "raw-tg-chat-OSMIRE",
         }
         settings_dict = {"url": "http://test:9191", "username": "admin", **raw_creds}
         # File must exist for the CONFIG_FILE.exists() guard, but the actual

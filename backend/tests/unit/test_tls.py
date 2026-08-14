@@ -4,6 +4,11 @@ Unit tests for TLS certificate management module.
 These tests are designed to run without the josepy dependency
 by importing submodules directly instead of through __init__.py.
 """
+import json
+import logging
+import os
+import pathlib
+import stat
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -11,6 +16,55 @@ import pytest
 
 # Test TLS settings without needing josepy - import directly from submodule
 from tls.settings import TLSSettings, save_tls_settings, load_tls_settings, clear_tls_settings_cache
+
+
+def _fake_owner_stat(target_path, fake_uid):
+    """Patch Path.stat and os.stat so ``target_path`` reports a foreign owner.
+
+    Same shape as the m40pn helper in ``tests/test_cloud_storage.py``: the real
+    mode bits are preserved so the mode branch behaves normally, only st_uid is
+    overridden, and only for the target path, so chmod/tempfile internals are
+    unaffected.
+    """
+    real_path_stat = pathlib.Path.stat
+    real_os_stat = os.stat
+    target_str = str(target_path)
+
+    class _FakeStatResult:
+        def __init__(self, src):
+            self._src = src
+
+        def __getattr__(self, name):
+            if name == "st_uid":
+                return fake_uid
+            return getattr(self._src, name)
+
+    def _path_side_effect(self, *args, **kwargs):
+        result = real_path_stat(self, *args, **kwargs)
+        if str(self) == target_str:
+            return _FakeStatResult(result)
+        return result
+
+    def _os_side_effect(path, *args, **kwargs):
+        result = real_os_stat(path, *args, **kwargs)
+        if str(path) == target_str:
+            return _FakeStatResult(result)
+        return result
+
+    class _Both:
+        def __enter__(self):
+            self._a = patch.object(pathlib.Path, "stat", _path_side_effect)
+            self._b = patch("tls.settings.os.stat", _os_side_effect)
+            self._a.__enter__()
+            self._b.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            self._b.__exit__(*exc)
+            self._a.__exit__(*exc)
+            return False
+
+    return _Both()
 
 
 class TestTLSSettings:
@@ -220,6 +274,140 @@ class TestTLSSettingsPersistence:
                 assert loaded.enabled is True
                 assert loaded.domain == "example.com"
                 assert loaded.acme_email == "admin@example.com"
+
+
+class TestTLSSettingsStartupIntegrityProbe:
+    """Bead 2owpi: the m40pn startup probe extended to tls_settings.json.
+
+    ``cloud_storage.crypto.verify_key_integrity_at_startup`` (bead m40pn)
+    surfaces mode/ownership drift on the Fernet key at every container start
+    rather than at the first scheduled backup. ``tls_settings.json`` holds the
+    same class of secret in the same directory and had no such probe, so a
+    0644 left behind by a manual edit or a restore was invisible until someone
+    thought to look. The PO declined at-rest encryption for this file on
+    2026-08-13 (ECM must decrypt unattended, so the key would sit beside it);
+    this probe is what was chosen instead, because it catches a real
+    misconfiguration rather than a threat the architecture cannot defend
+    against.
+
+    Posture mirrors m40pn exactly: repair the mode, treat ownership as
+    advisory under root, log an unmissable ERROR when it is not, and NEVER
+    raise. TLS settings must not be able to take down channel management.
+    """
+
+    def _probe(self, config_file):
+        from tls.settings import verify_tls_settings_integrity_at_startup
+        with patch('tls.settings.TLS_CONFIG_FILE', config_file):
+            return verify_tls_settings_integrity_at_startup()
+
+    def test_absent_file_is_not_a_violation(self, tmp_path, caplog):
+        """TLS is optional. An unconfigured instance must probe clean."""
+        with caplog.at_level(logging.ERROR, logger="tls.settings"):
+            result = self._probe(tmp_path / "tls_settings.json")
+
+        assert result is True
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def test_correct_mode_and_owner_passes_quietly(self, tmp_path, caplog):
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+        config_file.chmod(0o600)
+
+        with caplog.at_level(logging.WARNING, logger="tls.settings"):
+            result = self._probe(config_file)
+
+        assert result is True
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_drifted_mode_is_repaired_to_0600(self, tmp_path, caplog):
+        """The case this probe exists for: a 0644 after an edit or a restore."""
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+        config_file.chmod(0o644)
+
+        with caplog.at_level(logging.WARNING, logger="tls.settings"):
+            result = self._probe(config_file)
+
+        assert result is True
+        assert stat.S_IMODE(os.stat(config_file).st_mode) == 0o600
+        messages = [r.getMessage() for r in caplog.records
+                    if r.levelno >= logging.WARNING]
+        assert any("mode_repaired" in m for m in messages)
+
+    def test_unrepairable_mode_logs_error_and_returns_false(
+        self, tmp_path, caplog
+    ):
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+        config_file.chmod(0o644)
+
+        with patch('tls.settings.os.chmod', side_effect=PermissionError("nope")):
+            with caplog.at_level(logging.ERROR, logger="tls.settings"):
+                result = self._probe(config_file)
+
+        assert result is False
+        messages = [r.getMessage() for r in caplog.records
+                    if r.levelno >= logging.ERROR]
+        assert any("mode_repair_failed" in m for m in messages)
+
+    def test_foreign_owner_under_root_is_advisory_only(self, tmp_path, caplog):
+        """Root reads any file regardless of owner; mode is the real control."""
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+        config_file.chmod(0o600)
+
+        foreign_uid = os.stat(config_file).st_uid + 4242
+        with _fake_owner_stat(config_file, foreign_uid):
+            with patch('tls.settings.os.getuid', return_value=0):
+                with caplog.at_level(logging.ERROR, logger="tls.settings"):
+                    result = self._probe(config_file)
+
+        assert result is True
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def test_foreign_owner_when_not_root_logs_error_and_never_raises(
+        self, tmp_path, caplog
+    ):
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+        config_file.chmod(0o600)
+
+        foreign_uid = os.stat(config_file).st_uid + 4242
+        with _fake_owner_stat(config_file, foreign_uid):
+            with patch('tls.settings.os.getuid', return_value=1000):
+                with caplog.at_level(logging.ERROR, logger="tls.settings"):
+                    result = self._probe(config_file)
+
+        assert result is False
+        messages = [r.getMessage() for r in caplog.records
+                    if r.levelno >= logging.ERROR]
+        assert any("ownership_unfixable" in m for m in messages)
+
+    def test_probe_never_raises_even_when_stat_explodes(self, tmp_path, caplog):
+        """Log-loudly-but-boot. Nothing in here may abort startup."""
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text('{"enabled": false}')
+
+        with patch('tls.settings.os.stat', side_effect=OSError("boom")):
+            with caplog.at_level(logging.ERROR, logger="tls.settings"):
+                result = self._probe(config_file)
+
+        assert result is False
+
+    def test_probe_reads_no_credential_out_of_the_file(self, tmp_path, caplog):
+        """The probe checks metadata. It must never open the contents."""
+        config_file = tmp_path / "tls_settings.json"
+        config_file.write_text(json.dumps({
+            "enabled": True,
+            "dns_api_token": "<synthetic-probe-token-2owpi>",
+        }))
+        config_file.chmod(0o644)
+
+        with caplog.at_level(logging.DEBUG, logger="tls.settings"):
+            self._probe(config_file)
+
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert "<synthetic-probe-token-2owpi>" not in logged
 
 
 # Import storage only after TLSSettings tests (doesn't need josepy)

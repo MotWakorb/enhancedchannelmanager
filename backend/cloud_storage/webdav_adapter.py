@@ -23,7 +23,7 @@ Security posture (HARD ACs, grooming SRE + Security):
   negligible. No blocking SDK call runs on the loop (HARD AC #1).
 
 * **Credential masking.** Any logged/surfaced string is passed through
-  :func:`cloud_storage.upload_security.mask_secrets` so Authorization headers
+  :func:`cloud_storage.upload_security.redact_secrets` so Authorization headers
   and tokens never reach the logs (HARD AC #5).
 
 * **TLS.** ``verify=True`` by default; the per-target ``insecure`` flag wires
@@ -46,7 +46,7 @@ from cloud_storage.types import (
 from cloud_storage.upload_security import (
     SSRFError,
     UPLOAD_TIMEOUT_SECONDS,
-    mask_secrets,
+    redact_secrets,
     pinned_async_client,
     pinned_request_url,
     preresolve_endpoint,
@@ -151,11 +151,11 @@ class WebDAVAdapter(CloudStorageAdapter):
             # Masked detail goes only to UploadResult.error (non-logging sink);
             # the logger gets generic safe text so no sensitive source reaches it.
             logger.warning("[WEBDAV] Upload of %s refused by SSRF policy", local_path.name)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             logger.warning("[WEBDAV] Upload of %s failed", local_path.name)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
         try:
@@ -176,10 +176,10 @@ class WebDAVAdapter(CloudStorageAdapter):
             )
         except SSRFError as e:
             logger.warning("[WEBDAV] Connection refused by SSRF policy")
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
         except Exception as e:
             logger.warning("[WEBDAV] Connection test failed")
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
         try:

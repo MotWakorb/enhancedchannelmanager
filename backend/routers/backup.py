@@ -37,10 +37,18 @@ from auth import (
 from auth.dependencies import (
     get_current_user,
     get_token_from_request,
+    instance_has_operator_identity,
     is_mcp_service_principal,
 )
-from auth.settings import get_auth_settings
-from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
+from config import (
+    ADMIN_ONLY_READ_REDACTED_FIELDS,
+    CONFIG_DIR,
+    CONFIG_FILE,
+    DispatcharrSettings,
+    get_settings,
+    save_settings,
+    clear_settings_cache,
+)
 from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
 from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, EPG_INDEX_MAX_ROWS, as_int
@@ -62,7 +70,6 @@ from models import (
     TaskSchedule,
     TagGroup,
     Tag,
-    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,7 +101,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0100"
+APP_VERSION = "0.18.1-0104"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -113,8 +120,8 @@ BACKUP_SCHEMA_VERSION = 1
 # whole module (and the shipped artifact format) is written against it.
 REDACTED = REDACTION_SENTINEL
 
-# Credential fields in DispatcharrSettings that must never appear raw in an
-# exported backup. Mirrors the YAML export contract for parity (bd-l0nhi).
+# Fields in DispatcharrSettings that must never appear raw in an exported
+# backup. Mirrors the YAML export contract for parity (bd-l0nhi).
 # bd-jmi1c (GH #273): both ``dispatcharr_api_key`` (canonical) and the
 # legacy ``api_key`` are listed so the back-compat mirror in
 # ``config.save_settings`` doesn't accidentally leak a value the canonical
@@ -123,14 +130,38 @@ REDACTED = REDACTION_SENTINEL
 # the legacy field is removed from the model. The debug-bundle redactor in
 # routers/channel_pipeline.py imports this tuple, so a single edit there
 # propagates everywhere.
-_SETTINGS_CREDENTIAL_FIELDS = (
+#
+# READ-PARITY WITH GET /api/settings (bead …-9kwzp.9). The trailing entries are
+# DERIVED from ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``, not restated, and
+# that is the fix rather than an implementation detail. Bead 9ej7f made GET
+# /api/settings withhold that partition from every caller
+# ``routers.settings._resolve_settings_admin`` classifies as non-admin —
+# including the MCP service principal. But GET /api/backup/create, /export and
+# /saved/{filename} carry ``RequireAdminIfEnabled``, which ADMITS that
+# principal (``_build_mcp_service_principal`` sets ``is_admin=True``), so while
+# this tuple was a hand-maintained literal it silently defeated two thirds of
+# 9ej7f: ``telegram_bot_token`` happened to be listed, ``discord_webhook_url``
+# and ``telegram_chat_id`` were not, and neither is matched by
+# ``_ALERT_METHOD_CREDENTIAL_KEYS`` (that set matches keys INSIDE
+# ``alert_methods.config`` JSON, not top-level settings fields). The principal
+# just refused those values on the settings endpoint read them out of a
+# standard backup artifact instead.
+#
+# Adding two strings would have fixed the two fields and left the class open:
+# every future addition to the settings read-redaction partition would leak the
+# same way until someone remembered this second list. Deriving closes it — one
+# edit in ``config`` now moves both surfaces. Do NOT re-inline these names.
+# ``dict.fromkeys`` dedupes the overlap (``telegram_bot_token`` is in both
+# halves) while keeping the historical order stable for the artifact contract.
+_SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
     "password",
     "dispatcharr_api_key",
     "api_key",
     "smtp_password",
     "telegram_bot_token",
     "mcp_api_key",
-)
+    *sorted(ADMIN_ONLY_READ_REDACTED_FIELDS),
+)))
 
 # Credential-class keys that may live inside alert_methods.config JSON. Matches
 # the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
@@ -368,9 +399,10 @@ def _create_backup_zip() -> io.BytesIO:
 
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Add settings.json — written from the redacted dict so credential
-            # fields (password, api_key, smtp_password, telegram_bot_token,
-            # mcp_api_key) never hit the archive raw.
+            # Add settings.json — written from the redacted dict so every field
+            # in _SETTINGS_CREDENTIAL_FIELDS (the credential-class fields plus
+            # the GET /api/settings read-redaction partition derived from
+            # config.ADMIN_ONLY_READ_REDACTED_FIELDS) never hits the archive raw.
             if CONFIG_FILE.exists():
                 redacted = _gather_settings()
                 zf.writestr("settings.json", json.dumps(redacted, indent=2))
@@ -2244,27 +2276,14 @@ _INITIAL_RESTORE_DENIED_DETAIL = (
 )
 
 
-def _instance_has_operator_identity(session: Session) -> bool:
-    """Report whether the instance holds an identity a restore would overwrite.
-
-    A user row is the primary signal: it becomes true the instant
-    ``/api/auth/setup`` creates the first admin, regardless of qg14z.
-    ``setup_complete`` is OR'd in as a second, independent signal so an
-    instance that lost its user rows but kept its auth settings is still
-    treated as owned. Fails closed if the users table cannot be read.
-    """
-    try:
-        if session.query(User).count() > 0:
-            return True
-    except Exception as e:
-        logger.warning(
-            "[BACKUP] Could not read the users table for the initial-restore gate, "
-            "treating the instance as owned: %s",
-            e,
-        )
-        return True
-
-    return bool(get_auth_settings().setup_complete)
+# The ownership predicate this gate keys on lives in ``auth.dependencies`` as
+# :func:`instance_has_operator_identity` and is imported above. It was a
+# private copy here until bead jy006 gave the same rule a second caller (the
+# ``enforce_when_auth_disabled`` branch of ``require_admin_if_enabled``, which
+# gates the mcp-api-key and TLS-material routes). Two copies of one fail-closed
+# security predicate is the drift defect bead 9kwzp.9 is about, and these two
+# in particular MUST agree: they are the same question ("is this instance
+# owned?") asked by the two halves of the same auth-disabled posture.
 
 
 async def _caller_is_human_admin(request: Request, session: Session) -> bool:
@@ -2287,24 +2306,32 @@ async def _caller_is_human_admin(request: Request, session: Session) -> bool:
 
 
 async def _guard_initial_restore(request: Request, session: Session) -> None:
-    """Refuse the anonymous first-run restore once the instance has an owner."""
-    if not _instance_has_operator_identity(session):
+    """Refuse the anonymous first-run restore once the instance has an owner.
+
+    ``require_auth`` IS NOT CONSULTED HERE, and that is the bead jy006 fix.
+    This guard used to return early — serving the anonymous restore — whenever
+    the operator had turned authentication off, on the reasoning that
+    ``RequireAdminIfEnabled`` already serves anonymous callers on such an
+    instance so refusing only here closed nothing. The PO decided that question
+    on 2026-08-13 the other way: ``require_auth: false`` stays open for
+    ordinary data and configuration routes, but this route is one of three
+    IDENTITY PRIMITIVES that stay admin-only in that mode, because the ZIP it
+    accepts replaces ``journal.db`` wholesale — the ``users`` table and every
+    admin password hash with it. An anonymous LAN caller who lands one on an
+    auth-disabled instance owns the instance afterwards, including after the
+    operator turns authentication back on. That is categorically unlike POST
+    /api/settings, which is merely open while the mode is on.
+
+    The genuine-first-run carve-out above is unchanged and is what keeps this
+    from being a lockout; see :func:`auth.dependencies.instance_has_operator_identity`
+    and the ``enforce_when_auth_disabled`` docstring in
+    ``auth.dependencies.require_admin_if_enabled``, which applies the identical
+    rule to the other two primitives.
+    """
+    if not instance_has_operator_identity(session):
         # Genuine first run — nothing exists to protect, and serving this case
         # is the endpoint's reason to exist (fresh container, or a
         # disaster-recovery rebuild sitting empty waiting for its restore).
-        return
-
-    if not get_auth_settings().require_auth:
-        # The operator turned authentication off. RequireAdminIfEnabled already
-        # serves anonymous callers on such an instance, so POST
-        # /api/backup/restore, GET /api/backup/create and POST /api/settings are
-        # equally open; refusing only here would break the operator's own
-        # restore without closing anything. Tracked as bead
-        # enhancedchannelmanager-jy006.
-        logger.warning(
-            "[BACKUP] Serving an anonymous initial restore over an existing "
-            "operator identity because require_auth is disabled"
-        )
         return
 
     if await _caller_is_human_admin(request, session):
@@ -2321,6 +2348,22 @@ async def _guard_initial_restore(request: Request, session: Session) -> None:
 async def restore_backup_initial(
     request: Request,
     file: UploadFile = File(...),
+    # COUPLED TO ``database.py``'s ``poolclass=StaticPool`` (bead …-9kwzp.5).
+    # FastAPI holds this session — and its live SQLite read transaction — open
+    # for the whole handler, which spans ``_restore_from_zip``'s ``close_db()``
+    # -> ``JOURNAL_DB_FILE.write_bytes()`` -> ``init_db()`` sequence.
+    # StaticPool's ``dispose()`` closes its single shared connection regardless
+    # of checkout state, so the pre-restore WAL is gone before the new bytes
+    # land. Under the DEFAULT QueuePool a checked-out connection SURVIVES
+    # ``dispose()`` and its stale WAL replays over the restored database — the
+    # lf29s security review reproduced a 200 + ``integrity_check=ok`` response
+    # on an instance that had silently reverted to its pre-restore data.
+    # This endpoint is therefore correct today because of a pooling choice made
+    # elsewhere for unrelated reasons. If ECM ever moves off StaticPool, this
+    # dependency must go first: resolve the identity gate with a short-lived
+    # session opened and closed inside ``_guard_initial_restore`` instead of
+    # one held across the file swap.
+    # Pinned by ``tests/unit/test_9kwzp5_staticpool_restore_coupling.py``.
     session: Session = Depends(get_session),
 ):
     """Restore from backup during initial setup.
@@ -2687,6 +2730,14 @@ async def restore_dbas_artifact(
 
 def _gather_settings(include_credentials: bool = False) -> dict:
     """Read settings.json and return as dict (excluding sensitive fields).
+
+    Redacts every name in :data:`_SETTINGS_CREDENTIAL_FIELDS` — the
+    credential-class fields plus the GET /api/settings read-redaction partition
+    (``config.ADMIN_ONLY_READ_REDACTED_FIELDS``), which is folded in there so a
+    caller admitted by ``RequireAdminIfEnabled`` but classified non-admin by
+    ``routers.settings._resolve_settings_admin`` — the MCP service principal —
+    cannot read out of an artifact what the settings endpoint withholds
+    (bead …-9kwzp.9).
 
     ``include_credentials`` (ADR-012 D12 / u81kh) preserves the settings-class
     credentials (SMTP password, API keys, bot tokens) instead of redacting them,

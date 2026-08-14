@@ -77,10 +77,10 @@ Once the container is up, open `http://<host>:6100` in a browser. With no
 users in the system yet, ECM shows a setup form instead of a login screen.
 The fields are: **Username** (3+ characters), **Email** (used for password
 recovery), **Password**, and **Confirm Password**. The password rule the
-backend actually enforces is: at least 8 characters, not a known
-common/breached password, and it can't contain the username. The form's
-on-screen hint additionally asks for uppercase, lowercase, and a number, but
-that part isn't enforced.
+backend enforces is: at least 8 characters, not a known common/breached
+password, and it can't contain the username. The form's on-screen hint states
+that same rule. There are no composition requirements: ECM follows NIST
+800-63B, which recommends against mandatory uppercase/lowercase/number rules.
 
 1. Fill in all four fields.
 2. Click **Create Admin Account**.

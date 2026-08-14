@@ -301,6 +301,62 @@ class TestAccessTokenExpiryMetadata:
         assert data["access_token_expires_in"] > 0
 
 
+class TestRefreshedAccessTokenIdentity:
+    """bd-suuoh: the access token minted by /auth/refresh identifies the
+    account, not a ``user_<id>`` placeholder.
+
+    ``rotate_refresh_token`` used to fabricate the ``username`` claim from the
+    subject id because it never loaded the user. The refresh handler already
+    has the real ``User`` row in hand, so it now passes the name through. The
+    claim is not an authorization input (``get_current_user`` resolves the
+    caller from ``sub``), but ``main.py``'s deprecated-admin-router warning
+    logs it verbatim as the acting operator, so the placeholder misattributed
+    every post-refresh request in that security log.
+    """
+
+    @pytest.mark.asyncio
+    async def test_refreshed_access_token_carries_real_username(
+        self, async_client, admin_user
+    ):
+        from auth.tokens import decode_token
+
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+
+        response = await async_client.post("/api/auth/refresh")
+        assert response.status_code == 200
+
+        refreshed = async_client.cookies.get("access_token")
+        assert decode_token(refreshed)["username"] == "admin"
+
+    @pytest.mark.asyncio
+    async def test_graced_refresh_also_carries_real_username(
+        self, async_client, admin_user, test_session
+    ):
+        """The rotation-grace path mints its own access token too."""
+        from auth.tokens import decode_token
+
+        login_response = await async_client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "validpassword123"},
+        )
+        assert login_response.status_code == 200
+        pre_rotation = async_client.cookies.get("refresh_token")
+
+        assert (await async_client.post("/api/auth/refresh")).status_code == 200
+
+        # Replay the immediately-prior token: answered inside the grace window.
+        async_client.cookies.set("refresh_token", pre_rotation)
+        graced = await async_client.post("/api/auth/refresh")
+        assert graced.status_code == 200
+
+        refreshed = async_client.cookies.get("access_token")
+        assert decode_token(refreshed)["username"] == "admin"
+
+
 class TestRefreshRotationGraceWindow:
     """bd-x67qe: server-side rotation grace window for the cross-tab refresh
     race.
@@ -576,6 +632,25 @@ class TestProtectedEndpoints:
         not warranted here. This test instead asserts the known setup-mode behavior:
         the endpoint is publicly accessible. A separate test (test_invalid_token_on_protected_endpoint_returns_401)
         uses /api/auth/me which always validates tokens.
+
+        WHAT THIS TEST DOES NOT PROVE, and why that used to be a blind spot
+        (bead enhancedchannelmanager-ne2yy). It says nothing about whether
+        /api/settings is protected when auth IS on — the enforcement that would
+        answer that is the exempt-set membership check in ``main.auth_middleware``,
+        and that set is now pinned by
+        ``tests/test_auth_exempt_paths_snapshot.py``. Read the two together:
+        this one records the setup-mode behaviour, that one records which paths
+        are allowed to skip the gate at all.
+
+        NOR is 200-in-setup-mode a general rule any more (bead
+        enhancedchannelmanager-jy006). Three identity primitives — POST
+        /api/backup/restore-initial, POST/DELETE /api/settings/mcp-api-key, and
+        the /api/tls certificate and key material — refuse an anonymous caller
+        even in this mode once the instance has an operator identity. This
+        endpoint is deliberately NOT one of them: /api/settings staying open
+        under ``require_auth: false`` is the documented half of that decision,
+        not an accident. See ``docs/auth_middleware.md`` →
+        "What ``require_auth: false`` permits".
         """
         response = await async_client.get("/api/settings")
         assert response.status_code == 200

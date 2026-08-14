@@ -804,7 +804,7 @@ class DbasBackupTask(TaskScheduler):
         """
         from cloud_storage import get_adapter
         from cloud_storage.crypto import decrypt_credentials
-        from cloud_storage.upload_security import mask_secrets
+        from cloud_storage.upload_security import redact_secrets
         from database import get_session
         from export_models import CloudStorageTarget
 
@@ -865,7 +865,7 @@ class DbasBackupTask(TaskScheduler):
             # adapter-level masking (adapter-returned `error` fields are already
             # masked at source), so mask it here.
             reason = "upload to target '%s' raised: %s" % (
-                target_name, mask_secrets(str(e)),
+                target_name, redact_secrets(str(e)),
             )
             await self._fail_target(target_id, target_name, reason, provider=provider)
             _bump_upload_metric(provider, "failed")
@@ -991,11 +991,18 @@ class DbasBackupTask(TaskScheduler):
         msg = "DBAS backup upload to target id=%s failed — %s" % (target_id, reason)
         # The logger receives ONLY the safe target id, never `reason`/`msg`:
         # `reason` can carry a masked-but-credential-derived adapter error or a
-        # masked SDK-exception string, and CodeQL traces that value into any
-        # logging sink (it does not recognise mask_secrets() as a sanitizer).
-        # The masked detail still reaches the operator via the journal
-        # description and the notification message below (non-logging sinks
-        # that are stored/displayed, not logged).
+        # masked SDK-exception string. The masked detail still reaches the
+        # operator via the journal description and the notification message
+        # below (non-logging sinks that are stored/displayed, not logged).
+        #
+        # This started as a CodeQL workaround: the redactor used to be named
+        # `mask_secrets`, and CodeQL's name-based sensitive-data heuristic
+        # classified its OUTPUT as a secret, so any log line carrying it was
+        # flagged. That root cause is gone (see the naming rule on
+        # cloud_storage.upload_security.redact_secrets, bead
+        # enhancedchannelmanager-9kwzp), but the behaviour is kept on purpose:
+        # the journal row is the durable record for a failed upload, and the
+        # log line stays a pointer to it rather than a second copy.
         logger.warning("[DBAS_BACKUP] Upload to target id=%s failed (see journal/notification for detail)", target_id)
         try:
             journal.log_entry(

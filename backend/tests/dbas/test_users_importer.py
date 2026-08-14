@@ -642,7 +642,7 @@ async def test_payload_still_drops_secret_keys_present_in_schema():
 async def test_failure_message_masks_echoed_secret():
     """A create_user error whose text carries a secret-looking token is masked
     in the operator-facing FailureDetail.message — no raw secret survives."""
-    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key shape masked by mask_secrets
+    secret = "AKIAIOSFODNN7EXAMPLE"  # AWS access-key shape masked by redact_secrets
 
     async def _raise_with_secret(payload, *, password=None):
         raise RuntimeError("upstream rejected; aws_secret_access_key=%s echoed" % secret)

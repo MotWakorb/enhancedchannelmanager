@@ -209,7 +209,18 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
   Rendering Guard` job in `.github/workflows/test.yml`. It uses
   `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the checked-out
   source and serves it on an isolated preview port with no backend. The shell,
-  Dashboard and Settings all mount that way, so the assertion is reachable.
+  Dashboard and Settings all mount that way, so the assertion is reachable,
+  but only because `captureStorageState()` and `openApp()` in
+  `e2e/fixtures/css-guard.ts` state the auth posture themselves when
+  `E2E_EXACT_BUILD` is set. Before bead `enhancedchannelmanager-p388h` the app
+  rendered its shell on an unanswered auth probe, and this job relied on that
+  fail-open without saying so; the app now shows a "Cannot reach ECM" screen
+  instead, which is correct, so the fixture stubs the four posture routes
+  (`/api/auth/status`, `/api/auth/setup-required`, `/api/auth/me`,
+  `/api/session-start`) exactly as `e2e/operator-shell.spec.ts` and
+  `e2e/filter-select-ownership.spec.ts` already do on the same preview build.
+  No data endpoint is stubbed, so the routes render the same empty and error
+  states this guard has always measured.
   The job is **not** in the required-check set. Making it required means
   first converting it to the step-gated shape the required jobs use (see
   "One source of truth per required check" below): it currently skips at the

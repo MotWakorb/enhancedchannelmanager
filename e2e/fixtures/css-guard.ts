@@ -31,9 +31,69 @@
  *    no-op in Playwright — the option is ignored and the call returns the
  *    current state immediately — so a still-rendering login form reads as
  *    "not a login page" and the run proceeds into a blank shell.
+ *
+ * 4. A STATED AUTH POSTURE WHEN THERE IS NO BACKEND. See
+ *    `stubAuthPostureWhenBackendless()` below: on the `E2E_EXACT_BUILD`
+ *    preview build there is no server to answer the posture probes, and the
+ *    app now declines to guess one.
  */
 import { expect, isLoginPage, performLogin } from './base'
 import type { Browser, BrowserContext, Page } from '@playwright/test'
+
+/**
+ * State the instance's auth posture when the run has no backend to ask.
+ *
+ * `E2E_EXACT_BUILD=true` builds the checked-out source and serves it on an
+ * isolated preview port with NO backend — that is what the flag means, and it
+ * is the mode the `Screen-Reader-Only Rendering Guard` CI job runs in
+ * (`.github/workflows/test.yml`, `docs/testing.md` § "Rendered-CSS regression
+ * guards"). Every `/api` call fails there, including the two auth-posture
+ * probes `ProtectedRoute` gates the whole app on.
+ *
+ * That used to render the app shell anyway, because `useAuthRequired()`
+ * resolved an unanswered probe to "auth is not required" and the setup probe's
+ * catch did the same. Bead `enhancedchannelmanager-p388h` removed that
+ * fail-open: an unresolved posture renders a retryable "Cannot reach ECM"
+ * screen instead of the app. That is the correct product behaviour — a
+ * degraded backend must not produce a sessionless app shell — and it is also
+ * the exact screen this fixture was left staring at, with `.tab-navigation`
+ * never appearing and the 30s `waitForSelector` timing out. The fixture was
+ * riding the defect, so the fixture is what changes.
+ *
+ * These four routes are the same set `openDeterministicOperatorShell()`
+ * (`e2e/operator-shell.spec.ts:183`) and `openApp()`
+ * (`e2e/filter-select-ownership.spec.ts:29`) already install for the same
+ * reason on the same backend-less preview build. The posture the three of them
+ * state is identical, `require_auth: false` with `setup_complete: true` and no
+ * session; only `dispatcharr_enabled`, which nothing here reads, differs
+ * between them. It describes the instance these guards have always measured.
+ *
+ * ONLY the posture probes are stubbed. Every data endpoint still fails exactly
+ * as it did before, so each route renders the same empty and error states this
+ * guard family has always measured — the rendered CSS under test is unchanged.
+ *
+ * Gated on `E2E_EXACT_BUILD` because that flag IS the backend-less mode. The
+ * other six guards in this family run against a live ECM container on :6100
+ * and must keep exercising its real auth posture and its real login.
+ */
+async function stubAuthPostureWhenBackendless(context: BrowserContext): Promise<void> {
+  if (process.env.E2E_EXACT_BUILD !== 'true') return
+  const json = (body: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  })
+  await context.route(/\/api\/auth\/status(?:\/|\?|$)/, (route) =>
+    route.fulfill(json({ require_auth: false, setup_complete: true, dispatcharr_enabled: false })))
+  await context.route(/\/api\/auth\/setup-required(?:\/|\?|$)/, (route) =>
+    route.fulfill(json({ required: false })))
+  await context.route(/\/api\/auth\/me(?:\/|\?|$)/, (route) =>
+    route.fulfill({
+      ...json({ detail: 'No session on the backend-less preview build' }),
+      status: 401,
+    }))
+  await context.route(/\/api\/session-start(?:\?|$)/, (route) => route.fulfill({ status: 204, body: '' }))
+}
 
 /** A primary route: its hash id and the selector proving its chunk rendered. */
 export interface RouteSpec {
@@ -77,6 +137,7 @@ export async function captureStorageState(browser: Browser): Promise<StorageStat
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 65_000))
     const context = await browser.newContext()
     try {
+      await stubAuthPostureWhenBackendless(context)
       const page = await context.newPage()
       await page.goto('/', { waitUntil: 'domcontentloaded' })
       if (await isLoginPage(page)) await performLogin(page)
@@ -105,6 +166,7 @@ export async function openApp(
   viewport?: { width: number; height: number }
 ): Promise<Page> {
   const context = await browser.newContext({ storageState, ...(viewport ? { viewport } : {}) })
+  await stubAuthPostureWhenBackendless(context)
   const page = await context.newPage()
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   // Belt and braces: if the reused state has expired we would land on the

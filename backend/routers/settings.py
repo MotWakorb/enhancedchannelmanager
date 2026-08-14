@@ -24,7 +24,14 @@ from auth import (
 )
 from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.settings import get_auth_settings
-from config import get_settings, save_settings, clear_settings_cache, set_log_level, DispatcharrSettings
+from config import (
+    ADMIN_ONLY_READ_REDACTED_FIELDS,
+    get_settings,
+    save_settings,
+    clear_settings_cache,
+    set_log_level,
+    DispatcharrSettings,
+)
 from dispatcharr_client import (
     DispatcharrClient,
     clamp_dispatcharr_version,
@@ -140,6 +147,15 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
 )
 # bead 9ej7f — admin-only fields whose VALUES are also withheld on READ.
 #
+# The set itself now lives in ``config`` as ``ADMIN_ONLY_READ_REDACTED_FIELDS``
+# and is re-exported here under its historical private name (bead 9kwzp.9): the
+# backup artifact producer has to redact exactly the same partition, and while
+# the literal lived in this module it did not, so the MCP service principal read
+# two of the three straight out of a standard backup. Both enforcement points
+# derive from the one definition now — add a field in ``config`` and it is
+# withheld on GET /api/settings AND redacted out of every artifact. The
+# rationale for the READ gate stays here, where the gate is.
+#
 # These three are outbound notification credentials: a Discord webhook URL is a
 # bearer capability to post into a server, and a Telegram bot token plus chat id
 # is a bearer capability to post into a chat. They were returned verbatim by a
@@ -158,11 +174,7 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
 # instead is a single carve-out in ``_assert_admin_for_changed_fields``: an
 # EMPTY value from a non-admin is the redacted placeholder coming back, not a
 # request to clear.
-_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
-    "discord_webhook_url",
-    "telegram_bot_token",
-    "telegram_chat_id",
-})
+_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = ADMIN_ONLY_READ_REDACTED_FIELDS
 
 
 async def _resolve_settings_admin(
@@ -2361,6 +2373,15 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     rotation. See ``RequireHumanAdminForServiceCredential`` for the full
     reasoning and why it is a sibling of the outbound-test gate rather than a
     reuse of it.
+
+    bead jy006: this gate is one of the three that ENFORCE EVEN WHEN
+    ``require_auth`` IS FALSE, once the instance has an operator identity.
+    Minting a persistent admin-equivalent bearer credential is not something an
+    anonymous LAN caller may do on an auth-disabled instance, because the key
+    outlives the mode: it keeps working after the operator turns authentication
+    back on. An instance with no operator identity at all still reaches this
+    handler anonymously, so a headless auth-disabled deployment can still
+    configure its own sidecar.
     """
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
@@ -2379,6 +2400,12 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     sidecar integration on the instance with one call. The MCP principal is
     refused for the same credential-lifecycle reason — revoking the key it
     authenticates with is a self-inflicted outage with no operator in the loop.
+
+    bead jy006 applies to this half too, for the destructive rather than the
+    escalation reason: an anonymous caller on an auth-disabled instance that
+    has an operator identity may not end every sidecar integration on it. See
+    the generate half above for the identity carve-out that keeps a headless
+    deployment reachable.
     """
     settings = get_settings()
     settings.mcp_api_key = ""

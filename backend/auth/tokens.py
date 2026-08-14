@@ -81,6 +81,40 @@ def _get_secret_key() -> str:
         return _DEFAULT_SECRET_KEY
 
 
+def _get_configured_jwt_lifetimes() -> Tuple[int, int]:
+    """Configured (access_token_minutes, refresh_token_days) from settings.
+
+    Falls back to the module constants under exactly the conditions
+    :func:`_get_secret_key` already tolerates — settings module unavailable
+    (ImportError) or the config directory unreadable (OSError). Any other
+    exception is a bug and propagates rather than silently issuing tokens
+    with a lifetime the operator never configured.
+
+    bd-suuoh: these two values are already honored by the auth cookies'
+    ``max_age``, by ``UserSession.expires_at``, and by the
+    ``access_token_expires_in`` metadata the frontend schedules its proactive
+    refresh from. The issuer ignoring them left every one of those in
+    disagreement with the tokens actually minted.
+    """
+    try:
+        from .settings import get_auth_settings
+        jwt_settings = get_auth_settings().jwt
+        return (
+            jwt_settings.access_token_expire_minutes,
+            jwt_settings.refresh_token_expire_days,
+        )
+    except (ImportError, OSError) as e:
+        logger.warning(
+            "[AUTH] Configured JWT lifetimes unavailable (%s: %s) — issuing "
+            "tokens with the built-in defaults (%dm access / %dd refresh)",
+            type(e).__name__,
+            e,
+            ACCESS_TOKEN_EXPIRE_MINUTES,
+            REFRESH_TOKEN_EXPIRE_DAYS,
+        )
+        return ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS
+
+
 def create_access_token(
     user_id: int,
     username: str,
@@ -92,13 +126,15 @@ def create_access_token(
     Args:
         user_id: The user's ID.
         username: The user's username.
-        expires_delta: Optional custom expiration time.
+        expires_delta: Optional custom expiration time. When omitted the
+            configured ``jwt.access_token_expire_minutes`` is used.
 
     Returns:
         The encoded JWT string.
     """
     if expires_delta is None:
-        expires_delta = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_minutes, _ = _get_configured_jwt_lifetimes()
+        expires_delta = timedelta(minutes=access_minutes)
 
     now = datetime.utcnow()
     expire = now + expires_delta
@@ -118,14 +154,25 @@ def create_refresh_token(user_id: int) -> str:
     """
     Create a JWT refresh token with longer expiration.
 
+    The lifetime comes from the configured ``jwt.refresh_token_expire_days``,
+    which is the same value the login handlers write into
+    ``UserSession.expires_at`` (bd-suuoh). Keeping them in step matters in
+    both directions: a JWT that outlives its session row lets the client
+    present a perfectly decodable token against a row
+    ``_cleanup_expired_sessions`` has already deleted, which answers 401
+    "Session not found or revoked"; a JWT that dies before its row logs the
+    operator out ahead of the lifetime the settings advertise.
+
     Args:
         user_id: The user's ID.
 
     Returns:
         The encoded JWT refresh token string.
     """
+    _, refresh_days = _get_configured_jwt_lifetimes()
+
     now = datetime.utcnow()
-    expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = now + timedelta(days=refresh_days)
 
     payload = {
         "sub": str(user_id),  # JWT requires sub to be string
@@ -224,12 +271,24 @@ def refresh_access_token(refresh_token: str) -> str:
     return create_access_token(user_id=user_id, username=f"user_{user_id}")
 
 
-def rotate_refresh_token(refresh_token: str) -> Tuple[str, str]:
+def rotate_refresh_token(
+    refresh_token: str,
+    username: Optional[str] = None,
+) -> Tuple[str, str]:
     """
     Rotate refresh token - revoke old one and create new access + refresh tokens.
 
     Args:
         refresh_token: The current refresh token.
+        username: The account's real username, for the new access token's
+            ``username`` claim. Callers that have already loaded the ``User``
+            row (the ``/auth/refresh`` handler does) must pass it. Omitting it
+            falls back to a ``user_<id>`` placeholder, which is NOT the
+            account's name — the claim is not used for authorization
+            (``get_current_user`` resolves the caller from ``sub``) but it is
+            logged verbatim as the acting operator by ``main.py``'s
+            deprecated-admin-router warning, so a placeholder there
+            misattributes the request (bd-suuoh).
 
     Returns:
         Tuple of (new_access_token, new_refresh_token).
@@ -253,8 +312,10 @@ def rotate_refresh_token(refresh_token: str) -> Tuple[str, str]:
         _revoked_tokens.add(jti)
 
     # Create new tokens
-    # Note: In production, we'd fetch the username from the database
-    new_access_token = create_access_token(user_id=user_id, username=f"user_{user_id}")
+    new_access_token = create_access_token(
+        user_id=user_id,
+        username=username if username is not None else f"user_{user_id}",
+    )
     new_refresh_token = create_refresh_token(user_id=user_id)
 
     return new_access_token, new_refresh_token

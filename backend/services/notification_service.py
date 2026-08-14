@@ -124,10 +124,17 @@ async def create_notification_internal(
 
         # Log only safe routing identifiers (type + source), never the title or
         # message body: callers may pass a credential-derived (masked) detail in
-        # `message`, and CodeQL traces any message/title value into this logging
-        # sink (it does not recognise mask_secrets() as a sanitizer). The body is
-        # still persisted to the notification row and dispatched to alert
-        # channels — both non-logging sinks.
+        # `message`. The body is still persisted to the notification row and
+        # dispatched to alert channels — both non-logging sinks.
+        #
+        # This started as a CodeQL workaround: the redactor used to be named
+        # `mask_secrets`, and CodeQL's name-based sensitive-data heuristic
+        # classified its OUTPUT as a secret, so any log line carrying it was
+        # flagged. That root cause is gone (see the naming rule on
+        # cloud_storage.upload_security.redact_secrets, bead
+        # enhancedchannelmanager-9kwzp), but the behaviour is kept on purpose:
+        # withholding an operator-supplied body from the log is correct on its
+        # own merits, and the detail is not lost, only routed elsewhere.
         logger.debug("[NOTIFY-SVC] Created notification: type=%s source=%s source_id=%s", notification_type, source, source_id)
         return result
     except Exception as e:

@@ -153,6 +153,74 @@ adds `paths:` support under `query-filters.exclude`, this limitation can be revi
 Check the release notes for `github/codeql-action` and the CodeQL config schema docs
 when upgrading the action version.
 
+## Before suppressing: check whether a NAME is the finding
+
+**Try this before reaching for any of the three workarounds above.** None of them
+teach CodeQL anything, so all three have to be re-applied for every future
+occurrence. Sometimes the alert is caused by an identifier, and renaming it both
+removes the alert permanently and leaves the code more accurate.
+
+The sensitive-data queries (`py/clear-text-logging-sensitive-data`,
+`py/clear-text-storage-sensitive-data`, and the other CWE-312 family members)
+do not detect secrets. They detect *names that look like secrets*. Their shared
+heuristic, `shared/concepts/codeql/concepts/internal/SensitiveDataHeuristics.qll`
+in `github/codeql`, works in two passes:
+
+1. `maybeSensitiveRegexp()` marks a name as maybe-sensitive. The `secret` class
+   is broadly "contains `secret`"; there are sibling classes for passwords
+   (`api.?(key|tok)` and friends), account info, certificates and private data.
+2. `notSensitiveRegexp()` then *subtracts* names implying the data has already
+   been rendered non-sensitive. Its terms include `redact`, `censor`,
+   `obfuscate`, `hash`, `md5`, `sha`, `random`, `crypt` and `encode`.
+
+A function whose **definition name** survives both passes is treated as a source
+of sensitive data, which means its RETURN VALUE is taint. So a redaction helper
+named `mask_secrets` is read as a function that *returns* a secret, and every
+caller that logs its output is reported as clear-text logging.
+
+That is exactly what happened on PR #864 (bead `enhancedchannelmanager-9kwzp`):
+six HIGH alerts, five in `backend/tls/routes.py` and one in
+`backend/tls/renewal.py`, every one of them sourced at the `mask_secrets()` call
+inside `backend/tls/redaction.py`. Not one path started at an actual credential.
+The fix was to rename the helper to `redact_secrets`. All six alerts went to
+`fixed` on the next scan, with no config change, no dismissal and no QL pack.
+
+The tell that this is the mechanism, and not a coincidence, was already in the
+data: `redact_secret_values` sits in the same call chain and also contains
+`secret`, but contains `redact` too, and it appeared in all six data-flow paths
+as an ordinary intermediate step and never as a source.
+
+Two cautions:
+
+- **Only do this when the new name is more truthful, not less.** Renaming a
+  function that really does return a credential so that it contains `redact` is
+  hiding a finding, and the next reviewer has no way to see it. The test is
+  whether you would defend the name with CodeQL out of the picture.
+- **The name becomes load-bearing.** Say so at the definition, or a later
+  cleanup silently reintroduces the alerts. `redact_secrets` carries that note
+  in its docstring, and `TestRedactorNameIsNotClassifiedSensitiveByCodeQL` in
+  `backend/tests/test_cloud_upload_security.py` pins it with both regexes
+  transcribed, including an assertion that the OLD name would still classify as
+  a source so the test cannot pass vacuously.
+
+**How to tell a name-caused alert from a real one.** Read the data-flow path,
+not the sink line. The alert JSON from the REST API omits code flows; fetch the
+SARIF instead, which contains `codeFlows` for every result:
+
+```bash
+# find the analysis for the PR merge ref, then pull its SARIF
+gh api "repos/MotWakorb/enhancedchannelmanager/code-scanning/analyses?ref=refs/pull/<PR>/merge" \
+  --jq '.[] | "\(.id)  \(.category)  results=\(.results_count)"'
+gh api -H "Accept: application/sarif+json" \
+  "repos/MotWakorb/enhancedchannelmanager/code-scanning/analyses/<ID>" > analysis.sarif
+```
+
+If every path starts at a sanitizer/formatter call rather than at a credential,
+the name is the finding. Confirm it at runtime as well before concluding it is a
+false positive: drive the sink with a synthetic credential and read the emitted
+line, and smoke-test that check by neutering the redaction first, so you know a
+clean result means "no leak" and not "broken probe".
+
 ## Verifying no Default-Setup drift
 
 Run this anytime you need to confirm Default Setup hasn't been silently

@@ -966,7 +966,11 @@ jobs:
   # runs without a live ECM container. E2E_EXACT_BUILD=true builds
   # the checked-out source and serves it on an isolated preview port with no
   # backend; the shell, Dashboard and Settings all mount that way, so the
-  # assertion is reachable. `e2e/frozen-chrome.spec.ts`,
+  # assertion is reachable. Mounting them needs the auth posture stated rather
+  # than probed, which `e2e/fixtures/css-guard.ts` does under this same flag —
+  # see its `stubAuthPostureWhenBackendless()`; without it the app correctly
+  # renders "Cannot reach ECM" (bead enhancedchannelmanager-p388h) and there is
+  # no shell to measure. `e2e/frozen-chrome.spec.ts`,
   # `e2e/route-typography-scale.spec.ts` and `e2e/contrast-aa.spec.ts` walk
   # every route, and Channel Manager's `.channels-pane` never mounts without an
   # API — measured, not assumed. Those three plus

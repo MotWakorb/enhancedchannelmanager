@@ -60,6 +60,37 @@ DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP = 10
 DEFAULT_MCP_BULK_MERGE_SOFT_CAP = 20
 DEFAULT_MCP_BULK_MERGE_HARD_CAP = 200
 
+# CANONICAL: the :class:`DispatcharrSettings` fields whose VALUES are withheld
+# from a non-admin caller on READ (bead …-9ej7f). Outbound notification
+# credentials — a Discord webhook URL is a bearer capability to post into a
+# server, and a Telegram bot token plus chat id is a bearer capability to post
+# into a chat.
+#
+# WHY IT LIVES HERE and not in the router that enforces it (bead
+# …-9kwzp.9). This partition has two independent enforcement points, and while
+# it was defined in ``routers/settings.py`` only ONE of them knew about it:
+#
+#   * ``routers.settings`` withholds these on GET /api/settings.
+#   * ``routers.backup`` must redact them out of every backup artifact,
+#     because GET /api/backup/create, /export and /saved/{filename} carry
+#     ``RequireAdminIfEnabled``, which ADMITS the MCP service principal — the
+#     exact principal ``_resolve_settings_admin`` classifies as non-admin. Two
+#     of the three fields were readable straight out of a standard backup by
+#     the caller the settings endpoint had just refused.
+#
+# ``config`` is the leaf both consumers already import and is where the model
+# these names partition is defined, so deriving from here cannot cycle and
+# cannot drift. Adding a field here closes it on BOTH surfaces at once; that
+# one-edit property is the whole point, so do not re-inline a literal copy in
+# either router. ``routers.settings`` re-exports it under its historical
+# private name and carries the read-gate rationale;
+# ``routers.backup._SETTINGS_CREDENTIAL_FIELDS`` folds it in.
+ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
+    "discord_webhook_url",
+    "telegram_bot_token",
+    "telegram_chat_id",
+})
+
 
 def validate_url_scheme(url: str, field_name: str = "URL") -> None:
     """Validate that a URL uses an allowed scheme (http/https only).

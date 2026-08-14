@@ -34,7 +34,7 @@ import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
 import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
 import type { SettingsPage } from './hooks/useHashRoute';
-import { useAuth } from './hooks/useAuth';
+import { useAdminNavVisible } from './hooks/useAuth';
 import { settingsSectionHeading } from './components/settingsSections';
 import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
 import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
@@ -312,7 +312,14 @@ function App() {
   // Tab navigation state (hash-based routing)
   const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
   // Gates the administration-only entries in the sidebar's Settings drill-in.
-  const { user } = useAuth();
+  // This used to be `Boolean(user?.is_admin)`, which hid the whole
+  // Administration group on any auth-disabled instance, because `user` is
+  // permanently null there (bead enhancedchannelmanager-p388h, absorbing
+  // ee5f1). SettingsTab's own gate already reads null as PERMITTED for the
+  // same reason (`isAdminUser = !user || user.is_admin`, bead
+  // enhancedchannelmanager-9kwzp.10); the navigation into it was the one place
+  // still resolving unknown to hidden.
+  const adminNavVisible = useAdminNavVisible();
   const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
@@ -2676,7 +2683,7 @@ function App() {
         editModeActive={isEditMode}
         settingsPage={settingsPage}
         onSettingsPageChange={(page) => handleRouteChange('settings', page)}
-        isAdmin={Boolean(user?.is_admin)}
+        isAdmin={adminNavVisible}
       />
 
       <EditModeExitDialog

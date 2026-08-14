@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Awaitable
 
+from .redaction import redact_secret_values
 from .settings import get_tls_settings, save_tls_settings, TLS_DIR
 from .storage import CertificateStorage
 
@@ -35,6 +36,23 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _redact(settings, text: str) -> str:
+    """Strip the configured DNS credentials out of a renewal error string.
+
+    Bead 2owpi. ``last_renewal_error`` is the sharpest carrier in the TLS
+    subsystem: it is free text composed from a third-party exception, it is
+    PERSISTED into ``tls_settings.json``, and it is served by
+    ``GET /api/tls/status`` — the weakest-gated route in the router, which
+    admits the MCP service principal and no-ops entirely while ``require_auth``
+    is false. Redact before it is stored, not only before it is shown.
+    """
+    return redact_secret_values(text, (
+        settings.dns_api_token,
+        settings.aws_access_key_id,
+        settings.aws_secret_access_key,
+    ))
 
 
 # Callback for when certificate is renewed (e.g., to restart server)
@@ -209,7 +227,7 @@ async def renew_certificate() -> CertificateResult:
                     logger.warning("[TLS-RENEWAL] Failed to delete DNS record: %s", e)
 
             except Exception as e:
-                error = f"DNS challenge failed: {e}"
+                error = _redact(settings, f"DNS challenge failed: {e}")
                 settings.last_renewal_error = error
                 save_tls_settings(settings)
                 return CertificateResult(success=False, error=error)
@@ -243,12 +261,12 @@ async def renew_certificate() -> CertificateResult:
             save_tls_settings(settings)
             return result
         else:
-            settings.last_renewal_error = result.error
+            settings.last_renewal_error = _redact(settings, result.error or "")
             save_tls_settings(settings)
             return result
 
     except Exception as e:
-        error = f"Renewal failed: {e}"
+        error = _redact(settings, f"Renewal failed: {e}")
         logger.error("[TLS-RENEWAL] %s", error)
         settings.last_renewal_error = error
         save_tls_settings(settings)

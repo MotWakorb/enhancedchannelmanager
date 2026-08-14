@@ -1,9 +1,25 @@
 """
 AWS Route53 DNS provider for ACME DNS-01 challenges.
+
+CREDENTIAL REDACTION (bead enhancedchannelmanager-2owpi)
+--------------------------------------------------------
+
+botocore was checked and does not put the access key ID or secret into its
+exception text: an invalid credential comes back as
+``InvalidClientTokenId: The security token included in the request is
+invalid``. That is a fact about the current boto3, not a property of this
+code, and every error string below is a generic ``except Exception`` over a
+third-party SDK. Since the strings travel to a log line, to the persisted
+``last_renewal_error`` and to an HTTP response body, they go through
+:func:`tls.redaction.redact_secret_values` first, which deletes this
+provider's own key ID and secret by identity before the generic pattern sweep,
+matching the Cloudflare provider next door.
 """
 import asyncio
 import logging
 from typing import Optional
+
+from ..redaction import redact_secret_values
 
 from .base import DNSProvider, DNSProviderError
 
@@ -59,6 +75,9 @@ class Route53DNS(DNSProvider):
 
         self.zone_id = zone_id
         self.region = region
+        # Retained for identity redaction only (bead 2owpi). boto3 keeps its
+        # own copy inside the client; these are never used to sign anything.
+        self._credential_values = (access_key_id, secret_access_key)
 
         # Create boto3 client with explicit credentials if provided
         if access_key_id and secret_access_key:
@@ -71,6 +90,10 @@ class Route53DNS(DNSProvider):
         else:
             # Use default credential chain (env vars, IAM role, etc.)
             self._client = boto3.client("route53", region_name=region)
+
+    def _redact(self, text: str) -> str:
+        """Strip this provider's credentials out of an error string (bead 2owpi)."""
+        return redact_secret_values(text, self._credential_values)
 
     async def verify_credentials(self) -> tuple[bool, Optional[str]]:
         """Verify that the AWS credentials are valid for Route53."""
@@ -87,9 +110,9 @@ class Route53DNS(DNSProvider):
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             error_msg = e.response.get("Error", {}).get("Message", str(e))
-            return False, f"AWS error ({error_code}): {error_msg}"
+            return False, self._redact(f"AWS error ({error_code}): {error_msg}")
         except Exception as e:
-            return False, f"Connection error: {e}"
+            return False, self._redact(f"Connection error: {e}")
 
     async def get_zone_id(self, domain: str) -> Optional[str]:
         """
@@ -133,9 +156,9 @@ class Route53DNS(DNSProvider):
 
         except ClientError as e:
             error_msg = e.response.get("Error", {}).get("Message", str(e))
-            raise DNSProviderError(f"Failed to get hosted zone: {error_msg}")
+            raise DNSProviderError(self._redact(f"Failed to get hosted zone: {error_msg}"))
         except Exception as e:
-            raise DNSProviderError(f"Failed to get hosted zone: {e}")
+            raise DNSProviderError(self._redact(f"Failed to get hosted zone: {e}"))
 
     async def create_txt_record(
         self,
@@ -208,9 +231,9 @@ class Route53DNS(DNSProvider):
 
         except ClientError as e:
             error_msg = e.response.get("Error", {}).get("Message", str(e))
-            raise DNSProviderError(f"Failed to create TXT record: {error_msg}")
+            raise DNSProviderError(self._redact(f"Failed to create TXT record: {error_msg}"))
         except Exception as e:
-            raise DNSProviderError(f"Failed to create TXT record: {e}")
+            raise DNSProviderError(self._redact(f"Failed to create TXT record: {e}"))
 
     async def delete_txt_record(self, record_id: str) -> bool:
         """
@@ -278,9 +301,9 @@ class Route53DNS(DNSProvider):
                 logger.warning("[TLS-ROUTE53] TXT record not found (already deleted?): %s", record_id)
                 return True
             error_msg = e.response.get("Error", {}).get("Message", str(e))
-            raise DNSProviderError(f"Failed to delete TXT record: {error_msg}")
+            raise DNSProviderError(self._redact(f"Failed to delete TXT record: {error_msg}"))
         except Exception as e:
-            raise DNSProviderError(f"Failed to delete TXT record: {e}")
+            raise DNSProviderError(self._redact(f"Failed to delete TXT record: {e}"))
 
     async def _wait_for_change(
         self,
