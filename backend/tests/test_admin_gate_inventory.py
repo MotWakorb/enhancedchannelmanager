@@ -18,9 +18,36 @@ ECM has two admin gates that look interchangeable and are not:
   only in the 403 body, which names the surface being refused so incident
   triage starts in the right place.
 
-Every gate in both families no-ops while ``require_auth`` is false or setup is
-incomplete, so nothing here is reachable-only-by-an-admin on a first-run or
-auth-disabled instance. Read every verdict below with that condition attached.
+MOST gates in both families no-op while ``require_auth`` is false or setup is
+incomplete, so most of what follows is not reachable-only-by-an-admin on a
+first-run or auth-disabled instance. Read every verdict below with that
+condition attached — EXCEPT for the two named next.
+
+TWO GATES NO LONGER NO-OP WHEN AUTH IS DISABLED (bead jy006)
+------------------------------------------------------------
+
+This paragraph read "every gate in both families no-ops…" until bead jy006, and
+that is now wrong for ``RequireHumanAdminForServiceCredential`` and
+``RequireHumanAdminForTLSMaterial``. Both carry
+``enforce_when_auth_disabled=True``: on an instance that HAS an operator
+identity (a user row, or ``setup_complete``), they require a real human admin
+even while ``require_auth`` is false. On an instance with none, they still
+no-op, so no first-run or headless deployment is locked out.
+
+The rule the PO decided (2026-08-13) is DURABILITY OF THE RESULTING IDENTITY,
+which is a different axis from the seven MCP rules below and cuts across them:
+minting an ``mcp_api_key`` or installing a TLS private key leaves the caller
+holding a credential that keeps working after the operator turns authentication
+back on, where a settings write does not. The third route decided the same way,
+``POST /api/backup/restore-initial``, does not appear in this inventory at all
+because it is guarded in its handler rather than by a dependency.
+
+That axis is pinned in
+``tests/routers/test_jy006_auth_disabled_identity_primitives.py``, including a
+test that exactly these two gates carry the flag, and NOT here: this module
+classifies by MCP verdict and adding a second axis to its set assertions would
+make both harder to read. What this module must not do is keep asserting the
+old blanket claim in prose.
 
 Reaching for the first when you meant the second closes the non-admin half of
 a hole and leaves the MCP half wide open, which reads as fixed in review. That

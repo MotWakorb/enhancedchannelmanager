@@ -298,10 +298,44 @@ _MCP_DENIAL_DETAIL_DEFAULT = (
 )
 
 
+def instance_has_operator_identity(session: Session) -> bool:
+    """Report whether the instance holds an identity a caller could take over.
+
+    A user row is the primary signal: it becomes true the instant
+    ``/api/auth/setup`` creates the first admin. ``setup_complete`` is OR'd in
+    as a second, independent signal so an instance that lost its user rows but
+    kept its auth settings is still treated as owned. Fails closed — an
+    unreadable users table is treated as owned — because the callers of this
+    predicate use it to decide whether an ANONYMOUS caller may proceed, so the
+    unknown case must not be the permissive one.
+
+    Shared by ``routers.backup._guard_initial_restore`` (bead lf29s) and by the
+    ``enforce_when_auth_disabled`` branch of :func:`require_admin_if_enabled`
+    (bead jy006). It lives here, in one copy, deliberately: two identical
+    fail-closed security predicates in two modules is the drift defect bead
+    9kwzp.9 is about, and these two must answer "is this instance owned?"
+    identically or the auth-disabled posture is inconsistent between the
+    restore path and the credential paths.
+    """
+    try:
+        if session.query(User).count() > 0:
+            return True
+    except Exception as e:
+        logger.warning(
+            "[AUTH] Could not read the users table for the operator-identity "
+            "check, treating the instance as owned: %s",
+            e,
+        )
+        return True
+
+    return bool(get_auth_settings().setup_complete)
+
+
 def require_admin_if_enabled(
     *,
     reject_mcp_service_principal: bool = False,
     mcp_denial_detail: str = _MCP_DENIAL_DETAIL_DEFAULT,
+    enforce_when_auth_disabled: bool = False,
 ):
     """
     Factory function to create a dependency that requires admin when auth is enabled.
@@ -309,6 +343,36 @@ def require_admin_if_enabled(
     When auth is disabled (setup not complete or require_auth=False),
     the endpoint is publicly accessible. When auth is enabled, the
     caller must be an authenticated admin.
+
+    ``enforce_when_auth_disabled`` (bead jy006, PO decision 2026-08-13): when
+    True, the auth-disabled short-circuit above applies ONLY while the instance
+    holds no operator identity. ``require_auth: false`` is a supported ECM
+    operating mode and stays fully permissive for ordinary data and
+    configuration routes, but three IDENTITY PRIMITIVES are refused to an
+    anonymous caller even in that mode, because each one lets a caller
+    establish a durable, privileged identity that survives the operator turning
+    authentication back on:
+
+      * ``POST /api/backup/restore-initial`` — replaces every admin password
+        hash (gated in ``routers.backup._guard_initial_restore``, which needs
+        its own copy of the rule because it must also survive a damaged
+        ``setup_complete``; it shares this module's
+        :func:`instance_has_operator_identity`).
+      * ``POST``/``DELETE /api/settings/mcp-api-key`` — plants or destroys a
+        persistent, admin-equivalent bearer credential.
+      * the ``/api/tls`` certificate/key material and HTTPS lifecycle — installs
+        a caller-supplied private key as the instance's TLS identity.
+
+    THE NO-IDENTITY CARVE-OUT IS LOAD-BEARING, not a softening. A literal
+    "always require an admin" would make these routes permanently unreachable
+    on an instance that runs with ``require_auth: false`` and never created a
+    user — a supported headless posture — with no in-band recovery, since the
+    only way to obtain an admin would be to run the setup wizard and thereby
+    change the posture the operator chose. The carve-out follows the shape
+    already shipped and security-reviewed under bead lf29s.
+
+    Everything ``require_auth: false`` still permits is documented in
+    ``docs/auth_middleware.md`` → "What ``require_auth: false`` permits".
 
     ``reject_mcp_service_principal`` (kgz3k / bead 6n76m): when True, the static
     MCP service principal is DENIED even though it carries ``is_admin=True``.
@@ -335,11 +399,34 @@ def require_admin_if_enabled(
         settings = get_auth_settings()
 
         # If auth not required or setup not complete, allow anonymous access
+        enforcing_over_disabled_auth = False
         if not settings.require_auth or not settings.setup_complete:
-            return None
+            if not enforce_when_auth_disabled:
+                return None
+            if not instance_has_operator_identity(session):
+                # Genuine first run, or a deliberately headless auth-disabled
+                # instance that never created a user. Nothing exists here for a
+                # caller to take over, and refusing would lock the operator out
+                # of the only path that configures this surface.
+                return None
+            enforcing_over_disabled_auth = True
 
         # Auth is required - get the user and check admin
-        user = await get_current_user(request, session)
+        try:
+            user = await get_current_user(request, session)
+        except HTTPException:
+            if enforcing_over_disabled_auth:
+                # The jy006 refusal an operator most wants to see in the log:
+                # an anonymous caller reaching for an identity primitive on an
+                # instance whose owner turned authentication off.
+                logger.warning(
+                    "[AUTH] Refused an unauthenticated request to an identity "
+                    "primitive on an auth-disabled instance that already has "
+                    "an operator identity: %s %s",
+                    request.method,
+                    request.url.path,
+                )
+            raise
         if not user.is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -414,9 +501,19 @@ RequireHumanAdminForOutboundTest = Depends(
 # owns the credential, which is the same principle
 # :func:`reject_mcp_service_principal_mutation` applies to the self-mutation
 # auth routes.
+#
+# bead jy006 — one of the three gates that ENFORCES EVEN WHEN ``require_auth``
+# IS FALSE, once the instance has an operator identity. The key this route
+# mints is a persistent, admin-equivalent bearer credential that the global
+# middleware accepts across the whole ``/api/`` surface, so an anonymous LAN
+# caller minting one on an auth-disabled instance walks away with an identity
+# that OUTLIVES the operator turning authentication back on. That is the
+# property that distinguishes it from the rest of the auth-disabled surface,
+# which is merely open while the mode is on.
 RequireHumanAdminForServiceCredential = Depends(
     require_admin_if_enabled(
         reject_mcp_service_principal=True,
+        enforce_when_auth_disabled=True,
         mcp_denial_detail=(
             "The MCP service principal cannot manage the MCP API key. "
             "Rotating or revoking the key it authenticates with is a "
@@ -451,9 +548,30 @@ RequireHumanAdminForServiceCredential = Depends(
 # is work the MCP sidecar exists to do — it exposes no TLS tool — and the
 # availability half means a leaked key could take the operator's own HTTPS
 # termination down.
+#
+# bead jy006 — the third gate that ENFORCES EVEN WHEN ``require_auth`` IS
+# FALSE, once the instance has an operator identity. ``upload-cert`` and the
+# ACME trio install a private key that becomes the instance's TLS identity, so
+# an anonymous caller reaching them on an auth-disabled instance can serve
+# their own key to every client of that instance from then on — again an
+# identity that OUTLIVES the operator turning authentication back on.
+#
+# The enforcement is applied to this gate WHOLESALE — all ten routes, including
+# ``GET /settings``, ``DELETE /certificate`` and the https trio — rather than
+# to the key-install subset alone. That is the "coarse on purpose" trade
+# ``tests/test_admin_gate_inventory.py`` documents for this family: splitting
+# it would need a second constant with its own 403 body and its own inventory
+# group, and it costs the operator nothing, because
+# ``TLSSettingsSection.tsx`` makes NO API call at all when it renders
+# non-admin (``useEffect`` returns at ``if (!isAdmin) return``), which is
+# exactly the state an auth-disabled instance is already in — ``useAuth``
+# never resolves a user when ``require_auth`` is false, so that section is
+# handed ``isAdmin={user?.is_admin ?? false}``. Nothing that works today stops
+# working.
 RequireHumanAdminForTLSMaterial = Depends(
     require_admin_if_enabled(
         reject_mcp_service_principal=True,
+        enforce_when_auth_disabled=True,
         mcp_denial_detail=(
             "The MCP service principal cannot manage TLS. Issuing, uploading, "
             "renewing or deleting certificate material, writing DNS-provider "

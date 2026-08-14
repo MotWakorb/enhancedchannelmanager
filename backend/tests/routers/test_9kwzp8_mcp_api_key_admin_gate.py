@@ -201,22 +201,35 @@ async def test_admin_reaches_mcp_api_key_revoke_handler(async_client):
 
 
 class TestSetupModeStillAllowed:
-    """Auth-disabled and setup-incomplete instances must keep working.
+    """An UNOWNED instance must keep working, whatever its auth flags say.
 
     No first-run path calls either endpoint today — ``SetupPage.tsx`` imports
     exactly one API function (``completeSetup``) and the only caller of
     ``generateMCPApiKey`` / ``revokeMCPApiKey`` is ``MCPSettingsSection``, which
     is rendered from the post-auth Settings tab behind its own ``isAdmin``
-    guard. This pins the auth-disabled behaviour anyway, because an instance
-    running with ``require_auth=False`` is a supported configuration and the
-    gate must not lock its operator out of MCP setup.
+    guard. This pins the behaviour anyway, because an instance running with
+    ``require_auth=False`` is a supported configuration and the gate must not
+    lock its operator out of MCP setup.
+
+    NARROWED BY BEAD jy006. This class used to parametrize a third posture,
+    ``require_auth=False, setup_complete=True``, and assert 200 there too. That
+    combination now means "auth is off AND this instance has an operator
+    identity", which is precisely the case the PO decided must require a real
+    human admin: the key this route mints is a persistent, admin-equivalent
+    bearer credential that survives the operator turning authentication back
+    on. The two postures left here both describe an instance with NO operator
+    identity, where the gate still no-ops.
+
+    The full jy006 matrix for this route — anonymous, non-admin, admin and MCP
+    principal, against both identity signals — is in
+    ``test_jy006_auth_disabled_identity_primitives.py``.
     """
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.parametrize(
         "require_auth,setup_complete",
-        [(False, True), (True, False), (False, False)],
-        ids=["auth-disabled", "setup-incomplete", "both"],
+        [(True, False), (False, False)],
+        ids=["setup-incomplete", "both"],
     )
     @pytest.mark.asyncio
     async def test_anonymous_caller_reaches_handler_in_setup_mode(

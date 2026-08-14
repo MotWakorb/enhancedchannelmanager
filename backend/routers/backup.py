@@ -37,9 +37,9 @@ from auth import (
 from auth.dependencies import (
     get_current_user,
     get_token_from_request,
+    instance_has_operator_identity,
     is_mcp_service_principal,
 )
-from auth.settings import get_auth_settings
 from config import CONFIG_DIR, CONFIG_FILE, DispatcharrSettings, get_settings, save_settings, clear_settings_cache
 from credential_sentinel import REDACTION_SENTINEL
 from dbas import artifact_crypto
@@ -62,7 +62,6 @@ from models import (
     TaskSchedule,
     TagGroup,
     Tag,
-    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -2244,27 +2243,14 @@ _INITIAL_RESTORE_DENIED_DETAIL = (
 )
 
 
-def _instance_has_operator_identity(session: Session) -> bool:
-    """Report whether the instance holds an identity a restore would overwrite.
-
-    A user row is the primary signal: it becomes true the instant
-    ``/api/auth/setup`` creates the first admin, regardless of qg14z.
-    ``setup_complete`` is OR'd in as a second, independent signal so an
-    instance that lost its user rows but kept its auth settings is still
-    treated as owned. Fails closed if the users table cannot be read.
-    """
-    try:
-        if session.query(User).count() > 0:
-            return True
-    except Exception as e:
-        logger.warning(
-            "[BACKUP] Could not read the users table for the initial-restore gate, "
-            "treating the instance as owned: %s",
-            e,
-        )
-        return True
-
-    return bool(get_auth_settings().setup_complete)
+# The ownership predicate this gate keys on lives in ``auth.dependencies`` as
+# :func:`instance_has_operator_identity` and is imported above. It was a
+# private copy here until bead jy006 gave the same rule a second caller (the
+# ``enforce_when_auth_disabled`` branch of ``require_admin_if_enabled``, which
+# gates the mcp-api-key and TLS-material routes). Two copies of one fail-closed
+# security predicate is the drift defect bead 9kwzp.9 is about, and these two
+# in particular MUST agree: they are the same question ("is this instance
+# owned?") asked by the two halves of the same auth-disabled posture.
 
 
 async def _caller_is_human_admin(request: Request, session: Session) -> bool:
@@ -2287,24 +2273,32 @@ async def _caller_is_human_admin(request: Request, session: Session) -> bool:
 
 
 async def _guard_initial_restore(request: Request, session: Session) -> None:
-    """Refuse the anonymous first-run restore once the instance has an owner."""
-    if not _instance_has_operator_identity(session):
+    """Refuse the anonymous first-run restore once the instance has an owner.
+
+    ``require_auth`` IS NOT CONSULTED HERE, and that is the bead jy006 fix.
+    This guard used to return early — serving the anonymous restore — whenever
+    the operator had turned authentication off, on the reasoning that
+    ``RequireAdminIfEnabled`` already serves anonymous callers on such an
+    instance so refusing only here closed nothing. The PO decided that question
+    on 2026-08-13 the other way: ``require_auth: false`` stays open for
+    ordinary data and configuration routes, but this route is one of three
+    IDENTITY PRIMITIVES that stay admin-only in that mode, because the ZIP it
+    accepts replaces ``journal.db`` wholesale — the ``users`` table and every
+    admin password hash with it. An anonymous LAN caller who lands one on an
+    auth-disabled instance owns the instance afterwards, including after the
+    operator turns authentication back on. That is categorically unlike POST
+    /api/settings, which is merely open while the mode is on.
+
+    The genuine-first-run carve-out above is unchanged and is what keeps this
+    from being a lockout; see :func:`auth.dependencies.instance_has_operator_identity`
+    and the ``enforce_when_auth_disabled`` docstring in
+    ``auth.dependencies.require_admin_if_enabled``, which applies the identical
+    rule to the other two primitives.
+    """
+    if not instance_has_operator_identity(session):
         # Genuine first run — nothing exists to protect, and serving this case
         # is the endpoint's reason to exist (fresh container, or a
         # disaster-recovery rebuild sitting empty waiting for its restore).
-        return
-
-    if not get_auth_settings().require_auth:
-        # The operator turned authentication off. RequireAdminIfEnabled already
-        # serves anonymous callers on such an instance, so POST
-        # /api/backup/restore, GET /api/backup/create and POST /api/settings are
-        # equally open; refusing only here would break the operator's own
-        # restore without closing anything. Tracked as bead
-        # enhancedchannelmanager-jy006.
-        logger.warning(
-            "[BACKUP] Serving an anonymous initial restore over an existing "
-            "operator identity because require_auth is disabled"
-        )
         return
 
     if await _caller_is_human_admin(request, session):

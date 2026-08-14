@@ -576,6 +576,25 @@ class TestProtectedEndpoints:
         not warranted here. This test instead asserts the known setup-mode behavior:
         the endpoint is publicly accessible. A separate test (test_invalid_token_on_protected_endpoint_returns_401)
         uses /api/auth/me which always validates tokens.
+
+        WHAT THIS TEST DOES NOT PROVE, and why that used to be a blind spot
+        (bead enhancedchannelmanager-ne2yy). It says nothing about whether
+        /api/settings is protected when auth IS on — the enforcement that would
+        answer that is the exempt-set membership check in ``main.auth_middleware``,
+        and that set is now pinned by
+        ``tests/test_auth_exempt_paths_snapshot.py``. Read the two together:
+        this one records the setup-mode behaviour, that one records which paths
+        are allowed to skip the gate at all.
+
+        NOR is 200-in-setup-mode a general rule any more (bead
+        enhancedchannelmanager-jy006). Three identity primitives — POST
+        /api/backup/restore-initial, POST/DELETE /api/settings/mcp-api-key, and
+        the /api/tls certificate and key material — refuse an anonymous caller
+        even in this mode once the instance has an operator identity. This
+        endpoint is deliberately NOT one of them: /api/settings staying open
+        under ``require_auth: false`` is the documented half of that decision,
+        not an accident. See ``docs/auth_middleware.md`` →
+        "What ``require_auth: false`` permits".
         """
         response = await async_client.get("/api/settings")
         assert response.status_code == 200

@@ -528,13 +528,28 @@ class TestSetupModeStillAllowed:
     This still pins the auth-disabled behaviour, because an instance running
     with ``require_auth=False`` is a supported configuration and the gate must
     not lock its operator out of TLS setup.
+
+    NARROWED BY BEAD jy006. This class used to parametrize a third posture,
+    ``require_auth=False, setup_complete=True``, and assert 200 on all thirteen
+    routes. That combination now means "auth is off AND this instance has an
+    operator identity", and the PO decided that the ten
+    ``RequireHumanAdminForTLSMaterial`` routes require a real human admin in
+    it — installing a caller-supplied private key makes it the instance's TLS
+    identity, which survives the operator turning authentication back on. The
+    two postures left here both describe an instance with NO operator identity,
+    where every gate in the router still no-ops.
+
+    That third posture is now split by route in
+    ``test_auth_disabled_owned_instance_splits_by_gate`` below, and the full
+    jy006 matrix lives in
+    ``test_jy006_auth_disabled_identity_primitives.py``.
     """
 
     @pytest.mark.parametrize("route", TLS_ROUTES, ids=_route_id)
     @pytest.mark.parametrize(
         "require_auth,setup_complete",
-        [(False, True), (True, False), (False, False)],
-        ids=["auth-disabled", "setup-incomplete", "both"],
+        [(True, False), (False, False)],
+        ids=["setup-incomplete", "both"],
     )
     @pytest.mark.asyncio
     async def test_anonymous_caller_reaches_handler_in_setup_mode(
@@ -548,3 +563,27 @@ class TestSetupModeStillAllowed:
 
             assert response.status_code == 200, response.text
             gate.witness.assert_called()
+
+    @pytest.mark.parametrize("route", TLS_ROUTES, ids=_route_id)
+    @pytest.mark.asyncio
+    async def test_auth_disabled_owned_instance_splits_by_gate(
+        self, async_client, route
+    ):
+        """bead jy006 — the line the PO drew, restated per route.
+
+        On an auth-disabled instance that HAS an operator identity, this router
+        is no longer uniform: the ten material routes refuse an anonymous
+        caller, while the two status reads and ``/test-dns-provider`` do not.
+        Asserted as one parametrized sweep over the whole route table rather
+        than as two lists, so a route that changes tier shows up here as a
+        named failure instead of silently joining the other group.
+        """
+        expected = 401 if route in TLS_MATERIAL_ROUTES else 200
+
+        with _Gate(async_client, route) as gate, \
+                patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = False
+            auth_mock.return_value.setup_complete = True
+            response = await gate.request()
+
+            assert response.status_code == expected, response.text

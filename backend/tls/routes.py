@@ -28,10 +28,35 @@ stamps ``is_admin=True``. Three tiers now apply, per route:
   credential material. Admin required, MCP principal admitted, which is the
   inventory's default for anything outside the denied classes.
 
-All three no-op when ``require_auth`` is false or setup is incomplete, so a
-first-run or auth-disabled instance is unaffected. Every verdict is pinned in
-``tests/test_admin_gate_inventory.py`` and
-``tests/routers/test_9kwzp11_tls_router_admin_gate.py``.
+AUTH-DISABLED BEHAVIOUR (bead jy006, PO decision 2026-08-13)
+------------------------------------------------------------
+
+This paragraph used to read "all three no-op when ``require_auth`` is false or
+setup is incomplete". That is no longer true of the first tier, and the
+difference is the point of bead jy006.
+
+* ``RequireHumanAdminForTLSMaterial`` carries ``enforce_when_auth_disabled``.
+  On an instance that HAS an operator identity (a user row, or
+  ``setup_complete``), all ten of its routes require a real human admin even
+  while ``require_auth`` is false. Installing a caller-supplied private key is
+  one of the three identity primitives ECM refuses anonymously in every mode,
+  because the installed key becomes the instance's TLS identity and survives
+  the operator turning authentication back on. On an instance with NO operator
+  identity — a genuine first run, or a deliberately headless auth-disabled
+  deployment that never created a user — the gate still no-ops, so nothing is
+  locked out.
+* ``RequireHumanAdminForOutboundTest`` (``POST /test-dns-provider``) and
+  ``RequireAdminIfEnabled`` (the two status reads) are UNCHANGED: they still
+  no-op whenever ``require_auth`` is false or setup is incomplete. The PO's
+  decision gates the three identity primitives and leaves the rest of the
+  auth-disabled surface open. Note the residual this leaves inside this router:
+  ``GET /settings`` is refused on such an instance while
+  ``POST /test-dns-provider``, which USES the DNS-provider credentials that
+  route discloses in masked form, is not.
+
+Every verdict is pinned in ``tests/test_admin_gate_inventory.py``,
+``tests/routers/test_9kwzp11_tls_router_admin_gate.py`` and
+``tests/routers/test_jy006_auth_disabled_identity_primitives.py``.
 """
 import asyncio
 import logging

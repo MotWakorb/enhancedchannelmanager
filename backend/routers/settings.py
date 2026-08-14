@@ -2361,6 +2361,15 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     rotation. See ``RequireHumanAdminForServiceCredential`` for the full
     reasoning and why it is a sibling of the outbound-test gate rather than a
     reuse of it.
+
+    bead jy006: this gate is one of the three that ENFORCE EVEN WHEN
+    ``require_auth`` IS FALSE, once the instance has an operator identity.
+    Minting a persistent admin-equivalent bearer credential is not something an
+    anonymous LAN caller may do on an auth-disabled instance, because the key
+    outlives the mode: it keeps working after the operator turns authentication
+    back on. An instance with no operator identity at all still reaches this
+    handler anonymously, so a headless auth-disabled deployment can still
+    configure its own sidecar.
     """
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
@@ -2379,6 +2388,12 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     sidecar integration on the instance with one call. The MCP principal is
     refused for the same credential-lifecycle reason — revoking the key it
     authenticates with is a self-inflicted outage with no operator in the loop.
+
+    bead jy006 applies to this half too, for the destructive rather than the
+    escalation reason: an anonymous caller on an auth-disabled instance that
+    has an operator identity may not end every sidecar integration on it. See
+    the generate half above for the identity carve-out that keeps a headless
+    deployment reachable.
     """
     settings = get_settings()
     settings.mcp_api_key = ""
