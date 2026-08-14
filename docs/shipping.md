@@ -165,18 +165,18 @@ The required check names above are pulled from `gh api /repos/MotWakorb/enhanced
 
 #### Read the gate, not just the checks
 
-`gh pr checks <#> --watch` reports **check conclusions and nothing else**. It has no view of whether the branch actually merges, so a PR whose seven required checks are all green can still be sitting on a merge conflict, and the watch will report green right up to the moment `gh pr merge` refuses. That blind spot nearly landed a conflicted merge on 2026-08-10.
+`gh pr checks <#> --watch` reports **check conclusions and nothing else**. It has no view of whether the branch actually merges, so a PR whose eight required checks are all green can still be sitting on a merge conflict, and the watch will report green right up to the moment `gh pr merge` refuses. That blind spot nearly landed a conflicted merge on 2026-08-10.
 
 Re-run the `gh pr view` command above until all three conditions hold:
 
-1. **Seven context lines appear.** Exactly seven, one per required name. A name that never appears is worse than a failing one: branch protection waits forever for a context no job emits, and `enforce_admins=true` means nobody can bypass it. If a required name is missing, stop and fix the workflow that should emit it, rather than waiting.
+1. **Eight context lines appear.** Exactly eight, one per required name. A name that never appears is worse than a failing one: branch protection waits forever for a context no job emits, and `enforce_admins=true` means nobody can bypass it. If a required name is missing, stop and fix the workflow that should emit it, rather than waiting.
 2. **Every one reads `SUCCESS`.** `PENDING`, `QUEUED` or `IN_PROGRESS` means keep polling. `FAILURE` means fix the branch. `SKIPPED` on a required context is a red flag, not a pass: GitHub counts a skipped job as satisfying the check, so a `SKIPPED` required context means a job skipped itself instead of gating its steps.
 3. **`mergeStateStatus` is `CLEAN`, or is `UNSTABLE` and you have read the failing non-required check and decided to accept it.** See "When `UNSTABLE` is the terminal state" below: `UNSTABLE` can be permanent, and the ship agent is required to drive the merge, so it needs a documented exit rather than a poll that never ends.
 
 | `mergeStateStatus` | What it means | What to do |
 | --- | --- | --- |
 | `CLEAN` | Required checks green, no conflict. | Merge. |
-| `UNSTABLE` | A non-required check is failing; the required seven are green. | Read the failing check, then decide. |
+| `UNSTABLE` | A non-required check is failing; the required eight are green. | Read the failing check, then decide. |
 | `BLOCKED` | A required check is failing, missing, or a review is outstanding. | Do not merge. Find which one. |
 | `DIRTY` | Merge conflict with the base branch. | `git fetch origin && git merge origin/dev`, resolve, push. |
 | `BEHIND` | The branch is behind the base and the base requires up-to-date branches. | Update the branch from `origin/dev`. |
@@ -186,9 +186,9 @@ Re-run the `gh pr view` command above until all three conditions hold:
 
 ##### When `UNSTABLE` is the terminal state
 
-`UNSTABLE` means every required check is green and something else is red. Polling will not clear it. Several jobs on every PR are deliberately **not** required contexts, including `Operator Docs`, `Fake-Test Guard`, `Visual Regression`, `Screen-Reader-Only Rendering Guard` and `Operator Workspace Release Matrix`. Any of them failing produces a permanent `UNSTABLE`.
+`UNSTABLE` means every required check is green and something else is red. Polling will not clear it. Several jobs on every PR are deliberately **not** required contexts, including `Fake-Test Guard`, `Visual Regression`, `Screen-Reader-Only Rendering Guard` and `Operator Workspace Release Matrix`. Any of them failing produces a permanent `UNSTABLE`.
 
-This matters most for `Operator Docs`, which is where `mkdocs build --strict` and the em-dash ratchet live. A broken user-guide link fails that job and nothing else, so the PR sits at `UNSTABLE` forever.
+This matters most for `Visual Regression`, which is where the Playwright pixel-diff snapshot baselines live. A single changed pixel in a `.png` baseline fails that job and nothing else, so the PR sits at `UNSTABLE` forever until someone updates the baseline or judges the diff acceptable.
 
 `CLAUDE.md` requires the ship agent to drive the merge, so "wait for `CLEAN`" is not a usable instruction here. The rule is:
 
@@ -199,9 +199,13 @@ This matters most for `Operator Docs`, which is where `mkdocs build --strict` an
 
 #### What a green check actually ran
 
-Six of the seven required checks gate their real work on `scripts/classify_changed_paths.py`: only approved root machine-generated `.beads` state can pass without running a suite. Every other path runs the suites. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened.
+Six of the eight required checks gate their real work on `scripts/classify_changed_paths.py`: only approved root machine-generated `.beads` state can pass without running a suite. Every other path runs the suites. `Operator Docs` is not one of the six: it runs its full six gates unconditionally on every pull request, regardless of what changed. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened.
 
 Read that summary before treating a green rollup as proof the suite passed. `gh run view <run-id>` links it, or open the run in the browser.
+
+#### `Operator Docs` can fail from a registry outage, not a defect
+
+`Operator Docs` installs `detect-secrets` and the mkdocs site dependencies from the network on every run. As an advisory job that was survivable: a registry blip failed the job, the PR sat at `UNSTABLE`, and a retry later in the day cleared it. As a required context it blocks the merge directly, with no admin bypass (`enforce_admins=true` on `dev`). If `Operator Docs` fails on a step that never reaches your change's own gates (`Install docs site dependencies`, `Install detect-secrets (pinned)`), read the step log before assuming the PR is broken: it may be PyPI or npm, not you. This is an accepted trade, not an oversight. There is no fallback dependency mirror today.
 
 #### Confirm the image published
 

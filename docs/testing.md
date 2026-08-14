@@ -455,11 +455,11 @@ Do **not** lower the threshold in the config.
 
 ## One source of truth per required check
 
-`dev` branch protection requires seven status checks: `Backend Tests`,
-`Frontend Tests`, `MCP Server Tests`, `Semgrep Lint`, `Version Consistency`
-(all from `.github/workflows/test.yml`), and `CodeQL Analysis (python)` /
-`CodeQL Analysis (javascript-typescript)` (the `codeql-analysis` matrix in
-`.github/workflows/build.yml`).
+`dev` branch protection requires eight status checks: `Backend Tests`,
+`Frontend Tests`, `MCP Server Tests`, `Semgrep Lint`, `Version Consistency`,
+`Operator Docs` (all from `.github/workflows/test.yml`), and
+`CodeQL Analysis (python)` / `CodeQL Analysis (javascript-typescript)` (the
+`codeql-analysis` matrix in `.github/workflows/build.yml`).
 
 **Invariant: each of those names is emitted by exactly one job, and that job
 runs on every pull request.**
@@ -547,7 +547,7 @@ disabling its deploy.
 
 ### What a green required check actually ran
 
-Because six of the seven required checks gate their real work on
+Because six of the eight required checks gate their real work on
 `code_paths_changed`, the check **name** is the same whether a suite ran or not.
 `Backend Tests` reads as "the backend tests ran" either way.
 
@@ -580,18 +580,22 @@ runtime condition, and `continue-on-error` absorbs it either way.
 only after the merge, in `docs-pages.yml`, so a broken user-guide link merged
 green and surfaced as a failed Pages deploy on `dev`. It checks something
 disjoint from `npm run docs:check`: pb2s4 records a broken link that the
-first passed and the second caught. `Operator Docs` is deliberately ungated
-and deliberately **not** a required context, so adding the step changes no
-branch-protection surface.
+first passed and the second caught. `Operator Docs` is deliberately ungated:
+it runs its full six gates unconditionally on every pull request, regardless
+of what changed, and it is a required context, so a failure in any of them
+blocks the merge directly.
 
-**That last point bounds what this buys.** Because `Operator Docs` is not
-required, a broken site build does **not** block the merge. It turns the PR's
-`mergeStateStatus` to `UNSTABLE` and stays there. The enforcement is the
-shipper reading the rollup and refusing to merge past it, per
-`docs/shipping.md` section "When `UNSTABLE` is the terminal state" - not
-branch protection. Making it required is a Phase 2 branch-protection change
-and is deliberately out of scope: a required name that fails to appear on a
-PR wedges that PR permanently, and `enforce_admins` is true on `dev`.
+**That last point is why the required-context contract exists.** A required
+name that no job emits blocks every open pull request permanently, not just
+the one that broke it, because `enforce_admins` is true on `dev` and there is
+no admin bypass. `Operator Docs` is safe to require because its job shape
+cannot skip, rename, or hollow itself out: no job-level `if:`, no `paths:`
+filter, and the only step-level condition is the pull-request-only one the
+ratchets need. `backend/tests/unit/test_classify_changed_paths.py::TestOperatorDocsRequiredContext`
+pins that shape, along with the six-gate inventory the job's own run summary
+reports, so a later edit that would quietly weaken the check (an added path
+filter, a renamed job, a gate moved elsewhere, a `continue-on-error`) fails a
+required check instead of merging unnoticed.
 
 ## Container Freshness Check
 
