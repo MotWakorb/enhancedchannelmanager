@@ -722,3 +722,113 @@ describe('Proactive token refresh (bd-3ymo4)', () => {
     expect(refreshCalls).toBe(0);
   });
 });
+
+describe('session resolution when auth is disabled (bead enhancedchannelmanager-9kwzp)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // An auth-disabled instance that HAS an operator identity. This is the
+  // configuration bead enhancedchannelmanager-p388h reopened /login for, so
+  // that an operator could reach the three surfaces bead jy006 gated behind an
+  // authenticated human admin (initial restore, the MCP API key, TLS key
+  // material).
+  const AUTH_OFF_WITH_IDENTITY = {
+    require_auth: false,
+    setup_complete: true,
+    enabled_providers: ['local'],
+    primary_auth_mode: 'local' as const,
+    smtp_configured: false,
+  };
+
+  const OPERATOR = {
+    id: 7,
+    username: 'operator',
+    email: null,
+    display_name: null,
+    is_admin: true,
+    is_active: true,
+    auth_provider: 'local',
+    external_id: null,
+  };
+
+  async function renderSettled() {
+    const { useAuth, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    let rendered!: ReturnType<typeof renderHook<ReturnType<typeof useAuth>, unknown>>;
+    await act(async () => {
+      rendered = renderHook(() => useAuth(), { wrapper });
+    });
+    return rendered;
+  }
+
+  // THE DEFECT. checkAuth returned early on `!require_auth` and never called
+  // /api/auth/me, so an operator who signed in at /login lost the session on
+  // the next mount: refresh the page or open a second tab and `user` was null
+  // again, SettingsTab passed isAdmin={false}, and the TLS and MCP sections
+  // said "Admin access required".
+  it('resolves the signed-in operator from the cookie even though auth is not required', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_OFF_WITH_IDENTITY);
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: OPERATOR });
+
+    const { result } = await renderSettled();
+
+    expect(getCurrentUser).toHaveBeenCalled();
+    expect(result.current.user).toEqual(OPERATOR);
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  // The tri-state semantics p388h established are untouched: an auth-disabled
+  // instance is still 'not-required' whether or not a session resolved. This
+  // guards against "fixing" the above by reporting the instance as auth-on.
+  it('still reports the instance as not-required once the operator resolves', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_OFF_WITH_IDENTITY);
+    vi.mocked(getCurrentUser).mockResolvedValue({ user: OPERATOR });
+
+    const { useAuthRequirement, AuthProvider } = await import('./useAuth');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+    let rendered!: ReturnType<typeof renderHook<string, unknown>>;
+    await act(async () => {
+      rendered = renderHook(() => useAuthRequirement(), { wrapper });
+    });
+
+    expect(rendered.result.current).toBe('not-required');
+  });
+
+  // No cookie on an auth-disabled instance is the ordinary case, and it must
+  // stay quiet: a 401 leaves `user` null and the app renders as before. This
+  // is the cost of the fix, pinned so it cannot grow into a boot failure.
+  it('leaves the user null when the instance has no session cookie', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    const { HttpError } = await import('../services/httpClient');
+    vi.mocked(getAuthStatus).mockResolvedValue(AUTH_OFF_WITH_IDENTITY);
+    vi.mocked(getCurrentUser).mockRejectedValue(new HttpError('Unauthorized', 401));
+
+    const { result } = await renderSettled();
+
+    expect(getCurrentUser).toHaveBeenCalled();
+    expect(result.current.user).toBeNull();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  // The one flag that still short-circuits. With setup incomplete there is no
+  // operator row, so no cookie can name one and the request is pure waste.
+  it('does not probe for a user before first-run setup has happened', async () => {
+    const { getAuthStatus, getCurrentUser } = await import('../services/api');
+    vi.mocked(getAuthStatus).mockResolvedValue({
+      ...AUTH_OFF_WITH_IDENTITY,
+      setup_complete: false,
+    });
+
+    const { result } = await renderSettled();
+
+    expect(getCurrentUser).not.toHaveBeenCalled();
+    expect(result.current.user).toBeNull();
+  });
+});

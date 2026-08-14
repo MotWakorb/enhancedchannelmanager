@@ -88,8 +88,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
           const status = await getAuthStatus();
           setAuthStatus(status);
 
-          // If auth is not required or setup not complete, no need to check user
-          if (!status.require_auth || !status.setup_complete) {
+          // Only ONE of the two flags can skip the /me call, and it is not
+          // require_auth (bead enhancedchannelmanager-9kwzp, from a Codex
+          // review plus a live QA repro).
+          //
+          // `!setup_complete` genuinely means there is no session to resolve:
+          // no operator row exists, so no cookie can name one.
+          //
+          // `!require_auth` used to short-circuit here too, on the reasoning
+          // that an instance which does not demand a session cannot have one.
+          // Bead enhancedchannelmanager-p388h made that false: it reopened
+          // /login on an auth-disabled instance that already holds an operator
+          // identity, precisely so an operator could reach the three surfaces
+          // bead jy006 gated behind an authenticated human admin (initial
+          // restore, the MCP API key, TLS key material). Returning early threw
+          // that session away on the next render of the app: the operator
+          // signed in, then a refresh or a second tab resolved `user` to null,
+          // SettingsTab passed isAdmin={false}, and the TLS and MCP sections
+          // went back to "Admin access required". Signing in again fixed it
+          // until the next reload, which made the reopened route close to
+          // useless.
+          //
+          // The cost of falling through is one /me request (plus httpClient's
+          // one refresh retry) on an auth-off instance with no cookie, which
+          // 401s and leaves `user` null exactly as before.
+          if (!status.setup_complete) {
             setIsLoading(false);
             return;
           }

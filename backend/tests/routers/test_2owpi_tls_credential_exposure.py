@@ -47,8 +47,14 @@ Two paths were found and both are pinned below.
   ``mask_secrets`` does NOT save this path: its key/value rule needs the key
   name adjacent to the separator, and a JSON body puts a closing quote between
   them, so ``{"aws_secret_access_key": "..."}`` passes through it untouched.
-  The fix is path-based redaction, and the path list is a module constant so
-  the remaining credential-bearing routes can be added to one place.
+  The fix WAS path-based redaction with the path list held in a module
+  constant, so the remaining credential-bearing routes could be added to one
+  place. Nobody added them, and a Codex review of this branch found sixteen
+  more route/model pairs still leaking (bead enhancedchannelmanager-9kwzp).
+  The handler now redacts every request body on every path and keeps no path
+  list at all; ``tests/routers/test_9kwzp_validation_error_body_redaction.py``
+  holds the app-wide proof. The TLS-specific checks below stay because they
+  exercise this router's own routes end to end.
 
 No test in this file contains a real credential. Placeholders follow
 ``docs/pytest_conventions.md`` -> "Credential Fixtures in Security Tests":
@@ -355,36 +361,27 @@ class TestValidationErrorHandlerRedactsTLSBodies:
         for secret in (DNS_TOKEN, AWS_SECRET):
             assert secret not in response.text
 
-    @pytest.mark.asyncio
-    async def test_a_non_credential_path_still_logs_its_body(
-        self, async_client, caplog
-    ):
-        """The redaction is scoped, not a blanket loss of debuggability.
-
-        Without this, widening the prefix list to ``/api`` would look like a
-        passing change while destroying the diagnostic value the handler
-        exists for.
-        """
-        from main import CREDENTIAL_BEARING_BODY_PREFIXES
-
-        assert not any(
-            p in ("/api", "/api/", "/") for p in CREDENTIAL_BEARING_BODY_PREFIXES
-        )
-        assert "/api/auth" in CREDENTIAL_BEARING_BODY_PREFIXES
-        assert "/api/tls" in CREDENTIAL_BEARING_BODY_PREFIXES
-
-    def test_tls_configure_body_fields_are_all_covered_by_the_prefix(self):
-        """A TLS route body must never be outside the redacted prefix set."""
-        from main import CREDENTIAL_BEARING_BODY_PREFIXES, app
-        from fastapi.routing import APIRoute
-
-        tls_paths = [
-            route.path for route in app.routes
-            if isinstance(route, APIRoute) and route.path.startswith("/api/tls")
-        ]
-        assert tls_paths
-        for path in tls_paths:
-            assert any(path.startswith(p) for p in CREDENTIAL_BEARING_BODY_PREFIXES)
+    # Two tests used to sit here, and both have been deleted rather than
+    # updated (bead enhancedchannelmanager-9kwzp, from a Codex review of this
+    # branch). They asserted on the CONTENTS OF THE PREFIX TUPLE:
+    # ``"/api/tls" in CREDENTIAL_BEARING_BODY_PREFIXES``, and that no TLS route
+    # fell outside it. Both passed on every commit while sixteen other
+    # credential-bearing routes -- POST /api/settings, POST/PATCH
+    # /api/cloud-targets, POST/PUT /api/sync-targets, POST/PATCH
+    # /api/admin/users and more -- logged and echoed their bodies in clear,
+    # because reading the mechanism's configuration is not exercising the
+    # behaviour the mechanism exists to produce.
+    #
+    # The prefix tuple is gone: main.py now redacts every request body on every
+    # path, so there is no list left to assert on. What replaces these two is
+    # ``tests/routers/test_9kwzp_validation_error_body_redaction.py``, which
+    # walks the live app for credential-bearing request models and runs the
+    # real handler against a real pydantic failure of each one. Its
+    # ``test_no_path_allowlist_governs_the_redaction`` is what stops a prefix
+    # list, and a test like these two, from coming back.
+    #
+    # The TLS-specific end-to-end checks above are kept: they are the ones that
+    # prove the wiring on this router's own routes.
 
 
 # ===========================================================================

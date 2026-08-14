@@ -241,6 +241,28 @@ describe('ProtectedRoute', () => {
       expect(screen.queryByText(APP_CONTENT)).not.toBeInTheDocument();
     });
 
+    // The two probes are NOT interchangeable, which the comment on
+    // `setupRequired` used to claim (bead enhancedchannelmanager-9kwzp; live
+    // QA disproved it). GET /api/auth/status auto-corrects a stale
+    // setup_complete=false up to true when users exist, but nothing ever flips
+    // a persisted true back to false when the last user row goes away, so an
+    // instance can report setup_complete=true with zero users while
+    // GET /api/auth/setup-required correctly answers required=true.
+    //
+    // The direct probe must win outright in that state. Deriving "setup is not
+    // required" from setup_complete=true instead would strand the operator on
+    // a login page for an instance with no account to log into.
+    it('trusts the setup probe over setup_complete when the two disagree', async () => {
+      vi.mocked(api.checkSetupRequired).mockResolvedValue({ required: true });
+      vi.mocked(api.getAuthStatus).mockResolvedValue(STATUS_AFTER_SETUP);
+      vi.mocked(api.getCurrentUser).mockRejectedValue(new HttpError('Unauthorized', 401));
+
+      renderProtected();
+
+      expect(await screen.findByRole('button', { name: 'Create Admin Account' })).toBeInTheDocument();
+      expect(screen.queryByText(APP_CONTENT)).not.toBeInTheDocument();
+    });
+
     it('shows the cannot-reach screen when both probes fail', async () => {
       vi.mocked(api.checkSetupRequired).mockRejectedValue(unreachable());
       vi.mocked(api.getAuthStatus).mockRejectedValue(unreachable());

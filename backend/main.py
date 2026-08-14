@@ -833,33 +833,73 @@ async def get_request_rates():
     }
 
 
-# Request-path prefixes whose bodies carry credential material and must never
-# be logged or echoed back verbatim by the validation-error handler below.
+# The 422 handler below never puts a request-body VALUE into a log line or a
+# response, on any path. That is unconditional by design, and the design is the
+# fix rather than an implementation detail.
 #
-# Bead enhancedchannelmanager-2owpi. This used to be the single prefix
-# "/api/auth", on the reasoning that only login bodies hold passwords. That
-# missed /api/tls: POST /configure and POST /test-dns-provider both take
-# dns_api_token, aws_access_key_id and aws_secret_access_key in the body, so
-# any TLS configure request that failed validation for an unrelated reason (a
-# bad https_port, a missing field) wrote those credentials in clear into the
-# application log at ERROR and echoed them back in the 422. Logs get pasted
-# into GitHub issues.
+# WHAT CAME BEFORE. Bead enhancedchannelmanager-2owpi replaced a single
+# hardcoded "/api/auth" check with a module constant,
+# CREDENTIAL_BEARING_BODY_PREFIXES, seeded with "/api/auth" and "/api/tls" —
+# the two the bead had evidence for. A Codex pre-merge review of the same
+# branch then named four more credential-bearing routes the constant did not
+# cover, all of which were still logging their raw bodies at ERROR and echoing
+# them to the caller:
 #
-# Note that cloud_storage.upload_security.mask_secrets does NOT rescue this
-# path: its key/value rule needs the key name adjacent to the separator, and
-# JSON puts a closing quote in between, so {"aws_secret_access_key": "..."}
-# passes through it untouched. Path-based redaction is the control.
+#   POST /api/settings          SettingsRequest carries the Dispatcharr
+#                               password, the Dispatcharr API key, SMTP
+#                               credentials, the Discord webhook URL and the
+#                               Telegram bot token.
+#   POST|PATCH /api/cloud-targets   an arbitrary ``credentials`` mapping.
+#   POST|PUT   /api/sync-targets    an arbitrary ``credentials`` mapping.
+#   POST|PATCH /api/admin/users     a plaintext ``password``.
 #
-# This list is deliberately a constant rather than an inline check: other
-# routers take credentials in request bodies too, and adding them belongs in
-# one place. It must stay specific — widening it to "/api" would pass every
-# test here while destroying the diagnostics the handler exists for.
-CREDENTIAL_BEARING_BODY_PREFIXES: tuple[str, ...] = (
-    "/api/auth",
-    "/api/tls",
-)
-
-_BODY_REDACTED = "[REDACTED — credential-bearing endpoint]"
+# Those four were the ones a human review surfaced. Walking the live app for
+# write routes whose request models hold credential-shaped fields put the real
+# figure at SIXTEEN route/model pairs outside the two covered prefixes, adding
+# among others POST /api/settings/test-smtp, /test-discord, /test-telegram, the
+# Emby/Plex/Jellyfin test-connection routes, POST /api/cloud-targets/test and
+# POST /api/epg/migration/apply. That walk is
+# tests/routers/test_9kwzp_validation_error_body_redaction.py, and the gap
+# between "four found by reading" and "sixteen found by walking" is the whole
+# argument below.
+#
+# WHY THE MECHANISM CHANGED AND NOT JUST ITS CONTENTS. Those four are an
+# indictment of the allowlist, not of whoever wrote it. A list of
+# credential-bearing prefixes has to be extended by hand every time a route
+# starts accepting a secret, and the cost of forgetting is paid silently: the
+# unlisted route defaults to LEAKING, the tests stay green, and nothing tells
+# anyone. Appending the sixteen missing prefixes would have restored exactly
+# the state that produced them, and left the seventeenth to be found the same
+# way.
+#
+# ALTERNATIVE CONSIDERED AND REJECTED: redact by field NAME instead of by
+# route, matching against the credential-key denylist that routers/backup.py
+# already maintains. That has the same shape of defect one layer down. It
+# swaps a hand-maintained list of paths for a hand-maintained list of field
+# names, and a credential whose name nobody anticipated (an opaque vendor
+# token, "pat", "signing_key") defaults to leaking again. A denylist cannot
+# have a fail-closed default, because its default IS the deny list being
+# incomplete. That is acceptable for the backup redactor, whose job is to
+# preserve as much of an artifact as it safely can; it is the wrong trade for a
+# debug log line whose entire content is discretionary.
+#
+# So: no list, no per-route knob, nothing to remember. When someone adds a
+# credential-bearing route tomorrow and reads none of this, its body is
+# redacted because every body is redacted.
+#
+# WHAT SURVIVES, SO THIS IS NOT A LOSS OF DIAGNOSTICS. Only body VALUES are
+# withheld. Every validation error keeps its ``loc`` (which field), ``msg``
+# (what was wrong with it) and ``type`` (the pydantic error class), on every
+# path, so a 422 still tells the caller precisely which field to fix and why.
+# The one diagnostic that goes is pydantic's ``input`` echo of the offending
+# value, and on a missing-field error that ``input`` is the whole request body
+# anyway (which is why redacting ``exc.body`` alone was never sufficient).
+#
+# Note also that cloud_storage.upload_security.mask_secrets does NOT rescue
+# this path and never did: its key/value rule needs the key name adjacent to
+# the separator, and JSON puts a closing quote in between, so
+# {"aws_secret_access_key": "..."} passes through it untouched.
+_BODY_REDACTED = "[REDACTED: request bodies are not logged or returned]"
 
 
 def _redact_validation_errors(errors: list) -> list:
@@ -868,6 +908,9 @@ def _redact_validation_errors(errors: list) -> list:
     ``exc.errors()`` carries the offending input alongside each message, and
     for a missing-field error that input is the ENTIRE request body, so
     redacting the body alone would not have been enough (bead 2owpi).
+
+    ``loc``, ``msg`` and ``type`` are left untouched: they name the offending
+    field and say what was wrong with it without quoting what was sent.
     """
     redacted = []
     for err in errors:
@@ -881,7 +924,7 @@ def _redact_validation_errors(errors: list) -> list:
 # Custom validation error handler to log details
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Log detailed validation errors for debugging."""
+    """Log validation errors without quoting any request-body value."""
     logger.error("[VALIDATION-ERROR] Request path: %s", request.url.path)
     logger.error("[VALIDATION-ERROR] Request method: %s", request.method)
 
@@ -893,25 +936,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     }
     logger.error("[VALIDATION-ERROR] Request headers: %s", safe_headers)
 
-    # Log body but redact on credential-bearing paths (passwords, DNS-provider
-    # tokens, AWS keys)
-    is_credential_path = request.url.path.startswith(CREDENTIAL_BEARING_BODY_PREFIXES)
+    # Body SHAPE only: how many bytes arrived and what the client said they
+    # were. Never the bytes themselves. This is what distinguishes "the client
+    # sent nothing" from "the client sent something we could not parse", which
+    # is the part of the raw-body log line that had real diagnostic value; the
+    # ``loc`` of each error below covers the rest.
     try:
         body = await request.body()
-        if is_credential_path:
-            logger.error("[VALIDATION-ERROR] Request body: %s", _BODY_REDACTED)
-        else:
-            logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
+        logger.error(
+            "[VALIDATION-ERROR] Request body: %s (%d bytes, content-type: %s)",
+            _BODY_REDACTED,
+            len(body),
+            request.headers.get("content-type", "unset"),
+        )
     except Exception as e:
         logger.error("[VALIDATION-ERROR] Could not read body: %s", e)
 
-    raw_errors = exc.errors()
-    logged_errors = _redact_validation_errors(raw_errors) if is_credential_path else raw_errors
+    logged_errors = _redact_validation_errors(exc.errors())
     logger.error("[VALIDATION-ERROR] Validation errors: %s", logged_errors)
-    logger.error(
-        "[VALIDATION-ERROR] Validation body: %s",
-        _BODY_REDACTED if is_credential_path else exc.body,
-    )
+    # A separate "[VALIDATION-ERROR] Validation body: %s" line used to log
+    # exc.body here. It is gone rather than redacted: with the value withheld
+    # it would print the same constant on every 422 forever, which is noise
+    # that reads like information. The line above already reports the body's
+    # size and content type.
 
     # Sanitize errors for JSON serialization — ctx.error may contain
     # non-serializable ValueError objects from field_validator
@@ -926,7 +973,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         status_code=422,
         content={
             "detail": safe_errors,
-            "body": _BODY_REDACTED if is_credential_path else str(exc.body),
+            # Kept as a key so the response shape is unchanged for any client
+            # that reads it; the value is constant.
+            "body": _BODY_REDACTED,
         },
     )
 

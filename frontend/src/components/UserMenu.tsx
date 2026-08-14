@@ -2,7 +2,10 @@
  * User menu component for header.
  *
  * Shows current user info, profile editing, password change, and logout.
- * Hidden when there is no signed-in user.
+ *
+ * With no signed-in user it falls back to a "Sign in" button when the instance
+ * has an operator identity to sign in as, and renders nothing otherwise. This
+ * is the app shell's only sign-in affordance; see the branch below.
  */
 import { logger } from '../utils/logger';
 import React, { useState, useRef, useEffect } from 'react';
@@ -14,7 +17,7 @@ import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './UserMenu.css';
 
 export function UserMenu() {
-  const { user, logout, isLoading, refreshUser } = useAuth();
+  const { user, authStatus, logout, isLoading, refreshUser } = useAuth();
   const notifications = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -75,8 +78,49 @@ export function UserMenu() {
   // extra condition would have shown that operator no identity and, worse, no
   // way to sign out. `user` alone is the correct gate, and it already covers
   // the unresolved and auth-disabled cases, where it stays null.
-  if (isLoading || !user) {
+  if (isLoading) {
     return null;
+  }
+
+  // No session, but this instance HAS an operator identity to sign in as.
+  //
+  // Live QA on an auth-disabled instance (bead enhancedchannelmanager-9kwzp)
+  // found the app shell offered zero sign-in affordances in this state: this
+  // component correctly returned null with no user, nothing else in the header
+  // links to /login, and ProtectedRoute's auth-off branch only renders the
+  // login page for a path the operator has to type by hand. The route p388h
+  // reopened was therefore reachable only by someone who already knew the URL
+  // existed.
+  //
+  // `authStatus.setup_complete` is the whole condition. Without it there is no
+  // account to sign in as and the button would lead to a login form nobody can
+  // satisfy. When auth IS required and there is no session, ProtectedRoute
+  // renders the login page instead of the app shell, so this button is not
+  // reachable in that mode and does not duplicate it.
+  if (!user) {
+    if (!authStatus?.setup_complete) {
+      return null;
+    }
+    return (
+      <div className="user-menu">
+        {/* `.user-menu-trigger` alone: this is the same header-band chrome as
+            the signed-in trigger and wants no visual variant, so it carries no
+            modifier class that the stylesheet would never define. */}
+        <button
+          className="user-menu-trigger"
+          onClick={() => {
+            // Same SPA navigation idiom LoginPage and ProtectedRoute use:
+            // push the path, then wake the popstate listeners.
+            window.history.pushState({}, '', '/login');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }}
+          title="Sign in"
+        >
+          <span className="material-icons user-menu-icon">login</span>
+          <span className="user-menu-name">Sign in</span>
+        </button>
+      </div>
+    );
   }
 
   const handleLogout = async () => {

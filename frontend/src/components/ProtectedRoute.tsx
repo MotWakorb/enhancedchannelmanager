@@ -124,23 +124,48 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
 
   // Whether first-run setup is needed, or null if nothing told us.
   //
-  // The two probes report the SAME fact from two endpoints, so a status
-  // response that DID arrive settles a setup probe that did not:
-  // GET /api/auth/setup-required answers `user_count == 0`, and
-  // GET /api/auth/status reports `setup_complete`, which that handler
-  // auto-corrects to true whenever `user_count > 0`. The two are therefore
-  // equivalent in both directions.
+  // The two probes are NOT equivalent, and an earlier version of this comment
+  // claimed they were "equivalent in both directions". Live QA disproved that
+  // (bead enhancedchannelmanager-9kwzp): on an instance with `setup_complete:
+  // true` and zero user rows, GET /api/auth/setup-required answered
+  // `{"required": true}` while GET /api/auth/status answered
+  // `{"setup_complete": true}`. Only ONE direction holds, because the
+  // auto-correction in `auth/routes.py` only runs one way:
   //
-  // This is NOT the permissive guess this bead removed. It substitutes an
-  // answer the server actually gave for one it failed to give, rather than
-  // inventing "no"; when neither probe answered, the value stays null and the
-  // unresolved branch below refuses to render the app. Deriving it matters
-  // because a flaky setup probe alone would otherwise wedge an instance that
-  // is working fine.
+  //   setup-required false (user_count > 0)  =>  setup_complete true.
+  //     The status handler flips a stale false to true whenever users exist,
+  //     and persists the fix. Sound.
+  //   setup_complete true                    =>  setup-required false.
+  //     NOT sound. Nothing ever flips a persisted true back to false when the
+  //     last user row goes away, so `setup_complete` can outlive the account
+  //     it was set for.
+  //
+  // So the derivation below uses only the sound direction: it may conclude
+  // setup IS required from `!setup_complete`, and it declines to conclude the
+  // opposite from `setup_complete`. That is why the last branch yields null
+  // rather than false. Behaviourally the two are the same today, since the
+  // only reader is the `=== true` check immediately below and both null and
+  // false fall through it; writing null is what keeps the code from asserting
+  // the direction that does not hold.
+  //
+  // This is NOT the permissive guess bead enhancedchannelmanager-p388h
+  // removed. It substitutes an answer the server actually gave for one it
+  // failed to give, rather than inventing "no". When neither probe answered,
+  // the value stays null and the unresolved branch below refuses to render the
+  // app. Deriving it matters because a flaky setup probe alone would otherwise
+  // wedge an instance that is working fine.
+  //
+  // No privilege turns on any of this: the identity primitives 401/403 on
+  // their own. The residual edge is a UX one, and it needs BOTH the zero-user
+  // `setup_complete: true` state above AND a dead setup probe: the app then
+  // shows a login page for an instance with no account to log into. With the
+  // setup probe alive, which is the normal case, `setupCheck === 'required'`
+  // wins outright and the operator gets the setup page, so the edge is not
+  // worth code to special-case.
   const setupRequired: boolean | null =
     setupCheck === 'required' ? true
       : setupCheck === 'not-required' ? false
-        : authStatus ? !authStatus.setup_complete
+        : authStatus && !authStatus.setup_complete ? true
           : null;
 
   // Show setup page if first-time setup is required
