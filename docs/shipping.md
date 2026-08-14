@@ -86,9 +86,9 @@ Every user-facing change must also be recorded in [`CHANGELOG.md`](../CHANGELOG.
 
 ### 6. Commit and Open the PR
 
-`dev` branch protection requires PRs with 7 passing status checks (`enforce_admins=true`: no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
+`dev` branch protection requires PRs with 8 passing status checks (`enforce_admins=true`: no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
 
-Each of those 7 names is emitted by exactly one job, on every PR. If you ever see the same context reported twice on one commit, stop: that is bead `enhancedchannelmanager-5rwzy` recurring, and a permanently green duplicate can hide a real failure behind the aggregate view. See `docs/testing.md` section "One source of truth per required check".
+Each of those 8 names is emitted by exactly one job, on every PR. If you ever see the same context reported twice on one commit, stop: that is bead `enhancedchannelmanager-5rwzy` recurring, and a permanently green duplicate can hide a real failure behind the aggregate view. See `docs/testing.md` section "One source of truth per required check".
 
 ```bash
 # Branch from current origin/dev
@@ -137,7 +137,7 @@ gh pr create --base dev --head <feature-or-chore-branch> \
 # unsupported. Remove any branch worktree and check the branch out in the main
 # checkout before opening its PR.
 
-# Wait for the 7 required checks AND for the PR to be mergeable.
+# Wait for the 8 required checks AND for the PR to be mergeable.
 # Do NOT use `gh pr checks <#> --watch` here: see "Read the gate, not just
 # the checks" below for why an all-green watch can still be unmergeable.
 gh pr view <#> --json statusCheckRollup,mergeable,mergeStateStatus --jq '
@@ -145,7 +145,7 @@ gh pr view <#> --json statusCheckRollup,mergeable,mergeStateStatus --jq '
     | select((.name // .context) as $n
         | ["Backend Tests","Frontend Tests","MCP Server Tests",
            "CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)",
-           "Semgrep Lint","Version Consistency"] | index($n))
+           "Semgrep Lint","Version Consistency","Operator Docs"] | index($n))
     | "  \(.name // .context): \(.conclusion // .state // "PENDING")"),
   "  mergeable=\(.mergeable)  mergeStateStatus=\(.mergeStateStatus)"'
 

@@ -5,7 +5,7 @@ Origin: bead enhancedchannelmanager-t4d5w.
 
 ## Why this exists
 
-Six of the seven required status checks on `dev` gate their real work on the
+Six of the eight required status checks on `dev` gate their real work on the
 documentation-only classifier. That is correct, but the check NAME is the same
 either way: `Backend Tests` reads as "the backend tests ran" whether pytest
 executed 2000 tests or the job printed a sentence and exited. A reader of the

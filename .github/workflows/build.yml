@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 # ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
 #
-# This workflow owns two of the seven required status checks:
+# This workflow owns two of the eight required status checks:
 # `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`,
 # both from the `codeql-analysis` matrix below.
 #
