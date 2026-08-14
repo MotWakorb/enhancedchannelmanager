@@ -12,8 +12,10 @@ Two independent verdicts come out of one changed-file set:
 
 ## Why this exists
 
-`dev` and `main` branch protection require seven status checks. Before this
-script, two workflows could emit the same required check name on one commit:
+`dev` branch protection requires eight status checks; `main` requires a
+narrower four (`Backend Tests`, `Frontend Tests`, and the two
+`CodeQL Analysis` contexts). Before this script, two workflows could emit
+the same required check name on one commit:
 `test.yml` ran on `paths-ignore: ['**.md', '.beads/**']` and
 `docs-only-pass.yml` ran on `paths: ['**.md', '.beads/**']`. Those filters are
 not complements. A pull request that touches BOTH code and Markdown matches
