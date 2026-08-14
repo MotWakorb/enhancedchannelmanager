@@ -14,15 +14,15 @@ ECM uses a global auth middleware in `main.py` that blocks unauthenticated reque
 - Per-endpoint `RequireAuthIfEnabled` / `RequireAdminIfEnabled` DI dependencies still exist for role-based checks (e.g., admin-only routes in `backup.py`)
 
 **The exempt set is pinned by a test.** `AUTH_EXEMPT_PATHS` is the entire
-authentication gate for `/api/*` — an exact string match, no prefix logic, no
+authentication gate for `/api/*`: an exact string match, no prefix logic, no
 second layer behind it for routers that carry no dependency of their own. Its
 contents are snapshotted in
 `backend/tests/test_auth_exempt_paths_snapshot.py`, so adding a path requires
 editing that file in the same commit. The failure message is the review
 checklist. This exists because adding a data route to that set was otherwise a
 one-line, silent, total-exposure change that shipped with green CI, and because
-`/api/backup/restore-initial` — a full `journal.db` replacement, admin password
-hashes included — really was in that set until bead
+`/api/backup/restore-initial` (a full `journal.db` replacement, admin password
+hashes included) really was in that set until bead
 `enhancedchannelmanager-lf29s`.
 
 Note that middleware exemption is not the same as anonymity: `GET` and `PUT
@@ -35,9 +35,9 @@ token in every mode. That is pinned too.
 `require_auth: false` is a real, supported ECM operating mode, not a bug state.
 Setting it means **the instance serves its API to anyone who can open a socket
 to it.** Run it only on a network you trust, and read this section before you
-do. (An incomplete first-run setup — `setup_complete: false` — has the same
-effect and the same rules; the middleware and every gate below treat the two
-conditions identically.)
+do. (An incomplete first-run setup, meaning `setup_complete: false`, has the
+same effect and the same rules; the middleware and every gate below treat the
+two conditions identically.)
 
 PO decision, 2026-08-13, bead `enhancedchannelmanager-jy006`.
 
@@ -53,9 +53,9 @@ while the mode is on. Assume that anything the API can read, an anonymous
 caller on the same network can read, and anything it can change, they can
 change.
 
-Secret redaction still applies — the `*_configured` booleans, the alert-method
+Secret redaction still applies. The `*_configured` booleans, the alert-method
 `config` masking (bead `9kwzp.13`) and the `9ej7f` settings redaction do not
-depend on authentication — so an anonymous read does not hand over stored
+depend on authentication, so an anonymous read does not hand over stored
 credential *values*. It does hand over everything else.
 
 ### What is still refused
@@ -65,11 +65,11 @@ when `require_auth` is false:
 
 | Surface | Route(s) | Why |
 |-|-|-|
-| Initial restore | `POST /api/backup/restore-initial` | Replaces `journal.db` wholesale — the `users` table and every admin password hash with it. |
+| Initial restore | `POST /api/backup/restore-initial` | Replaces `journal.db` wholesale: the `users` table and every admin password hash with it. |
 | MCP service credential | `POST` / `DELETE /api/settings/mcp-api-key` | Mints or destroys a persistent, admin-equivalent bearer credential the middleware accepts across the whole `/api/` surface. |
 | TLS certificate and key material | `/api/tls`: `GET /settings`, `POST /configure`, `/request-cert`, `/complete-challenge`, `/upload-cert`, `/renew`, `/https/start`, `/https/stop`, `/https/restart`, `DELETE /certificate` | Installs a caller-supplied private key as the instance's TLS identity, and holds the DNS-provider credentials that issue it. |
 
-The line is not "how destructive is it" — `POST /api/settings` and `POST
+The line is not "how destructive is it." `POST /api/settings` and `POST
 /api/backup/restore` are both open and both do real damage. The line is
 **durability of the resulting identity**: each of the three leaves the caller
 holding a credential or a key that keeps working *after* you turn
@@ -86,7 +86,7 @@ damaged `setup_complete`. All three share one ownership predicate,
 ### The carve-out: instances with no operator identity
 
 All three still serve an anonymous caller on an instance that holds **no**
-operator identity — no user row, and `setup_complete` false. That is a genuine
+operator identity: no user row, and `setup_complete` false. That is a genuine
 first run, or a deliberately headless deployment that runs with authentication
 off and never creates a user. Without the carve-out these routes would be
 permanently unreachable there with no in-band recovery, because the only way to
@@ -117,9 +117,9 @@ instance is treated as owned.
   `RequireHumanAdminForOutboundTest` alongside eleven other connection-test
   sinks, none of which this decision covers, so an anonymous caller on an
   auth-disabled instance can exercise the stored DNS-provider credentials and
-  enumerate your zones — while `GET /api/tls/settings`, which merely discloses
-  those credentials in masked form, is refused. Revisit with the other eleven
-  sinks, not on its own.
+  enumerate your zones. By contrast, `GET /api/tls/settings`, which merely
+  discloses those credentials in masked form, is refused. Revisit with the
+  other eleven sinks, not on its own.
 
 Behaviour is pinned in
 `backend/tests/routers/test_jy006_auth_disabled_identity_primitives.py` and
