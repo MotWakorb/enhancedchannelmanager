@@ -26,6 +26,7 @@ import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAcc
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
+import { planChannelNumberShift } from '../utils/channelNumberShift';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -4417,7 +4418,7 @@ export function ChannelsPane({
       finalName: string;
     }> = [];
 
-    // Build updates for existing channels that need to be shifted (target group)
+    // Build updates for existing channels that need to be shifted out of the way
     const shiftUpdates: Array<{
       channel: Channel;
       finalChannelNumber: number;
@@ -4431,55 +4432,35 @@ export function ChannelsPane({
       finalName: string;
     }> = [];
 
-    // Check if we need to shift existing channels to avoid duplicates
-    // This applies when assigning new numbers (not keeping current) and any moved channel
-    // would conflict with an existing channel in the target group
+    // Check if we need to shift existing channels to avoid duplicates.
+    // This applies when assigning new numbers (not keeping current).
+    //
+    // Occupancy is read across the whole staged lineup, not just the target
+    // group: channel numbers are global, so shifting the target group's tail
+    // used to push it silently onto the next group's numbers. The channels
+    // being moved vacate their own numbers as part of this same operation, so
+    // they are excluded from occupancy (beads enhancedchannelmanager-nzwtw,
+    // enhancedchannelmanager-i85dg).
     if (!keepChannelNumber && startingChannelNumber !== undefined) {
-      // Get existing channels in the target group
-      const targetGroupChannels = localChannels.filter((ch) => {
-        if (targetGroupId === null) {
-          return ch.channel_group_id === null;
-        }
-        return ch.channel_group_id === targetGroupId;
+      const shiftPlan = planChannelNumberShift({
+        channels: localChannels,
+        startingNumber: startingChannelNumber,
+        count: channelsToMove.length,
+        excludeIds: channelsToMove.map((ch) => ch.id),
       });
 
-      // Calculate the range of channel numbers that will be used by the moved channels
-      const movedRangeStart = startingChannelNumber;
-      const movedRangeEnd = startingChannelNumber + channelsToMove.length - 1;
+      for (const { channel, toNumber } of shiftPlan.shifts) {
+        let finalName = channel.name;
 
-      // Find channels that would conflict (their number falls within the moved range)
-      const conflictingChannels = targetGroupChannels.filter((ch) => {
-        return ch.channel_number !== null &&
-               ch.channel_number >= movedRangeStart &&
-               ch.channel_number <= movedRangeEnd;
-      });
-
-      // If there are conflicts, we need to shift existing channels
-      if (conflictingChannels.length > 0) {
-        // Find all channels at or after the insertion point that need to be shifted
-        const channelsToShift = targetGroupChannels.filter((ch) => {
-          return ch.channel_number !== null && ch.channel_number >= startingChannelNumber;
-        });
-
-        // Sort by channel number to process in order
-        channelsToShift.sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
-
-        // Shift each channel up by the number of channels being inserted
-        const shiftAmount = channelsToMove.length;
-        for (const channel of channelsToShift) {
-          const newNumber = (channel.channel_number ?? 0) + shiftAmount;
-          let finalName = channel.name;
-
-          // Apply auto-rename if enabled
-          if (autoRenameChannelNumber) {
-            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-            if (newName) {
-              finalName = newName;
-            }
+        // Apply auto-rename if enabled
+        if (autoRenameChannelNumber) {
+          const newName = computeAutoRename(channel.name, channel.channel_number, toNumber);
+          if (newName) {
+            finalName = newName;
           }
-
-          shiftUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
         }
+
+        shiftUpdates.push({ channel, finalChannelNumber: toNumber, finalName });
       }
     }
 

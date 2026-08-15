@@ -229,6 +229,8 @@ export interface ChannelManagerTabProps {
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to count how many existing channels a push-down would renumber
+  onCountPushDownShift?: (startingNumber: number, count: number) => number;
   // Callback to get the highest existing channel number (for "insert at end" option)
   onGetHighestChannelNumber?: () => number;
 
@@ -398,6 +400,7 @@ export function ChannelManagerTab({
   onCreateChannelManual,
   defaultNormalizeOnCreate = false,
   onCheckConflicts,
+  onCountPushDownShift,
   onGetHighestChannelNumber,
 
   // External trigger to open edit modal from Guide tab
@@ -706,6 +709,7 @@ export function ChannelManagerTab({
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCreateChannel={onCreateChannelManual}
           onCheckConflicts={onCheckConflicts}
+          onCountPushDownShift={onCountPushDownShift}
           onGetHighestChannelNumber={onGetHighestChannelNumber}
           showStreamUrls={showStreamUrls}
           strikeThreshold={strikeThreshold}

@@ -856,6 +856,9 @@ const RENDERERS = {
         // The conflict confirm only appears when the parent reports a
         // collision, so this stub reports one unconditionally.
         onCheckConflicts={() => 4}
+        // The push-down blast radius is always at least the conflict count and
+        // usually larger, so the stub reports a larger figure.
+        onCountPushDownShift={() => 37}
         onGetHighestChannelNumber={() => 2001}
       />
     ),
