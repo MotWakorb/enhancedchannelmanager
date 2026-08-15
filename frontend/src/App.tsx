@@ -35,7 +35,15 @@ import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPro
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
-import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
+import {
+  getGuardedPopStateDecision,
+  getGuardedRouteDecision,
+  isPlainPrimaryActivation,
+  resolvePendingRouteResume,
+  ROUTE_HIERARCHY,
+  type PendingRouteChange,
+} from './components/routeHierarchy';
+import type { RouteChangeGuardDetail } from './hooks/useHashRoute';
 import type { SettingsPage } from './hooks/useHashRoute';
 import { useAdminNavVisible } from './hooks/useAuth';
 import { settingsSectionHeading } from './components/settingsSections';
@@ -313,7 +321,9 @@ function App() {
   const [commitFailure, setCommitFailure] = useState<CommitFailure | null>(null);
 
   // Tab navigation state (hash-based routing)
-  const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
+  const {
+    activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage, resumeRejectedNavigation,
+  } = useHashRoute();
   // Gates the administration-only entries in the sidebar's Settings drill-in.
   // This used to be `Boolean(user?.is_admin)`, which hid the whole
   // Administration group on any auth-disabled instance, because `user` is
@@ -328,11 +338,31 @@ function App() {
   // for its destination to pick up (see the task-editor handoff below) needs a
   // way to take it back when the guard refuses the navigation, or a deferred
   // route becomes a stale intent (bead enhancedchannelmanager-6fi7p).
-  const [pendingRouteChange, setPendingRouteChange] = useState<{
-    tab: TabId;
-    settingsPage?: SettingsPage;
-    onCancel?: () => void;
-  } | null>(null);
+  // A ref rather than state: nothing renders from the pending route, and an
+  // event handler has to be able to read the intent it is about to REPLACE. A
+  // second deferral — the operator presses Back while the exit dialog from a
+  // task-editor handoff is still up — must not drop the first one's `onCancel`
+  // on the floor, which would strand exactly the stale sessionStorage intent
+  // that callback exists to clear.
+  const pendingRouteChangeRef = useRef<PendingRouteChange | null>(null);
+  const replacePendingRouteChange = useCallback((next: PendingRouteChange | null) => {
+    const outgoing = pendingRouteChangeRef.current;
+    if (outgoing && outgoing !== next) outgoing.onCancel?.();
+    pendingRouteChangeRef.current = next;
+  }, []);
+  // Unmounting with a deferred navigation still pending abandons it for good:
+  // signing out flips auth state, ProtectedRoute swaps this whole tree for
+  // LoginPage, and nothing here gets another render to notice. The in-memory
+  // half of that does not matter — it dies with the tree — but `onCancel`
+  // clears a sessionStorage handoff, which SURVIVES both the unmount and the
+  // next sign-in in the same tab, and would then redirect the operator's next
+  // visit to ANY Settings page to Scheduled Tasks. Unmount is the honest
+  // trigger: it covers sign-out, session expiry and teardown alike, without
+  // App having to observe an auth transition it is never rendered for.
+  useEffect(() => () => {
+    pendingRouteChangeRef.current?.onCancel?.();
+    pendingRouteChangeRef.current = null;
+  }, []);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
     status: null as HTMLDivElement | null,
@@ -558,6 +588,27 @@ function App() {
     onError: setError,
   });
 
+  // Every "the operator chose to leave" path ends the same way: honour what
+  // the exit dialog was holding back. Deliberately NOT a cancel path — none of
+  // these abandon the request, so none of them may fire `onCancel`.
+  //
+  // A deferred Back/Forward resumes as a real history transition rather than a
+  // pushState (bead enhancedchannelmanager-6fi7p): the operator pressed Back,
+  // so they should end up on the entry they pressed Back to, not on a new
+  // entry with that one still behind them.
+  const completeDeferredExit = useCallback(() => {
+    const pendingRoute = pendingRouteChangeRef.current;
+    if (pendingRoute) {
+      pendingRouteChangeRef.current = null;
+      const resume = resolvePendingRouteResume(pendingRoute);
+      if (resume.kind === 'history') {
+        resumeRejectedNavigation(resume.delta);
+      } else {
+        setHash(resume.tab, resume.settingsPage);
+      }
+    }
+  }, [resumeRejectedNavigation, setHash]);
+
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
@@ -600,23 +651,17 @@ function App() {
     setSelectedChannelIds(new Set());
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
-    }
-  }, [commit, clearHistory, pendingRouteChange, setHash]);
+    // Carry the operator wherever they were trying to go
+    completeDeferredExit();
+  }, [commit, clearHistory, completeDeferredExit]);
 
   const handleAcknowledgeCommitFailure = useCallback(() => {
     setCommitFailure(null);
     setShowExitDialog(false);
     setSelectedChannelIds(new Set());
     clearHistory();
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
-    }
-  }, [clearHistory, pendingRouteChange, setHash]);
+    completeDeferredExit();
+  }, [clearHistory, completeDeferredExit]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -624,22 +669,21 @@ function App() {
     setShowExitDialog(false);
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
-    }
-  }, [discard, clearHistory, pendingRouteChange, setHash]);
+    // Carry the operator wherever they were trying to go
+    completeDeferredExit();
+  }, [discard, clearHistory, completeDeferredExit]);
 
   // The ONE cancel path. The three handlers above all navigate through to the
   // pending route, so `onCancel` must not fire from any of them: this is the
   // only place the requested navigation is genuinely abandoned.
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
-    pendingRouteChange?.onCancel?.();
-    setPendingRouteChange(null);
+    replacePendingRouteChange(null);
+    // A vetoed Back has ALREADY been rewound to the entry the operator was on
+    // by the router, so keeping editing needs to undo nothing here — they are
+    // still on Channel Manager, still in Edit Mode, with their staged work.
     focusHeadingOnRouteChangeRef.current = false;
-  }, [pendingRouteChange]);
+  }, [replacePendingRouteChange]);
 
   // Handle tab change - check for edit mode with pending changes
   const handleRouteChange = useCallback((
@@ -661,7 +705,7 @@ function App() {
     if (decision === 'confirm') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
-      setPendingRouteChange({ tab: newTab, settingsPage, onCancel: options?.onCancel });
+      replacePendingRouteChange({ tab: newTab, settingsPage, onCancel: options?.onCancel });
       return;
     }
 
@@ -672,11 +716,55 @@ function App() {
     }
 
     setHash(newTab, settingsPage);
-  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
+  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash, replacePendingRouteChange]);
 
   const handleTabChange = useCallback((newTab: TabId) => {
     handleRouteChange(newTab);
   }, [handleRouteChange]);
+
+  // Browser Back/Forward — the one navigation the Edit Mode guard could not
+  // see (bead enhancedchannelmanager-6fi7p).
+  //
+  // `useHashRoute` has always asked permission before a popstate transition,
+  // via the cancelable `ecm:before-route-change` event, and always had working
+  // machinery to rewind a refused one. Nothing here listened. The only
+  // production listener for that event in the whole frontend was SettingsTab's
+  // unsaved-form guard, so an operator with staged channel edits who pressed
+  // Back left Edit Mode with no dialog and no staged work. `handleRouteChange`
+  // is not on that path at all: Back does not go through a tab click.
+  //
+  // Vetoing is synchronous and the operator's answer is not, so the two halves
+  // are split. This handler refuses the transition, which makes the router
+  // rewind history to the entry the operator was on — so the app is never left
+  // showing a route it did not accept — and opens the exit dialog carrying the
+  // delta that re-runs the transition. `completeDeferredExit` replays it on
+  // Apply or Discard; Keep Editing simply leaves the rewind in place.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<RouteChangeGuardDetail>).detail;
+      const decision = getGuardedPopStateDecision(detail, isEditMode, stagedOperationCount);
+      if (decision === 'ignore') return;
+
+      if (decision === 'exit-and-navigate') {
+        // Nothing staged: let the transition through and tidy up, exactly as
+        // a tab click to the same destination would.
+        rawExitEditMode();
+        setSelectedChannelIds(new Set());
+        return;
+      }
+
+      event.preventDefault();
+      focusHeadingOnRouteChangeRef.current = true;
+      setShowExitDialog(true);
+      replacePendingRouteChange({
+        tab: detail.tab,
+        settingsPage: detail.settingsPage ?? undefined,
+        historyDelta: detail.historyDelta,
+      });
+    };
+    window.addEventListener('ecm:before-route-change', handler);
+    return () => window.removeEventListener('ecm:before-route-change', handler);
+  }, [isEditMode, stagedOperationCount, rawExitEditMode, replacePendingRouteChange]);
 
   // Listen for task editor navigation events from NotificationCenter.
   //

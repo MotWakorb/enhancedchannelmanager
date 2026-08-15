@@ -99,12 +99,57 @@ function buildHash(tab: TabId, settingsPage?: SettingsPage | null, m3uChangesHou
   return `#${tab}${query}`;
 }
 
+/**
+ * `detail` of the cancelable `ecm:before-route-change` event.
+ *
+ * A guard calls `event.preventDefault()` to refuse the navigation.
+ *
+ * `source` exists because the two callers need different treatment (bead
+ * enhancedchannelmanager-6fi7p). Programmatic navigation (`push`) already
+ * passes through `App`'s `handleRouteChange`, which consults the Edit Mode
+ * guard BEFORE calling `setHash`; a second veto there would fight its own
+ * resolution — including the `setHash` that carries the operator to the route
+ * they just confirmed leaving Edit Mode for. Back/Forward (`pop`) never
+ * touches `handleRouteChange` at all, and is the only reason a guard for it
+ * has to live on this event. `SettingsTab`'s unsaved-form guard predates the
+ * field and deliberately still guards both.
+ */
+export interface RouteChangeGuardDetail {
+  /** Hash the app currently considers accepted. */
+  from: string;
+  /** Hash being navigated to. */
+  to: string;
+  source: 'push' | 'pop';
+  /**
+   * `pop` only: the `window.history.go()` argument that re-runs the very
+   * navigation about to be vetoed, so a guard that defers to an operator can
+   * later honour it as a real Back/Forward rather than a new pushState.
+   * `null` when the target entry carries no route index and there is
+   * therefore no reliable delta.
+   */
+  historyDelta: number | null;
+  /** Destination route, already parsed — guards decide on the tab, not the hash. */
+  tab: TabId;
+  settingsPage: SettingsPage | null;
+}
+
 export interface UseHashRouteReturn {
   activeTab: TabId;
   settingsPage: SettingsPage | null;
   m3uChangesHours: number | null;
   setHash: (tab: TabId, settingsPage?: SettingsPage | null) => void;
   setSettingsPage: (page: SettingsPage) => void;
+  /**
+   * Re-run a Back/Forward navigation this hook vetoed, once the guard that
+   * vetoed it has been satisfied (bead enhancedchannelmanager-6fi7p).
+   *
+   * Takes the `historyDelta` from the guard event. The resulting `popstate`
+   * skips the guard exactly once — the operator has already answered — so the
+   * operator lands on the entry they asked for, with the forward/back entries
+   * around it intact. A `pushState` to the same hash would instead leave them
+   * on a NEW entry with the one they pressed Back from still behind them.
+   */
+  resumeRejectedNavigation: (historyDelta: number) => void;
 }
 
 export function useHashRoute(): UseHashRouteReturn {
@@ -115,11 +160,26 @@ export function useHashRoute(): UseHashRouteReturn {
     typeof window.history.state?.ecmRouteIndex === 'number' ? window.history.state.ecmRouteIndex : 0,
   );
   const restoringRejectedHistoryRef = useRef(false);
+  // Set for exactly one popstate: the one `resumeRejectedNavigation` causes.
+  // That transition was already put to the operator and answered, so putting
+  // it to the guard again would only ask the same question twice.
+  const bypassGuardOnceRef = useRef(false);
 
-  const canNavigate = useCallback((nextHash: string) => window.dispatchEvent(new CustomEvent('ecm:before-route-change', {
+  const canNavigate = useCallback((
+    detail: Omit<RouteChangeGuardDetail, 'from'>,
+  ) => window.dispatchEvent(new CustomEvent<RouteChangeGuardDetail>('ecm:before-route-change', {
     cancelable: true,
-    detail: { from: acceptedHashRef.current, to: nextHash },
+    detail: { from: acceptedHashRef.current, ...detail },
   })), []);
+
+  const resumeRejectedNavigation = useCallback((historyDelta: number) => {
+    // `history.go(0)` reloads in some browsers and fires no popstate in
+    // others, which would strand the bypass flag on the next genuine
+    // Back/Forward. There is nothing to resume at zero anyway.
+    if (!historyDelta) return;
+    bypassGuardOnceRef.current = true;
+    window.history.go(historyDelta);
+  }, []);
 
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
@@ -128,7 +188,9 @@ export function useHashRoute(): UseHashRouteReturn {
       return;
     }
     const nextHash = buildHash(tab, settingsPage);
-    if (!canNavigate(nextHash)) return;
+    if (!canNavigate({
+      to: nextHash, source: 'push', historyDelta: null, tab, settingsPage: nextSettingsPage,
+    })) return;
     const nextHistoryIndex = acceptedHistoryIndexRef.current + 1;
     window.history.pushState({ ...window.history.state, ecmRouteIndex: nextHistoryIndex }, '', nextHash);
     acceptedHistoryIndexRef.current = nextHistoryIndex;
@@ -160,11 +222,23 @@ export function useHashRoute(): UseHashRouteReturn {
         return;
       }
       const requestedHash = window.location.hash;
-      if (!canNavigate(requestedHash)) {
-        const requestedIndex = window.history.state?.ecmRouteIndex;
-        if (typeof requestedIndex === 'number') {
+      const requestedIndex = window.history.state?.ecmRouteIndex;
+      const historyDelta = typeof requestedIndex === 'number'
+        ? requestedIndex - acceptedHistoryIndexRef.current
+        : null;
+      const requested = parseHash(requestedHash);
+      const bypassingGuard = bypassGuardOnceRef.current;
+      bypassGuardOnceRef.current = false;
+      if (!bypassingGuard && !canNavigate({
+        to: requestedHash,
+        source: 'pop',
+        historyDelta,
+        tab: requested.tab,
+        settingsPage: requested.settingsPage,
+      })) {
+        if (historyDelta !== null) {
           restoringRejectedHistoryRef.current = true;
-          window.history.go(acceptedHistoryIndexRef.current - requestedIndex);
+          window.history.go(-historyDelta);
         } else {
           window.history.replaceState(window.history.state, '', acceptedHashRef.current);
         }
@@ -197,7 +271,14 @@ export function useHashRoute(): UseHashRouteReturn {
     };
   }, [canNavigate]);
 
-  return { activeTab: route.tab, settingsPage: route.settingsPage, m3uChangesHours: route.m3uChangesHours ?? null, setHash, setSettingsPage };
+  return {
+    activeTab: route.tab,
+    settingsPage: route.settingsPage,
+    m3uChangesHours: route.m3uChangesHours ?? null,
+    setHash,
+    setSettingsPage,
+    resumeRejectedNavigation,
+  };
 }
 
 // Export for testing

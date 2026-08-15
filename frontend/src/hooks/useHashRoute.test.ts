@@ -225,6 +225,139 @@ describe('useHashRoute', () => {
     window.removeEventListener('ecm:before-route-change', reject);
   });
 
+  /**
+   * bead enhancedchannelmanager-6fi7p. The router always asked permission
+   * before a Back/Forward, and the ONE production listener for that question
+   * was SettingsTab's unsaved-form guard — so Channel Manager's Edit Mode
+   * guard, which lives in App, never heard it. App could not have distinguished
+   * a Back from its own setHash even if it had listened, and it has to: it
+   * resolves programmatic navigation itself, before calling setHash, and
+   * guarding that again would veto the operator's own confirmed exit.
+   */
+  describe('guard event detail', () => {
+    function captureGuardDetails() {
+      const seen: unknown[] = [];
+      const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+      window.addEventListener('ecm:before-route-change', listener);
+      return {
+        seen,
+        stop: () => window.removeEventListener('ecm:before-route-change', listener),
+      };
+    }
+
+    it('marks a Back/Forward as pop, parses the destination, and says how to re-run it', () => {
+      const { result } = renderHook(() => useHashRoute());
+      act(() => result.current.setHash('stats'));
+      const captured = captureGuardDetails();
+
+      act(() => {
+        // A real Back lands on an earlier entry, which carries that entry's
+        // own route index. Written directly so the delta is deterministic.
+        window.history.replaceState({ ecmRouteIndex: 0 }, '', '#settings/normalization');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      captured.stop();
+
+      expect(captured.seen).toEqual([
+        expect.objectContaining({
+          source: 'pop',
+          to: '#settings/normalization',
+          tab: 'settings',
+          settingsPage: 'normalization',
+          historyDelta: -1,
+        }),
+      ]);
+    });
+
+    it('marks a setHash navigation as push, with no delta to re-run', () => {
+      const { result } = renderHook(() => useHashRoute());
+      const captured = captureGuardDetails();
+
+      act(() => result.current.setHash('settings', 'email'));
+      captured.stop();
+
+      expect(captured.seen).toEqual([
+        expect.objectContaining({
+          source: 'push',
+          to: '#settings/email',
+          tab: 'settings',
+          settingsPage: 'email',
+          historyDelta: null,
+        }),
+      ]);
+    });
+
+    it('reports no delta when the target entry carries no route index', () => {
+      const { result } = renderHook(() => useHashRoute());
+      act(() => result.current.setHash('stats'));
+      const captured = captureGuardDetails();
+
+      act(() => {
+        window.history.replaceState({}, '', '#guide');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      captured.stop();
+
+      expect(captured.seen).toEqual([expect.objectContaining({ historyDelta: null })]);
+    });
+  });
+
+  describe('resumeRejectedNavigation (bead enhancedchannelmanager-6fi7p)', () => {
+    it('replays the transition and skips the guard for exactly that one popstate', () => {
+      const goSpy = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+      const guard = vi.fn((event: Event) => event.preventDefault());
+      window.addEventListener('ecm:before-route-change', guard);
+      const { result } = renderHook(() => useHashRoute());
+      act(() => {
+        window.history.replaceState({ ecmRouteIndex: 0 }, '', '#channel-manager');
+      });
+
+      act(() => result.current.resumeRejectedNavigation(-1));
+      expect(goSpy).toHaveBeenCalledWith(-1);
+
+      // The popstate the replayed go() causes. The operator already answered
+      // this question, so it must not be asked again — and the route must be
+      // accepted despite a guard that refuses everything.
+      act(() => {
+        window.history.replaceState({ ecmRouteIndex: 0 }, '', '#stats');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      expect(guard).not.toHaveBeenCalled();
+      expect(result.current.activeTab).toBe('stats');
+
+      // The NEXT Back is a fresh question. A bypass that stuck would leave the
+      // guard permanently deaf after one confirmed exit.
+      act(() => {
+        window.history.replaceState({ ecmRouteIndex: 0 }, '', '#guide');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(result.current.activeTab).toBe('stats');
+
+      window.removeEventListener('ecm:before-route-change', guard);
+      goSpy.mockRestore();
+    });
+
+    it('arms nothing on a zero delta, which has no transition to replay', () => {
+      const goSpy = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+      const guard = vi.fn((event: Event) => event.preventDefault());
+      window.addEventListener('ecm:before-route-change', guard);
+      const { result } = renderHook(() => useHashRoute());
+
+      act(() => result.current.resumeRejectedNavigation(0));
+      expect(goSpy).not.toHaveBeenCalled();
+
+      act(() => {
+        window.history.replaceState({ ecmRouteIndex: 0 }, '', '#stats');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      expect(guard).toHaveBeenCalledTimes(1);
+
+      window.removeEventListener('ecm:before-route-change', guard);
+      goSpy.mockRestore();
+    });
+  });
+
   it('sets initial hash via replaceState if none present', () => {
     window.location.hash = '';
     renderHook(() => useHashRoute());

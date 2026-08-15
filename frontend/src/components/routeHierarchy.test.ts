@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HEADER_POLICIES, ROUTE_HIERARCHY } from './routeHierarchy';
+import {
+  getGuardedPopStateDecision,
+  getGuardedRouteDecision,
+  isPlainPrimaryActivation,
+  resolvePendingRouteResume,
+  ROUTE_HEADER_POLICIES,
+  ROUTE_HIERARCHY,
+} from './routeHierarchy';
+import type { RouteChangeGuardDetail } from '../hooks/useHashRoute';
 import { ROUTE_TITLES } from './routeTitles';
 import { GROUPS } from './navigationGroups';
 import {
@@ -176,4 +184,85 @@ describe('primary route hierarchy', () => {
       expect(getGuardedRouteDecision(isEditMode, stagedCount, target)).toBe(expected);
     },
   );
+});
+
+/**
+ * bead enhancedchannelmanager-6fi7p. `getGuardedRouteDecision` was reachable
+ * only from `handleRouteChange`, and Back/Forward does not go through it, so
+ * an operator with staged channel edits who pressed Back left Edit Mode with
+ * no confirmation and no staged work. This is the same policy, put where the
+ * router's own permission question can reach it.
+ */
+describe('browser Back/Forward guard', () => {
+  const popDetail = (over: Partial<RouteChangeGuardDetail> = {}): RouteChangeGuardDetail => ({
+    from: '#channel-manager',
+    to: '#settings',
+    source: 'pop',
+    historyDelta: -1,
+    tab: 'settings',
+    settingsPage: null,
+    ...over,
+  });
+
+  it('asks the operator before a Back that would discard staged work', () => {
+    expect(getGuardedPopStateDecision(popDetail(), true, 3)).toBe('confirm');
+  });
+
+  it('exits Edit Mode and lets a Back through when nothing is staged', () => {
+    expect(getGuardedPopStateDecision(popDetail(), true, 0)).toBe('exit-and-navigate');
+  });
+
+  it('leaves a Back alone when Edit Mode is not active', () => {
+    expect(getGuardedPopStateDecision(popDetail(), false, 0)).toBe('ignore');
+  });
+
+  it('leaves a Back INTO Channel Manager alone — Edit Mode survives it', () => {
+    expect(
+      getGuardedPopStateDecision(popDetail({ tab: 'channel-manager', to: '#channel-manager' }), true, 3),
+    ).toBe('ignore');
+  });
+
+  /**
+   * The load-bearing one. `handleRouteChange` has already put this question to
+   * the operator and acted on the answer; the `setHash` that follows is the
+   * ACT of leaving, including the one that carries them out of Edit Mode after
+   * they chose Apply or Discard. A guard that answered `confirm` here would
+   * re-open the dialog it was closing.
+   */
+  it('never guards a programmatic navigation — handleRouteChange already did', () => {
+    expect(getGuardedPopStateDecision(popDetail({ source: 'push', historyDelta: null }), true, 3))
+      .toBe('ignore');
+  });
+
+  it('ignores an event with no detail rather than assuming a destination', () => {
+    expect(getGuardedPopStateDecision(undefined, true, 3)).toBe('ignore');
+  });
+});
+
+/**
+ * bead enhancedchannelmanager-6fi7p — the "and then actually go back" half.
+ * A vetoed Back is rewound to the entry the operator was on, so honouring it
+ * afterwards has to REPLAY the history transition. A pushState to the same
+ * hash would leave them on a new entry with the one they pressed Back from
+ * still sitting behind them.
+ */
+describe('resuming a deferred navigation', () => {
+  it('replays a deferred Back as a history transition', () => {
+    expect(resolvePendingRouteResume({ tab: 'settings', historyDelta: -2 }))
+      .toEqual({ kind: 'history', delta: -2 });
+  });
+
+  it('replays a deferred Forward the same way', () => {
+    expect(resolvePendingRouteResume({ tab: 'stats', historyDelta: 1 }))
+      .toEqual({ kind: 'history', delta: 1 });
+  });
+
+  it.each([
+    ['a tab click, which was never a history transition', undefined],
+    ['an entry with no route index, which cannot be addressed by delta', null],
+    ['a zero delta, which would move nothing', 0],
+  ])('falls back to the hash for %s', (_why, historyDelta) => {
+    expect(resolvePendingRouteResume({ tab: 'settings', settingsPage: 'maintenance', historyDelta }))
+      .toEqual({ kind: 'hash', tab: 'settings', settingsPage: 'maintenance' });
+  });
 });
