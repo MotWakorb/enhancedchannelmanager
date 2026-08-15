@@ -420,6 +420,26 @@ Why: the channel list spans 27k+ streams. Per-change network calls would be unus
 
 **Lazy per-group stream loading** is a related optimization: the 27k streams are never loaded at once. Streams are fetched on demand per channel group as the user navigates.
 
+### Edit Mode exit guard: what it covers
+
+Because the staged ledger is in memory, anything that leaves the route or tears down the tree destroys it. The exit guard is the dialog that offers **Apply**, **Discard** or **Keep Editing** before that happens. What follows is its **observable behaviour**, which is the stable part; the mechanism behind it is under active change and is deliberately not described here.
+
+| Way out | Guarded? | Behaviour with staged changes |
+|-|-|-|
+| Clicking ECM's own navigation away from Channel Manager | Yes | Exit dialog |
+| In-app links that change route (Notification Center → task editor, **Clean up empty groups**) | Yes (bead `enhancedchannelmanager-6fi7p`) | Exit dialog |
+| Browser **Back** / **Forward** | Yes (bead `enhancedchannelmanager-6fi7p`) | Exit dialog. Choosing to leave replays the history transition, so the operator lands on the entry they navigated to with surrounding entries intact; **Keep Editing** leaves them on Channel Manager, still in Edit Mode |
+| **Sign Out** in the user menu | Yes (epic `enhancedchannelmanager-r93hq`) | Exit dialog. **Apply** applies and *then* signs out; **Keep Editing** cancels the sign-out |
+| Navigating *to* Channel Manager | No, deliberately | Edit Mode survives it, so there is nothing to confirm |
+| Closing the tab or reloading the page | Partly | The browser's own `beforeunload` prompt fires (`App.tsx`). This is a genuine page unload, not an in-app transition, so it is a separate mechanism with browser-controlled wording |
+
+Two design points worth carrying forward:
+
+- **The sign-out guard is not the route guard with a different caller.** The route guard exempts a destination of `channel-manager` because Edit Mode survives that navigation. Nothing survives a sign-out, so the sign-out guard has no such exemption, and it has no "exit Edit Mode and continue" case either: with nothing staged the tree unmounts regardless, so there is nothing to tidy.
+- **A deferred navigation can leave state behind.** A caller that writes handoff state before requesting a route change (the Notification Center writes which scheduled task to open) must be able to take it back when the operator chooses **Keep Editing**. Otherwise the cancelled intent survives in `sessionStorage` and hijacks the next visit to any Settings page. Any new deferred-navigation caller inherits this obligation.
+
+Before extending the guard, read the current implementation rather than this table: the coverage above is settled, the internals are in flight.
+
 ## MCP Server
 
 A separate container (`mcp-server/`, default port 6101) exposes ECM operations to AI agents via the Model Context Protocol. Runs as a Starlette app with the Streamable HTTP transport: a single `/mcp` endpoint. Claude Desktop (via the `mcp-remote` bridge) and Claude Code connect over HTTP.

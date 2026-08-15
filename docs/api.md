@@ -31,6 +31,39 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/channels/import-csv` | Import channels from CSV file |
 | `POST /api/channels/preview-csv` | Preview and validate CSV before import |
 
+### `POST /api/channels`: the `normalization` disclosure block
+
+`normalize` (bool, default `false`) asks ECM to run the channel name through the normalization rule set before creating the channel. When normalization is requested, the `200` body carries a `normalization` object alongside the Dispatcharr channel fields:
+
+```json
+{
+  "id": 412,
+  "name": "CNN",
+  "normalization": {
+    "requested": true,
+    "applied": true,
+    "nameApplied": "CNN",
+    "error": null
+  }
+}
+```
+
+| Field | Type | Meaning |
+|-|-|-|
+| `requested` | bool | Always `true` when the block is present |
+| `applied` | bool | `false` means the engine did not run and the channel carries the raw name |
+| `nameApplied` | str | The name the channel was actually created with |
+| `error` | str \| null | The engine failure, when `applied` is `false` |
+
+**A failed normalization does not fail the create.** The channel is created under the raw name and the call still returns `200`, which is exactly why the block exists: without it the response was observationally identical to `normalize: false`, so a caller that asked for normalization and silently did not get it had no way to find out (bead `enhancedchannelmanager-e9e5o`).
+
+Two properties this contract is built on, both of which callers can rely on:
+
+- **The block is present when and only when `normalize` was requested.** A caller that never sends `normalize` gets a byte-identical response body to the one it got before this field existed. Nothing to migrate.
+- **Detection is a positive signal, not a missing key.** Branch on `applied === false`, not on the presence or absence of `normalization`. Probing for absence conflates "normalization succeeded" with "I never asked".
+
+The MCP `create_channel` tool renders the failure as a `WARNING:` line naming the error and the name the channel was created with.
+
 ### `POST /api/channels/{id}/add-streams`
 
 Bulk variant of `/add-stream`: fetches the channel once, appends every requested stream that isn't already on it (in request order), and PUTs once. That's one Dispatcharr roundtrip total, regardless of batch size. The MCP `bulk_add_streams_to_channel` tool calls this instead of looping the single-add endpoint, which timed out on slow hardware for batches of ~10 streams (bd-02xjj / GH #223).
@@ -73,7 +106,28 @@ Bulk variant of `/add-stream`: fetches the channel once, appends every requested
 
 Request-level fields: `operations` (required list), `groupsToCreate` (opt list of `{name, ...}` dicts to create before processing), `validateOnly` (bool, default `false`: return `validationIssues` without applying), `continueOnError` (bool, default `false`), `consolidate` (bool, default `false`: collapse redundant ops first).
 
-Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed }`. Pre-validation (missing referenced channels/streams) surfaces in `validationIssues` on a `200` response. Only schema-shape failures produce a `422`.
+Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed, partial, normalizationFailures }`. Pre-validation (missing referenced channels/streams) surfaces in `validationIssues` on a `200` response. Only schema-shape failures produce a `422`.
+
+**`normalizationFailures`** is the batch counterpart of the [`normalization` block on `POST /api/channels`](#post-apichannels-the-normalization-disclosure-block). It is **always present** and is an empty list on a clean batch, so check its length rather than probing for the key. It carries one entry per `createChannel` operation that set `normalize: true` and did not get it:
+
+```json
+{
+  "normalizationFailures": [
+    {
+      "tempId": -3,
+      "name": "US: CNN",
+      "nameApplied": "US: CNN",
+      "error": "normalization engine unavailable"
+    }
+  ]
+}
+```
+
+Those operations **applied**. They appear nowhere in `errors`, `operationsFailed` does not count them, and `success` stays `true`: the channel exists, it simply carries the raw name. That is the whole reason the list is needed, since the outcome is otherwise indistinguishable from `normalize: false`. The MCP `bulk_commit_channels` tool renders the list (first 10 entries) below any validation issues.
+
+Both fields are additive (bead `enhancedchannelmanager-e9e5o`): a caller that never sends `normalize` on any operation sees an empty list and an otherwise unchanged envelope.
+
+`normalize` on `createChannel` is still accepted, but **ECM's own Edit Mode no longer sends it.** The Create Channels dialog resolves the final name client-side before staging, precisely so no backend pass can normalize an already-normalized name a second time (the staged name carries the channel-number and country prefixes applied on top of the engine's output). In practice `normalizationFailures` therefore reports on third-party REST and MCP callers, not on the ECM UI.
 
 ## Channel Groups
 

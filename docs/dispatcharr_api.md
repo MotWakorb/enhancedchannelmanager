@@ -53,6 +53,28 @@ python scripts/record_dispatcharr_openapi_manifest.py \
 
 The script performs no network request of its own, so CI stays hermetic. Read the resulting fixture diff — it is a readable summary of what moved upstream. If you also intend to *support* the new version, update `TESTED_DISPATCHARR_SERIES` in `backend/dispatcharr_client.py` in the same change, or the connection test will keep warning operators that it is untested.
 
+## Concurrency: 0.28.x offers no conditional update
+
+**Measured, not assumed.** Bead `enhancedchannelmanager-auocn`, 2026-08-15, against a live Dispatcharr 0.28.2 instance. `GET /api/schema/?format=json` returned `200` and roughly 716 KB of JSON. Searched in full, that document contains:
+
+| Looked for | Occurrences |
+|-|-|
+| `If-Match` | 0 |
+| `If-None-Match` | 0 |
+| `If-Unmodified-Since` | 0 |
+| `ETag` | 0 |
+| `412` (as a declared response) | 0 |
+
+Further, `PATCH /api/channels/channels/{id}/` declares the path `id` parameter and nothing else, and the `Channel` and `PatchedChannel` component schemas carry **no** version, revision or modified-at field. So there is not even a token to compare client-side and reject on: the absence is at every layer, not just the HTTP one.
+
+**What this constrains.** Any ECM write that reads a Dispatcharr row, decides something from it, and then writes it back is a read-modify-write with no compare-and-set available. It cannot be made atomic against a concurrent writer, and no amount of client-side care changes that. The mitigations actually available are:
+
+1. **Re-read immediately before the write** and skip when the row has already moved. This narrows the window to one round trip; it does not close it. `backend/channel_group_reparent.py::_still_belongs_to_group` is the worked example, and its docstring says "check, not atomicity" for exactly this reason.
+2. **Withhold the write only on positive evidence.** A re-read that fails, or returns a shape without the field being checked, must proceed. Refusing on no evidence converts a rare lost update into a common outright failure.
+3. **Report what actually happened**, so a skipped write is a logged, counted outcome rather than a silent one.
+
+**Before proposing optimistic concurrency for a Dispatcharr write, re-run the measurement above against the version you are targeting.** This finding is pinned to 0.28.x. If a later release adds `ETag` or a `modified_at` field, this section is what should change, and the re-record procedure in [The automated sweep (ADR-014)](#the-automated-sweep-adr-014) already captures the schema you would check it in.
+
 ## Core Settings (`/api/core/settings/`)
 
 > Added 2026-08-03 alongside the schema correction above — this contract was previously undocumented and its absence was the root cause of bead `q6xjl` (a 404 on every settings-restore key).
