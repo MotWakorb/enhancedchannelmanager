@@ -162,6 +162,51 @@ class TestUpdateChannelGroup:
         mock_client.update_channel_group.assert_called_once_with(1, {"name": "Updated"})
 
 
+class _DispatcharrNonNullGroupError(Exception):
+    """What Dispatcharr 0.28.2 returns for ``channel_group_id: null``.
+
+    Measured against the live drill instance on 2026-08-09::
+
+        PATCH /api/channels/channels/1/ {"channel_group_id": null}
+          -> 400 {"channel_group_id":["This field may not be null."]}
+        PATCH /api/channels/channels/1/ {"channel_group_id": 378}
+          -> 200  (the channel really moved)
+
+    A bare ``AsyncMock`` accepts anything, which is how the first cut of the
+    …-ayfn9 reparent passed every unit test and then 400'd on the very first
+    live Delete Group. Any double standing in for ``update_channel`` in this
+    module enforces the constraint the real API enforces. Deliberately the same
+    double as ``tests/routers/test_channels.py`` uses for the other delete path.
+    """
+
+
+def _channel_patch_double(recorder: list | None = None):
+    """An ``update_channel`` double that rejects a null ``channel_group_id``."""
+
+    def _patch(channel_id: int, data: dict):
+        if "channel_group_id" in data and data["channel_group_id"] is None:
+            raise _DispatcharrNonNullGroupError(
+                "Client error '400 Bad Request' for url "
+                "'http://dispatcharr:9191/api/channels/channels/%s/': "
+                '{"channel_group_id":["This field may not be null."]}' % channel_id
+            )
+        if recorder is not None:
+            recorder.append(("patch", channel_id, data))
+        return {"id": channel_id, **data}
+
+    return _patch
+
+
+def _channel_page(channels, next_page=None):
+    return {"results": channels, "count": len(channels), "next": next_page}
+
+
+# Dispatcharr's baseline group, resolved BY NAME by the production code, so the
+# fixtures give it a non-obvious id: a test that passes only because the id
+# happens to be 1 proves nothing.
+_DEFAULT_GROUP = {"id": 42, "name": "Default Group"}
+
+
 class TestDeleteChannelGroup:
     """Tests for DELETE /api/channel-groups/{group_id}."""
 
@@ -170,6 +215,8 @@ class TestDeleteChannelGroup:
         """Deletes group when no M3U sync active."""
         mock_client = AsyncMock()
         mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([])
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
         mock_client.delete_channel_group.return_value = None
 
         with patch("routers.channel_groups.get_client", return_value=mock_client):
@@ -210,6 +257,8 @@ class TestDeleteChannelGroup:
         """
         mock_client = AsyncMock()
         mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([])
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
         request = httpx.Request("DELETE", "http://disp/api/channels/groups/1/")
         upstream = httpx.Response(
             400, request=request,
@@ -230,12 +279,232 @@ class TestDeleteChannelGroup:
         """A non-upstream error on delete stays a 500 (bd-1wq7z.22)."""
         mock_client = AsyncMock()
         mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([])
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
         mock_client.delete_channel_group.side_effect = RuntimeError("boom")
 
         with patch("routers.channel_groups.get_client", return_value=mock_client):
             response = await async_client.delete("/api/channel-groups/1")
 
         assert response.status_code == 500
+
+
+class TestDeleteChannelGroupReparentsMembers:
+    """The immediate delete keeps the dialog's promise (bead …-auocn).
+
+    Split out of …-ayfn9, which fixed only the Edit Mode bulk-commit path. Both
+    paths reach the SAME confirm dialog, which tells the operator "This group
+    contains N channels. The channels will be moved to 'Default Group'." This
+    one then issued a bare delete, which Dispatcharr refuses::
+
+        DELETE /api/channels/groups/377/ -> 400
+        {"error":"Cannot delete group with associated channels"}
+
+    Unlike …-ayfn9 the failure was visible — ``upstream_http_exception`` surfaces
+    the 400 — but it was still unachievable: deleting a non-empty group from this
+    path always failed, with no in-product way to succeed short of emptying the
+    group by hand. These cases pin the same semantics as
+    ``tests/routers/test_channels.py::TestBulkCommitDeleteChannelGroup``, because
+    the point of the bead is that the two paths cannot be allowed to drift.
+    """
+
+    @pytest.mark.asyncio
+    async def test_members_are_reparented_to_the_default_group_before_the_delete(
+        self, async_client, test_session
+    ):
+        """Members move to a REAL group id, THEN the group is deleted."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+            {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+            {"id": 13, "name": "Elsewhere", "channel_group_id": 999},
+        ])
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+        calls: list = []
+        mock_client.update_channel.side_effect = _channel_patch_double(calls)
+        mock_client.delete_channel_group.side_effect = (
+            lambda gid: calls.append(("delete", gid, None))
+        )
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "deleted"
+        assert response.json()["channels_moved"] == 2
+        # Both members moved to the RESOLVED id (42, not the literal 1 and
+        # emphatically not None), the outsider was never touched, and the delete
+        # came last.
+        assert calls == [
+            ("patch", 11, {"channel_group_id": 42}),
+            ("patch", 12, {"channel_group_id": 42}),
+            ("delete", 377, None),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_target_group_is_resolved_by_name_not_by_id(
+        self, async_client, test_session
+    ):
+        """Nothing may depend on the baseline group's id being 1."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+        ])
+        mock_client.get_channel_groups.return_value = [
+            {"id": 1, "name": "Some Operator's Own Group"},
+            {"id": 907, "name": "  default group  "},  # trimmed + case-insensitive
+        ]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        mock_client.update_channel.assert_awaited_once_with(11, {"channel_group_id": 907})
+
+    @pytest.mark.asyncio
+    async def test_a_null_channel_group_id_is_never_sent(self, async_client, test_session):
+        """The regression guard: the double 400s on null exactly as the API does."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+        ])
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        for call in mock_client.update_channel.await_args_list:
+            assert call.args[1]["channel_group_id"] is not None
+
+    @pytest.mark.asyncio
+    async def test_no_default_group_answers_400_with_a_usable_message(
+        self, async_client, test_session
+    ):
+        """An instance without the baseline group gets a reason, not a null PATCH.
+
+        400, not 500: the operator can act on this, and the reason is the whole
+        value of the answer.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+        ])
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+        ]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert "Default Group" in detail
+        assert "1 channel" in detail
+        # Nothing was attempted upstream: no null PATCH, no doomed delete.
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_deleting_the_default_group_itself_answers_400(
+        self, async_client, test_session
+    ):
+        """Moving a group's channels INTO that same group empties nothing."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 42},
+        ])
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/42")
+
+        assert response.status_code == 400
+        assert "Default Group" in response.json()["detail"]
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_group_is_deleted_without_any_patch(
+        self, async_client, test_session
+    ):
+        """No members means no reparenting — the bare delete was always correct.
+
+        It also means the baseline group need not exist: an empty group deletes
+        cleanly on an instance that has no "Default Group" at all.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 13, "name": "Elsewhere", "channel_group_id": 999},
+        ])
+        mock_client.get_channel_groups.return_value = []
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/378")
+
+        assert response.status_code == 200
+        assert response.json()["channels_moved"] == 0
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.delete_channel_group.assert_awaited_once_with(378)
+
+    @pytest.mark.asyncio
+    async def test_members_are_found_across_every_page(self, async_client, test_session):
+        """A member on page two is still a member. Paging stops at `next: null`."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        pages = [
+            _channel_page(
+                [{"id": 11, "name": "PBS 1", "channel_group_id": 377}], next_page="page2"
+            ),
+            _channel_page([{"id": 12, "name": "PBS 2", "channel_group_id": 377}]),
+        ]
+        mock_client.get_channels.side_effect = lambda page, page_size: pages[page - 1]
+        mock_client.get_channel_groups.return_value = [_DEFAULT_GROUP]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        assert response.json()["channels_moved"] == 2
+
+    @pytest.mark.asyncio
+    async def test_an_m3u_synced_group_is_hidden_without_touching_its_channels(
+        self, async_client, test_session
+    ):
+        """Hiding is not deleting, so nothing is reparented on that branch."""
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {
+            377: {"auto_channel_sync": True},
+        }
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+        mock_client.update_channel.side_effect = _channel_patch_double()
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "hidden"
+        mock_client.update_channel.assert_not_awaited()
+        mock_client.get_channels.assert_not_awaited()
+        mock_client.delete_channel_group.assert_not_awaited()
 
 
 class TestRestoreChannelGroup:
