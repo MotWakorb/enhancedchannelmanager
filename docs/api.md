@@ -1279,7 +1279,7 @@ See the [user guide](user_guide/backup-restore/configure-cloud-destinations.md) 
 | `POST /api/auth/setup` | Complete first-run setup (create admin account) |
 | `POST /api/auth/login` | Login with username/password |
 | `POST /api/auth/logout` | Logout and clear session |
-| `POST /api/auth/refresh` | Refresh access token |
+| `POST /api/auth/refresh` | Refresh access token. Rotates the refresh token on every accepted call. The **immediately-prior** refresh token stays acceptable until its successor is actually used (rotation confirmation, bead `upkp1`): presenting it returns a fresh access-token cookie and NO refresh cookie, never rotates, and never extends the session's `expires_at`. Exactly one generation is retained, so a token two rotations old is refused. Refusals return 401 and are logged with a reason code. |
 | `GET /api/auth/me` | Get current user info |
 | `PUT /api/auth/me` | Update current user profile |
 | `POST /api/auth/change-password` | Change current user's password |

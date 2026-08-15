@@ -3,9 +3,11 @@ Authentication API endpoints.
 
 Provides login, logout, token refresh, and password management.
 """
+import ipaddress
 import logging
 import os
 import fcntl
+import re
 import secrets
 import smtplib
 import ssl
@@ -391,9 +393,9 @@ def _set_access_cookie(
 ) -> None:
     """Set ONLY the short-lived access-token cookie.
 
-    Used by the rotation grace path (bd-x67qe), which must NOT touch the
-    refresh cookie: the browser's jar already holds the winner's rotated
-    refresh token, and re-sending the loser's stale one would regress it.
+    Used by the predecessor path (bd-x67qe, bead upkp1), which must NOT touch
+    the refresh cookie: the browser's jar already holds the successor's
+    refresh token, and re-sending the superseded one would regress it.
     """
     settings = get_auth_settings()
     response.set_cookie(
@@ -641,7 +643,7 @@ async def login(
         # Fallback to direct user lookup for backwards compatibility
         user = session.query(User).filter(User.username == login_request.username).first()
 
-    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    client_ip = _client_address(request)
 
     if user is None:
         logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", login_request.username, client_ip)
@@ -793,71 +795,377 @@ async def update_current_user_profile(
     )
 
 
-# How long (seconds) the immediately-prior refresh token stays acceptable
-# after a rotation (bd-x67qe). Long enough to absorb the cross-tab race —
-# two tabs' proactive-refresh timers fire within milliseconds of each other —
-# and short enough that a stolen predecessor is useless almost immediately.
-REFRESH_ROTATION_GRACE_SECONDS = 10
+# Reason code for the one refusal that is the closest thing to a replay
+# signal this server can emit: signature and expiry check out, but the
+# presented credential matches no live session, current or predecessor. It
+# gets its own log message (bead yhk3r, L-2) so it is greppable on its own.
+_REFRESH_DENIAL_UNKNOWN_SESSION = "unknown_session"
+
+# Bounded refusal logging for POST /api/auth/refresh (bead yhk3r, L-5).
+#
+# The endpoint is unauthenticated and deliberately NOT rate limited: the
+# existing 5/min login limiter already makes several e2e specs unrunnable, and
+# behind a proxy ``get_remote_address`` can collapse every LAN client onto one
+# address (filed separately as SEC-03). One WARNING per refusal on an endpoint
+# anyone can POST to is therefore a disk-fill vector, so refusals are deduped
+# per (reason code, client address) for this interval. Nothing is dropped
+# silently: refusals skipped during an interval are counted and reported on
+# the next line that does get emitted.
+_REFRESH_DENIAL_LOG_INTERVAL_SECONDS = 60.0
+
+# Upper bound on tracked (reason, client) pairs, so a flood from many
+# addresses cannot grow the dedupe map without limit.
+_REFRESH_DENIAL_TRACKED_PAIRS = 256
+
+# (reason, client) -> (monotonic time of the last emitted line, refusals
+# skipped since then).
+_refresh_denial_log_state = {}
 
 
-def _refresh_via_rotation_grace(
+def _reset_refresh_denial_log_state() -> None:
+    """Forget all refusal dedupe bookkeeping.
+
+    Test seam: the state is module-global and survives between tests, so a
+    test asserting on refusal logging clears it first rather than depending
+    on whatever earlier tests left behind.
+    """
+    _refresh_denial_log_state.clear()
+
+
+def _refresh_denials_skipped_since_last(reason: str, client: str) -> Optional[int]:
+    """Record one refusal against the dedupe map.
+
+    Returns the number of refusals skipped since the last emitted line for
+    this (reason, client) pair, or ``None`` when this refusal is itself
+    inside the dedupe interval and must not be emitted.
+    """
+    now = time.monotonic()
+    key = (reason, client)
+    entry = _refresh_denial_log_state.get(key)
+
+    if entry is not None and now - entry[0] < _REFRESH_DENIAL_LOG_INTERVAL_SECONDS:
+        _refresh_denial_log_state[key] = (entry[0], entry[1] + 1)
+        return None
+
+    if (
+        entry is None
+        and len(_refresh_denial_log_state) >= _REFRESH_DENIAL_TRACKED_PAIRS
+    ):
+        for stale_key in [
+            k
+            for k, v in _refresh_denial_log_state.items()
+            if now - v[0] >= _REFRESH_DENIAL_LOG_INTERVAL_SECONDS
+        ]:
+            del _refresh_denial_log_state[stale_key]
+        if len(_refresh_denial_log_state) >= _REFRESH_DENIAL_TRACKED_PAIRS:
+            # Still full of live entries: start over rather than retain a map
+            # that can only grow. Worst case is one extra line per pair.
+            _refresh_denial_log_state.clear()
+
+    _refresh_denial_log_state[key] = (now, 0)
+    return entry[1] if entry is not None else 0
+
+
+def _forwarded_address(value: str) -> Optional[str]:
+    """Return ``value`` as a canonical IP literal, or ``None`` if it is not one.
+
+    ``X-Forwarded-For`` is caller-supplied and is only ever supposed to hold
+    an IP address (proxies may append a port, and IPv6 is bracketed when a
+    port is present). Anything else is discarded rather than trimmed: see
+    :func:`_client_address` for why the difference matters.
+    """
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("["):
+        # "[2001:db8::1]:41234" — the bracketed form, with or without a port.
+        host, closed, _ = candidate.partition("]")
+        if not closed:
+            return None
+        candidate = host[1:]
+    elif candidate.count(":") == 1:
+        # "203.0.113.7:41234". A bare IPv6 address has more than one colon,
+        # so this cannot truncate one.
+        candidate = candidate.split(":")[0]
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
+def _client_address(request: Request) -> str:
+    """Best-effort client address for an auth log line.
+
+    The returned value is ALWAYS either an IP literal this function itself
+    rendered from :mod:`ipaddress`, the socket peer address, or the constant
+    ``"unknown"`` — never a substring of a request header.
+
+    That is the whole point of the function, and it is stricter than
+    truncating on purpose. ``X-Forwarded-For`` is set by whoever sent the
+    request; before this, its first comma-separated field was logged verbatim
+    and unbounded by the refusal lines in :func:`_deny_refresh` and by the
+    login-failure lines. A caller could therefore choose the text that landed
+    in an auth log: a refresh token, its full sha256 hash (which L-4 of the
+    upkp1 security spec says must never be logged, and which is separately a
+    CodeQL finding), or padding to fill the disk. Truncating would have
+    bounded the length while still emitting attacker-chosen text; validating
+    the shape means there is no attacker-chosen text to emit, which also
+    closes forged-log-line injection at this layer regardless of what the
+    HTTP parser in front of it accepts in a header value.
+
+    A header that does not parse as an address falls back to the socket peer
+    silently. The peer is the more truthful answer in that case, and the
+    alternative — logging that a bad header arrived — would hand the same
+    unauthenticated caller a second way to generate lines.
+    """
+    forwarded = _forwarded_address(
+        request.headers.get("X-Forwarded-For", "").split(",")[0]
+    )
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+# A run this long of token-alphabet characters does not occur in a real
+# User-Agent (its longest such run is a product token like "AppleWebKit"),
+# but it is exactly the shape of a secret: a sha256 hex digest is 64
+# characters and each dot-separated segment of a JWT is longer still.
+_SECRET_SHAPED_RUN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
+
+# Cap on the User-Agent as logged. Long enough to keep the platform and
+# browser tokens that make the field worth logging at all.
+_LOGGED_AGENT_CHARS = 80
+
+
+def _log_safe_agent(value: Optional[str]) -> str:
+    """Render a caller-supplied User-Agent as a single safe log field.
+
+    Unlike an address, a User-Agent is free-form, so there is no shape to
+    validate it against and the defence has to be applied to the value
+    itself. Three things happen, in this order:
+
+    1. secret-shaped runs are redacted, so a caller cannot get a refresh
+       token or its hash into an auth log by putting it here instead of in
+       ``X-Forwarded-For`` (a 64-character hash fits inside the cap below
+       intact, so truncation alone would not stop it);
+    2. everything outside printable ASCII is dropped, so no newline,
+       carriage return or terminal escape can forge a second log line or
+       rewrite the operator's console;
+    3. the result is truncated.
+
+    Redaction runs before truncation so a secret cannot survive by sitting
+    across the cut.
+    """
+    if not value:
+        return ""
+    redacted = _SECRET_SHAPED_RUN.sub("[redacted]", value)
+    printable = "".join(c for c in redacted if " " <= c <= "~")
+    return printable[:_LOGGED_AGENT_CHARS]
+
+
+def _deny_refresh(
+    request: Request,
+    reason: str,
+    detail: str,
+    *,
+    claims: Optional[dict] = None,
+) -> AuthenticationError:
+    """Log a refresh refusal at WARNING and return the 401 to raise.
+
+    Used as ``raise _deny_refresh(...)`` so every refusal path in
+    :func:`refresh_tokens` emits exactly one line carrying its own reason
+    code (bead yhk3r). Before this, the endpoint refused in complete silence:
+    38 hours of container logs held zero refresh lines of any kind, which is
+    why bead upkp1 had to be diagnosed from a browser's error body instead of
+    from the server that produced the 401.
+
+    What is logged, and what is not: the reason code, the subject and ``jti``
+    from claims that already passed the signature check, the client address
+    and a truncated User-Agent. NEVER the presented credential and never the
+    stored hash of one. The ``jti`` names the token without being usable as
+    one, and a full hash in a log line would additionally be a CodeQL finding.
+
+    That guarantee has to survive the two caller-supplied fields as well, or
+    it is only a guarantee about the arguments this function happens to pass:
+    an unauthenticated caller who put a token or its hash in ``X-Forwarded-For``
+    or ``User-Agent`` would otherwise have written it into the log itself.
+    :func:`_client_address` and :func:`_log_safe_agent` are what close that,
+    and property 19 asserts it over both headers.
+    """
+    client = _client_address(request)
+    subject = None
+    jti = None
+    if claims:
+        subject = claims.get("sub")
+        jti = claims.get("jti")
+    agent = _log_safe_agent(request.headers.get("User-Agent"))
+
+    skipped = _refresh_denials_skipped_since_last(reason, client)
+    if skipped is None:
+        logger.debug(
+            "[AUTH] Refresh refused (%s) for client=%s, deduped within the "
+            "%.0fs refusal-logging interval",
+            reason,
+            client,
+            _REFRESH_DENIAL_LOG_INTERVAL_SECONDS,
+        )
+    elif reason == _REFRESH_DENIAL_UNKNOWN_SESSION:
+        logger.warning(
+            "[AUTH] Refresh refused (%s): valid signature, but the presented "
+            "credential matches no live session, current or predecessor. "
+            "Either a superseded token was replayed, or the client is holding "
+            "a stale cookie from a deleted session, an earlier install or a "
+            "secret rotation. user_id=%s jti=%s client=%s agent=%s "
+            "skipped_since_last=%d",
+            reason,
+            subject,
+            jti,
+            client,
+            agent,
+            skipped,
+        )
+    else:
+        logger.warning(
+            "[AUTH] Refresh refused (%s): user_id=%s jti=%s client=%s "
+            "agent=%s skipped_since_last=%d",
+            reason,
+            subject,
+            jti,
+            client,
+            agent,
+            skipped,
+        )
+
+    return AuthenticationError(detail)
+
+
+def _refresh_via_predecessor(
     session: Session,
+    request: Request,
     response: Response,
     token_hash: str,
     user_id: int,
+    claims: dict,
 ) -> RefreshResponse:
     """Answer a refresh presented with the immediately-prior refresh token.
 
-    Cross-tab rotation race (bd-x67qe): two tabs of one session can POST
-    /auth/refresh with the same pre-rotation cookie near-simultaneously. The
-    winner rotates; the loser lands here. Inside a short grace window the
-    loser gets an idempotent answer — a fresh access token bound to the SAME
-    session — instead of a hard-logout 401.
+    ROTATION CONFIRMATION (bead upkp1). The predecessor stays acceptable
+    until its successor is actually used, replacing the 10-second wall-clock
+    grace window this path shipped with (bd-x67qe). A client whose rotated
+    response never arrived, because the tab navigated or the request was
+    aborted mid-flight, used to be locked out ten seconds later with no
+    non-interactive way back.
+
+    Why no ``successor_used`` flag is needed, and why the rule is "the
+    successor was ACCEPTED" rather than "the successor was presented": the
+    guarded UPDATE in :func:`refresh_tokens` writes the presented hash into
+    ``prior_refresh_token_hash`` in the same statement that installs the
+    successor's hash as current. The instant a successor is accepted, the
+    predecessor's hash is overwritten out of the row and can never match
+    again, so "valid until the successor is used" IS "valid until it is
+    overwritten". A presentation that fails any check never reaches that
+    UPDATE and therefore cannot confirm anything. The row is the sole
+    authority; a separate flag would be a second source of truth that can
+    disagree with the hashes, and it would cost a migration to say nothing
+    new.
+
+    Acceptance conditions, in the order enforced below. All five must hold;
+    this list is the authority on how many there are, because a pre-merge
+    review of an earlier draft found a normative "four conditions and nothing
+    else" phrasing that omitted the last one while a required test demanded
+    it:
+
+    1. the row's ``prior_refresh_token_hash`` matches the presented token,
+    2. the row belongs to the ``sub`` in the verified claims,
+    3. the row is not revoked,
+    4. the row's ``expires_at`` is still in the future,
+    5. the user the row belongs to still exists and is still active.
+
+    (5) is not redundant with the others. Deactivating an account has to take
+    effect on this path too, or a stranded client would keep collecting
+    access tokens for a disabled user until the session expired on its own,
+    and nothing else here consults the user row for anything but the username
+    on the minted token.
 
     Security invariants:
-    - Only the LATEST predecessor is honored, one generation deep — a normal
-      rotation overwrites ``prior_refresh_token_hash``, so graced tokens
-      cannot chain.
-    - NO second rotation and NO refresh cookie: the browser jar keeps the
-      winner's rotated refresh token.
-    - ``expires_at`` is untouched — grace never extends session lifetime.
-    - Revoked sessions are excluded — logout kills grace immediately.
+    - Only the LATEST predecessor is honored, one generation deep. A normal
+      rotation overwrites ``prior_refresh_token_hash``, so predecessors never
+      chain and exactly one superseded token is live per session.
+    - NO second rotation and NO refresh cookie. The jar keeps the successor's
+      refresh token. Minting a fresh one here would fork the chain: the
+      server does not hold the plaintext successor, so it could only install
+      a NEW one and strand whoever legitimately received the real successor.
+    - ``expires_at`` is untouched, so this path never extends session
+      lifetime. That asymmetry is the outer bound the removed window used to
+      provide: a healthy client rotates and slides its session forward, while
+      a client living on predecessor answers is guaranteed back through
+      interactive login at the original expiry.
+    - The presented JWT's own ``exp`` is enforced before any DB lookup.
+    - Revoked sessions are excluded, so logout kills the predecessor at once.
 
     Raises:
-        AuthenticationError: when no grace applies.
+        AuthenticationError: when the predecessor is not acceptable.
     """
-    graced_session = session.query(UserSession).filter(
+    prior_session = session.query(UserSession).filter(
         UserSession.prior_refresh_token_hash == token_hash,
         UserSession.user_id == user_id,
         UserSession.is_revoked == False,
     ).first()
 
     now = datetime.utcnow()
-    if (
-        not graced_session
-        or graced_session.rotated_at is None
-        or (now - graced_session.rotated_at).total_seconds()
-        > REFRESH_ROTATION_GRACE_SECONDS
-    ):
-        raise AuthenticationError("Session not found or revoked")
+    if not prior_session:
+        raise _deny_refresh(
+            request,
+            _REFRESH_DENIAL_UNKNOWN_SESSION,
+            "Session not found or revoked",
+            claims=claims,
+        )
 
-    if graced_session.expires_at < now:
-        raise AuthenticationError("Session expired")
+    # ``<=``, not ``<``: the rule is that the session is live while
+    # ``expires_at > now``, so an instant that lands exactly on the expiry is
+    # already outside it. Matches the current-token check in
+    # :func:`refresh_tokens`.
+    if prior_session.expires_at <= now:
+        raise _deny_refresh(
+            request,
+            "predecessor_session_expired",
+            "Session expired",
+            claims=claims,
+        )
 
     user = session.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
-        raise AuthenticationError("User not found or disabled")
+        raise _deny_refresh(
+            request,
+            "predecessor_user_inactive",
+            "User not found or disabled",
+            claims=claims,
+        )
 
     access_token = create_access_token(user_id=user.id, username=user.username)
     _set_access_cookie(response, access_token)
 
-    # last_used_at only — never expires_at (see invariants above).
-    graced_session.last_used_at = now
+    rotated_at = prior_session.rotated_at
+    # last_used_at only. Never expires_at, never either hash, never
+    # rotated_at (see invariants above).
+    prior_session.last_used_at = now
     session.commit()
 
+    # rotated_at no longer gates acceptance; it survives as forensic state so
+    # an operator can see a client stuck on the predecessor for days.
+    age = (
+        "%ds" % int((now - rotated_at).total_seconds())
+        if rotated_at is not None
+        else "unknown"
+    )
     logger.info(
-        "[AUTH] Refresh honored within rotation grace window for user: %s",
+        "[AUTH] Refresh answered from the predecessor token for user %s "
+        "(session_id=%s, age_since_rotation=%s, successor not used yet)",
         user.username,
+        prior_session.id,
+        age,
     )
     return RefreshResponse(
         message="Token refreshed",
@@ -875,31 +1183,49 @@ async def refresh_tokens(
     Refresh access token using refresh token.
 
     Sets new httpOnly cookies with fresh access and refresh tokens. A refresh
-    presented with the immediately-prior token inside the rotation grace
-    window is answered idempotently (bd-x67qe) — see
-    :func:`_refresh_via_rotation_grace`.
+    presented with the immediately-prior token is answered idempotently until
+    that token's successor is actually used (rotation confirmation, bead
+    upkp1) - see :func:`_refresh_via_predecessor`.
+
+    CONCURRENCY CONSTRAINT: this body must contain NO ``await``, and adding
+    one is an escalation rather than a judgment call. Every Session in this
+    application shares one sqlite connection (``poolclass=StaticPool``) and
+    therefore one transaction, so a second request that interleaved between
+    the read below and its commit could durably commit this request's
+    half-finished rotation. What makes that impossible today is that the body
+    runs straight through without yielding the event loop, which is what lets
+    the compare-and-swap below be decided from ``rowcount`` alone.
     """
     refresh_token = get_refresh_token_from_request(request)
     if not refresh_token:
-        raise AuthenticationError("No refresh token provided")
+        raise _deny_refresh(request, "no_credential", "No refresh token provided")
 
     try:
         # Decode and validate refresh token
         try:
             claims = decode_token(refresh_token)
         except TokenRevokedError:
-            # A rotated-away predecessor's jti is blacklisted in-process the
-            # moment the winner rotates, but the token may still be inside
-            # the rotation grace window. Re-validate signature + expiry only
-            # and let the DB-side grace check below decide (bd-x67qe).
+            # LOAD-BEARING, NOT AN EDGE CASE (bead upkp1). Rotation adds the
+            # presented jti to the in-process blacklist, so a predecessor's
+            # jti is blacklisted the instant its successor is minted. Under
+            # rotation confirmation the predecessor stays valid for the rest
+            # of the session's life, so EVERY predecessor acceptance now
+            # depends on this fallback. Re-validate signature and expiry only
+            # and let the DB decide: the row, not the in-process set, is the
+            # revocation authority. Narrowing or removing this reintroduces
+            # the stranding bug wholesale.
             claims = decode_token(refresh_token, ignore_revocation=True)
 
         if claims.get("type") != "refresh":
-            raise AuthenticationError("Invalid token type")
+            raise _deny_refresh(
+                request, "wrong_credential_type", "Invalid token type", claims=claims
+            )
 
         user_id = claims.get("sub")
         if user_id is None:
-            raise AuthenticationError("Invalid token payload")
+            raise _deny_refresh(
+                request, "no_subject", "Invalid token payload", claims=claims
+            )
 
         # Verify session exists and is valid
         token_hash = hash_token(refresh_token)
@@ -909,19 +1235,26 @@ async def refresh_tokens(
         ).first()
 
         if not user_session:
-            # Not the current token — maybe the immediately-prior one inside
-            # the rotation grace window (cross-tab refresh race, bd-x67qe).
-            return _refresh_via_rotation_grace(
-                session, response, token_hash, int(user_id)
+            # Not the current token. It may be the immediately-prior one,
+            # whose successor has not been used yet (bead upkp1).
+            return _refresh_via_predecessor(
+                session, request, response, token_hash, int(user_id), claims
             )
 
-        if user_session.expires_at < datetime.utcnow():
-            raise AuthenticationError("Session expired")
+        # ``<=``, not ``<``: a session is live while ``expires_at > now``, so
+        # the expiry instant itself is outside the session. Same predicate on
+        # the predecessor path in :func:`_refresh_via_predecessor`.
+        if user_session.expires_at <= datetime.utcnow():
+            raise _deny_refresh(
+                request, "session_expired", "Session expired", claims=claims
+            )
 
         # Get user
         user = session.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
-            raise AuthenticationError("User not found or disabled")
+            raise _deny_refresh(
+                request, "user_inactive", "User not found or disabled", claims=claims
+            )
 
         # Rotate tokens. Pass the real username so the refreshed access
         # token keeps identifying the account rather than a ``user_<id>``
@@ -933,8 +1266,12 @@ async def refresh_tokens(
 
         # Guarded rotation (bd-x67qe): the UPDATE only applies while the row
         # still holds the pre-rotation hash, so exactly ONE of two racing
-        # requests can rotate. Recording the predecessor hash + rotation time
-        # opens the grace window for the loser.
+        # requests can rotate. Writing the presented hash into
+        # ``prior_refresh_token_hash`` is also what CONFIRMS a rotation for
+        # bead upkp1: it hands the loser an idempotent answer, and it
+        # atomically overwrites the previous predecessor out of the row, which
+        # is what ends that token's life. Rotating twice therefore refuses the
+        # oldest token, with no window and no flag involved.
         settings = get_auth_settings()
         now = datetime.utcnow()
         rotated = session.query(UserSession).filter(
@@ -956,10 +1293,14 @@ async def refresh_tokens(
 
         if not rotated:
             # Photo-finish: another request rotated this session between our
-            # read and write. Fall through to the grace path instead of
-            # clobbering the winner's rotation.
-            return _refresh_via_rotation_grace(
-                session, response, token_hash, int(user_id)
+            # read and write. Fall through to the predecessor path instead of
+            # clobbering the winner's rotation. The successor minted just
+            # above is discarded on purpose: acceptance is decided by the
+            # stored hash, so a token that never reached the row is not a
+            # credential. Storing or returning it would install a second
+            # current token.
+            return _refresh_via_predecessor(
+                session, request, response, token_hash, int(user_id), claims
             )
 
         # Clean up expired sessions for this user
@@ -975,11 +1316,13 @@ async def refresh_tokens(
         )
 
     except TokenExpiredError:
-        raise AuthenticationError("Refresh token expired")
+        raise _deny_refresh(request, "jwt_expired", "Refresh token expired")
     except TokenRevokedError:
-        raise AuthenticationError("Refresh token revoked")
+        raise _deny_refresh(request, "jwt_revoked", "Refresh token revoked")
     except InvalidTokenError as e:
-        raise AuthenticationError(f"Invalid refresh token: {str(e)}")
+        raise _deny_refresh(
+            request, "jwt_invalid", f"Invalid refresh token: {str(e)}"
+        )
 
 
 @router.post("/logout", response_model=LogoutResponse)
@@ -995,9 +1338,11 @@ async def logout(
     Always returns success even if not logged in (idempotent).
     """
     # Try to revoke the session if we have a refresh token. Also match the
-    # immediately-prior (graced) token hash (bd-x67qe): a stale tab logging
-    # out with the pre-rotation cookie must still kill the session — logout
-    # always beats the rotation grace window.
+    # immediately-prior token's hash (bd-x67qe): a stale tab logging out with
+    # the pre-rotation cookie must still kill the session. Revocation beats
+    # predecessor acceptance, which is what bounds bead upkp1's longer-lived
+    # predecessor: one row is the whole chain, so revoking it refuses the
+    # current token and its predecessor together.
     refresh_token = get_refresh_token_from_request(request)
     if refresh_token:
         try:
@@ -1283,7 +1628,7 @@ async def dispatcharr_login(
                 login_request.password,
             )
     except DispatcharrRateLimitError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1291,14 +1636,14 @@ async def dispatcharr_login(
             headers={"Retry-After": "60"},
         )
     except DispatcharrNetworkPolicyError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(e),
         )
     except DispatcharrAuthenticationError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -1819,12 +1819,16 @@ class UserSession(Base):
     # Token tracking (store hash of refresh token, not the token itself)
     refresh_token_hash = Column(String(255), nullable=False, unique=True)
 
-    # Rotation grace window (bd-x67qe): hash of the immediately-prior refresh
-    # token and when it was rotated away. For a short window after rotation
-    # the predecessor is still accepted by /auth/refresh (idempotent-refresh
-    # semantics) so two tabs racing the same rotation don't hard-logout the
-    # loser. Only ONE generation is kept — a normal rotation overwrites both
-    # fields, so a graced token can never chain to an older one.
+    # Rotation confirmation (bd-x67qe, bead upkp1): hash of the
+    # immediately-prior refresh token and when it was rotated away. The
+    # predecessor is accepted by /auth/refresh with idempotent-refresh
+    # semantics until its successor is actually used, which is exactly when
+    # the next rotation overwrites ``prior_refresh_token_hash`` out of this
+    # row. Only ONE generation is kept, so a superseded token can never chain
+    # to an older one. ``rotated_at`` no longer gates acceptance (the
+    # 10-second wall-clock window it used to serve stranded any client whose
+    # rotated response never arrived); it is retained as forensic state for
+    # the refresh log lines.
     prior_refresh_token_hash = Column(String(255), nullable=True)
     rotated_at = Column(DateTime, nullable=True)
 
