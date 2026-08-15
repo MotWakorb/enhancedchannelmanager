@@ -26,6 +26,8 @@ import type { ChannelPipelineRule, CreateRuleData, Condition, Action, ConditionT
 import type { RuleAnalyzerFinding } from '../../types/channelPipeline';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
+import { ActionFieldValidityContext } from './actionFieldValidity';
+import type { ActionFieldValidityRegistry } from './actionFieldValidity';
 import { CustomSelect } from '../CustomSelect';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { ModalOverlay } from '../ModalOverlay';
@@ -52,6 +54,34 @@ interface ValidationErrors {
   activeWindow?: string;
   conditions?: string;
   actions?: string;
+  /**
+   * DOM id of the first action field whose entry the operator must fix
+   * (bead `enhancedchannelmanager-ay3iq`). A VALUE, not a message: unlike the
+   * other keys nothing renders this one, because the field is already showing
+   * its own `.field-error` sentence and repeating that sentence as a section
+   * error would put the same text in the DOM twice. Its job is to block the
+   * save and tell `handleSave` which field to focus.
+   */
+  invalidActionFieldId?: string;
+}
+
+/**
+ * The first of `fieldIds` in document order, or `null` if none of them is in
+ * the document. Used only to pick which field to focus when a save is blocked;
+ * the block itself does not depend on it.
+ */
+function firstFieldInDocumentOrder(fieldIds: string[]): string | null {
+  let bestId: string | null = null;
+  let best: HTMLElement | null = null;
+  for (const fieldId of fieldIds) {
+    const el = document.getElementById(fieldId);
+    if (!el) continue;
+    if (!best || (best.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      best = el;
+      bestId = fieldId;
+    }
+  }
+  return bestId;
 }
 
 /** Debounce for the advisory analyzer call (home-lab: 250-500ms is plenty). */
@@ -325,6 +355,29 @@ export function RuleBuilder({
     };
   }, [buildConfig]);
 
+  // Action fields that are currently REFUSING what the operator typed, keyed by
+  // the field's DOM id (bead `enhancedchannelmanager-ay3iq`). `ActionEditor`
+  // holds such an entry as local text and leaves the action's field empty, so
+  // without this the builder saw a perfectly valid action and saved it, and the
+  // operator got automatic numbering or the group's current lowest instead of
+  // the start they typed, while looking at the red error that said so.
+  //
+  // A ref, not state: `validate` reads it at save time, and re-rendering the
+  // builder on every keystroke in an action field would buy nothing. Held here
+  // rather than in `ActionEditor` because the save seam is here; see
+  // `actionFieldValidity.ts` for why this is a registry and not a check for
+  // these two fields.
+  const invalidActionFieldsRef = useRef(new Map<string, string>());
+  const actionFieldValidity = useMemo<ActionFieldValidityRegistry>(() => ({
+    report: (fieldId, message) => {
+      if (message) invalidActionFieldsRef.current.set(fieldId, message);
+      else invalidActionFieldsRef.current.delete(fieldId);
+    },
+    release: fieldId => {
+      invalidActionFieldsRef.current.delete(fieldId);
+    },
+  }), []);
+
   const validate = useCallback((): ValidationErrors | null => {
     const newErrors: ValidationErrors = {};
 
@@ -364,6 +417,17 @@ export function RuleBuilder({
       }
     }
 
+    // An action field refusing its entry blocks the save no matter what the
+    // action objects look like: the whole point is that a refused entry is
+    // INVISIBLE in them. The id is only for focusing; fall back to any key so a
+    // field that has left the document still blocks rather than slipping
+    // through.
+    const invalidFieldIds = [...invalidActionFieldsRef.current.keys()];
+    if (invalidFieldIds.length > 0) {
+      newErrors.invalidActionFieldId =
+        firstFieldInDocumentOrder(invalidFieldIds) ?? invalidFieldIds[0];
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0 ? null : newErrors;
   }, [name, activeFrom, activeUntil, conditions, actions]);
@@ -391,6 +455,12 @@ export function RuleBuilder({
       setCurrentStep(1);
       if (validationErrors.name) {
         document.getElementById(`${id}-name`)?.focus();
+      } else if (validationErrors.invalidActionFieldId) {
+        // Nothing renders this one as a section error (see ValidationErrors);
+        // the field's own `.field-error` is the message. Focus it so the
+        // operator lands on the entry they have to fix, scrolled into view,
+        // rather than on a Save button that appeared to do nothing.
+        document.getElementById(validationErrors.invalidActionFieldId)?.focus();
       }
       return;
     }
@@ -740,21 +810,36 @@ export function RuleBuilder({
                   <div className="section-error" role="alert">{errors.actions}</div>
                 )}
 
+                {/*
+                  Every ActionEditor reports its refused field entries into this
+                  registry, which `validate` reads to block the save (bead
+                  `enhancedchannelmanager-ay3iq`). Keys are per-instance DOM ids
+                  from the editor's `useId`, so an entry follows the component
+                  instance that is showing it. The `key={index}` below therefore
+                  does not desync the registry from the screen on a reorder: the
+                  instance keeps both its local text and its registry entry, and
+                  the two still agree. That reorder does leave the editor's
+                  mount-derived local state showing the PREVIOUS action's values,
+                  a known and separate defect that predates this registry and is
+                  not made worse by it.
+                */}
                 <div className="actions-list">
-                  {actions.map((action, index) => (
-                    <ActionEditor
-                      key={index}
-                      action={action}
-                      onChange={updated => handleUpdateAction(index, updated)}
-                      onRemove={() => handleRemoveAction(index)}
-                      showValidation={Object.keys(errors).length > 0}
-                      showPreview
-                      previousActions={actions.slice(0, index)}
-                      orderNumber={index + 1}
-                      totalItems={actions.length}
-                      onReorder={newPos => handleReorderAction(index, newPos)}
-                    />
-                  ))}
+                  <ActionFieldValidityContext.Provider value={actionFieldValidity}>
+                    {actions.map((action, index) => (
+                      <ActionEditor
+                        key={index}
+                        action={action}
+                        onChange={updated => handleUpdateAction(index, updated)}
+                        onRemove={() => handleRemoveAction(index)}
+                        showValidation={Object.keys(errors).length > 0}
+                        showPreview
+                        previousActions={actions.slice(0, index)}
+                        orderNumber={index + 1}
+                        totalItems={actions.length}
+                        onReorder={newPos => handleReorderAction(index, newPos)}
+                      />
+                    ))}
+                  </ActionFieldValidityContext.Provider>
                 </div>
 
                 <div className="add-item-wrapper">

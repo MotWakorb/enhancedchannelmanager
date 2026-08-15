@@ -11,6 +11,7 @@ import {
   parseWholeChannelNumberInput,
   wholeChannelNumberInputError,
 } from '../../utils/channelNumber';
+import { useReportedFieldError } from './actionFieldValidity';
 import './ActionEditor.css';
 
 interface ChannelGroup {
@@ -356,6 +357,30 @@ export function ActionEditor({
   }, [action.type]);
 
   const actionDef = ACTION_TYPES.find(a => a.type === action.type);
+
+  // Report the two starting-number refusals to the enclosing rule form so the
+  // save seam can see them (bead `enhancedchannelmanager-ay3iq`). Without this
+  // the refusal is invisible one layer up: a refused entry leaves the action
+  // carrying NO start, RuleBuilder reads that as valid, and the rule saves with
+  // automatic numbering / the group's current lowest while the operator is
+  // looking at a red error. See `actionFieldValidity.ts`.
+  //
+  // Conditioned on the field being RENDERED, not just on the text being
+  // refused: switching Channel Numbering back to Auto, or changing the action's
+  // type, takes the field off screen, and a refusal with no visible field would
+  // block a save the operator has no way to unblock. The text state is
+  // deliberately left alone in that case: it is what the field shows again if
+  // they switch back.
+  useReportedFieldError(
+    `${id}-ch-start`,
+    actionDef?.hasChannelNumbering && channelNumberMode === 'starting'
+      ? channelNumberStartError
+      : null,
+  );
+  useReportedFieldError(
+    `${id}-sort-group-start`,
+    actionDef?.hasSortGroupConfig ? sortGroupStartError : null,
+  );
 
   // Check for dependency warnings
   const getDependencyWarning = (): string | null => {

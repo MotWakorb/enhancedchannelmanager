@@ -20,13 +20,14 @@
  * checked the message would still pass while `1.5` was quietly stored as `1`.
  */
 import { useState } from 'react';
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { server, resetMockDataStore } from '../../test/mocks/server';
 import { ActionEditor } from './ActionEditor';
+import { RuleBuilder } from './RuleBuilder';
 import { WHOLE_CHANNEL_NUMBER_RULE_MESSAGE } from '../../utils/channelNumber';
-import type { Action } from '../../types/channelPipeline';
+import type { Action, ChannelPipelineRule } from '../../types/channelPipeline';
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
@@ -182,5 +183,176 @@ describe('Sort Group starting number', () => {
 
     expect(screen.queryByRole('alert')).toBeNull();
     expect(lastAction(calls).starting_number).toBeUndefined();
+  });
+});
+
+/**
+ * The save seam (bead `enhancedchannelmanager-ay3iq`).
+ *
+ * Refusing the entry at the field is only half the contract. `ActionEditor`
+ * holds the typed text in component state, so a refused entry leaves the action
+ * carrying NO start at all. `RuleBuilder.validate()` cannot see that text or its
+ * message either, so it used to read the action as perfectly valid and save it.
+ * The operator was shown a red error, saved anyway, and got automatic numbering
+ * (Create Channel) or the group's current lowest (Sort Group): a different
+ * result from the one they asked for, arrived at silently.
+ *
+ * These tests therefore drive the REAL `RuleBuilder`, not a harness around
+ * `ActionEditor`. A test that stops at `onChange` output asserts the very state
+ * transformation that enables the defect, and would stay green through it.
+ *
+ * Both save routes are covered, because they are separate entry points into
+ * `handleSave`: the footer Save button, and the Enter key, which bubbles from
+ * any input in the form to the builder's `onKeyDown`.
+ */
+describe('the RuleBuilder save seam refuses a rule whose start was refused', () => {
+  /** A rule that saves cleanly, so only the starting-number entry is in play. */
+  function ruleWith(actions: Action[]): Partial<ChannelPipelineRule> {
+    return {
+      name: 'Numbering rule',
+      conditions: [{ type: 'always' }],
+      actions,
+    };
+  }
+
+  const CREATE_CHANNEL: Action = {
+    type: 'create_channel',
+    name_template: '{stream_name}',
+    group_id: 1,
+    channel_number: '100-99999',
+  };
+  const SORT_GROUP: Action = { type: 'sort_group', order: 'asc' };
+
+  it('does not save a Create Channel action when Enter follows a fractional start', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    // Enter inside the field is the route Codex named: it bubbles to the
+    // builder's key handler, which calls handleSave directly.
+    await user.keyboard('{Enter}');
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('does not save a Create Channel action when Save follows a fractional start', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('does not save a Sort Group action when Save follows a fractional start', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([SORT_GROUP]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('does not save a Sort Group action when Enter follows a fractional start', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([SORT_GROUP]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    await user.keyboard('{Enter}');
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('saves once the refused entry is corrected, with the corrected start', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(onSave).not.toHaveBeenCalled();
+
+    await retype(user, input, '250');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].actions[0].channel_number).toBe('250-99999');
+    expect(screen.queryByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeNull();
+  });
+
+  it('saves a rule whose refused entry belongs to a field the action no longer shows', async () => {
+    // Switching Channel Numbering back to Auto removes the field, and with it
+    // the entry. A refusal that outlived its own field would block a save the
+    // operator has no way to unblock: nothing red is left on screen to fix.
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+
+    const numberingTrigger = screen
+      .getByText('Channel Numbering')
+      .closest('.action-field')
+      ?.querySelector('.custom-select-trigger') as HTMLButtonElement;
+    await user.click(numberingTrigger);
+    await user.click(screen.getByRole('option', { name: /auto \(sequential/i }));
+
+    expect(screen.queryByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].actions[0].channel_number).toBeUndefined();
   });
 });
