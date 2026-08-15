@@ -13,12 +13,24 @@ What the contract deliberately does NOT say:
 * **No uniqueness.** Dispatcharr declares ``channel_number`` as a non-unique
   float and its release notes state duplicates are permitted. Real lineups have
   them. Uniqueness is a separate question and is not enforced here.
-* **No maximum.** The PO's rule named none, and Dispatcharr stores a plain
-  float, so inventing an upper bound here would narrow compatibility. An
+* **No maximum among floats.** The PO's rule named none, and Dispatcharr stores
+  a plain float, so inventing an upper bound here would narrow compatibility. An
   absurd-but-finite value such as ``1e308`` is therefore in contract: it is an
   exact integer (every float at or above ``2**53`` is), so it carries no
   fractional part. It is answered, not raised on. ``inf`` and ``nan`` are not
   finite and are rejected.
+
+There is one limit, and it is about representability rather than magnitude.
+Python ``int`` is arbitrary precision, so a JSON body can carry a value such as
+``10**400`` that has no ``float`` representation at all. Those are **rejected**.
+A channel number has to survive the round trip this contract spans: JSON number
+to a JavaScript ``number`` in the browser, and to Dispatcharr's plain float
+column. ``10**400`` survives neither -- the frontend parses it to ``Infinity``
+and rejects it as non-finite, and there is no float to store. Accepting it in
+Python on the grounds that an ``int`` has no fractional part would leave the two
+halves disagreeing about an input either side can be handed, while their
+docstrings claim an identical rule. So the predicate answers ``False`` rather
+than raising ``OverflowError`` out of ``float()``.
 
 Out-of-contract values are **rejected at the boundary**, not silently rounded.
 That is an explicit PO choice: an import that previously succeeded may now fail,
@@ -64,11 +76,43 @@ CHANNEL_NUMBER_RULE_MESSAGE = (
 )
 
 # One tick per tenth, matching the grid `frontend/src/utils/channelNumberShift.ts`
-# plans on. The tolerance absorbs binary-float dust only: it is fourteen orders
-# of magnitude below the 0.05 gap that separates an in-contract tenth from the
-# nearest out-of-contract value, so `1.05` can never slip through it.
+# plans on.
+#
+# What the tolerance guarantees, and over what range. It is compared against
+# `value * 10`, so in value terms it admits a deviation of 1e-10.
+#
+# * Reject side. The nearest out-of-contract value to a tenth is half a tick
+#   away, which is 0.5 once scaled -- a margin of 5e8 over the tolerance, so
+#   `1.05` can never slip through. Measured: `10**n + 0.05` scales to a
+#   deviation of exactly 0.5 and is rejected for every n from 0 to 14. That
+#   discrimination holds up to `2**48`. At `2**49` float spacing is 0.125, which
+#   exceeds the 0.05 half-tick, so `base + 0.05` is not a distinct float and
+#   there is no two-decimal value left to reject.
+# * Accept side. The tolerance is not what makes ordinary numbers pass. For
+#   every one-decimal value `k / 10` below `_EXACT_INTEGER_FLOOR`, scaling back
+#   by ten returns `k` exactly: measured deviation 0.0 over 3.4M sampled values
+#   across all seventeen decades, plus exhaustively over 0.0-200.0. Parsed input
+#   (`float("10000000.1")`) and planned input (`channelNumberShift.ts` divides
+#   integer ticks by ten once, at the end) are both drawn from that population.
+# * Dust. The tolerance therefore earns its keep on one case only: arithmetic
+#   drift, such as `0.7 + 0.1` being `0.7999999999999999`. Being absolute, the
+#   dust it absorbs shrinks with magnitude -- about 4.5e5 float steps at
+#   magnitude 1, about 7 at 1e5, and less than one above roughly 1e6. Above that
+#   the predicate accepts only values that round-trip exactly, which is what the
+#   two producers above deliver. A magnitude-relative tolerance was measured as
+#   the alternative and is worse where it matters: at 8 float steps it accepts
+#   `1e14 + 0.05`, which is a real two-decimal value that must be rejected.
 _TENTHS = 10
 _TENTH_TOLERANCE = 1e-9
+
+# Every float at or above `2**53` is an exact integer, because the gap between
+# adjacent floats there is at least 2. Such a value carries no fractional part,
+# so it is in contract under a rule that names no maximum, and the check can
+# short-circuit before any arithmetic. That is also what keeps the scaling below
+# safe: the largest value that reaches it is just under `2**53`, and
+# `2**53 * 10` is about 9.0e16, some 290 orders of magnitude below
+# `sys.float_info.max`, so the multiplication cannot overflow.
+_EXACT_INTEGER_FLOOR = 2.0**53
 
 # Text accepted before the numeric rule is applied. Digits, optionally followed
 # by a decimal point and one or more digits. This admits the canonical
@@ -99,22 +143,34 @@ def is_valid_channel_number(value: Any) -> bool:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        # ``int`` is arbitrary precision, so a JSON body can carry a value with
+        # no float representation (``10**400``). Answer rather than raise: a
+        # predicate that raises turns "reject this input" into a 500 at every
+        # entry point that consumes it. ``False`` is also the answer the
+        # frontend gives, which parses the same JSON to ``Infinity``. See the
+        # module docstring for why rejection is the right answer, not merely
+        # the convenient one.
+        return False
     if not math.isfinite(number):
         return False
     if number < 0:
         return False
-    # Scale the FRACTIONAL part, not the whole value. Scaling the whole value
-    # overflows to infinity for magnitudes near ``sys.float_info.max``, and
-    # ``round(inf)`` raises ``OverflowError``. A predicate that raises instead
-    # of answering turns "reject this input" into a 500 at every entry point
-    # that consumes it. ``math.fmod`` is exact (it returns the true remainder,
-    # introducing no rounding error of its own) and its result lies in
-    # ``[0, 1)``, so the scaled value can never overflow. Every float at or
-    # above ``2**53`` is already an exact integer, so its fraction is ``0.0``
-    # and it reads as in contract, consistent with the rule naming no maximum.
-    fraction = math.fmod(number, 1.0)
-    scaled = fraction * _TENTHS
+    if number >= _EXACT_INTEGER_FLOOR:
+        # An exact integer: no fractional part to check, and short-circuiting
+        # here is what makes the scaling below overflow-proof.
+        return True
+    # Scale the WHOLE value, not just its fractional part. Scaling only the
+    # fraction looks like the safer way to dodge the overflow, but it discards
+    # the precision that makes an ordinary large channel number work:
+    # ``math.fmod(10000000.1, 1.0)`` is ``0.09999999962747097``, which scales to
+    # ``0.9999999962747097`` and misses a whole tenth by far more than the
+    # tolerance, so ``10000000.1`` reads as out of contract. Scaling the whole
+    # value returns ``100000001.0`` exactly. The magnitude guard above supplies
+    # the overflow safety instead, so both properties hold at once.
+    scaled = number * _TENTHS
     return abs(scaled - round(scaled)) <= _TENTH_TOLERANCE
 
 

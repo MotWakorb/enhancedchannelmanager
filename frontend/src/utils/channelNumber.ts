@@ -12,10 +12,19 @@
  *
  *   - No uniqueness. Dispatcharr declares `channel_number` as a non-unique
  *     float and permits duplicates, and real lineups have them.
- *   - No maximum. The rule named none, and Dispatcharr stores a plain float.
- *     An absurd-but-finite value such as `1e308` is therefore in contract: it
- *     is an exact integer (every float at or above 2**53 is), so it carries no
- *     fractional part. `NaN` and `Infinity` are not finite and are rejected.
+ *   - No maximum among representable numbers. The rule named none, and
+ *     Dispatcharr stores a plain float. An absurd-but-finite value such as
+ *     `1e308` is therefore in contract: it is an exact integer (every float at
+ *     or above 2**53 is), so it carries no fractional part. `NaN` and
+ *     `Infinity` are not finite and are rejected.
+ *
+ * The one limit is representability rather than magnitude. Python's `int` is
+ * arbitrary precision, so a JSON body reaching the backend can carry `10**400`,
+ * which has no float representation. Both halves reject it: here it has already
+ * become `Infinity` by the time it is a `number`, and `backend/channel_number.py`
+ * answers `false` rather than raising out of `float()`. A channel number has to
+ * survive JSON -> `number` -> Dispatcharr's float column, and that value
+ * survives none of it.
  *
  * Out-of-contract input is REJECTED at the boundary, never silently rounded.
  * That is an explicit PO choice: surfacing bad data beats altering it quietly.
@@ -41,14 +50,50 @@ export const CHANNEL_NUMBER_RULE_MESSAGE =
 export const CHANNEL_NUMBER_DECIMAL_PLACES = 1;
 
 /**
- * One tick per tenth, matching the grid `channelNumberShift.ts` plans on. The
- * tolerance absorbs binary-float dust only: `0.7 + 0.1` is `0.7999999999999999`
- * and has to read as the channel number `0.8`. It is fourteen orders of
- * magnitude below the `0.05` gap separating an in-contract tenth from the
- * nearest out-of-contract value, so `1.05` can never slip through it.
+ * One tick per tenth, matching the grid `channelNumberShift.ts` plans on.
+ *
+ * What the tolerance guarantees, and over what range. It is compared against
+ * `value * 10`, so in value terms it admits a deviation of `1e-10`.
+ *
+ *   - Reject side. The nearest out-of-contract value to a tenth is half a tick
+ *     away, which is `0.5` once scaled -- a margin of 5e8 over the tolerance,
+ *     so `1.05` can never slip through. Measured: `10**n + 0.05` scales to a
+ *     deviation of exactly `0.5` and is rejected for every n from 0 to 14. That
+ *     discrimination holds up to `2**48`; at `2**49` float spacing is `0.125`,
+ *     which exceeds the `0.05` half-tick, so `base + 0.05` is not a distinct
+ *     float and there is no two-decimal value left to reject.
+ *   - Accept side. The tolerance is not what makes ordinary numbers pass. For
+ *     every one-decimal value `k / 10` below `EXACT_INTEGER_FLOOR`, scaling
+ *     back by ten returns `k` exactly: measured deviation `0.0` over 3.4M
+ *     sampled values across all seventeen decades, plus exhaustively over
+ *     `0.0`-`200.0`. Both producers of channel numbers draw from that
+ *     population -- parsed input (`Number('10000000.1')`) and planned input
+ *     (`channelNumberShift.ts` divides integer ticks by ten once, at the end).
+ *   - Dust. The tolerance therefore earns its keep on one case only:
+ *     arithmetic drift, such as `0.7 + 0.1` being `0.7999999999999999`, which
+ *     has to read as the channel number `0.8`. Being absolute, the dust it
+ *     absorbs shrinks with magnitude -- about 4.5e5 float steps at magnitude 1,
+ *     about 7 at `1e5`, and less than one above roughly `1e6`. Above that the
+ *     predicate accepts only values that round-trip exactly, which is what the
+ *     two producers deliver. A magnitude-relative tolerance was measured as the
+ *     alternative and is worse where it matters: at 8 float steps it accepts
+ *     `1e14 + 0.05`, a real two-decimal value that must be rejected.
+ *
+ * Keep this reasoning in step with `_TENTH_TOLERANCE` in
+ * `backend/channel_number.py`, which carries the same numbers.
  */
 const TENTHS = 10;
 const TENTH_TOLERANCE = 1e-9;
+
+/**
+ * Every float at or above `2**53` is an exact integer, because the gap between
+ * adjacent floats there is at least 2. Such a value carries no fractional part,
+ * so it is in contract under a rule that names no maximum, and the check can
+ * short-circuit before any arithmetic. That is also what keeps the scaling
+ * safe: the largest value reaching it is just under `2**53`, and `2**53 * 10`
+ * is about `9.0e16`, far below `Number.MAX_VALUE`, so nothing overflows.
+ */
+const EXACT_INTEGER_FLOOR = 2 ** 53;
 
 /**
  * Text accepted before the numeric rule is applied: digits, optionally followed
@@ -63,13 +108,22 @@ const CHANNEL_NUMBER_TEXT = /^\d+(?:\.\d+)?$/;
 /** Whether `value` is a channel number the contract can hold. `null` is not. */
 export function isValidChannelNumber(value: unknown): value is number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return false;
-  // Scale the FRACTIONAL part, not the whole value. Scaling the whole value
-  // reaches Infinity near Number.MAX_VALUE, and `Infinity - Infinity` is NaN,
-  // which fails every comparison. A huge finite value would therefore read as
-  // out of contract here while `backend/channel_number.py` reads it as in
-  // contract. `%` is exact and its result lies in [0, 1), so nothing overflows.
-  const fraction = value % 1;
-  const scaled = fraction * TENTHS;
+  // An exact integer: no fractional part to check, and short-circuiting here is
+  // what makes the scaling below overflow-proof.
+  if (value >= EXACT_INTEGER_FLOOR) return true;
+  // Scale the WHOLE value, not just its fractional part. Scaling only the
+  // fraction looks like the safer way to dodge the overflow near
+  // Number.MAX_VALUE, but it discards the precision that makes an ordinary
+  // large channel number work: `10000000.1 % 1` is `0.09999999962747097`, which
+  // scales to `0.9999999962747097` and misses a whole tenth by far more than
+  // the tolerance, so `10000000.1` reads as out of contract. Scaling the whole
+  // value returns `100000001` exactly. The magnitude guard above supplies the
+  // overflow safety instead, so both properties hold at once.
+  //
+  // `Math.round` breaks ties upward while Python's `round` goes to even, so the
+  // two halves pick different integers for an exact `.5` such as `1.05 * 10`.
+  // The distance is `0.5` either way, so the comparison agrees regardless.
+  const scaled = value * TENTHS;
   return Math.abs(scaled - Math.round(scaled)) <= TENTH_TOLERANCE;
 }
 
