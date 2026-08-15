@@ -305,3 +305,51 @@ class TestPasswordManagement:
             },
         )
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_forgot_password_send_failure_never_logs_the_raw_token(
+        self, async_client, test_user, caplog, monkeypatch,
+    ):
+        """The email-failure branch must not log the live reset token (cb1e1).
+
+        The token minted by /api/auth/forgot-password is a working credential:
+        whoever reads it can reset that account's password. An email outage is
+        an ordinary operational failure, and ECM logs get pasted into GitHub
+        issues, so the failure branch may record the failure and the user id
+        and nothing else.
+
+        The assertion is a negative over the log records the request actually
+        emitted, not over the arguments of the logging call. The positive
+        user_id assertion at the end is what keeps it from passing vacuously:
+        if the branch never ran, or caplog captured nothing, that one fails.
+        """
+        import logging
+
+        import auth.routes as auth_routes
+
+        minted = {}
+
+        def fail_to_send(to_email, reset_token, base_url):
+            minted["token"] = reset_token
+            return False
+
+        monkeypatch.setattr(auth_routes, "send_password_reset_email", fail_to_send)
+
+        with caplog.at_level(logging.DEBUG):
+            response = await async_client.post(
+                "/api/auth/forgot-password",
+                json={"email": test_user.email},
+            )
+
+        assert response.status_code == 200
+        # The endpoint really did mint a token and really did take the failure
+        # branch, so there was a live credential available to leak.
+        assert len(minted.get("token", "")) > 20
+
+        emitted = " ".join(
+            f"{record.getMessage()} {record.msg!r} {record.args!r}"
+            for record in caplog.records
+        )
+        assert minted["token"] not in emitted
+        # The operator still learns that the send failed, and for whom.
+        assert f"user_id={test_user.id}" in emitted

@@ -1451,8 +1451,14 @@ async def forgot_password(
         if email_sent:
             logger.info("[AUTH] Password reset email sent to: %s", user.email)
         else:
-            # Still log the token for debugging if email fails
-            logger.warning("[AUTH] Password reset email failed for %s, token: %s", user.email, raw_token)
+            # NEVER log raw_token on this branch. It is a live, working
+            # password-reset credential, and an email outage is an ordinary
+            # operational failure, so anyone reading the log could reset this
+            # user's password. Log the user id only. An operator whose SMTP is
+            # down still has two recovery paths that do not depend on this
+            # line: PATCH /api/admin/users/{user_id} with a password (admin
+            # only) and the reset_password.py CLI. See bead cb1e1.
+            logger.warning("[AUTH] Password reset email failed for user_id=%s", user.id)
 
     # Always return success for security
     return ForgotPasswordResponse()
