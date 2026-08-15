@@ -603,13 +603,21 @@ function App() {
   // pushState (bead enhancedchannelmanager-6fi7p): the operator pressed Back,
   // so they should end up on the entry they pressed Back to, not on a new
   // entry with that one still behind them.
+  //
+  // A history transition is a REQUEST, though, and the browser can decline it
+  // silently. The operator answered the dialog either way, so the destination
+  // still has to be honoured — by hash, on a new entry, which is the same
+  // fallback a navigation that was never a history transition already takes.
   const completeDeferredExit = useCallback(() => {
     const pendingRoute = pendingRouteChangeRef.current;
     if (pendingRoute) {
       pendingRouteChangeRef.current = null;
       const resume = resolvePendingRouteResume(pendingRoute);
       if (resume.kind === 'history') {
-        resumeRejectedNavigation(resume.delta);
+        resumeRejectedNavigation(
+          resume.delta,
+          () => setHash(pendingRoute.tab, pendingRoute.settingsPage),
+        );
       } else {
         setHash(resume.tab, resume.settingsPage);
       }

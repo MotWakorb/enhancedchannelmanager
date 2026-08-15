@@ -41,6 +41,87 @@ const LEGACY_SETTINGS_PAGE_ALIASES: Record<string, SettingsPage> = {
 
 const DEFAULT_TAB: TabId = 'channel-manager';
 
+/**
+ * How long the router waits for the `popstate` a traversal it asked for was
+ * supposed to produce, before deciding it is never coming.
+ *
+ * `window.history.go()` is a request, not an instruction: the browser may
+ * clamp it to a no-op at the ends of the stack, coalesce it, or ignore it
+ * outright, and every one of those cases fires nothing at all. Anything armed
+ * in anticipation of that `popstate` — a rewind to chase, a guard bypass to
+ * spend — has to come down on a timer rather than wait forever, or the NEXT
+ * genuine Back inherits it (bead enhancedchannelmanager-6fi7p).
+ */
+const TRAVERSAL_SETTLE_MS = 1000;
+
+/**
+ * Corrective traversals the router will spend chasing the accepted entry
+ * before it gives up and re-anchors where it actually is.
+ *
+ * A traversal the router asks for and an operator gesture land on the same
+ * FIFO queue, so a rewind computed from one position can be executed from
+ * another and overshoot. Recomputing from the position each `popstate`
+ * reports converges, but nothing guarantees it converges QUICKLY against an
+ * adversarial stack, and an unbounded chase is a worse failure than a
+ * re-anchor: it holds the operator in a loop they cannot break.
+ */
+const MAX_RESTORE_TRAVERSALS = 3;
+
+/**
+ * A programmatic traversal the router has asked for and is waiting on.
+ *
+ * The point of the record — as against the two bare booleans this replaces —
+ * is `expectedIndex`. A boolean says "a popstate I asked for is coming" and
+ * therefore claims the next one that arrives, whoever caused it. An operator
+ * pressing Back while a rewind is in flight produces exactly that popstate,
+ * and consuming it silently moves the browser while the router's bookkeeping
+ * still describes the entry it left.
+ */
+interface PendingTraversal {
+  /**
+   * `restore` rewinds a refused transition back to the accepted entry.
+   * `resume` replays a transition the operator has since confirmed.
+   */
+  intent: 'restore' | 'resume';
+  /** Route index the resulting `popstate` must land on to be the one we armed. */
+  expectedIndex: number;
+  /** Corrective traversals already spent chasing `expectedIndex`. */
+  corrections: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  /** `resume` only: carry the operator to the destination another way. */
+  onUnfulfilled?: () => void;
+}
+
+/**
+ * The router's own bookkeeping, carried on each history entry's state.
+ *
+ * `ecmRouteIndex` is an ordinal within a contiguous run of entries this router
+ * numbered itself, which is what makes `go(delta)` addressable. `ecmRouteEpoch`
+ * identifies the run. When the router lands on an entry it did not number — a
+ * legacy entry, or one pushed by something else — it cannot know that entry's
+ * ordinal, so it starts a NEW run anchored there instead of pretending the old
+ * ordinals still describe the stack. Deltas are then refused across the
+ * boundary rather than computed wrongly, and the callers already have the
+ * fallback for a refused delta: navigate by hash.
+ */
+interface RouteHistoryState {
+  ecmRouteIndex?: number;
+  ecmRouteEpoch?: number;
+  [key: string]: unknown;
+}
+
+const historyState = (): RouteHistoryState => (window.history.state ?? {}) as RouteHistoryState;
+
+/**
+ * The entry's ordinal, or `null` when this router cannot place it in the run
+ * it is currently numbering. A missing epoch reads as run 0 so entries stamped
+ * before epochs existed stay addressable.
+ */
+function placedRouteIndex(state: RouteHistoryState, epoch: number): number | null {
+  if (typeof state.ecmRouteIndex !== 'number') return null;
+  return (state.ecmRouteEpoch ?? 0) === epoch ? state.ecmRouteIndex : null;
+}
+
 interface HashRoute {
   tab: TabId;
   settingsPage: SettingsPage | null;
@@ -124,8 +205,9 @@ export interface RouteChangeGuardDetail {
    * `pop` only: the `window.history.go()` argument that re-runs the very
    * navigation about to be vetoed, so a guard that defers to an operator can
    * later honour it as a real Back/Forward rather than a new pushState.
-   * `null` when the target entry carries no route index and there is
-   * therefore no reliable delta.
+   * `null` when the router cannot place the target entry in the run of
+   * entries it is currently numbering — no route index at all, or one from an
+   * earlier run — and there is therefore no reliable delta.
    */
   historyDelta: number | null;
   /** Destination route, already parsed — guards decide on the tab, not the hash. */
@@ -148,22 +230,29 @@ export interface UseHashRouteReturn {
    * operator lands on the entry they asked for, with the forward/back entries
    * around it intact. A `pushState` to the same hash would instead leave them
    * on a NEW entry with the one they pressed Back from still behind them.
+   *
+   * The bypass is spent on the entry the replay was AIMED at and on no other:
+   * a `popstate` from anywhere else is a transition the operator has not
+   * answered for, and putting it through unguarded is the silent Edit Mode
+   * exit this whole mechanism exists to prevent.
+   *
+   * `onUnfulfilled` runs when the browser produces no `popstate` at all —
+   * a refused or clamped traversal. The operator asked to go somewhere and
+   * answered for it, so swallowing that is not an option; the caller passes
+   * the hash-based route to the same destination.
    */
-  resumeRejectedNavigation: (historyDelta: number) => void;
+  resumeRejectedNavigation: (historyDelta: number, onUnfulfilled?: () => void) => void;
 }
 
 export function useHashRoute(): UseHashRouteReturn {
   const [route, setRoute] = useState<HashRoute>(() => parseHash(window.location.hash));
   const routeRef = useRef(route);
   const acceptedHashRef = useRef(window.location.hash);
+  const routeEpochRef = useRef<number>(historyState().ecmRouteEpoch ?? 0);
   const acceptedHistoryIndexRef = useRef<number>(
-    typeof window.history.state?.ecmRouteIndex === 'number' ? window.history.state.ecmRouteIndex : 0,
+    placedRouteIndex(historyState(), routeEpochRef.current) ?? 0,
   );
-  const restoringRejectedHistoryRef = useRef(false);
-  // Set for exactly one popstate: the one `resumeRejectedNavigation` causes.
-  // That transition was already put to the operator and answered, so putting
-  // it to the guard again would only ask the same question twice.
-  const bypassGuardOnceRef = useRef(false);
+  const pendingTraversalRef = useRef<PendingTraversal | null>(null);
 
   const canNavigate = useCallback((
     detail: Omit<RouteChangeGuardDetail, 'from'>,
@@ -172,14 +261,101 @@ export function useHashRoute(): UseHashRouteReturn {
     detail: { from: acceptedHashRef.current, ...detail },
   })), []);
 
-  const resumeRejectedNavigation = useCallback((historyDelta: number) => {
-    // `history.go(0)` reloads in some browsers and fires no popstate in
-    // others, which would strand the bypass flag on the next genuine
-    // Back/Forward. There is nothing to resume at zero anyway.
-    if (!historyDelta) return;
-    bypassGuardOnceRef.current = true;
-    window.history.go(historyDelta);
+  const disarmTraversal = useCallback(() => {
+    const pending = pendingTraversalRef.current;
+    if (!pending) return;
+    if (pending.timer !== null) clearTimeout(pending.timer);
+    pendingTraversalRef.current = null;
   }, []);
+
+  /**
+   * Make the entry the operator is ACTUALLY on the accepted entry.
+   *
+   * The router is authoritative about which ROUTE is accepted; the browser is
+   * authoritative about which ENTRY the operator is on. When a traversal
+   * cannot reconcile the two — no addressable delta, or a rewind that will not
+   * converge — the only honest move is to stop claiming a slot the browser has
+   * left and stamp the accepted route onto the slot it is on, so the two agree
+   * by construction rather than by hope.
+   *
+   * Landing somewhere the router cannot place also means its ordinals no
+   * longer describe this stack, so it starts a new numbering run here. Deltas
+   * against entries from earlier runs are then refused rather than computed
+   * wrongly — see {@link placedRouteIndex}.
+   */
+  const anchorAcceptedRouteHere = useCallback(() => {
+    const state = historyState();
+    const placed = placedRouteIndex(state, routeEpochRef.current);
+    const onAcceptedEntry = placed !== null && placed === acceptedHistoryIndexRef.current;
+    if (onAcceptedEntry && window.location.hash === acceptedHashRef.current) return;
+    if (!onAcceptedEntry) {
+      routeEpochRef.current += 1;
+      acceptedHistoryIndexRef.current = 0;
+    }
+    window.history.replaceState(
+      {
+        ...state,
+        ecmRouteIndex: acceptedHistoryIndexRef.current,
+        ecmRouteEpoch: routeEpochRef.current,
+      },
+      '',
+      acceptedHashRef.current,
+    );
+  }, []);
+
+  const settleUnfulfilledTraversal = useCallback((traversal: PendingTraversal) => {
+    if (traversal.intent === 'restore') anchorAcceptedRouteHere();
+    else traversal.onUnfulfilled?.();
+  }, [anchorAcceptedRouteHere]);
+
+  /**
+   * Ask the browser for a traversal and record what it has to produce for the
+   * router to treat it as answered. Nothing here can leave a flag armed: the
+   * traversal either lands on `expectedIndex`, or it is taken down when the
+   * browser refuses it, or the settle timer takes it down.
+   */
+  const armTraversal = useCallback((
+    traversal: Omit<PendingTraversal, 'timer'>,
+    run: () => void,
+  ) => {
+    disarmTraversal();
+    const armed: PendingTraversal = { ...traversal, timer: null };
+    pendingTraversalRef.current = armed;
+    try {
+      run();
+    } catch {
+      // The browser refused outright, so its popstate is definitively not
+      // coming. Finish the traversal here rather than letting the caller's
+      // failure leave the router waiting on an event that cannot arrive.
+      if (pendingTraversalRef.current === armed) pendingTraversalRef.current = null;
+      settleUnfulfilledTraversal(armed);
+      return;
+    }
+    armed.timer = setTimeout(() => {
+      if (pendingTraversalRef.current !== armed) return;
+      pendingTraversalRef.current = null;
+      settleUnfulfilledTraversal(armed);
+    }, TRAVERSAL_SETTLE_MS);
+  }, [disarmTraversal, settleUnfulfilledTraversal]);
+
+  const resumeRejectedNavigation = useCallback((historyDelta: number, onUnfulfilled?: () => void) => {
+    // `history.go(0)` reloads in some browsers and fires no popstate in
+    // others, and there is nothing to resume at zero anyway — so hand the
+    // navigation straight to the caller's fallback.
+    if (!historyDelta) {
+      onUnfulfilled?.();
+      return;
+    }
+    armTraversal(
+      {
+        intent: 'resume',
+        expectedIndex: acceptedHistoryIndexRef.current + historyDelta,
+        corrections: 0,
+        onUnfulfilled,
+      },
+      () => window.history.go(historyDelta),
+    );
+  }, [armTraversal]);
 
   // Bail out when the route is unchanged so a caller that loops can't churn pushState + a fresh-object re-render. Uses pushState (not assign) to avoid a hashchange/popstate echo.
   const setHash = useCallback((tab: TabId, settingsPage?: SettingsPage | null) => {
@@ -192,7 +368,11 @@ export function useHashRoute(): UseHashRouteReturn {
       to: nextHash, source: 'push', historyDelta: null, tab, settingsPage: nextSettingsPage,
     })) return;
     const nextHistoryIndex = acceptedHistoryIndexRef.current + 1;
-    window.history.pushState({ ...window.history.state, ecmRouteIndex: nextHistoryIndex }, '', nextHash);
+    window.history.pushState(
+      { ...historyState(), ecmRouteIndex: nextHistoryIndex, ecmRouteEpoch: routeEpochRef.current },
+      '',
+      nextHash,
+    );
     acceptedHistoryIndexRef.current = nextHistoryIndex;
     acceptedHashRef.current = nextHash;
     const nextRoute = { tab, settingsPage: nextSettingsPage };
@@ -216,46 +396,121 @@ export function useHashRoute(): UseHashRouteReturn {
       return parsed;
     };
 
-    const handlePopState = () => {
-      if (restoringRejectedHistoryRef.current) {
-        restoringRejectedHistoryRef.current = false;
+    const acceptCurrentEntry = () => {
+      const nextRoute = canonicalizeCurrentHash();
+      acceptedHashRef.current = window.location.hash;
+      const placed = placedRouteIndex(historyState(), routeEpochRef.current);
+      if (placed !== null) {
+        acceptedHistoryIndexRef.current = placed;
+      } else {
+        // Accepting an entry this router never numbered. Keeping the index it
+        // was carrying would leave the bookkeeping describing the entry the
+        // operator LEFT, so number this one and start a new run from it.
+        routeEpochRef.current += 1;
+        acceptedHistoryIndexRef.current = 0;
+        window.history.replaceState(
+          { ...historyState(), ecmRouteIndex: 0, ecmRouteEpoch: routeEpochRef.current },
+          '',
+          window.location.hash,
+        );
+      }
+      routeRef.current = nextRoute;
+      setRoute(nextRoute);
+    };
+
+    /**
+     * Put the operator back on the accepted entry after a refused transition.
+     *
+     * Recomputed from the position each `popstate` actually reports rather
+     * than from the delta the refusal was raised with, because a traversal the
+     * router asked for and one the operator asked for share a queue: the
+     * rewind can be executed from a slot the operator has since moved off, and
+     * a delta computed against the old slot lands somewhere else again. When
+     * the entry cannot be placed at all, or the chase will not converge inside
+     * its budget, re-anchor rather than keep traversing.
+     */
+    const restoreAcceptedEntry = (currentIndex: number | null, corrections: number) => {
+      const acceptedIndex = acceptedHistoryIndexRef.current;
+      if (currentIndex === null
+        || currentIndex === acceptedIndex
+        || corrections >= MAX_RESTORE_TRAVERSALS) {
+        disarmTraversal();
+        anchorAcceptedRouteHere();
         return;
       }
+      armTraversal(
+        { intent: 'restore', expectedIndex: acceptedIndex, corrections: corrections + 1 },
+        () => window.history.go(acceptedIndex - currentIndex),
+      );
+    };
+
+    const handlePopState = () => {
+      const currentIndex = placedRouteIndex(historyState(), routeEpochRef.current);
+      const pending = pendingTraversalRef.current;
+
+      if (pending) {
+        if (currentIndex !== null && currentIndex === pending.expectedIndex) {
+          disarmTraversal();
+          if (pending.intent === 'restore') {
+            // Back where the refusal started. Nothing to accept, but the entry
+            // still has to say what the router says it says.
+            anchorAcceptedRouteHere();
+            return;
+          }
+          // `resume`: this exact transition was put to the operator and
+          // answered, so putting it to the guard again would ask twice.
+          acceptCurrentEntry();
+          return;
+        }
+        if (pending.intent === 'restore') {
+          // Not the rewind we armed — the operator moved again while it was in
+          // flight. The refusal stands and their dialog is still open, so this
+          // is not a second question to ask; it is a position to correct.
+          restoreAcceptedEntry(currentIndex, pending.corrections);
+          return;
+        }
+        // A `resume` bypass is armed for one entry and this is not it. Take it
+        // down: a transition the operator has not answered for must never
+        // inherit an answer they gave about a different one.
+        disarmTraversal();
+      } else if (currentIndex !== null
+        && currentIndex === acceptedHistoryIndexRef.current
+        && window.location.hash === acceptedHashRef.current) {
+        // Landed on the entry the router already considers accepted, showing
+        // the route it already considers accepted. There is no transition here
+        // to put to a guard.
+        return;
+      }
+
       const requestedHash = window.location.hash;
-      const requestedIndex = window.history.state?.ecmRouteIndex;
-      const historyDelta = typeof requestedIndex === 'number'
-        ? requestedIndex - acceptedHistoryIndexRef.current
-        : null;
+      const historyDelta = currentIndex === null
+        ? null
+        : currentIndex - acceptedHistoryIndexRef.current;
       const requested = parseHash(requestedHash);
-      const bypassingGuard = bypassGuardOnceRef.current;
-      bypassGuardOnceRef.current = false;
-      if (!bypassingGuard && !canNavigate({
+      if (!canNavigate({
         to: requestedHash,
         source: 'pop',
         historyDelta,
         tab: requested.tab,
         settingsPage: requested.settingsPage,
       })) {
-        if (historyDelta !== null) {
-          restoringRejectedHistoryRef.current = true;
-          window.history.go(-historyDelta);
-        } else {
-          window.history.replaceState(window.history.state, '', acceptedHashRef.current);
-        }
+        restoreAcceptedEntry(currentIndex, 0);
         return;
       }
-      const nextRoute = canonicalizeCurrentHash();
-      acceptedHashRef.current = window.location.hash;
-      if (typeof window.history.state?.ecmRouteIndex === 'number') {
-        acceptedHistoryIndexRef.current = window.history.state.ecmRouteIndex;
-      }
-      routeRef.current = nextRoute;
-      setRoute(nextRoute);
+      acceptCurrentEntry();
     };
 
     const initialRoute = canonicalizeCurrentHash();
-    if (typeof window.history.state?.ecmRouteIndex !== 'number') {
-      window.history.replaceState({ ...window.history.state, ecmRouteIndex: 0 }, '', window.location.hash);
+    if (placedRouteIndex(historyState(), routeEpochRef.current) === null) {
+      window.history.replaceState(
+        {
+          ...historyState(),
+          ecmRouteIndex: acceptedHistoryIndexRef.current,
+          ecmRouteEpoch: routeEpochRef.current,
+        },
+        '',
+        window.location.hash,
+      );
     }
     acceptedHashRef.current = window.location.hash;
     routeRef.current = initialRoute;
@@ -268,8 +523,11 @@ export function useHashRoute(): UseHashRouteReturn {
     return () => {
       window.removeEventListener('popstate', handlePopState);
       window.removeEventListener('ecm:route-replaced', handleRouteReplaced);
+      // The settle timer outlives the listener it exists to protect, and its
+      // callback touches history. Nothing armed may survive the unmount.
+      disarmTraversal();
     };
-  }, [canNavigate]);
+  }, [canNavigate, disarmTraversal, armTraversal, anchorAcceptedRouteHere]);
 
   return {
     activeTab: route.tab,
