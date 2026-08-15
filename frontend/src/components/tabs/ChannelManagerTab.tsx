@@ -6,6 +6,7 @@ import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
 import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
+import type { DedupDropReport } from '../../hooks/useDedupOnDrop';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import type { SourceLoadState } from '../sourceLoadState';
 import { aggregateWorkspaceSources, retryFailedSources, type WorkspaceSource } from '../workspaceLoadState';
@@ -199,8 +200,14 @@ export interface ChannelManagerTabProps {
     suggestedStartingNumber?: number,
   ) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
-  // Includes target group ID and starting channel number for pre-filling the modal
-  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Includes target group ID and starting channel number for pre-filling the modal.
+  // Resolves with what the duplicate check did so ChannelsPane can say so
+  // (bead enhancedchannelmanager-ok8tj); pass-through only.
+  onBulkStreamsDrop?: (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ) => void | Promise<DedupDropReport | void>;
   // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
   onOpenCreateChannelModal?: () => void;
   onBulkCreateFromGroup: (

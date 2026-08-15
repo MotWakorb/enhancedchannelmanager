@@ -48,6 +48,8 @@ import { compareChannelNames, type ChannelSortOrder } from '../utils/channelSort
 import { getDateLocale } from '../utils/formatting';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
+import { describeDedupDropReport } from './dedupDropMessages';
+import type { DedupDropReport } from '../hooks/useDedupOnDrop';
 import { useDropdown } from '../hooks/useDropdown';
 import { useModal } from '../hooks/useModal';
 import { useNormalizePreview } from '../hooks/useNormalizePreview';
@@ -198,8 +200,16 @@ interface ChannelsPaneProps {
   // Now includes optional target group ID and suggested starting number for positional drops
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => void;
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
-  // Includes target group ID and starting channel number for pre-filling the modal
-  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Includes target group ID and starting channel number for pre-filling the modal.
+  // May resolve with what the duplicate check did, which this pane turns into an
+  // operator-visible message (bead enhancedchannelmanager-ok8tj). Callers that do
+  // not run a dedup check — the dev harness and the pane's own tests — return void
+  // and simply say nothing, exactly as before.
+  onBulkStreamsDrop?: (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ) => void | Promise<DedupDropReport | void>;
   // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
   onOpenCreateChannelModal?: () => void;
   // Appearance settings
@@ -3136,6 +3146,27 @@ export function ChannelsPane({
     return maxNumber + 1;
   };
 
+  // Say what the duplicate check did on a drop (bead
+  // enhancedchannelmanager-ok8tj). The drop handler resolves with the outcome;
+  // a `candidate` outcome resolves to no message, because the StreamDedupModal
+  // it just opened IS the message. Callers that return void — the dev harness,
+  // this pane's own tests — say nothing, exactly as before.
+  const reportDedupDropOutcome = (
+    groupId: number | 'ungrouped',
+    result: void | Promise<DedupDropReport | void>,
+  ) => {
+    if (!result) return;
+    const groupLabel = groupId === 'ungrouped'
+      ? 'the ungrouped list'
+      : `"${channelGroups.find((g) => g.id === groupId)?.name ?? 'Unknown Group'}"`;
+    void Promise.resolve(result).then((report) => {
+      if (!report) return;
+      const message = describeDedupDropReport(report, groupLabel);
+      if (!message) return;
+      notifications[message.type](message.message, message.title);
+    });
+  };
+
   // Handle stream dropped on group header - creates new channel(s) with stream name(s)
   // Always routes to bulk create modal for consistent UX (works for 1 or many streams)
   const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamIds: number[]) => {
@@ -3147,7 +3178,7 @@ export function ChannelsPane({
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
     // Route to bulk create modal (handles single or multiple streams)
-    onBulkStreamsDrop(streamIds, targetGroupId, nextNumber);
+    reportDedupDropOutcome(groupId, onBulkStreamsDrop(streamIds, targetGroupId, nextNumber));
   };
 
   // Handle stream dropped between channels - creates new channel(s) at specific position
@@ -3162,7 +3193,10 @@ export function ChannelsPane({
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
     // Route to bulk create modal (handles single or multiple streams)
-    onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
+    reportDedupDropOutcome(
+      groupId,
+      onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber),
+    );
   };
 
   // getNameForSorting / stripCountryPrefix used to live here as local

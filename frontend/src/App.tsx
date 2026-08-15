@@ -17,6 +17,7 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
+import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure } from './types';
@@ -2427,7 +2428,24 @@ function App() {
   const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
-  const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
+  //
+  // Every branch below now NAMES what the duplicate check did (bead
+  // enhancedchannelmanager-ok8tj), closing the sibling of the defect commit
+  // `941d9087` fixed on the `Create in…` trigger path. Silence covered five
+  // different stories here — a candidate was found, nothing was similar
+  // enough, the lookup broke, the drop carried more than one stream, or the
+  // client could not read the stream's name — and the first was the only one
+  // the operator could actually see.
+  //
+  // The report is RETURNED rather than toasted here: `App` renders
+  // `NotificationProvider`, so it is outside its own provider and cannot call
+  // `useNotifications()`. `ChannelsPane`, which owns the drop target and knows
+  // the group's name, turns the report into the message.
+  const handleBulkStreamsDrop = useCallback(async (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ): Promise<DedupDropReport> => {
     const proceedWithCreate = () => {
       // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
       setDroppedStreamIds(streamIds);
@@ -2436,9 +2454,11 @@ function App() {
     };
 
     if (streamIds.length !== 1) {
-      // Multi-stream drops keep the existing bulk-create flow unchanged.
+      // Multi-stream drops keep the existing bulk-create flow unchanged —
+      // bulk dedup is a separate surface. Say so, rather than leaving the
+      // absent merge prompt to be read as "nothing matched".
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_multi_stream', streamName: null, streamCount: streamIds.length };
     }
 
     const streamId = streamIds[0];
@@ -2448,10 +2468,10 @@ function App() {
       // the drop is never silently dropped on the floor.
       logger.warn('[DEDUP] dropped stream id %s not found in client cache; skipping dedup lookup', streamId);
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_unknown_stream', streamName: null, streamCount: 1 };
     }
 
-    void dedupOnDrop.handleSingleStreamDrop(
+    const outcome = await dedupOnDrop.handleSingleStreamDrop(
       {
         streamId,
         streamName: stream.name,
@@ -2459,6 +2479,7 @@ function App() {
       },
       proceedWithCreate,
     );
+    return { outcome, streamName: stream.name, streamCount: 1 };
   }, [streams, seenStreams, dedupOnDrop]);
 
   // Handle open create channel modal (triggers bulk create modal in manual entry mode)

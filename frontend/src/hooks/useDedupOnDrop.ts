@@ -52,6 +52,56 @@ export interface UseDedupOnDropOptions {
   reloadChannels: () => Promise<void> | void;
 }
 
+/**
+ * What the drag-drop duplicate check actually did, reported back to the
+ * caller (bead enhancedchannelmanager-ok8tj).
+ *
+ * The same defect `941d9087` fixed on the "Create in…" trigger path lived
+ * here unchanged: all three outcomes looked identical from outside the hook
+ * — the create path ran and nothing was said — so an operator who saw no
+ * merge prompt could not tell "nothing in the group was similar enough"
+ * from "the check never happened". Same vocabulary as
+ * {@link import('./useAddStreamDedup').AddStreamDedupOutcome} deliberately:
+ * this is one feature with two trigger paths, and the two must not drift.
+ */
+export type DedupDropOutcome =
+  /** A candidate cleared the threshold and the modal is open. */
+  | 'candidate'
+  /** The lookup ran and nothing in the target group cleared the threshold. */
+  | 'no_candidate'
+  /** The lookup itself failed; the create path ran without a dedup check. */
+  | 'lookup_failed';
+
+/**
+ * The full set of cases the operator can land in on a drop, including the
+ * two the CALLER decides before this hook is ever reached: a multi-stream
+ * drop (bulk dedup is a separate surface) and a drop whose stream metadata
+ * the client cannot read (nothing to look up).
+ */
+export type DedupDropReportOutcome =
+  | DedupDropOutcome
+  | 'skipped_multi_stream'
+  | 'skipped_unknown_stream';
+
+/**
+ * One drop's outcome plus the facts needed to describe it.
+ *
+ * The drop is initiated in `ChannelsPane`, which knows the target group's
+ * name but not the dropped stream's; the dedup lookup is driven from
+ * `App`, which knows the stream but cannot call `useNotifications` (it
+ * renders `NotificationProvider` rather than living inside it). So the
+ * producer names the case and carries the facts it alone holds, and the
+ * consumer writes the sentence — the same division of labour as the
+ * `useAddStreamDedup` → `StreamsPane` path, one hop longer.
+ */
+export interface DedupDropReport {
+  outcome: DedupDropReportOutcome;
+  /** Provider name of the dropped stream, or null when it could not be read. */
+  streamName: string | null;
+  /** How many streams the drop carried — the multi-stream skip needs it. */
+  streamCount: number;
+}
+
 export interface UseDedupOnDropReturn {
   /** Open state + candidate for the StreamDedupModal, or null when closed. */
   modalState: DedupModalState | null;
@@ -60,13 +110,18 @@ export interface UseDedupOnDropReturn {
   /**
    * Entry point. Looks up candidates and either opens the modal or runs the
    * caller-supplied fallback (the unchanged single-stream creation path).
-   * Backend errors are logged and treated as "no candidate" so a failing
-   * candidates endpoint never blocks a drop the operator already initiated.
+   * Backend errors are logged and still run the fallback so a failing
+   * candidates endpoint never blocks a drop the operator already initiated —
+   * but they are now reported as `lookup_failed` rather than passed off as
+   * "no candidate", which is what made the two indistinguishable.
+   *
+   * @returns which of the three outcomes happened, so the caller can make it
+   *   visible to the operator (bead enhancedchannelmanager-ok8tj).
    */
   handleSingleStreamDrop: (
     request: DedupDropRequest,
     fallback: () => void,
-  ) => Promise<void>;
+  ) => Promise<DedupDropOutcome>;
   /** Modal callback: merge into the candidate channel. */
   handleMerge: (channelId: string) => Promise<void>;
   /** Modal callback: proceed with the original create path. */
@@ -96,7 +151,7 @@ export function useDedupOnDrop({
   );
 
   const handleSingleStreamDrop = useCallback(
-    async (request: DedupDropRequest, fallback: () => void) => {
+    async (request: DedupDropRequest, fallback: () => void): Promise<DedupDropOutcome> => {
       let response;
       try {
         response = await api.getDedupCandidates(
@@ -112,14 +167,14 @@ export function useDedupOnDrop({
           err,
         );
         fallback();
-        return;
+        return 'lookup_failed';
       }
 
       if (response.candidates.length === 0) {
         // No candidate cleared the §D2 floor — proceed with the original
         // single-stream creation flow exactly as before.
         fallback();
-        return;
+        return 'no_candidate';
       }
 
       setModalState({
@@ -129,6 +184,7 @@ export function useDedupOnDrop({
         candidate: response.candidates[0],
         fallback,
       });
+      return 'candidate';
     },
     [],
   );
