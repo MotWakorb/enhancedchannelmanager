@@ -136,13 +136,17 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
  * in-contract data the tick comparison IS exact equality; the grid is not an
  * approximation of it.
  *
- * Nothing enforces that contract on the way in yet. `backend/csv_handler.py`
- * accepts any positive float for `channel_number` with no precision check,
- * there is no ECM column for `channel_number` at all, and the frontend parses
- * with a bare `parseFloat`, so an import can still carry an out-of-contract
- * value like `1.05`. Such a value collapses onto the nearest tenth for
- * COMPARISON, and lands on the tenths grid on OUTPUT (see the `toNumber`
- * computation below). Both are deliberate:
+ * That contract is now enforced on the way in. `frontend/src/utils/
+ * channelNumber.ts` and `backend/channel_number.py` define the domain, and
+ * every channel-number entry point rejects an out-of-contract value like
+ * `1.05` rather than rounding it (bead `enhancedchannelmanager-ic884.1`).
+ * There is still no ECM column for `channel_number` at all, so the lineup this
+ * planner reads comes from Dispatcharr, which enforces nothing itself: a value
+ * written before enforcement landed, or by any other Dispatcharr client, can
+ * still be out of contract. This module's handling of that case is therefore
+ * DEFENSIVE rather than load-bearing, and unchanged: such a value collapses
+ * onto the nearest tenth for COMPARISON, and lands on the tenths grid on
+ * OUTPUT (see the `toNumber` computation below). Both are deliberate:
  *
  *   - Collapsing for comparison is conservative. An out-of-contract number is
  *     treated as occupying the slot an operator reads it as, so the planner
@@ -154,12 +158,10 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
  *
  * This module does NOT enforce the invariant; it only has to cope with
  * whatever is already in the lineup. Defining and enforcing the canonical
- * channel-number domain is bead `enhancedchannelmanager-ic884.1` ("Define and
- * enforce valid canonical channel-number values"), which now carries the PO's
- * one-decimal constraint. The collapse is pinned by the "collapses an
- * out-of-contract number onto the nearest tenth" test in
- * `channelNumberShift.test.ts`; it is a pinned behaviour, not an enforced
- * guarantee about the data.
+ * channel-number domain is the job of `channelNumber.ts` and its backend
+ * counterpart. The collapse is pinned by the "collapses an out-of-contract
+ * number onto the nearest tenth" test in `channelNumberShift.test.ts`; it is a
+ * pinned behaviour, not an enforced guarantee about the data.
  */
 const TICK_SCALE = 10;
 

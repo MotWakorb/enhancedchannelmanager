@@ -4,6 +4,7 @@ import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, Channe
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { channelNumberInputError, parseChannelNumberInput } from '../utils/channelNumber';
 import { categorizeStreamGroups } from '../utils/streamGroupCategories';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -1385,8 +1386,15 @@ export function StreamsPane({
           }
         }
 
-        // Parse channel number (optional)
-        const channelNumber = bulkCreateStartingNumber ? parseFloat(bulkCreateStartingNumber) : undefined;
+        // Parse channel number (optional). Manual entry reaches the API without
+        // going through `handleBulkCreate`'s guard, so it applies the canonical
+        // contract itself (bead enhancedchannelmanager-ic884.1).
+        const parsedNumber = parseChannelNumberInput(bulkCreateStartingNumber);
+        if (!parsedNumber.ok) {
+          alert(parsedNumber.message);
+          return;
+        }
+        const channelNumber = parsedNumber.value ?? undefined;
 
         // Create the channel
         await onCreateChannel(
@@ -1579,9 +1587,15 @@ export function StreamsPane({
         return;
       }
     } else {
-      const startingNum = parseFloat(bulkCreateStartingNumber);
-      if (isNaN(startingNum) || startingNum < 0) {
-        alert('Please enter a valid starting channel number');
+      // The starting number is a channel number, so it is held to the canonical
+      // contract (non-negative, at most one decimal place). An out-of-contract
+      // entry is refused with the same sentence the API would return rather
+      // than being rounded onto a neighbouring tenth, and the whole created run
+      // inherits the starting value, so this one check covers every channel the
+      // operation would create. Bead enhancedchannelmanager-ic884.1.
+      const parsedStart = parseChannelNumberInput(bulkCreateStartingNumber, { allowEmpty: false });
+      if (!parsedStart.ok) {
+        alert(parsedStart.message);
         return;
       }
     }
@@ -2458,6 +2472,12 @@ export function StreamsPane({
                     className="form-input"
                     autoFocus
                   />
+                  {(() => {
+                    const startError = channelNumberInputError(bulkCreateStartingNumber);
+                    return startError ? (
+                      <div className="field-error" role="alert">{startError}</div>
+                    ) : null;
+                  })()}
                   {bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
                       {(() => {
@@ -2958,7 +2978,7 @@ export function StreamsPane({
                     // In separate groups mode, check first group has a start number
                     : isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
                       ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name)
-                      : !bulkCreateStartingNumber
+                      : !bulkCreateStartingNumber || !!channelNumberInputError(bulkCreateStartingNumber)
                 )}
               >
                 {bulkCreateLoading ? (

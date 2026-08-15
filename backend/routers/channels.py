@@ -17,9 +17,17 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
+from channel_number import (
+    CHANNEL_NUMBER_RULE_MESSAGE,
+    ChannelNumber,
+    InvalidChannelNumberError,
+    parse_channel_number_text,
+    validate_channel_number_in_payload,
+)
 from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
@@ -84,7 +92,10 @@ def validate_stream_permutation(
 
 class CreateChannelRequest(BaseModel):
     name: str
-    channel_number: Optional[float] = None
+    # `ChannelNumber` is the canonical domain (bead enhancedchannelmanager-ic884.1):
+    # non-negative, at most one decimal place. Every channel-number field in this
+    # module uses it so no entry point re-implements the check.
+    channel_number: Optional[ChannelNumber] = None
     channel_group_id: Optional[int] = None
     logo_id: Optional[int] = None
     tvg_id: Optional[str] = None
@@ -114,13 +125,13 @@ class ReorderStreamsRequest(BaseModel):
 
 class AssignNumbersRequest(BaseModel):
     channel_ids: list[int]
-    starting_number: Optional[float] = None
+    starting_number: Optional[ChannelNumber] = None
 
 
 class MergeChannelsRequest(BaseModel):
     source_channel_ids: list[int]
     target_name: str
-    target_channel_number: Optional[float] = None
+    target_channel_number: Optional[ChannelNumber] = None
     target_channel_group_id: Optional[int] = None
     target_logo_id: Optional[int] = None
     target_tvg_id: Optional[str] = None
@@ -204,6 +215,21 @@ class BulkUpdateChannelOp(BaseModel):
     channelId: int
     data: dict
 
+    @field_validator("data")
+    @classmethod
+    def _check_channel_number(cls, value: dict) -> dict:
+        """`data` is a free-form field bag, so the contract is applied by key.
+
+        Absent means "not changing the number"; explicit `None` means "clear
+        it". Anything else must be in contract (bead
+        enhancedchannelmanager-ic884.1).
+        """
+        try:
+            validate_channel_number_in_payload(value)
+        except InvalidChannelNumberError:
+            raise PydanticCustomError("channel_number", CHANNEL_NUMBER_RULE_MESSAGE) from None
+        return value
+
 
 class BulkAddStreamOp(BaseModel):
     type: Literal["addStreamToChannel"] = "addStreamToChannel"
@@ -226,14 +252,14 @@ class BulkReorderStreamsOp(BaseModel):
 class BulkAssignNumbersOp(BaseModel):
     type: Literal["bulkAssignChannelNumbers"] = "bulkAssignChannelNumbers"
     channelIds: list[int]
-    startingNumber: Optional[float] = None
+    startingNumber: Optional[ChannelNumber] = None
 
 
 class BulkCreateChannelOp(BaseModel):
     type: Literal["createChannel"] = "createChannel"
     tempId: int  # Negative temp ID from frontend
     name: str
-    channelNumber: Optional[float] = None
+    channelNumber: Optional[ChannelNumber] = None
     groupId: Optional[int] = None
     newGroupName: Optional[str] = None
     logoId: Optional[int] = None
@@ -1030,10 +1056,13 @@ async def import_channels_csv(file: UploadFile = File(...), _admin=RequireAdminI
             # Add optional fields
             channel_number = row.get("channel_number", "").strip()
             if channel_number:
-                try:
-                    channel_data["channel_number"] = float(channel_number)
-                except ValueError:
-                    pass  # Skip invalid numbers
+                # `validate_channel_row` already rejected out-of-contract values
+                # before the row reached this loop, so this parse re-uses the
+                # same canonical function rather than a second, looser `float()`
+                # (bead enhancedchannelmanager-ic884.1).
+                parsed_number = parse_channel_number_text(channel_number)
+                if parsed_number is not None:
+                    channel_data["channel_number"] = parsed_number
 
             if group_id:
                 channel_data["channel_group_id"] = group_id
@@ -2576,6 +2605,13 @@ async def get_channel_streams(channel_id: int):
 async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabled):
     """Update a channel. Admin only (operator-only write, bd-v7n9f)."""
     logger.debug("[CHANNELS] PATCH /channels/%s - data=%s", channel_id, data)
+    # The body is an untyped field bag, so the canonical channel-number contract
+    # is applied by key rather than by field type (bead
+    # enhancedchannelmanager-ic884.1).
+    try:
+        validate_channel_number_in_payload(data)
+    except InvalidChannelNumberError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     client = get_client()
     try:
         # Get before state for logging

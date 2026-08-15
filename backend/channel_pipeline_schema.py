@@ -12,10 +12,46 @@ import re
 import json
 
 import safe_regex
+from channel_number import CHANNEL_NUMBER_RULE_MESSAGE, is_valid_channel_number
 from regex_lint import lint_replacement_group_refs
 from date_placeholders import expand_date_placeholders
 
 logger = logging.getLogger(__name__)
+
+# A channel-number SPEC in a pipeline rule is not a bare channel number. The
+# vocabulary is "auto", a literal number, or a "min-max" range string, and the
+# spec may also be a template such as "{auto}" that only resolves at execution
+# time. Only the literal-number form IS a channel number, so only that form is
+# held to the canonical contract (bead enhancedchannelmanager-ic884.1); every
+# other shape is left exactly as validation found it before this check existed,
+# because narrowing the spec vocabulary is a different question and would
+# invalidate rules operators already have.
+_CHANNEL_NUMBER_RANGE = re.compile(r"^\s*\d+\s*-\s*\d+\s*$")
+
+
+def validate_channel_number_spec(spec: Any, action_label: str) -> list:
+    """Return contract errors for the literal-number form of a spec.
+
+    Returns no errors for ``"auto"``, a ``"min-max"`` range, a template, or any
+    other non-numeric shape. A literal number outside the canonical domain
+    (negative, non-finite, or carrying more than one decimal place) is rejected
+    here so it cannot be stored on a rule and applied later.
+    """
+    if isinstance(spec, bool) or spec is None:
+        return []
+    if isinstance(spec, (int, float)):
+        number: Any = spec
+    elif isinstance(spec, str):
+        text = spec.strip()
+        if text == "auto" or _CHANNEL_NUMBER_RANGE.match(text):
+            return []
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return []  # A template or other non-numeric spec: not this rule's business.
+    else:
+        return []
+    return [] if is_valid_channel_number(number) else [f"{action_label}: {CHANNEL_NUMBER_RULE_MESSAGE}"]
 
 
 # =============================================================================
@@ -394,6 +430,13 @@ class Action:
             if_exists = self.params.get("if_exists", "skip")
             if if_exists not in ("skip", "merge", "merge_only", "update"):
                 errors.append(f"create_channel.if_exists must be 'skip', 'merge', 'merge_only', or 'update'")
+            # The channel_number spec defaults to "auto" when absent or null.
+            if self.params.get("channel_number") is not None:
+                errors.extend(
+                    validate_channel_number_spec(
+                        self.params["channel_number"], "create_channel.channel_number"
+                    )
+                )
             # Validate optional name transform
             errors.extend(self._validate_name_transform())
 
@@ -574,6 +617,8 @@ class Action:
             value = self.params.get("value")
             if value is None:
                 errors.append("set_channel_number requires a 'value' ('auto', integer, or 'min-max' range)")
+            else:
+                errors.extend(validate_channel_number_spec(value, "set_channel_number"))
 
         # Validate set_stream_priority
         elif action_type == ActionType.SET_STREAM_PRIORITY:
