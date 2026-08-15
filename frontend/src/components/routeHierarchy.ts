@@ -44,6 +44,25 @@ export function getGuardedPopStateDecision(
   return decision === 'navigate' ? 'ignore' : decision;
 }
 
+/**
+ * Signing out ends the session, and the Edit Mode ledger is in memory, so it
+ * discards staged work exactly as leaving the route does — but it is an SPA
+ * state transition, so neither the route guard nor `beforeunload` can see it
+ * (bead epic enhancedchannelmanager-r93hq).
+ *
+ * There is no destination tab to exempt here: `getGuardedRouteDecision` lets
+ * a navigation to `channel-manager` through because Edit Mode SURVIVES it.
+ * Nothing survives a sign-out. And unlike a route change there is no
+ * `exit-and-navigate` case worth having — with no staged operations there is
+ * nothing to lose and nothing to tidy, because the whole tree unmounts.
+ */
+export function getGuardedSignOutDecision(
+  isEditMode: boolean,
+  stagedOperationCount: number,
+): 'confirm' | 'sign-out' {
+  return isEditMode && stagedOperationCount > 0 ? 'confirm' : 'sign-out';
+}
+
 export interface PendingRouteChange {
   tab: TabId;
   settingsPage?: SettingsPage;

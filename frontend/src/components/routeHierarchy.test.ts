@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getGuardedPopStateDecision,
   getGuardedRouteDecision,
+  getGuardedSignOutDecision,
   isPlainPrimaryActivation,
   resolvePendingRouteResume,
   ROUTE_HEADER_POLICIES,
@@ -236,6 +237,38 @@ describe('browser Back/Forward guard', () => {
 
   it('ignores an event with no detail rather than assuming a destination', () => {
     expect(getGuardedPopStateDecision(undefined, true, 3)).toBe('ignore');
+  });
+});
+
+/**
+ * bead epic enhancedchannelmanager-r93hq. Signing out unmounts the app and
+ * takes the in-memory Edit Mode ledger with it. `handleLogout` consulted
+ * nothing at all, and because it is an SPA state transition the `beforeunload`
+ * guard never fired either.
+ */
+describe('sign-out guard', () => {
+  it('asks the operator before signing out with staged work', () => {
+    expect(getGuardedSignOutDecision(true, 3)).toBe('confirm');
+  });
+
+  it('signs straight out when Edit Mode is active but nothing is staged', () => {
+    expect(getGuardedSignOutDecision(true, 0)).toBe('sign-out');
+  });
+
+  it('signs straight out when Edit Mode is not active', () => {
+    expect(getGuardedSignOutDecision(false, 0)).toBe('sign-out');
+  });
+
+  /**
+   * The route guard exempts `channel-manager` because Edit Mode SURVIVES a
+   * navigation back to its own route. Nothing survives a sign-out, so the
+   * sign-out guard has no such exemption — and this is exactly the case an
+   * operator is in when they sign out: standing on Channel Manager, in Edit
+   * Mode, with staged changes.
+   */
+  it('does not inherit the route guard exemption for Channel Manager', () => {
+    expect(getGuardedRouteDecision(true, 3, 'channel-manager')).toBe('navigate');
+    expect(getGuardedSignOutDecision(true, 3)).toBe('confirm');
   });
 });
 

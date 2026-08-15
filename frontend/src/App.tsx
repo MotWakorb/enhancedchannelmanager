@@ -38,6 +38,7 @@ import { ROUTE_TITLES } from './components/routeTitles';
 import {
   getGuardedPopStateDecision,
   getGuardedRouteDecision,
+  getGuardedSignOutDecision,
   isPlainPrimaryActivation,
   resolvePendingRouteResume,
   ROUTE_HIERARCHY,
@@ -363,6 +364,12 @@ function App() {
     pendingRouteChangeRef.current?.onCancel?.();
     pendingRouteChangeRef.current = null;
   }, []);
+  // Set when the operator asked to sign out with staged changes: the sign-out
+  // itself, held until they answer the exit dialog (bead epic
+  // enhancedchannelmanager-r93hq). A ref, not state — nothing renders from it,
+  // and running a stored continuation from inside a state updater would fire
+  // it twice under StrictMode.
+  const pendingSignOutRef = useRef<(() => void | Promise<void>) | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
     status: null as HTMLDivElement | null,
@@ -607,6 +614,9 @@ function App() {
         setHash(resume.tab, resume.settingsPage);
       }
     }
+    const pendingSignOut = pendingSignOutRef.current;
+    pendingSignOutRef.current = null;
+    if (pendingSignOut) void pendingSignOut();
   }, [resumeRejectedNavigation, setHash]);
 
   // Handle dialog actions
@@ -651,7 +661,7 @@ function App() {
     setSelectedChannelIds(new Set());
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Carry the operator wherever they were trying to go
+    // Carry the operator wherever they were trying to go — or sign them out
     completeDeferredExit();
   }, [commit, clearHistory, completeDeferredExit]);
 
@@ -669,7 +679,7 @@ function App() {
     setShowExitDialog(false);
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Carry the operator wherever they were trying to go
+    // Carry the operator wherever they were trying to go — or sign them out
     completeDeferredExit();
   }, [discard, clearHistory, completeDeferredExit]);
 
@@ -682,6 +692,7 @@ function App() {
     // A vetoed Back has ALREADY been rewound to the entry the operator was on
     // by the router, so keeping editing needs to undo nothing here — they are
     // still on Channel Manager, still in Edit Mode, with their staged work.
+    pendingSignOutRef.current = null;
     focusHeadingOnRouteChangeRef.current = false;
   }, [replacePendingRouteChange]);
 
@@ -765,6 +776,25 @@ function App() {
     window.addEventListener('ecm:before-route-change', handler);
     return () => window.removeEventListener('ecm:before-route-change', handler);
   }, [isEditMode, stagedOperationCount, rawExitEditMode, replacePendingRouteChange]);
+
+  // Signing out unmounts the app and takes the in-memory Edit Mode ledger with
+  // it, so it discards staged work exactly as navigating away does — but it is
+  // an SPA state transition, so `beforeunload` never fires and no route guard
+  // can see it (bead epic enhancedchannelmanager-r93hq). UserMenu hands the
+  // sign-out here instead of running it, and gets it back only once the
+  // operator has answered.
+  const requestSignOut = useCallback((proceed: () => void | Promise<void>) => {
+    if (getGuardedSignOutDecision(isEditMode, stagedOperationCount) === 'sign-out') {
+      void proceed();
+      return;
+    }
+    // A sign-out supersedes any deferred navigation: there will be no app left
+    // to navigate. Cancelling it rather than dropping it keeps the requester's
+    // handoff state from being stranded.
+    replacePendingRouteChange(null);
+    pendingSignOutRef.current = proceed;
+    setShowExitDialog(true);
+  }, [isEditMode, stagedOperationCount, replacePendingRouteChange]);
 
   // Listen for task editor navigation events from NotificationCenter.
   //
@@ -2852,7 +2882,7 @@ function App() {
             </svg>
           </a>
           <NotificationCenter dedupM3uToastSuppressed={dedupM3uToastSuppressed} />
-          <UserMenu />
+          <UserMenu onRequestSignOut={requestSignOut} />
         </div>
       </header>
 

@@ -155,3 +155,61 @@ describe('UserMenu sign-in affordance', () => {
     expect(screen.queryByRole('button', { name: /Sign in/i })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * bead epic enhancedchannelmanager-r93hq. `handleLogout` called `logout()`
+ * directly. Once auth state flipped, ProtectedRoute swapped the app for the
+ * login page and the in-memory Edit Mode ledger went with it — staged channel
+ * work discarded with no warning. It is an SPA state transition, so App's
+ * `beforeunload` guard never fired, and the user menu is in the header on
+ * every route, so it is reachable from Channel Manager in Edit Mode.
+ */
+describe('UserMenu sign-out guard', () => {
+  it('hands the sign-out to the host instead of ending the session itself', async () => {
+    const logout = vi.fn();
+    authState.current = { ...SIGNED_IN, logout };
+    const onRequestSignOut = vi.fn();
+    const user = userEvent.setup();
+    render(<UserMenu onRequestSignOut={onRequestSignOut} />);
+
+    await user.click(screen.getByRole('button', { name: /Operator/ }));
+    await user.click(screen.getByRole('button', { name: /Sign out/ }));
+
+    expect(onRequestSignOut).toHaveBeenCalledTimes(1);
+    // The session is still alive: the host has not answered yet.
+    expect(logout).not.toHaveBeenCalled();
+    // And the dropdown is out of the way of whatever the host puts up.
+    expect(screen.queryByRole('button', { name: /Sign out/ })).not.toBeInTheDocument();
+  });
+
+  it('ends the session when the host runs the deferred sign-out', async () => {
+    const logout = vi.fn().mockResolvedValue(undefined);
+    authState.current = { ...SIGNED_IN, logout };
+    let deferred: (() => void | Promise<void>) | null = null;
+    const user = userEvent.setup();
+    render(<UserMenu onRequestSignOut={(proceed) => { deferred = proceed; }} />);
+
+    await user.click(screen.getByRole('button', { name: /Operator/ }));
+    await user.click(screen.getByRole('button', { name: /Sign out/ }));
+    expect(logout).not.toHaveBeenCalled();
+
+    await deferred!();
+
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  // PIN, not a red-proven case: a UserMenu with no host has nothing to lose,
+  // and the dev harness renders one. It is pinned because making the guard
+  // mandatory would silently break sign-out wherever the prop is absent.
+  it('PIN: signs out directly when no host guard is supplied', async () => {
+    const logout = vi.fn().mockResolvedValue(undefined);
+    authState.current = { ...SIGNED_IN, logout };
+    const user = userEvent.setup();
+    render(<UserMenu />);
+
+    await user.click(screen.getByRole('button', { name: /Operator/ }));
+    await user.click(screen.getByRole('button', { name: /Sign out/ }));
+
+    await waitFor(() => expect(logout).toHaveBeenCalledTimes(1));
+  });
+});

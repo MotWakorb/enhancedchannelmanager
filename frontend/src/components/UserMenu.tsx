@@ -16,7 +16,24 @@ import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './UserMenu.css';
 
-export function UserMenu() {
+export interface UserMenuProps {
+  /**
+   * Ask the host whether the session may end, handing it the sign-out to run.
+   *
+   * Signing out unmounts the app and takes the in-memory Edit Mode ledger with
+   * it, discarding staged channel work with no warning — an SPA state
+   * transition, so `beforeunload` never fires (bead epic
+   * enhancedchannelmanager-r93hq). The host either runs `proceed` immediately
+   * or holds it until the operator answers its exit dialog.
+   *
+   * Optional so the dev harness, and this component's own tests, can render a
+   * UserMenu with no host: without it the sign-out runs unguarded, which is
+   * correct in a context that has no staged work to lose.
+   */
+  onRequestSignOut?: (proceed: () => void | Promise<void>) => void;
+}
+
+export function UserMenu({ onRequestSignOut }: UserMenuProps = {}) {
   const { user, authStatus, logout, isLoading, refreshUser } = useAuth();
   const notifications = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
@@ -123,7 +140,7 @@ export function UserMenu() {
     );
   }
 
-  const handleLogout = async () => {
+  const performLogout = async () => {
     setIsLoggingOut(true);
     try {
       await logout();
@@ -134,6 +151,22 @@ export function UserMenu() {
       setIsLoggingOut(false);
       setIsOpen(false);
     }
+  };
+
+  // Ask before ending the session, never after. `logout()` used to be called
+  // straight from here; by the time it resolved, ProtectedRoute had swapped
+  // the app for the login page and any staged Edit Mode work was gone (bead
+  // epic enhancedchannelmanager-r93hq). The menu closes either way — a
+  // dropdown left hanging over the host's exit dialog is nobody's idea of a
+  // confirmation — and `performLogout` is handed over rather than run, so the
+  // host can hold it until the operator answers.
+  const handleLogout = () => {
+    setIsOpen(false);
+    if (onRequestSignOut) {
+      onRequestSignOut(performLogout);
+      return;
+    }
+    void performLogout();
   };
 
   const handleOpenProfile = () => {
