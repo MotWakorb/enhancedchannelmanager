@@ -8,11 +8,19 @@ potential rollback.
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Union
 import re
 
 import safe_regex
 import journal
+from channel_number import (
+    CHANNEL_NUMBER_TICKS_PER_UNIT,
+    InvalidChannelNumberError,
+    channel_number_from_ticks,
+    channel_number_ticks,
+    is_valid_channel_number,
+    parse_channel_number_text,
+)
 from epg_matching import detect_region
 from match_fold import fold_match_key
 from channel_pipeline_schema import Action, ActionType, TemplateVariables
@@ -29,6 +37,79 @@ from services.dedup_matcher import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# A whole-number "min-max" channel-number range, the only range shape a rule's
+# channel-number spec honours. Kept shape-identical to
+# ``channel_pipeline_schema._CHANNEL_NUMBER_RANGE_RE``, which decides what an
+# operator is allowed to store.
+_CHANNEL_NUMBER_RANGE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
+
+# Any two numbers joined by a hyphen, honoured or not, so that a range naming a
+# tenth still reads as a range rather than as an unrecognised string. Used ONLY
+# to decide whether an unhonoured spec deserves a warning or a debug line, which
+# is why it is looser than the range shape actually honoured above. A non-range
+# literal needs no pattern: ``float()`` recognises those directly.
+_RANGE_SHAPED_SPEC_RE = re.compile(r"^\s*[+-]?[\d.]+\s*-\s*[+-]?[\d.]+\s*$")
+
+
+def _channel_number_spec_ticks(spec: Any) -> Optional[tuple[int, int]]:
+    """Return ``(start_tick, step_ticks)`` for a literal-number channel spec.
+
+    ``None`` means the spec is not a literal number this engine can honour:
+    ``"auto"``, a range, a template, or a number outside the canonical contract.
+    Every caller treats ``None`` as "not a literal", not as "invalid".
+
+    The step is one tick (a tenth) when the literal names a tenth and one whole
+    number otherwise, which is the frontend's
+    ``step: startingNumber % 1 !== 0 ? 0.1 : 1``.
+    """
+    if isinstance(spec, bool):
+        # ``bool`` is an ``int`` subclass, and the canonical contract excludes
+        # it. A rule carrying ``true`` here names no number, so it numbers
+        # automatically like any other unusable spec.
+        return None
+    if isinstance(spec, (int, float)):
+        number = spec
+    elif isinstance(spec, str):
+        try:
+            # Accepts only the plain decimal forms (``"800"``, ``"1.1"``), which
+            # are exactly the ones this function can honour as written.
+            number = parse_channel_number_text(spec, allow_empty=False)
+        except InvalidChannelNumberError:
+            return None
+    else:
+        return None
+
+    if not is_valid_channel_number(number):
+        return None
+    start_ticks = channel_number_ticks(number)
+    step_ticks = (
+        1 if start_ticks % CHANNEL_NUMBER_TICKS_PER_UNIT else CHANNEL_NUMBER_TICKS_PER_UNIT
+    )
+    return start_ticks, step_ticks
+
+
+def _looks_like_a_number_spec(spec: Any) -> bool:
+    """Whether an unhonoured channel-number spec was plainly MEANT as a number.
+
+    Decides between a warning and a debug line, nothing else. ``"{auto}"`` is
+    documented rule vocabulary and must not warn; ``"1.1-1.9"`` and ``"1e3"``
+    must.
+    """
+    if isinstance(spec, bool):
+        return False
+    if isinstance(spec, (int, float)):
+        return True
+    if not isinstance(spec, str):
+        return False
+    if _RANGE_SHAPED_SPEC_RE.match(spec):
+        return True
+    try:
+        float(spec)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 @dataclass
@@ -570,12 +651,34 @@ class ActionExecutor:
         self._last_name_transform_error: Optional[str] = None
         self._journaled_transform_failure_keys: set[tuple] = set()
 
-        # Channel number tracking
-        self._used_channel_numbers = set()
+        # Channel number tracking, held as TICKS (one per tenth) rather than as
+        # the numbers themselves. A rule may name a tenth, so occupancy has to
+        # answer "is 1.1 taken" without a float comparison deciding it: see
+        # ``channel_number_ticks`` in backend/channel_number.py.
+        self._used_channel_number_ticks: set[int] = set()
         for c in self.existing_channels:
             if c.get("channel_number"):
-                self._used_channel_numbers.add(c["channel_number"])
+                self._mark_channel_number_used(c["channel_number"])
         self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
+
+    def _mark_channel_number_used(self, number: Any) -> None:
+        """Record ``number`` as taken, on the tenths grid."""
+        try:
+            self._used_channel_number_ticks.add(channel_number_ticks(number))
+        except InvalidChannelNumberError:
+            # Dispatcharr enforces nothing on this column, so a non-numeric or
+            # non-finite value can come back from it. It occupies no number this
+            # engine could hand out, so there is nothing to record.
+            logger.debug(
+                "[AUTO-CREATE-EXEC] Ignoring unusable channel number %r", number
+            )
+
+    def _is_channel_number_used(self, number: Any) -> bool:
+        """Whether a channel already occupies ``number``, compared on the grid."""
+        try:
+            return channel_number_ticks(number) in self._used_channel_number_ticks
+        except InvalidChannelNumberError:
+            return False
 
     def _flush_journal_buffer(self) -> None:
         """Flush buffered journal entries in one transaction."""
@@ -1357,7 +1460,7 @@ class ActionExecutor:
             self._fold_key_to_channel.setdefault(_fold_key(base_name), simulated)
             self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), simulated)
             self._add_candidate(self._fold_key_candidates, _fold_key(base_name), simulated)
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             exec_ctx.current_channel_id = dry_id
             exec_ctx.created_channel_ids.add(dry_id)
             return ActionResult(
@@ -1429,7 +1532,7 @@ class ActionExecutor:
             self._fold_key_to_channel.setdefault(_fold_key(base_name), new_channel)
             self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), new_channel)
             self._add_candidate(self._fold_key_candidates, _fold_key(base_name), new_channel)
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
             exec_ctx.created_channel_ids.add(new_channel["id"])
@@ -3315,7 +3418,7 @@ class ActionExecutor:
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"channel_number": channel_number})
             channel["channel_number"] = channel_number
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
 
             return ActionResult(
@@ -3874,8 +3977,15 @@ class ActionExecutor:
     # Helper Methods
     # =========================================================================
 
-    def _apply_channel_number_in_name(self, channel_name: str, channel_number: int) -> str:
-        """Prepend channel number to name if settings.include_channel_number_in_name is enabled."""
+    def _apply_channel_number_in_name(
+        self, channel_name: str, channel_number: Union[int, float]
+    ) -> str:
+        """Prepend channel number to name if settings.include_channel_number_in_name is enabled.
+
+        A number that carries a tenth renders as the tenth (``1.1``); a whole
+        number renders without a decimal point (``800``, not ``800.0``), whether
+        it arrives as an ``int`` or a ``float``.
+        """
         if not self._settings or not getattr(self._settings, 'include_channel_number_in_name', False):
             return channel_name
 
@@ -5607,58 +5717,99 @@ class ActionExecutor:
             return self._created_groups[name_lower]
         return self._group_by_name.get(name_lower)
 
-    def _get_next_channel_number(self, spec: Any) -> int:
+    def _next_free_number_from_ticks(self, start_ticks: int, step_ticks: int) -> Union[int, float]:
+        """Walk up the tenths grid to the first number nothing occupies.
+
+        Terminates because the walk strictly ascends through a finite set of
+        occupied ticks, so each iteration consumes a distinct one.
         """
-        Get next available channel number based on spec.
+        tick = start_ticks
+        while tick in self._used_channel_number_ticks:
+            tick += step_ticks
+        return channel_number_from_ticks(tick)
+
+    def _get_next_channel_number(self, spec: Any) -> Union[int, float]:
+        """
+        Get the next available channel number for a rule's channel-number spec.
+
+        The spec vocabulary is ``"auto"``, a literal number, a whole-number
+        ``"min-max"`` range, or a template such as ``"{auto}"`` that names none
+        of those. A literal may carry one decimal place, which is the whole
+        canonical channel-number contract (``backend/channel_number.py``), and a
+        literal that names a tenth walks the grid BY tenths: a rule set to
+        ``1.1`` lands on ``1.1``, or on ``1.2`` when ``1.1`` is taken, never on
+        an unrelated integer. A whole literal still walks by whole numbers. That
+        is the ``step: startingNumber % 1 !== 0 ? 0.1 : 1`` rule
+        ``frontend/src/App.tsx`` and ``frontend/src/utils/channelNumberShift.ts``
+        already apply to a manual insert, on the same grid, and bead
+        ``enhancedchannelmanager-ay3iq`` is where the PO settled that a pipeline
+        rule should be able to say the same thing the UI can.
+
+        Ranges stay whole-number. Widening the range vocabulary is a separate
+        question from honouring a fractional literal, and the schema rejects a
+        fractional range rather than letting it arrive here.
 
         Args:
-            spec: "auto", specific int, or "min-max" range string
+            spec: ``"auto"``, a literal number (``int``, ``float`` or the text
+                of one), or a whole-number ``"min-max"`` range string.
 
         Returns:
-            Next available channel number
+            The next free channel number: an ``int`` when it lands on a whole
+            number, a ``float`` when it carries a tenth. Always in contract, so
+            ``is_valid_channel_number`` holds for it.
         """
-        if isinstance(spec, int):
-            num = spec
-            while num in self._used_channel_numbers:
-                num += 1
-            logger.debug("[AUTO-CREATE-EXEC] spec=%s (int) -> %s", spec, num)
+        literal = _channel_number_spec_ticks(spec)
+        if literal is not None:
+            start_ticks, step_ticks = literal
+            num = self._next_free_number_from_ticks(start_ticks, step_ticks)
+            logger.debug("[AUTO-CREATE-EXEC] spec=%r (literal) -> %s", spec, num)
             return num
 
         if isinstance(spec, str):
-            if spec == "auto":
-                # Find next available number starting from 1
-                num = 1
-                while num in self._used_channel_numbers:
-                    num += 1
-                logger.debug("[AUTO-CREATE-EXEC] spec='auto' -> %s (skipped %s used numbers)", num, num - 1)
+            # Stripped, so that the shapes this honours are exactly the shapes
+            # ``channel_pipeline_schema.validate_channel_number_spec`` accepts.
+            # The two diverging is how a spec passes validation and is then
+            # renumbered at execution, which is the defect class this whole
+            # function exists to close.
+            text = spec.strip()
+            if text == "auto":
+                num = self._next_free_number_from_ticks(
+                    CHANNEL_NUMBER_TICKS_PER_UNIT, CHANNEL_NUMBER_TICKS_PER_UNIT
+                )
+                logger.debug("[AUTO-CREATE-EXEC] spec='auto' -> %s", num)
                 return num
 
             # Check for range format "min-max"
-            match = re.match(r"^(\d+)-(\d+)$", spec)
+            match = _CHANNEL_NUMBER_RANGE_RE.match(text)
             if match:
                 min_num = int(match.group(1))
                 max_num = int(match.group(2))
                 for num in range(min_num, max_num + 1):
-                    if num not in self._used_channel_numbers:
+                    if channel_number_ticks(num) not in self._used_channel_number_ticks:
                         logger.debug("[AUTO-CREATE-EXEC] spec='%s' (range) -> %s", spec, num)
                         return num
                 # Range exhausted, use next after max
                 logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, max_num + 1)
                 return max_num + 1
 
-            # Try parsing as int — auto-increment from this starting number
-            try:
-                num = int(spec)
-                while num in self._used_channel_numbers:
-                    num += 1
-                logger.debug("[AUTO-CREATE-EXEC] spec='%s' (parsed int) -> %s", spec, num)
-                return num
-            except ValueError:
-                logger.debug("[AUTO-CREATE-EXEC] Non-numeric channel number spec %r, falling back to auto", spec)
-
-        # Fallback to auto
-        num = 1
-        while num in self._used_channel_numbers:
-            num += 1
-        logger.debug("[AUTO-CREATE-EXEC] spec=%r (fallback auto) -> %s", spec, num)
+        # Fallback to auto. A template such as "{auto}" is documented rule
+        # vocabulary and belongs here, so the fallback itself is not a defect.
+        # A spec that was MEANT as a number and still landed here is: it can
+        # only be a shape the rule schema rejects (a fractional range, a literal
+        # not written as plain digits) reaching execution from a rule stored
+        # before that check existed. Assigning automatically and saying nothing
+        # is the silent wrong result bead enhancedchannelmanager-ay3iq exists to
+        # remove, so that case is audible.
+        num = self._next_free_number_from_ticks(
+            CHANNEL_NUMBER_TICKS_PER_UNIT, CHANNEL_NUMBER_TICKS_PER_UNIT
+        )
+        if _looks_like_a_number_spec(spec):
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Channel number spec %r is not one this engine can "
+                "honour (a number with at most one decimal place, a whole-number "
+                "'min-max' range, or 'auto'); assigned %s automatically instead. "
+                "Re-saving the rule will report the reason.", spec, num
+            )
+        else:
+            logger.debug("[AUTO-CREATE-EXEC] spec=%r (fallback auto) -> %s", spec, num)
         return num

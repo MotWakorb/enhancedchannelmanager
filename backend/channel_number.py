@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Annotated, Any, Mapping, Optional
+from typing import Annotated, Any, Mapping, Optional, Union
 
 from pydantic import BeforeValidator
 from pydantic_core import PydanticCustomError
@@ -55,8 +55,11 @@ from pydantic_core import PydanticCustomError
 __all__ = [
     "CHANNEL_NUMBER_DECIMAL_PLACES",
     "CHANNEL_NUMBER_RULE_MESSAGE",
+    "CHANNEL_NUMBER_TICKS_PER_UNIT",
     "InvalidChannelNumberError",
     "ChannelNumber",
+    "channel_number_from_ticks",
+    "channel_number_ticks",
     "is_valid_channel_number",
     "validate_channel_number",
     "parse_channel_number_text",
@@ -75,8 +78,13 @@ CHANNEL_NUMBER_RULE_MESSAGE = (
     "(for example 1.0 or 1.1)."
 )
 
-# One tick per tenth, matching the grid `frontend/src/utils/channelNumberShift.ts`
-# plans on.
+#: One tick per tenth, matching the grid
+#: `frontend/src/utils/channelNumberShift.ts` plans on. Both the predicate below
+#: and any caller walking the grid (`channel_number_ticks`) scale by it.
+CHANNEL_NUMBER_TICKS_PER_UNIT = 10
+
+# What the tolerance guarantees, and over what range. It is compared against
+# `value * 10`, so in value terms it admits a deviation of 1e-10.
 #
 # What the tolerance guarantees, and over what range. It is compared against
 # `value * 10`, so in value terms it admits a deviation of 1e-10.
@@ -102,7 +110,6 @@ CHANNEL_NUMBER_RULE_MESSAGE = (
 #   two producers above deliver. A magnitude-relative tolerance was measured as
 #   the alternative and is worse where it matters: at 8 float steps it accepts
 #   `1e14 + 0.05`, which is a real two-decimal value that must be rejected.
-_TENTHS = 10
 _TENTH_TOLERANCE = 1e-9
 
 # Every float at or above `2**53` is an exact integer, because the gap between
@@ -170,8 +177,79 @@ def is_valid_channel_number(value: Any) -> bool:
     # tolerance, so ``10000000.1`` reads as out of contract. Scaling the whole
     # value returns ``100000001.0`` exactly. The magnitude guard above supplies
     # the overflow safety instead, so both properties hold at once.
-    scaled = number * _TENTHS
+    scaled = number * CHANNEL_NUMBER_TICKS_PER_UNIT
     return abs(scaled - round(scaled)) <= _TENTH_TOLERANCE
+
+
+def channel_number_ticks(value: Any) -> int:
+    """Return where ``value`` sits on the tenths grid, as an integer tick.
+
+    One tick per tenth. Ticks exist so that comparing and stepping channel
+    numbers can be exact: ``1.1 + 0.1`` is ``1.2000000000000002``, but tick 11
+    plus tick 1 is tick 12, and tick 12 divides back to exactly ``1.2``. Any
+    caller walking the grid does its arithmetic here and divides back once, at
+    the end, via :func:`channel_number_from_ticks`. That is the same discipline
+    ``frontend/src/utils/channelNumberShift.ts`` follows, on the same grid.
+
+    In-contract numbers map one-to-one onto ticks, so on contract-clean data a
+    tick comparison IS equality rather than an approximation of it. There is no
+    ECM column for ``channel_number``: the numbers come from Dispatcharr, which
+    enforces neither precision nor uniqueness, so a value written before this
+    contract landed or by another client can still be out of contract. Such a
+    value collapses onto the nearest tenth, matching the deliberate collapse the
+    frontend planner makes for the same reason. Collapsing is the conservative
+    direction: the number is read as occupying the slot an operator sees it in,
+    never as leaving that slot free. Which way an exact half collapses is left
+    to :func:`round`, because nothing depends on it; the frontend's
+    ``Math.round`` breaks that one tie upward instead.
+
+    Args:
+        value: A finite number. Negatives are permitted so that a lineup this
+            module did not write can still be read; the contract itself excludes
+            them, and :func:`is_valid_channel_number` is where that is decided.
+
+    Returns:
+        The tick index, exact for every value the contract can hold.
+
+    Raises:
+        InvalidChannelNumberError: If ``value`` is not a finite number, which
+            includes ``None``, a string, a ``bool``, ``inf`` and ``nan``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise InvalidChannelNumberError()
+    if isinstance(value, int):
+        # Exact, and it needs no ``float`` at all: ``int`` is arbitrary
+        # precision, so ``float(10**400)`` would raise ``OverflowError`` on a
+        # value whose tick is perfectly representable.
+        return value * CHANNEL_NUMBER_TICKS_PER_UNIT
+    if not math.isfinite(value):
+        raise InvalidChannelNumberError()
+    if abs(value) >= _EXACT_INTEGER_FLOOR:
+        # Already an exact integer at this magnitude (see _EXACT_INTEGER_FLOOR),
+        # so it sits on a whole tick, and skipping the scaling is what keeps
+        # ``1e308 * 10`` from reaching ``inf``.
+        return int(value) * CHANNEL_NUMBER_TICKS_PER_UNIT
+    return round(value * CHANNEL_NUMBER_TICKS_PER_UNIT)
+
+
+def channel_number_from_ticks(ticks: int) -> Union[int, float]:
+    """Return the channel number at tick ``ticks``.
+
+    The counterpart to :func:`channel_number_ticks`. Divide back exactly once,
+    at the end of whatever walk produced the tick, which is what keeps the
+    result on the grid instead of accumulating drift.
+
+    Returns:
+        An ``int`` when the tick lands on a whole number, a ``float`` when it
+        carries a tenth. The narrowing is deliberate: these values are
+        serialised straight into JSON bodies and into channel names, where
+        ``800.0`` reads as a change and ``800`` does not. It also keeps a whole
+        number exact past ``2**53``, where the division would lose it.
+    """
+    whole, remainder = divmod(ticks, CHANNEL_NUMBER_TICKS_PER_UNIT)
+    if remainder == 0:
+        return whole
+    return ticks / CHANNEL_NUMBER_TICKS_PER_UNIT
 
 
 def validate_channel_number(value: Any, *, allow_none: bool = True) -> Optional[float]:

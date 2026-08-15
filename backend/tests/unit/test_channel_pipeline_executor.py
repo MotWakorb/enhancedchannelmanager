@@ -4,10 +4,12 @@ Unit tests for the auto-creation executor service.
 Tests the ActionExecutor class which executes actions against channels, groups,
 and streams with proper rollback tracking.
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 import pytest
 
+from channel_number import is_valid_channel_number
 from channel_pipeline_executor import (
     ActionResult,
     ExecutionContext,
@@ -270,8 +272,9 @@ class TestActionExecutorInit:
         assert len(executor.existing_channels) == 2
         assert executor._channel_by_id[1]["name"] == "ESPN"
         assert executor._channel_by_name["espn"]["id"] == 1
-        assert 100 in executor._used_channel_numbers
-        assert 200 in executor._used_channel_numbers
+        assert executor._is_channel_number_used(100)
+        assert executor._is_channel_number_used(200)
+        assert not executor._is_channel_number_used(101)
 
     def test_init_with_groups(self):
         """Initialize executor with existing groups."""
@@ -5480,3 +5483,159 @@ class TestAssignDefaultProfiles:
             r.message for r in caplog.records if r.levelno == logging.WARNING
         )
         assert "incomplete" not in warning_text
+
+
+class TestChannelNumberTenths:
+    """A pipeline rule may name a tenth, and the engine has to honour it.
+
+    Bead ``enhancedchannelmanager-ay3iq``. ``1.1`` became a valid channel number
+    everywhere under bead ``enhancedchannelmanager-ic884.1``, but the executor
+    understood only whole numbers, so a rule set to ``1.1`` was accepted and
+    then quietly assigned an unrelated integer. These tests pin the fractional
+    result itself: never an integer substitution, never a silent fallback to
+    automatic numbering.
+    """
+
+    def _executor(self, numbers=(), settings=None):
+        client = MagicMock()
+        client.create_channel = AsyncMock()
+        client.update_channel = AsyncMock()
+        channels = [
+            {"id": index, "name": f"CH{index}", "channel_number": number,
+             "streams": [], "auto_created": True}
+            for index, number in enumerate(numbers, start=1)
+        ]
+        return ActionExecutor(client, existing_channels=channels, settings=settings)
+
+    def _stream_ctx(self):
+        return StreamContext(
+            stream_id=201, stream_name="ESPN HD", m3u_account_id=1,
+            m3u_account_name="Provider A", group_name="Sports",
+        )
+
+    def test_a_fractional_spec_keeps_its_own_number(self):
+        """The defect: this used to answer 3, the next free INTEGER."""
+        executor = self._executor([1, 2])
+        assert executor._get_next_channel_number(1.1) == 1.1
+
+    def test_a_fractional_string_spec_keeps_its_own_number(self):
+        executor = self._executor([1, 2])
+        assert executor._get_next_channel_number("1.1") == 1.1
+
+    def test_a_taken_tenth_moves_to_the_next_tenth_not_the_next_integer(self):
+        """The bead's collision case: 1.1 is taken, so the answer is 1.2, not 2."""
+        executor = self._executor([1, 1.1, 2])
+        assert executor._get_next_channel_number(1.1) == 1.2
+
+    def test_the_walk_carries_no_float_dust(self):
+        """``0.7 + 0.1`` is ``0.7999999999999999``, which is not a channel number."""
+        executor = self._executor([0.7])
+        assigned = executor._get_next_channel_number(0.7)
+        assert assigned == 0.8
+        assert is_valid_channel_number(assigned)
+
+    def test_a_full_tenths_run_carries_over_into_the_next_whole_number(self):
+        executor = self._executor([1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9])
+        assigned = executor._get_next_channel_number(1.1)
+        assert assigned == 2
+        assert is_valid_channel_number(assigned)
+
+    def test_every_number_the_walk_hands_out_is_in_contract(self):
+        """Ten consecutive assignments from a fractional start, all on the grid."""
+        executor = self._executor()
+        assigned = []
+        for _ in range(10):
+            number = executor._get_next_channel_number(20.1)
+            executor._mark_channel_number_used(number)
+            assigned.append(number)
+        assert assigned == [20.1, 20.2, 20.3, 20.4, 20.5, 20.6, 20.7, 20.8, 20.9, 21]
+        assert all(is_valid_channel_number(number) for number in assigned)
+
+    def test_a_whole_spec_still_steps_by_one(self):
+        """Unchanged behaviour: only a spec that names a tenth walks by a tenth."""
+        executor = self._executor([100, 101])
+        assigned = executor._get_next_channel_number(100)
+        assert assigned == 102
+        assert isinstance(assigned, int)
+
+    def test_a_whole_float_spec_answers_a_whole_number(self):
+        """``800.0`` must not reach a payload or a channel name as ``800.0``."""
+        executor = self._executor()
+        assigned = executor._get_next_channel_number(800.0)
+        assert assigned == 800
+        assert isinstance(assigned, int)
+
+    def test_a_fractional_range_is_not_honoured_and_says_so(self, caplog):
+        """Ranges stay whole-number, so a stored fractional range must not go quiet."""
+        import logging
+
+        executor = self._executor([1, 2])
+        with caplog.at_level(logging.WARNING):
+            assigned = executor._get_next_channel_number("1.1-1.9")
+        assert assigned == 3  # Automatic numbering, as before.
+        assert "1.1-1.9" in caplog.text
+
+    def test_a_template_spec_stays_quiet(self, caplog):
+        """``{auto}`` is documented rule vocabulary, so it must not warn."""
+        import logging
+
+        executor = self._executor([1, 2])
+        with caplog.at_level(logging.WARNING):
+            assert executor._get_next_channel_number("{auto}") == 3
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_a_fractional_number_reaches_dispatcharr_unchanged(self):
+        """The seam that matters: what the pipeline actually POSTs."""
+        executor = self._executor([1, 2])
+        executor.client.create_channel.return_value = {
+            "id": 9, "name": "ESPN HD", "channel_number": 1.1,
+        }
+        action = {
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "channel_number": 1.1,
+        }
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self._stream_ctx(), ExecutionContext())
+        )
+        assert result.success is True
+        posted = executor.client.create_channel.call_args[0][0]
+        assert posted["channel_number"] == 1.1
+
+    def test_set_channel_number_writes_the_tenth_it_was_given(self):
+        executor = self._executor([1, 2])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                {"type": "set_channel_number", "value": "1.1"},
+                self._stream_ctx(),
+                exec_ctx,
+            )
+        )
+        assert result.success is True
+        executor.client.update_channel.assert_awaited_once_with(
+            1, {"channel_number": 1.1}
+        )
+
+    def test_a_dry_run_previews_the_tenth(self):
+        executor = self._executor([1, 2])
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(
+                {"type": "create_channel", "name_template": "{stream_name}",
+                 "channel_number": 1.1},
+                self._stream_ctx(),
+                ExecutionContext(dry_run=True),
+            )
+        )
+        assert result.success is True
+        assert "#1.1" in result.description
+        executor.client.create_channel.assert_not_called()
+
+    def test_the_name_prefix_renders_a_tenth_as_a_tenth(self):
+        """``include_channel_number_in_name`` must print 1.1, and 800 as 800."""
+        executor = self._executor(settings=SimpleNamespace(
+            include_channel_number_in_name=True, channel_number_separator="-"
+        ))
+        assert executor._apply_channel_number_in_name("ESPN", 1.1) == "1.1 - ESPN"
+        assert executor._apply_channel_number_in_name("ESPN", 800) == "800 - ESPN"
