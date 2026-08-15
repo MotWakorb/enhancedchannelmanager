@@ -602,7 +602,7 @@ result.
 | Endpoint | Description |
 |-|-|
 | `GET /api/settings` | Get current settings. Secrets are never returned: API keys, tokens and passwords are reduced to `*_configured` booleans for every caller, and the shared Discord webhook URL plus the Telegram bot token and chat id are additionally withheld (empty string) from any caller not allowed to write them (an ordinary non-admin, or the MCP service key; bead 9ej7f). `discord_configured` / `telegram_configured` still report the integration state. |
-| `POST /api/settings` | Update settings. Admin-only fields are gated per field; a non-admin echoing the redacted (empty) notification credentials back keeps the stored values. |
+| `POST /api/settings` | Update settings. Admin-only fields are gated per field; a non-admin echoing the redacted (empty) notification credentials back keeps the stored values. `public_base_url` is admin-only, validated as a bare `scheme://host[:port]` origin (400 otherwise) and normalized before storage; omitting the field keeps the stored value, an explicit empty string clears it. |
 | `POST /api/settings/test` | Test Dispatcharr connection. Admin-only when auth is enabled; the MCP service key is refused (bead i4qrp). |
 | `POST /api/settings/test-smtp` | Test SMTP connection. Same gate as `/test`. |
 | `POST /api/settings/test-discord` | Test Discord webhook. Same gate as `/test`. |
@@ -1283,7 +1283,7 @@ See the [user guide](user_guide/backup-restore/configure-cloud-destinations.md) 
 | `GET /api/auth/me` | Get current user info |
 | `PUT /api/auth/me` | Update current user profile |
 | `POST /api/auth/change-password` | Change current user's password |
-| `POST /api/auth/forgot-password` | Request password reset email |
+| `POST /api/auth/forgot-password` | Request password reset email. The link's origin comes from the `public_base_url` setting when it is set; otherwise it falls back to the caller-supplied `X-Forwarded-Host` / `Host` headers, which is why the setting exists (bead qsqfv). |
 | `POST /api/auth/reset-password` | Reset password with token |
 | `GET /api/auth/providers` | List available auth providers |
 | `POST /api/auth/dispatcharr/login` | Login via Dispatcharr credentials |

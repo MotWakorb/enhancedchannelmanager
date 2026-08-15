@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useMemo, memo } from 'react';
+import { useState, useRef, useEffect, useId, useMemo, memo } from 'react';
 import type { Channel, Logo } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { parseChannelNumberInput } from '../utils/channelNumber';
 import { logger } from '../utils/logger';
 import './ModalBase.css';
 
@@ -42,6 +43,7 @@ export const EditChannelModal = memo(function EditChannelModal({
   epgDataLoading,
 }: EditChannelModalProps) {
   const { titleId, containerRef } = useOwnedDialog();
+  const channelNumberErrorId = `${useId()}-channel-number-error`;
   // Create a map for quick EPG source name lookup
   const epgSourceMap = new Map(epgSources.map((s) => [s.id, s.name]));
   // Source priority lookup (higher = more preferred), used to order search
@@ -60,7 +62,14 @@ export const EditChannelModal = memo(function EditChannelModal({
   ) => (epgSourcePriority.get(b.epg_source) ?? 0) - (epgSourcePriority.get(a.epg_source) ?? 0);
 
   // Channel basic info state
-  const [channelNumber, setChannelNumber] = useState<string>(String(channel.channel_number));
+  // An unassigned channel has a null number. `String(null)` put the literal
+  // text "null" in the box, which then read as an invalid entry once the
+  // canonical contract started checking it (bead enhancedchannelmanager-ic884.1).
+  const [channelNumber, setChannelNumber] = useState<string>(
+    channel.channel_number === null || channel.channel_number === undefined
+      ? ''
+      : String(channel.channel_number),
+  );
   const [channelName, setChannelName] = useState<string>(channel.name);
 
   // Logo state
@@ -138,10 +147,17 @@ export const EditChannelModal = memo(function EditChannelModal({
   // Get currently selected EPG data
   const currentEpgData = selectedEpgDataId ? epgData.find((e) => e.id === selectedEpgDataId) : null;
 
-  // Check if any changes were made
-  const parsedChannelNumber = parseFloat(channelNumber);
+  // Channel numbers are held to the canonical contract (non-negative, at most
+  // one decimal place) before they can be staged, so an out-of-contract entry
+  // is refused here with the same sentence the API would return rather than
+  // being rounded onto a neighbouring tenth. Bead enhancedchannelmanager-ic884.1.
+  // Empty text still means "leave the number alone", not "clear it": clearing
+  // is done from the inline number editor in the channel list.
+  const channelNumberParse = parseChannelNumberInput(channelNumber);
+  const channelNumberError = channelNumberParse.ok ? null : channelNumberParse.message;
+  const parsedChannelNumber = channelNumberParse.ok ? channelNumberParse.value : null;
   const hasChanges =
-    (!isNaN(parsedChannelNumber) && parsedChannelNumber !== channel.channel_number) ||
+    (parsedChannelNumber !== null && parsedChannelNumber !== channel.channel_number) ||
     channelName !== channel.name ||
     selectedLogoId !== channel.logo_id ||
     tvgId !== (channel.tvg_id || '') ||
@@ -163,11 +179,14 @@ export const EditChannelModal = memo(function EditChannelModal({
   };
 
   const handleSave = async () => {
+    // Nothing out of contract reaches the API from here, even if the disabled
+    // Save button is bypassed.
+    if (channelNumberError) return;
     setSaving(true);
     try {
       const changes: ChannelMetadataChanges = {};
 
-      if (!isNaN(parsedChannelNumber) && parsedChannelNumber !== channel.channel_number) {
+      if (parsedChannelNumber !== null && parsedChannelNumber !== channel.channel_number) {
         changes.channel_number = parsedChannelNumber;
       }
       if (channelName !== channel.name) {
@@ -489,7 +508,14 @@ export const EditChannelModal = memo(function EditChannelModal({
               value={channelNumber}
               onChange={(e) => setChannelNumber(e.target.value)}
               placeholder="123"
+              aria-invalid={channelNumberError ? true : undefined}
+              aria-describedby={channelNumberError ? channelNumberErrorId : undefined}
             />
+            {channelNumberError && (
+              <span className="field-error" id={channelNumberErrorId} role="alert">
+                {channelNumberError}
+              </span>
+            )}
           </div>
           <div className="edit-channel-name-field">
             <label>Channel Name</label>
@@ -1006,7 +1032,7 @@ export const EditChannelModal = memo(function EditChannelModal({
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleSave}
-            disabled={saving || !hasChanges}
+            disabled={saving || !hasChanges || !!channelNumberError}
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>

@@ -9,6 +9,8 @@ import io
 from typing import Any
 from urllib.parse import urlparse
 
+from channel_number import InvalidChannelNumberError, parse_channel_number_text
+
 
 class CSVParseError(Exception):
     """Raised when CSV parsing fails due to structural issues."""
@@ -123,15 +125,17 @@ def validate_channel_row(row: dict[str, str], row_num: int) -> list[str]:
     if not name:
         errors.append("Missing required field: name")
 
-    # Validate channel_number if provided
+    # Validate channel_number against the canonical contract
+    # (bead enhancedchannelmanager-ic884.1). Out-of-contract values are
+    # rejected here rather than rounded on the way in, so an import that
+    # carries bad data fails loudly instead of quietly changing it. The column
+    # name is prefixed because a CSV error has to point at a column.
     channel_number = row.get("channel_number", "").strip()
     if channel_number:
         try:
-            num = float(channel_number)
-            if num <= 0:
-                errors.append("channel_number must be positive")
-        except ValueError:
-            errors.append("channel_number must be a valid number")
+            parse_channel_number_text(channel_number, allow_empty=False)
+        except InvalidChannelNumberError as exc:
+            errors.append(f"channel_number: {exc}")
 
     # Validate logo_url if provided
     logo_url = row.get("logo_url", "").strip()

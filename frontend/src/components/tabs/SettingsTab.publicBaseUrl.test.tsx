@@ -1,26 +1,20 @@
 /**
- * Tests for the Channel Pipeline "Runaway Safety Cap" control (skg35).
+ * bead qsqfv - the Public Base URL field on Settings > Email.
  *
- * Surfaces ``max_auto_created_channels_per_run`` (the GH #473 runaway-creation
- * OOM safety valve) and its sibling ``max_auto_creation_log_entries`` in the
- * Settings > Channel Pipeline page so an operator can view + adjust them instead
- * of hand-editing settings.json.
+ * The backend now builds the emailed password-reset link from
+ * `public_base_url` when it is set, and only falls back to the
+ * caller-controlled `X-Forwarded-Host` / `Host` headers when it is not. That
+ * makes the field the operator's only way to close a P1 account-takeover
+ * vector, so it has to be reachable and round-trip correctly.
  *
- * Contracts under test:
- *   - The numeric inputs render on the Channel Pipeline page and populate from
- *     the loaded settings.
- *   - Helper text explains the idempotent-rerun behavior + the 0-disables
- *     semantics (so the operator knows a capped run can simply be re-run).
- *   - An admin can edit the cap and the new value is sent in the save payload.
- *   - For a NON-admin the inputs are disabled (consistent with the backend
- *     field-level admin gate, which 403s a non-admin who changes them).
+ * These tests pin the UI half: the stored value loads into the field, an
+ * operator's edit reaches the save payload trimmed, and the badge tells them
+ * which of the two modes their install is in.
+ *
+ * Scaffolding follows ./SettingsTab.notificationRedaction.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-
-// Mutable auth identity so a single mocked module can serve both the admin and
-// non-admin cases (vi.mock factories are hoisted + evaluated once per file).
-let mockUser: { is_admin: boolean; username: string } = { is_admin: true, username: 'admin' };
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -33,13 +27,15 @@ vi.mock('../../services/api', () => ({
   getM3UAccounts: vi.fn(),
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
-  testEmbyConnection: vi.fn(),
-  testPlexConnection: vi.fn(),
-  testJellyfinConnection: vi.fn(),
-  getStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
-  getProbeHistory: vi.fn().mockResolvedValue([]),
-  getProbeProgress: vi.fn().mockResolvedValue(null),
-  getStreamGroups: vi.fn().mockResolvedValue([]),
+  getStreams: vi.fn(),
+  getProbeHistory: vi.fn(),
+  getProbeProgress: vi.fn(),
+  getM3UDigestSettings: vi.fn(),
+  updateM3UDigestSettings: vi.fn(),
+  sendTestM3UDigest: vi.fn(),
+  testSmtpConnection: vi.fn(),
+  testDiscordWebhook: vi.fn(),
+  testTelegramBot: vi.fn(),
 }));
 
 vi.mock('../../services/channelPipelineApi', () => ({
@@ -60,7 +56,7 @@ vi.mock('../../contexts/NotificationContext', () => ({
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
-  useAuth: () => ({ user: mockUser }),
+  useAuth: () => ({ user: { is_admin: true, username: 'admin' } }),
 }));
 
 vi.mock('../settings/NormalizationEngineSection', () => ({
@@ -87,6 +83,9 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
+vi.mock('../settings/AlertMethodsSection', () => ({
+  AlertMethodsSection: () => <div data-testid="stub-alert-methods" />,
+}));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
 }));
@@ -96,6 +95,9 @@ vi.mock('../SettingsModal', () => ({
 vi.mock('../DeleteOrphanedGroupsModal', () => ({
   DeleteOrphanedGroupsModal: () => <div data-testid="stub-delete-orphaned" />,
 }));
+vi.mock('../ModalOverlay', () => ({
+  ModalOverlay: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
 vi.mock('../CustomSelect', () => ({
   CustomSelect: ({ value, onChange, options }: {
     value: string;
@@ -103,7 +105,7 @@ vi.mock('../CustomSelect', () => ({
     options: { value: string; label: string }[];
   }) => (
     <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {options.map((o) => (
+      {options.map((o: { value: string; label: string }) => (
         <option key={o.value} value={o.value}>{o.label}</option>
       ))}
     </select>
@@ -111,11 +113,8 @@ vi.mock('../CustomSelect', () => ({
 }));
 
 import * as api from '../../services/api';
-import { SettingsTab } from '../tabs/SettingsTab';
+import { SettingsTab } from './SettingsTab';
 
-function makeSettings(overrides: Partial<typeof settingsBase> = {}): Awaited<ReturnType<typeof api.getSettings>> {
-  return { ...settingsBase, ...overrides } as Awaited<ReturnType<typeof api.getSettings>>;
-}
 
 const settingsBase = {
   configured: true,
@@ -181,12 +180,12 @@ const settingsBase = {
   failed_stream_sort_order: ['failed', 'black_screen', 'low_fps'] as api.FailedStreamCategory[],
   strike_threshold: 3,
   normalize_on_channel_create: false,
-  smtp_configured: false,
+  smtp_configured: true,
   public_base_url: '',
-  smtp_host: '',
+  smtp_host: 'smtp.test',
   smtp_port: 587,
   smtp_user: '',
-  smtp_from_email: '',
+  smtp_from_email: 'ecm@example.com',
   smtp_from_name: 'ECM Alerts',
   smtp_use_tls: true,
   smtp_use_ssl: false,
@@ -212,67 +211,83 @@ const settingsBase = {
   ssrf_outbound_mode: 'lan_friendly' as const,
 };
 
-function renderOnChannelPipeline() {
-  return render(
-    <SettingsTab
-      onSaved={vi.fn()}
-      initialSettingsPage="channel-pipeline"
-    />
-  );
+function makeSettings(overrides: Partial<typeof settingsBase> = {}): Awaited<ReturnType<typeof api.getSettings>> {
+  return { ...settingsBase, ...overrides } as Awaited<ReturnType<typeof api.getSettings>>;
 }
 
-describe('Channel Pipeline Runaway Safety Cap (skg35)', () => {
+function renderEmailPage() {
+  return render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="email" />);
+}
+
+/** The badge next to the heading, which reads Configured or Not set. */
+function publicBaseUrlBadge(): HTMLElement {
+  const header = screen.getByRole('heading', { name: 'Public Base URL' }).parentElement!;
+  return within(header).getByText(/Configured|Not set/);
+}
+
+async function saveSettingsPage() {
+  fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
+  await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+}
+
+describe('SettingsTab public base URL (bead qsqfv)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUser = { is_admin: true, username: 'admin' };
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
     vi.mocked(api.saveSettings).mockResolvedValue({ status: 'ok', configured: true, server_changed: false });
     vi.mocked(api.getChannelProfiles).mockResolvedValue([]);
     vi.mocked(api.listAlertMethods).mockResolvedValue([]);
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
+    vi.mocked(api.getStreams).mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
   });
 
-  it('renders the channel-cap input populated from loaded settings', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ max_auto_created_channels_per_run: 750 }));
-    renderOnChannelPipeline();
+  it('loads the stored value and reports it as configured', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      public_base_url: 'https://ecm.example.com',
+    }));
 
-    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    expect(input.value).toBe('750');
+    renderEmailPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://ecm.example.com');
+    });
+    expect(publicBaseUrlBadge()).toHaveTextContent('Configured');
   });
 
-  it('explains the idempotent-rerun + 0-disables semantics in helper text', async () => {
-    renderOnChannelPipeline();
+  it('shows Not set when the install is still on header-derived links', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ public_base_url: '' }));
 
-    await screen.findByLabelText(/Max channels created per run/i);
-    // The idempotent-rerun hint is the operator's actual escape hatch — it must
-    // appear on the channel-cap field specifically (the one the capped-run
-    // message points them at).
-    expect(screen.getByText(/idempotent/i)).toBeInTheDocument();
-    // Both cap fields document the 0-disables sentinel, so there are two.
-    expect(screen.getAllByText(/Set to 0 to disable the cap/i)).toHaveLength(2);
+    renderEmailPage();
+
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    expect(publicBaseUrlBadge()).toHaveTextContent('Not set');
   });
 
-  it('lets an admin raise the cap and sends the new value on save', async () => {
-    renderOnChannelPipeline();
+  it('sends the edited value, trimmed, in the save payload', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ public_base_url: '' }));
 
-    const input = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    expect(input.disabled).toBe(false);
-    fireEvent.change(input, { target: { value: '5000' } });
+    renderEmailPage();
+    await waitFor(() => expect(screen.getByLabelText('Public Base URL')).toHaveValue(''));
 
-    fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
+    fireEvent.change(screen.getByLabelText('Public Base URL'), {
+      target: { value: '  https://ecm.example.com  ' },
+    });
+    await saveSettingsPage();
 
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
-    expect(payload.max_auto_created_channels_per_run).toBe(5000);
+    expect(payload.public_base_url).toBe('https://ecm.example.com');
   });
 
-  it('disables the cap inputs for a non-admin (backend gate would 403 a change)', async () => {
-    mockUser = { is_admin: false, username: 'viewer' };
-    renderOnChannelPipeline();
+  it('round-trips an untouched stored value instead of dropping the field', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      public_base_url: 'https://ecm.example.com',
+    }));
 
-    const channelInput = await screen.findByLabelText(/Max channels created per run/i) as HTMLInputElement;
-    const logInput = screen.getByLabelText(/Max execution-log entries per run/i) as HTMLInputElement;
-    expect(channelInput.disabled).toBe(true);
-    expect(logInput.disabled).toBe(true);
+    renderEmailPage();
+    await waitFor(() => expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://ecm.example.com'));
+
+    await saveSettingsPage();
+
+    const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(payload.public_base_url).toBe('https://ecm.example.com');
   });
 });

@@ -1162,6 +1162,10 @@ export interface SettingsResponse {
   failed_stream_sort_order: FailedStreamCategory[];  // Order of deprioritized categories (first = sorted higher)
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
+  // Canonical public origin (scheme://host[:port]) for links ECM emails out.
+  // '' means unset, in which case those links are built from caller-supplied
+  // request headers (bead qsqfv). Admin-only on write.
+  public_base_url: string;
   // Shared SMTP settings
   smtp_configured: boolean;  // Whether shared SMTP is configured
   smtp_host: string;
@@ -1328,6 +1332,7 @@ export async function saveSettings(settings: {
   failed_stream_sort_order?: FailedStreamCategory[];  // Optional - order of deprioritized categories
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
+  public_base_url?: string;  // Optional - public origin for emailed links; omit to keep the stored value, '' clears it
   // Shared SMTP settings
   smtp_host?: string;  // Optional - SMTP server hostname
   smtp_port?: number;  // Optional - SMTP port, defaults to 587

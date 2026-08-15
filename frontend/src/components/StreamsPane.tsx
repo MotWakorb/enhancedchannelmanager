@@ -4,6 +4,7 @@ import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, Channe
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
 import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
+import { channelNumberInputError, parseChannelNumberInput } from '../utils/channelNumber';
 import { categorizeStreamGroups } from '../utils/streamGroupCategories';
 import { openInVLC } from '../utils/vlc';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
@@ -1364,6 +1365,50 @@ export function StreamsPane({
     return count;
   }, [bulkCreateNormalize, normalizedNamesPreview]);
 
+  /**
+   * The starting channel number each group gets in separate-group mode.
+   *
+   * `null` means "not determined yet", which happens only while the first
+   * group has no entry; the Create button is disabled in that state. An empty
+   * entry on any later group means "continue from the previous group", so its
+   * number is derived here rather than left to the caller.
+   *
+   * Preview, the disabled state and the creation call all read this one
+   * computation. They used to derive the number three separate ways, and two
+   * of them used `parseInt`, so a validated `38.1` was created as `38`. That
+   * is the silent normalisation the channel-number contract exists to prevent
+   * (bead enhancedchannelmanager-ic884.1). `handleBulkCreateFromGroup` walks a
+   * decimal run in tenths, so the continuation walks in the same units.
+   */
+  const separateGroupStartNumbers = useMemo(() => {
+    const resolved = new Map<string, number | null>();
+    let current: number | null = null;
+    let step = 1;
+    for (const group of bulkCreateGroups) {
+      const parsed = parseChannelNumberInput(bulkCreateGroupStartNumbers.get(group.name) ?? '');
+      if (parsed.ok && parsed.value !== null) {
+        current = parsed.value;
+        step = current % 1 !== 0 ? 0.1 : 1;
+      }
+      resolved.set(group.name, current);
+      if (current !== null) {
+        // Snap back onto the tenths grid: 38.1 + 3 * 0.1 is 38.400000000000006.
+        current = Math.round((current + group.streams.length * step) * 10) / 10;
+      }
+    }
+    return resolved;
+  }, [bulkCreateGroups, bulkCreateGroupStartNumbers]);
+
+  /** The rejection message for each group whose start number is out of contract. */
+  const separateGroupStartErrors = useMemo(() => {
+    const errors = new Map<string, string>();
+    for (const group of bulkCreateGroups) {
+      const message = channelNumberInputError(bulkCreateGroupStartNumbers.get(group.name) ?? '');
+      if (message) errors.set(group.name, message);
+    }
+    return errors;
+  }, [bulkCreateGroups, bulkCreateGroupStartNumbers]);
+
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
   const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
@@ -1385,8 +1430,15 @@ export function StreamsPane({
           }
         }
 
-        // Parse channel number (optional)
-        const channelNumber = bulkCreateStartingNumber ? parseFloat(bulkCreateStartingNumber) : undefined;
+        // Parse channel number (optional). Manual entry reaches the API without
+        // going through `handleBulkCreate`'s guard, so it applies the canonical
+        // contract itself (bead enhancedchannelmanager-ic884.1).
+        const parsedNumber = parseChannelNumberInput(bulkCreateStartingNumber);
+        if (!parsedNumber.ok) {
+          alert(parsedNumber.message);
+          return;
+        }
+        const channelNumber = parsedNumber.value ?? undefined;
 
         // Create the channel
         await onCreateChannel(
@@ -1416,15 +1468,13 @@ export function StreamsPane({
     try {
       // Handle multi-group mode with separate groups
       if (useSeparateMode) {
-        // Create channels for each group separately, using per-group starting numbers
-        let currentNumber = 0; // Will be set by first group's start number
+        // Create channels for each group separately, using per-group starting
+        // numbers. `separateGroupStartNumbers` already applied the canonical
+        // contract and the continue-from-previous rule, so nothing here parses
+        // or truncates the operator's entry a second time.
         for (let i = 0; i < bulkCreateGroups.length; i++) {
           const group = bulkCreateGroups[i];
-          // Get per-group start number (or continue from previous)
-          const groupStartStr = bulkCreateGroupStartNumbers.get(group.name);
-          if (groupStartStr && !isNaN(parseInt(groupStartStr, 10))) {
-            currentNumber = parseInt(groupStartStr, 10);
-          }
+          const currentNumber = separateGroupStartNumbers.get(group.name) ?? 0;
           // Get custom group name (user may have renamed it)
           const customGroupName = bulkCreateCustomGroupNames.get(group.name) || group.name;
           // Find existing group with the custom name, or create new
@@ -1452,9 +1502,6 @@ export function StreamsPane({
             pushDown,
             bulkCreateNormalize
           );
-
-          // Increment starting number for next group (if no explicit start)
-          currentNumber += group.streams.length;
         }
       } else {
         // Single group or combined mode
@@ -1526,7 +1573,7 @@ export function StreamsPane({
     bulkCreateGroups,
     bulkCreateMultiGroupOption,
     bulkCreateCustomGroupNames,
-    bulkCreateGroupStartNumbers,
+    separateGroupStartNumbers,
     bulkCreateStartingNumber,
     bulkCreateGroupOption,
     bulkCreateSelectedGroupId,
@@ -1572,16 +1619,36 @@ export function StreamsPane({
     const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
 
     if (useSeparateMode) {
-      // Check that at least the first group has a starting number
+      // Each group's start number is a channel number, so each one is held to
+      // the canonical contract and refused with the same sentence the API
+      // would return. This used to accept anything `parseFloat` read as
+      // non-negative and then convert it with `parseInt`, so `1.05` created a
+      // run beginning at `1`; and it only ever looked at the first group, so a
+      // later group's entry reached the conversion unchecked. An empty entry
+      // means "continue from the previous group" and is allowed on every group
+      // except the first. Bead enhancedchannelmanager-ic884.1.
       const firstGroupStart = bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name);
-      if (!firstGroupStart || isNaN(parseFloat(firstGroupStart)) || parseFloat(firstGroupStart) < 0) {
+      if (!firstGroupStart || !firstGroupStart.trim()) {
         alert('Please enter a valid starting channel number for the first group');
         return;
       }
+      for (const group of bulkCreateGroups) {
+        const message = separateGroupStartErrors.get(group.name);
+        if (message) {
+          alert(message);
+          return;
+        }
+      }
     } else {
-      const startingNum = parseFloat(bulkCreateStartingNumber);
-      if (isNaN(startingNum) || startingNum < 0) {
-        alert('Please enter a valid starting channel number');
+      // The starting number is a channel number, so it is held to the canonical
+      // contract (non-negative, at most one decimal place). An out-of-contract
+      // entry is refused with the same sentence the API would return rather
+      // than being rounded onto a neighbouring tenth, and the whole created run
+      // inherits the starting value, so this one check covers every channel the
+      // operation would create. Bead enhancedchannelmanager-ic884.1.
+      const parsedStart = parseChannelNumberInput(bulkCreateStartingNumber, { allowEmpty: false });
+      if (!parsedStart.ok) {
+        alert(parsedStart.message);
         return;
       }
     }
@@ -1616,6 +1683,7 @@ export function StreamsPane({
     isFromMultipleGroups,
     bulkCreateMultiGroupOption,
     bulkCreateGroupStartNumbers,
+    separateGroupStartErrors,
     bulkCreateGroups,
     bulkCreateStartingNumber,
     bulkCreateStats.channelCount,
@@ -2380,6 +2448,7 @@ export function StreamsPane({
                         {bulkCreateGroups.map((group) => {
                           const customName = bulkCreateCustomGroupNames.get(group.name) || group.name;
                           const startNumber = bulkCreateGroupStartNumbers.get(group.name) || '';
+                          const startError = separateGroupStartErrors.get(group.name);
                           const existingGroup = channelGroups.find(g => g.name === customName);
                           return (
                             <div key={group.name} className="group-name-row">
@@ -2412,6 +2481,9 @@ export function StreamsPane({
                                 <span className="group-exists-badge" title="Group already exists - channels will be added to it">exists</span>
                               ) : (
                                 <span className="group-new-badge" title="New group will be created">new</span>
+                              )}
+                              {startError && (
+                                <div className="field-error" role="alert">{startError}</div>
                               )}
                             </div>
                           );
@@ -2458,6 +2530,12 @@ export function StreamsPane({
                     className="form-input"
                     autoFocus
                   />
+                  {(() => {
+                    const startError = channelNumberInputError(bulkCreateStartingNumber);
+                    return startError ? (
+                      <div className="field-error" role="alert">{startError}</div>
+                    ) : null;
+                  })()}
                   {bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
                       {(() => {
@@ -2866,33 +2944,22 @@ export function StreamsPane({
                 <div className="bulk-create-preview">
                   <label>Preview (first 3 channels per group)</label>
                   <div className="preview-list">
-                    {bulkCreateGroups.map((group, groupIdx) => {
-                      const groupStartStr = bulkCreateGroupStartNumbers.get(group.name);
-                      // Calculate starting number: use explicit value, or continue from previous group
-                      let startNum: number | null = null;
-                      if (groupStartStr && !isNaN(parseInt(groupStartStr, 10))) {
-                        startNum = parseInt(groupStartStr, 10);
-                      } else if (groupIdx > 0) {
-                        // Find the previous group's start and add its stream count
-                        let prevEnd = 0;
-                        for (let i = 0; i < groupIdx; i++) {
-                          const prevStartStr = bulkCreateGroupStartNumbers.get(bulkCreateGroups[i].name);
-                          if (prevStartStr && !isNaN(parseInt(prevStartStr, 10))) {
-                            prevEnd = parseInt(prevStartStr, 10) + bulkCreateGroups[i].streams.length;
-                          } else if (i === 0) {
-                            prevEnd = bulkCreateGroups[i].streams.length;
-                          } else {
-                            prevEnd += bulkCreateGroups[i].streams.length;
-                          }
-                        }
-                        startNum = prevEnd;
-                      }
+                    {bulkCreateGroups.map((group) => {
+                      // The preview reads the same resolution the creation call
+                      // uses, so what the operator is shown is what gets
+                      // created. It used to re-derive the numbers with
+                      // `parseInt`, which previewed a decimal start truncated.
+                      const startNum = separateGroupStartNumbers.get(group.name) ?? null;
+                      const step = startNum !== null && startNum % 1 !== 0 ? 0.1 : 1;
                       const customName = bulkCreateCustomGroupNames.get(group.name) || group.name;
                       return (
                         <div key={group.name} className="preview-group">
                           <div className="preview-group-header">{customName}</div>
                           {group.streams.slice(0, 3).map((stream, idx) => {
-                            const num = startNum !== null ? startNum + idx : '?';
+                            const num =
+                              startNum !== null
+                                ? Math.round((startNum + idx * step) * 10) / 10
+                                : '?';
                             return (
                               <div key={stream.id} className="preview-item">
                                 <span className="preview-number">{num}</span>
@@ -2956,9 +3023,12 @@ export function StreamsPane({
                     // Manual entry: require channel name
                     ? !manualEntryChannelName.trim()
                     // In separate groups mode, check first group has a start number
+                    // Separate groups mode: the first group must have a start
+                    // number, and no group may carry an out-of-contract one.
                     : isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
-                      ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name)
-                      : !bulkCreateStartingNumber
+                      ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name) ||
+                        separateGroupStartErrors.size > 0
+                      : !bulkCreateStartingNumber || !!channelNumberInputError(bulkCreateStartingNumber)
                 )}
               >
                 {bulkCreateLoading ? (

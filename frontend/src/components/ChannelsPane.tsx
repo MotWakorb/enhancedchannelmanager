@@ -27,6 +27,7 @@ import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
 import { planChannelNumberShift, channelNumberSlot } from '../utils/channelNumberShift';
+import { parseChannelNumberInput } from '../utils/channelNumber';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -3159,7 +3160,17 @@ export function ChannelsPane({
   };
 
   const handleSaveChannelNumber = async (channelId: number) => {
-    const newNumber = editingChannelNumber.trim() ? parseFloat(editingChannelNumber) : null;
+    // The canonical contract gates the inline editor: an out-of-contract entry
+    // is refused with the same sentence the API would return, and the editor
+    // stays open on the offending value so the operator can correct it rather
+    // than having it silently rounded onto a neighbouring tenth.
+    // Bead enhancedchannelmanager-ic884.1.
+    const parsed = parseChannelNumberInput(editingChannelNumber);
+    if (!parsed.ok) {
+      notifications.error(parsed.message, 'Invalid Channel Number');
+      return;
+    }
+    const newNumber = parsed.value;
     const channel = channels.find((c) => c.id === channelId);
 
     const updateData: { channel_number: number | null; name?: string } = { channel_number: newNumber };

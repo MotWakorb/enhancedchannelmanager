@@ -170,6 +170,24 @@ npm run test:e2e:debug     # Debug mode with breakpoints
 npm run test:e2e:report    # View test report
 ```
 
+> **`E2E_BASE_URL` is required. There is no default.** It used to default to
+> `http://localhost:6100`, the product owner's LIVE ECM instance holding real
+> channel data, so an unset variable silently pointed write-capable specs (a
+> channel-number push-down, a cross-group move, a merge, a delete) at
+> production (bead `enhancedchannelmanager-536bl`). Config load in
+> `playwright-base-url.mjs` now throws before any browser launches or any
+> request is made if `E2E_BASE_URL` is unset and `E2E_EXACT_BUILD` is not
+> `true`. Set it explicitly:
+> ```bash
+> E2E_BASE_URL=http://localhost:6100 npm run test:e2e   # explicit opt-in to the live instance
+> E2E_BASE_URL=http://localhost:5173 npm run test:e2e   # against a dev server you started yourself
+> ```
+> Or skip it entirely with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which
+> builds and serves the checked-out source on its own isolated preview port
+> (`127.0.0.1:4173`) and supplies that base URL itself. This is what the
+> `Screen-Reader-Only Rendering Guard` and `Operator Workspace Release Matrix`
+> CI jobs do, and neither sets `E2E_BASE_URL`.
+
 ### Rendered-CSS regression guards
 
 Seven specs in `e2e/` are not feature tests. They are guards over *rendered*
@@ -241,20 +259,21 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
   before shipping any change under `frontend/src/**/*.css`.
 
 **These guards measure the build that is being SERVED, not your working tree.**
-The default base URL is the deployed container on `:6100`, so running them
-against a container that has not been redeployed since your edit reports the
-*old* build's CSS, and the type-scale guard will list the sites you just
-fixed as brand-new failures. Observed exactly that: nine sites fixed in the
-tree still showed as off-scale on `:6100` because the container predated the
-fix.
+Point them at the deployed container on `:6100` explicitly. `E2E_BASE_URL`
+has no default (see above), so it must be set, and running them against a
+container that has not been redeployed since your edit reports the *old*
+build's CSS, and the type-scale guard will list the sites you just fixed as
+brand-new failures. Observed exactly that: nine sites fixed in the tree still
+showed as off-scale on `:6100` because the container predated the fix.
 
 ```bash
-# sr-only: builds and serves YOUR tree, no container involved. Always exact.
+# sr-only: builds and serves YOUR tree, no container involved. Always exact,
+# and E2E_START_SERVER + E2E_EXACT_BUILD already supply their own base URL.
 npm run test:css-guard:sr-only
 
-# the others: deploy your build to the container FIRST, then run.
+# the others: deploy your build to the container FIRST, then run against it explicitly.
 scripts/deploy-frontend.sh
-npm run test:css-guards
+E2E_BASE_URL=http://localhost:6100 npm run test:css-guards
 ```
 
 **Or serve your own tree and skip the deploy entirely.** `vite preview`

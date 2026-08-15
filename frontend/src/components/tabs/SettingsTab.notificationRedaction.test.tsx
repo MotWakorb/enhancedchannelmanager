@@ -192,6 +192,7 @@ const settingsBase = {
   strike_threshold: 3,
   normalize_on_channel_create: false,
   smtp_configured: true,
+  public_base_url: '',
   smtp_host: 'smtp.test',
   smtp_port: 587,
   smtp_user: '',

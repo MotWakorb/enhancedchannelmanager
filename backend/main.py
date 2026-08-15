@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0108",
+    version="0.18.1-0109",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1082,6 +1082,22 @@ async def startup_event():
         logger.error(
             "[MAIN] Config secret-file integrity startup probe crashed: %s",
             _key_probe_err,
+        )
+
+    # Surface the public-base-URL posture at boot (bead ...-qsqfv). The call
+    # itself is what warns: config.get_public_base_url() logs once per process
+    # when the value is unset or unusable, so making it here puts the warning
+    # near the top of the container log instead of leaving it to appear only
+    # after somebody happens to request a password reset. Never raises.
+    try:
+        from config import get_public_base_url
+        _public_base_url = get_public_base_url()
+        if _public_base_url:
+            logger.info("[MAIN] Public base URL for outbound links: %s", _public_base_url)
+    except Exception as _public_base_url_err:
+        logger.warning(
+            "[MAIN] Could not resolve the public base URL at startup: %s",
+            _public_base_url_err,
         )
 
     # Purge all expired user sessions

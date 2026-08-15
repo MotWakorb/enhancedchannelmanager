@@ -31,6 +31,18 @@ The in-app **Notification Center** (the bell icon) is governed by a separate `sh
 
 > **Going deeper:** see API reference → Alert Methods ([`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md), in the repository, not part of this published guide) for the request/response shapes and API reference → Scheduled Tasks (same file) for the task-update endpoints.
 
+## Settings → Email → Public Base URL
+
+**Set this.** It is the address your operators reach ECM at, and it is what ECM puts into links it emails out. Today that means the password-reset link.
+
+Enter the scheme and host only, with no path: `https://ecm.example.com`, or `http://192.168.1.10:6100` if you reach ECM by IP and port. A trailing slash is accepted and removed for you. A value with a path, a query string, a fragment, or embedded credentials is refused when you save, and so is a value with no `http://` or `https://` in front of it.
+
+While the field is empty, ECM falls back to building reset links from the `Host` and `X-Forwarded-Host` headers on the incoming request. Those headers are set by whoever sent the request, not by you, so anyone who knows one of your users' email addresses can make ECM email that user a genuine reset link that points at a host of the attacker's choosing. If the user opens it, their live reset token goes to the attacker. ECM logs a warning at startup while the field is unset.
+
+The **Configured / Not set** badge next to the heading tells you which of the two modes your install is in.
+
+Changing the value is an admin action, like the outbound connection and notification settings. It takes effect on the next reset email; no restart is needed.
+
 ## Settings → Notification Settings → SMTP
 
 SMTP is configured **once, globally**. Both M3U Digest reports and per-task email alerts use the same server.

@@ -12,10 +12,87 @@ import re
 import json
 
 import safe_regex
+from channel_number import CHANNEL_NUMBER_RULE_MESSAGE, is_valid_channel_number
 from regex_lint import lint_replacement_group_refs
 from date_placeholders import expand_date_placeholders
 
 logger = logging.getLogger(__name__)
+
+# A channel-number SPEC in a pipeline rule is not a bare channel number. The
+# vocabulary is "auto", a literal number, or a "min-max" range string, and the
+# spec may also be a template such as "{auto}" that only resolves at execution
+# time. Only the literal-number form IS a channel number, so only that form is
+# held to a numeric contract; every other shape is left exactly as validation
+# found it before this check existed, because narrowing the spec vocabulary is a
+# different question and would invalidate rules operators already have.
+# Bead enhancedchannelmanager-ic884.1.
+_CHANNEL_NUMBER_RANGE = re.compile(r"^\s*\d+\s*-\s*\d+\s*$")
+
+# A digits-only literal, which is the only literal form
+# ``ActionExecutor._get_next_channel_number`` honours as written.
+_CHANNEL_NUMBER_WHOLE_TEXT = re.compile(r"^\d+$")
+
+#: Why the pipeline is stricter than the canonical channel-number contract.
+#:
+#: ``ActionExecutor._get_next_channel_number`` matches an ``int`` spec and a
+#: digits-only string spec. Every other numeric shape, INCLUDING a float that
+#: happens to be whole, matches neither branch and falls through to automatic
+#: numbering, so the rule silently assigns a number unrelated to the one the
+#: operator wrote. Accepting such a literal here would bless a silent wrong
+#: result, which is worse than rejecting it, so the schema refuses the shapes
+#: the executor cannot honour and the executor's real contract becomes explicit.
+#:
+#: This restriction is PROVISIONAL. Whether pipeline rules should be able to
+#: name a fractional channel number at all is a product decision, filed for the
+#: PO as bead enhancedchannelmanager-ay3iq. If that lands, the executor learns
+#: tenths first and this check relaxes to the canonical contract; nothing here
+#: pre-empts the answer.
+PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE = (
+    "Pipeline channel numbers must be whole numbers written without a decimal "
+    "point (for example 800, not 800.0 or 1.1)."
+)
+
+
+def validate_channel_number_spec(spec: Any, action_label: str) -> list:
+    """Return contract errors for the literal-number form of a spec.
+
+    Returns no errors for ``"auto"``, a ``"min-max"`` range, a template, or any
+    other non-numeric shape. A literal number outside the canonical domain
+    (negative, non-finite, or carrying more than one decimal place) is rejected
+    with :data:`CHANNEL_NUMBER_RULE_MESSAGE`; a literal the executor cannot
+    honour as written is rejected with
+    :data:`PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE`. Either way it cannot be stored
+    on a rule and applied later.
+    """
+    if isinstance(spec, bool) or spec is None:
+        return []
+    if isinstance(spec, int):
+        return [] if is_valid_channel_number(spec) else [
+            f"{action_label}: {CHANNEL_NUMBER_RULE_MESSAGE}"
+        ]
+    if isinstance(spec, float):
+        # Out-of-contract first, so `-1.5` reads as "not a channel number"
+        # rather than as "write it without a decimal point".
+        if not is_valid_channel_number(spec):
+            return [f"{action_label}: {CHANNEL_NUMBER_RULE_MESSAGE}"]
+        return [f"{action_label}: {PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE}"]
+    if not isinstance(spec, str):
+        return []
+
+    text = spec.strip()
+    if text == "auto" or _CHANNEL_NUMBER_RANGE.match(text):
+        return []
+    if _CHANNEL_NUMBER_WHOLE_TEXT.match(text):
+        return [] if is_valid_channel_number(float(text)) else [
+            f"{action_label}: {CHANNEL_NUMBER_RULE_MESSAGE}"
+        ]
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return []  # A template or other non-numeric spec: not this rule's business.
+    if not is_valid_channel_number(number):
+        return [f"{action_label}: {CHANNEL_NUMBER_RULE_MESSAGE}"]
+    return [f"{action_label}: {PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE}"]
 
 
 # =============================================================================
@@ -394,6 +471,13 @@ class Action:
             if_exists = self.params.get("if_exists", "skip")
             if if_exists not in ("skip", "merge", "merge_only", "update"):
                 errors.append(f"create_channel.if_exists must be 'skip', 'merge', 'merge_only', or 'update'")
+            # The channel_number spec defaults to "auto" when absent or null.
+            if self.params.get("channel_number") is not None:
+                errors.extend(
+                    validate_channel_number_spec(
+                        self.params["channel_number"], "create_channel.channel_number"
+                    )
+                )
             # Validate optional name transform
             errors.extend(self._validate_name_transform())
 
@@ -574,6 +658,8 @@ class Action:
             value = self.params.get("value")
             if value is None:
                 errors.append("set_channel_number requires a 'value' ('auto', integer, or 'min-max' range)")
+            else:
+                errors.extend(validate_channel_number_spec(value, "set_channel_number"))
 
         # Validate set_stream_priority
         elif action_type == ActionType.SET_STREAM_PRIORITY:

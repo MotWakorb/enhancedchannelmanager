@@ -3,6 +3,7 @@ import type { Channel, Logo, MergeChannelsRequest } from '../types';
 import { CustomSelect, type SelectOption } from './CustomSelect';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { parseChannelNumberInput } from '../utils/channelNumber';
 import * as api from '../services/api';
 import './ModalBase.css';
 import './MergeChannelsModal.css';
@@ -35,15 +36,16 @@ export function MergeChannelsModal({
   const first = channels[0];
 
   const [name, setName] = useState(first.name);
-  const [channelNumber, setChannelNumber] = useState<string>(
-    String(
-      Math.min(
-        ...channels
-          .map((c) => c.channel_number)
-          .filter((n): n is number => n !== null)
-      ) || ''
-    )
-  );
+  // Lowest assigned number among the sources, or blank when none of them has
+  // one. `Math.min()` over an empty list is `Infinity`, which used to reach the
+  // box as the literal text "Infinity" and then the API as a non-finite number
+  // (bead enhancedchannelmanager-ic884.1).
+  const [channelNumber, setChannelNumber] = useState<string>(() => {
+    const assigned = channels
+      .map((c) => c.channel_number)
+      .filter((n): n is number => n !== null && n !== undefined);
+    return assigned.length ? String(Math.min(...assigned)) : '';
+  });
   const [groupId, setGroupId] = useState<number | null>(first.channel_group_id);
   const [logoId, setLogoId] = useState<number | null>(first.logo_id);
   const [epgDataId, setEpgDataId] = useState<number | null>(first.epg_data_id);
@@ -116,15 +118,25 @@ export function MergeChannelsModal({
       .map((p) => ({ value: String(p.id), label: p.name })),
   ];
 
+  // The merge target's number is held to the canonical contract before the
+  // request is built, so an out-of-contract entry never reaches the API and is
+  // never rounded onto a neighbouring tenth (bead enhancedchannelmanager-ic884.1).
+  const channelNumberParse = parseChannelNumberInput(channelNumber);
+  const channelNumberError = channelNumberParse.ok ? null : channelNumberParse.message;
+  const parsedChannelNumber = channelNumberParse.ok ? channelNumberParse.value : null;
+
   const handleMerge = async () => {
+    if (channelNumberError) {
+      setError(channelNumberError);
+      return;
+    }
     setMerging(true);
     setError(null);
     try {
-      const parsedNumber = parseFloat(channelNumber);
       const request: MergeChannelsRequest = {
         source_channel_ids: channels.map((c) => c.id),
         target_name: name.trim(),
-        target_channel_number: !isNaN(parsedNumber) ? parsedNumber : null,
+        target_channel_number: parsedChannelNumber,
         target_channel_group_id: groupId,
         target_logo_id: logoId,
         target_tvg_id: tvgId || null,
@@ -193,7 +205,13 @@ export function MergeChannelsModal({
               value={channelNumber}
               onChange={(e) => setChannelNumber(e.target.value)}
               placeholder="123"
+              aria-invalid={channelNumberError ? true : undefined}
             />
+            {channelNumberError && (
+              <span className="field-error" role="alert">
+                {channelNumberError}
+              </span>
+            )}
           </div>
 
           {/* Group selector */}
@@ -311,7 +329,7 @@ export function MergeChannelsModal({
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleMerge}
-            disabled={merging || !name.trim()}
+            disabled={merging || !name.trim() || !!channelNumberError}
           >
             {merging ? 'Merging...' : `Merge ${channels.length} Channels`}
           </button>
