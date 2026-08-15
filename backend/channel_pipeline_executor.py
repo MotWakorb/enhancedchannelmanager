@@ -657,8 +657,17 @@ class ActionExecutor:
         # ``channel_number_ticks`` in backend/channel_number.py.
         self._used_channel_number_ticks: set[int] = set()
         for c in self.existing_channels:
-            if c.get("channel_number"):
-                self._mark_channel_number_used(c["channel_number"])
+            # Presence, not truthiness. ``0`` is a channel number the canonical
+            # contract holds (non-negative, at most one decimal place) and it is
+            # falsy, so the old ``if c.get("channel_number")`` read an occupied
+            # channel 0 as free and let a rule naming ``0`` create a second one.
+            # ``None`` is the genuine "unassigned" state and stays excluded;
+            # anything else Dispatcharr may have stored is handed to
+            # ``_mark_channel_number_used``, which already absorbs a value that
+            # occupies no number this engine could hand out.
+            number = c.get("channel_number")
+            if number is not None:
+                self._mark_channel_number_used(number)
         self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
 
     def _mark_channel_number_used(self, number: Any) -> None:
@@ -5718,15 +5727,72 @@ class ActionExecutor:
         return self._group_by_name.get(name_lower)
 
     def _next_free_number_from_ticks(self, start_ticks: int, step_ticks: int) -> Union[int, float]:
-        """Walk up the tenths grid to the first number nothing occupies.
+        """Walk up the tenths grid to the first free number a float can hold.
 
-        Terminates because the walk strictly ascends through a finite set of
-        occupied ticks, so each iteration consumes a distinct one.
+        A tick is only usable if the number it divides back to lands on that
+        same tick. Below ``2**49`` every tick does, because adjacent floats
+        there are at most 0.0625 apart, narrower than a tenth, so distinct
+        tenths keep distinct floats. From ``2**49`` up the gap is 0.125, wider
+        than a tenth, so a run of ticks collapses onto one float and that float
+        reports the tick of whichever tenth it landed nearest. Handing such a
+        float back would return a number this walk had already established was
+        taken: the occupied value's own tick is one of the ticks that collapse
+        onto it. ``channel_number_from_ticks`` in backend/channel_number.py
+        carries the measurements on both sides of that bound, and
+        ``TestChannelNumberTicks`` in backend/tests/unit/test_channel_number.py
+        asserts them.
+
+        So a tick with no float of its own is stepped over, and the walk drops
+        to whole numbers from there. Whole numbers stay exact at every
+        magnitude, because a whole tick divides back to a Python ``int`` and
+        never touches a float at all.
+
+        Termination, at any magnitude: the collapse branch runs at most once,
+        since every tick it can move to afterwards is a whole tick, and the
+        guard below rules out a whole tick reaching it a second time. Every
+        other iteration consumes one distinct member of a finite occupied set,
+        ascending.
+
+        Returns:
+            A free channel number, always on the canonical grid: an ``int`` on a
+            whole number, a ``float`` on a tenth. Never a number
+            :meth:`_is_channel_number_used` reports as taken.
+
+        Raises:
+            RuntimeError: If a whole tick fails to round-trip, which the ``int``
+                path in ``channel_number_from_ticks`` makes impossible. It is
+                checked anyway because the alternative to failing there is a
+                walk that cannot advance.
         """
         tick = start_ticks
-        while tick in self._used_channel_number_ticks:
+        unit = CHANNEL_NUMBER_TICKS_PER_UNIT
+        collapsed_from: Optional[int] = None
+        while True:
+            number = channel_number_from_ticks(tick)
+            if channel_number_ticks(number) != tick:
+                if tick % unit == 0:
+                    raise RuntimeError(
+                        f"Channel number tick {tick} is whole but does not "
+                        "round-trip, so the tenths grid cannot be walked"
+                    )
+                # This tenth has no float of its own at this magnitude. Move to
+                # the next whole tick above it and walk whole numbers from here.
+                if collapsed_from is None:
+                    collapsed_from = tick
+                tick += unit - (tick % unit)
+                step_ticks = unit
+                continue
+            if not self._is_channel_number_used(number):
+                if collapsed_from is not None:
+                    logger.warning(
+                        "[AUTO-CREATE-EXEC] A tenth is not representable at this "
+                        "magnitude (tick %s is not a distinct floating-point "
+                        "value), so the search stepped by whole numbers and "
+                        "assigned %s instead. Channel numbers this large carry "
+                        "no tenths place.", collapsed_from, number
+                    )
+                return number
             tick += step_ticks
-        return channel_number_from_ticks(tick)
 
     def _get_next_channel_number(self, spec: Any) -> Union[int, float]:
         """
@@ -5756,7 +5822,11 @@ class ActionExecutor:
         Returns:
             The next free channel number: an ``int`` when it lands on a whole
             number, a ``float`` when it carries a tenth. Always in contract, so
-            ``is_valid_channel_number`` holds for it.
+            ``is_valid_channel_number`` holds for it, and never a number an
+            existing channel already occupies. At or above ``2**49`` a tenth has
+            no distinct floating-point value, so the answer there is a whole
+            number and the walk says so in the log rather than handing back a
+            duplicate: see :meth:`_next_free_number_from_ticks`.
         """
         literal = _channel_number_spec_ticks(spec)
         if literal is not None:

@@ -191,8 +191,16 @@ def channel_number_ticks(value: Any) -> int:
     the end, via :func:`channel_number_from_ticks`. That is the same discipline
     ``frontend/src/utils/channelNumberShift.ts`` follows, on the same grid.
 
-    In-contract numbers map one-to-one onto ticks, so on contract-clean data a
-    tick comparison IS equality rather than an approximation of it. There is no
+    Below ``2**49`` in-contract numbers map one-to-one onto ticks, so on
+    contract-clean data a tick comparison IS equality rather than an
+    approximation of it. That bound is where floats run out of room, not an
+    arbitrary cutoff: adjacent floats from there up are 0.125 apart, which is
+    wider than a tenth, so several ticks share one float and the mapping stops
+    being injective. Whole numbers are exempt at every magnitude, because the
+    ``int`` branch below never touches a float. :func:`channel_number_from_ticks`
+    carries the measurements and the matching caveat on the inverse.
+
+    There is no
     ECM column for ``channel_number``: the numbers come from Dispatcharr, which
     enforces neither precision nor uniqueness, so a value written before this
     contract landed or by another client can still be out of contract. Such a
@@ -209,7 +217,9 @@ def channel_number_ticks(value: Any) -> int:
             them, and :func:`is_valid_channel_number` is where that is decided.
 
     Returns:
-        The tick index, exact for every value the contract can hold.
+        The tick index. Exact for every value the contract can hold. Distinct
+        per value only below ``2**49`` for tenths, and at every magnitude for
+        whole numbers.
 
     Raises:
         InvalidChannelNumberError: If ``value`` is not a finite number, which
@@ -238,6 +248,27 @@ def channel_number_from_ticks(ticks: int) -> Union[int, float]:
     The counterpart to :func:`channel_number_ticks`. Divide back exactly once,
     at the end of whatever walk produced the tick, which is what keeps the
     result on the grid instead of accumulating drift.
+
+    How far the inverse actually holds, measured against this implementation:
+
+    * **A whole tick, at every magnitude.** It divides back to a Python ``int``
+      with no float in the path, and :func:`channel_number_ticks` multiplies
+      that ``int`` straight back. ``10**401`` round-trips as readily as ``10``.
+    * **A tenth, only below ``2**49``.** Adjacent floats below that bound are at
+      most 0.0625 apart, narrower than a tenth, so distinct tenths keep distinct
+      floats and rounding recovers the tick (measured: zero failures over the
+      5000 ticks below the bound, and over every tick to 2000). From ``2**49``
+      up the gap is 0.125, wider than a tenth, so a run of ticks divides back to
+      one shared float and that float reports only one of their tick values.
+      1000 of the first 5000 ticks at the bound fail the round trip.
+
+    A caller walking the grid must therefore treat a tick whose number does not
+    map back to it as unusable rather than as its own slot: two ticks that share
+    a float are the same channel number, so one of them being free proves
+    nothing about the other. ``ActionExecutor._next_free_number_from_ticks`` in
+    backend/channel_pipeline_executor.py is the one such walk, and it drops to
+    whole numbers at that point. Tests:
+    ``backend/tests/unit/test_channel_number.py``.
 
     Returns:
         An ``int`` when the tick lands on a whole number, a ``float`` when it

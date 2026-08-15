@@ -13,6 +13,7 @@ import pytest
 
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
+    CHANNEL_NUMBER_TICKS_PER_UNIT,
     InvalidChannelNumberError,
     _EXACT_INTEGER_FLOOR,
     channel_number_from_ticks,
@@ -443,6 +444,50 @@ class TestChannelNumberTicks:
     def test_every_tenth_of_a_decade_round_trips_exactly(self):
         for tick in range(0, 2001):
             assert channel_number_ticks(channel_number_from_ticks(tick)) == tick
+
+    def test_every_tenth_just_below_the_float_bound_still_round_trips(self):
+        """The bound is ``2**49``, where adjacent floats are 0.125 apart.
+
+        Just under it the gap is 0.0625, narrower than a tenth, so every tick
+        still names its own float. This is the top of the range
+        :func:`channel_number_from_ticks` documents as reversible, and it is
+        asserted rather than described so the claim cannot rot.
+        """
+        bound = 2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT
+        for tick in range(bound - 5000, bound):
+            assert channel_number_ticks(channel_number_from_ticks(tick)) == tick
+
+    def test_a_tenth_stops_naming_its_own_float_at_the_bound(self):
+        """From ``2**49`` up, several ticks share one float, so the inverse fails.
+
+        Pinned as a real property of binary floating point, not as a defect: no
+        implementation can make a tenth distinct where the gap between adjacent
+        doubles is 0.125. The caller's obligation is to notice, which
+        ``ActionExecutor._next_free_number_from_ticks`` does.
+        """
+        bound = 2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT
+        collapsed = [
+            tick
+            for tick in range(bound, bound + 5000)
+            if channel_number_ticks(channel_number_from_ticks(tick)) != tick
+        ]
+        assert len(collapsed) == 1000
+        assert all(tick % CHANNEL_NUMBER_TICKS_PER_UNIT for tick in collapsed)
+        assert collapsed[0] == 5629499534213123
+
+    def test_a_whole_tick_round_trips_at_every_magnitude(self):
+        """Whole numbers are exempt from the bound: the int path uses no float."""
+        for tick in (
+            0,
+            10,
+            8000,
+            2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT,
+            2**53 * CHANNEL_NUMBER_TICKS_PER_UNIT,
+            10**401,
+        ):
+            number = channel_number_from_ticks(tick)
+            assert isinstance(number, int)
+            assert channel_number_ticks(number) == tick
 
     def test_a_magnitude_above_the_exact_integer_floor_does_not_overflow(self):
         """``1e308 * 10`` is ``inf``, so the scaling has to be skipped, not attempted."""

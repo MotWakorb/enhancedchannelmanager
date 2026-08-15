@@ -5639,3 +5639,154 @@ class TestChannelNumberTenths:
         ))
         assert executor._apply_channel_number_in_name("ESPN", 1.1) == "1.1 - ESPN"
         assert executor._apply_channel_number_in_name("ESPN", 800) == "800 - ESPN"
+
+
+class TestChannelNumberOccupancy:
+    """A number an existing channel already holds is never handed out again.
+
+    Two surviving instances of the "silent wrong value" class the epic exists
+    to close, both found by external adversarial review of branch
+    ``fix/epic-yajww-operator-followups``:
+
+    * Occupancy was seeded with a truthiness test, so a channel numbered ``0``
+      was read as free and the engine created a second one.
+    * The tenths walk trusted a tick to name its own float. At or above
+      ``2**49`` adjacent floats are 0.125 apart, wider than a tenth, so the
+      walk divided the next tick back to the SAME float it had just rejected
+      as taken and returned it.
+    """
+
+    def _executor(self, numbers=()):
+        client = MagicMock()
+        client.create_channel = AsyncMock()
+        client.update_channel = AsyncMock()
+        channels = [
+            {"id": index, "name": f"CH{index}", "channel_number": number,
+             "streams": [], "auto_created": True}
+            for index, number in enumerate(numbers, start=1)
+        ]
+        return ActionExecutor(client, existing_channels=channels)
+
+    # -- Channel 0 --------------------------------------------------------
+
+    def test_an_occupied_channel_zero_is_recorded_as_taken(self):
+        """``0`` is falsy but in contract, so presence decides, not truthiness."""
+        executor = self._executor([0])
+        assert executor._used_channel_number_ticks == {0}
+        assert executor._is_channel_number_used(0) is True
+
+    def test_a_rule_naming_zero_does_not_duplicate_an_occupied_zero(self):
+        """The defect: this handed back ``0``, creating a second channel 0."""
+        executor = self._executor([0])
+        assert executor._get_next_channel_number(0) == 1
+
+    def test_a_rule_naming_zero_gets_zero_when_zero_is_free(self):
+        """The other half of the contract: 0 is assignable, not reserved."""
+        executor = self._executor([1, 2])
+        assert executor._get_next_channel_number(0) == 0
+
+    def test_an_unassigned_channel_leaves_zero_free(self):
+        """``None`` is Dispatcharr's normal "no number" state, not channel 0."""
+        executor = self._executor([None])
+        assert executor._used_channel_number_ticks == set()
+        assert executor._get_next_channel_number(0) == 0
+
+    @pytest.mark.parametrize("stored", ["", "not a number", float("nan"), float("inf")])
+    def test_a_stored_value_that_is_no_channel_number_does_not_break_startup(self, stored):
+        """Dispatcharr enforces nothing on this column, so construction must survive it."""
+        executor = self._executor([stored, 0])
+        assert executor._used_channel_number_ticks == {0}
+        assert executor._get_next_channel_number(0) == 1
+
+    def test_a_zero_tenth_start_walks_off_an_occupied_zero(self):
+        """``0.0`` names the same slot as ``0``, and steps by a whole number."""
+        executor = self._executor([0, 1])
+        assert executor._get_next_channel_number(0.0) == 2
+
+    # -- The float bound --------------------------------------------------
+
+    def test_a_large_fractional_start_never_answers_the_occupied_number(self):
+        """The reproduction: ``2**50 + 0.5`` used to come straight back."""
+        start = 1125899906842624.5
+        executor = self._executor([start])
+        assigned = executor._get_next_channel_number(start)
+        assert assigned != start
+        assert executor._is_channel_number_used(assigned) is False
+        assert assigned == 1125899906842625
+        assert is_valid_channel_number(assigned)
+
+    def test_the_collapsed_tenth_is_audible_not_silent(self, caplog):
+        """A different answer than the rule asked for has to say so."""
+        import logging
+
+        start = 1125899906842624.5
+        executor = self._executor([start])
+        with caplog.at_level(logging.WARNING):
+            assigned = executor._get_next_channel_number(start)
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("not representable at this magnitude" in text for text in warnings), warnings
+        assert any(str(assigned) in text for text in warnings), warnings
+
+    def test_an_ordinary_tenth_stays_quiet(self, caplog):
+        """The collapse warning must not fire at magnitudes floats handle."""
+        import logging
+
+        executor = self._executor([1.1])
+        with caplog.at_level(logging.WARNING):
+            assert executor._get_next_channel_number(1.1) == 1.2
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    @pytest.mark.parametrize(
+        "start",
+        [
+            562949953421312.5,   # 2**49 + 0.5, the first magnitude that collapses
+            1125899906842624.5,  # 2**50 + 0.5
+            2251799813685248.5,  # 2**51 + 0.5
+            9007199254740992.0,  # 2**53, every float here is a whole number
+            1e308,
+        ],
+    )
+    def test_the_walk_terminates_and_answers_a_free_number_at_any_magnitude(self, start):
+        executor = self._executor([start])
+        assigned = executor._get_next_channel_number(start)
+        assert executor._is_channel_number_used(assigned) is False
+        assert is_valid_channel_number(assigned)
+
+    def test_consecutive_assignments_at_the_bound_are_all_distinct(self):
+        """Marking one used must actually move the next answer along."""
+        start = 1125899906842624.5
+        executor = self._executor([start])
+        assigned = []
+        for _ in range(5):
+            number = executor._get_next_channel_number(start)
+            executor._mark_channel_number_used(number)
+            assigned.append(number)
+        assert len(set(assigned)) == 5
+        assert assigned == [
+            1125899906842625,
+            1125899906842626,
+            1125899906842627,
+            1125899906842628,
+            1125899906842629,
+        ]
+
+    def test_a_whole_tick_that_will_not_round_trip_fails_instead_of_hanging(self):
+        """The walk's own termination guard, exercised against its trigger.
+
+        A whole tick divides back to a Python ``int`` and multiplies straight
+        back, so this cannot happen for real. If it ever did, the walk would
+        step to another whole tick and repeat forever, so the guard has to be
+        the thing that fires. Broken here at the boundary the walk calls.
+        """
+        executor = self._executor()
+        with patch("channel_pipeline_executor.channel_number_ticks", return_value=-1):
+            with pytest.raises(RuntimeError, match="does not round-trip"):
+                executor._get_next_channel_number("auto")
+
+    def test_a_tenth_below_the_bound_is_still_honoured_as_a_tenth(self):
+        """The whole-number fallback must not reach magnitudes floats can hold."""
+        start = 281474976710656.5  # 2**48 + 0.5, the last magnitude with tenths
+        executor = self._executor([start])
+        assigned = executor._get_next_channel_number(start)
+        assert assigned == 281474976710656.6
+        assert executor._is_channel_number_used(assigned) is False
