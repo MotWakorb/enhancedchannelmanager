@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, normalizeStreamNamesWithBackend, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, resolveCreateChannelNames, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { channelNumberInputError, parseChannelNumberInput } from '../utils/channelNumber';
 import { categorizeStreamGroups } from '../utils/streamGroupCategories';
@@ -63,6 +63,15 @@ const GROUP_RENDER_CHUNK_SIZE = 100;
  * by 0".
  */
 const MANUAL_ENTRY_CHANNEL_COUNT = 1;
+
+/**
+ * How long the name resolver waits before calling the backend.
+ *
+ * Manual entry resolves the name the operator is TYPING, so without this the
+ * dialog would fire one normalization request per keystroke. Short enough that
+ * a human pausing to read the preview never notices it.
+ */
+const NORMALIZATION_PREVIEW_DEBOUNCE_MS = 250;
 
 // Channel defaults from settings
 export interface ChannelDefaults {
@@ -610,7 +619,19 @@ export function StreamsPane({
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   // Normalization toggle and preview
   const [bulkCreateNormalize, setBulkCreateNormalize] = useState(defaultNormalizeOnCreate);
-  const [normalizedNamesPreview, setNormalizedNamesPreview] = useState<Map<string, string>>(new Map());
+  /**
+   * Source name -> the name a channel created from it gets, as answered by
+   * `resolveCreateChannelNames` (bead enhancedchannelmanager-e9e5o).
+   *
+   * This is NOT preview-only decoration. The resolved name is the key the
+   * bulk-create path merges streams on, so it decides how many channels there
+   * are and which numbers they claim. `bulkCreateStats` therefore groups on
+   * THIS map rather than on raw `stream.name`: the dialog used to count off
+   * the raw names whatever the toggle said, while submission counted off the
+   * resolved ones, so on the default path it could promise two channels and
+   * stage one.
+   */
+  const [resolvedCreateNames, setResolvedCreateNames] = useState<Map<string, string>>(new Map());
   const [normalizationPreviewLoading, setNormalizationPreviewLoading] = useState(false);
   // True when the preview fetch failed. Without it a failed preview renders as
   // "No names will change", which is indistinguishable from a genuinely
@@ -1376,32 +1397,61 @@ export function StreamsPane({
   }, [streamsToCreate]);
 
 
+  /**
+   * The streams the create will actually run on, after the timezone filter.
+   *
+   * Split out of `bulkCreateStats` because the resolver effect below needs it
+   * and `bulkCreateStats` now needs the resolver's answer — keeping them in
+   * one memo would be a cycle.
+   */
+  const bulkCreateFilteredStreams = useMemo(
+    () => filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone),
+    [streamsToCreate, bulkCreateTimezone],
+  );
+
+  /**
+   * The names the "Normalization Rules" control is asked about.
+   *
+   * Manual entry has no provider stream, so it asks about what the operator
+   * typed. That is what makes the control work there at all rather than
+   * rendering an empty box (PO override on bead enhancedchannelmanager-e9e5o).
+   */
+  const normalizationSourceNames = useMemo(() => {
+    if (isManualEntry) {
+      const typed = manualEntryChannelName.trim();
+      return typed ? [typed] : [];
+    }
+    return bulkCreateFilteredStreams.map((s) => s.name);
+  }, [isManualEntry, manualEntryChannelName, bulkCreateFilteredStreams]);
+
   // Compute stream stats for the modal display
   // Applies timezone filtering when a preference is selected
-  // Note: Actual channel naming/grouping is handled by the backend normalization engine
   const bulkCreateStats = useMemo(() => {
-    // Filter streams based on timezone preference
-    const filteredStreams = filterStreamsByTimezone(streamsToCreate, bulkCreateTimezone);
+    const filteredStreams = bulkCreateFilteredStreams;
     const streamCount = filteredStreams.length;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
 
-    // Compute deduplicated channel count by grouping streams with the same name
-    // (after quality suffix stripping). This mirrors the dedup logic in handleBulkCreateFromGroup.
+    // Group on the RESOLVED name, exactly as `handleBulkCreateFromGroup` does
+    // (App.tsx): resolve first, strip quality suffixes from that, and merge on
+    // the result. Grouping on the raw name here was the drift — with a rule
+    // that strips `US:`, "US: CNN" and "CNN" are one channel on submit and
+    // used to be shown as two (bead enhancedchannelmanager-e9e5o).
     const channelMap = new Map<string, { name: string; streams: Stream[] }>();
     for (const stream of filteredStreams) {
-      const groupingKey = stripQualitySuffixes(stream.name);
+      const resolvedName = resolvedCreateNames.get(stream.name) ?? stream.name;
+      const groupingKey = stripQualitySuffixes(resolvedName);
       const existing = channelMap.get(groupingKey);
       if (existing) {
         existing.streams.push(stream);
       } else {
-        channelMap.set(groupingKey, { name: stream.name, streams: [stream] });
+        channelMap.set(groupingKey, { name: resolvedName, streams: [stream] });
       }
     }
     const channelCount = channelMap.size;
     const mergedCount = streamCount - channelCount;
 
     return { streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
-  }, [streamsToCreate, bulkCreateTimezone]);
+  }, [streamsToCreate, bulkCreateFilteredStreams, resolvedCreateNames]);
 
   /**
    * How many channel numbers the pending create claims, which is what the
@@ -1417,42 +1467,67 @@ export function StreamsPane({
     setBulkCreateNormalize(defaultNormalizeOnCreate);
   }, [defaultNormalizeOnCreate]);
 
-  // Fetch normalized names preview when normalize toggle is enabled
+  /**
+   * Resolve the names, through the SAME function the create calls.
+   *
+   * `resolveCreateChannelNames` is the one place the normalize question is
+   * answered (bead enhancedchannelmanager-e9e5o). Calling it here rather than
+   * `normalizeStreamNamesWithBackend` is what stops the dialog and the create
+   * from being able to disagree: with the toggle off it is identity and no
+   * request is made, and when the engine cannot be reached both fall back to
+   * the raw names, so the count the operator is shown is the count that gets
+   * staged on every branch.
+   *
+   * Debounced because in manual entry the source name changes on every
+   * keystroke.
+   */
   useEffect(() => {
-    if (!bulkCreateNormalize || !bulkCreateModalOpen || bulkCreateStats.filteredStreams.length === 0) {
-      setNormalizedNamesPreview(new Map());
+    if (!bulkCreateModalOpen) {
+      setResolvedCreateNames(new Map());
       setNormalizationPreviewFailed(false);
+      setNormalizationPreviewLoading(false);
       return;
     }
 
-    const fetchPreview = async () => {
-      setNormalizationPreviewLoading(true);
-      try {
-        const streamNames = bulkCreateStats.filteredStreams.map(s => s.name);
-        const normalizedMap = await normalizeStreamNamesWithBackend(streamNames);
-        setNormalizedNamesPreview(normalizedMap);
-        setNormalizationPreviewFailed(false);
-      } catch (error) {
-        logger.error('Failed to fetch normalization preview:', error);
-        setNormalizedNamesPreview(new Map());
-        setNormalizationPreviewFailed(true);
-      } finally {
-        setNormalizationPreviewLoading(false);
-      }
+    let cancelled = false;
+    const resolve = async () => {
+      const { names, normalizationFailed } = await resolveCreateChannelNames(
+        normalizationSourceNames,
+        bulkCreateNormalize,
+      );
+      if (cancelled) return;
+      setResolvedCreateNames(names);
+      setNormalizationPreviewFailed(normalizationFailed);
+      setNormalizationPreviewLoading(false);
     };
 
-    fetchPreview();
-  }, [bulkCreateNormalize, bulkCreateModalOpen, bulkCreateStats.filteredStreams]);
+    // Only a normalize-on run with something to resolve reaches the network.
+    const willFetch = bulkCreateNormalize && normalizationSourceNames.length > 0;
+    if (!willFetch) {
+      setNormalizationPreviewLoading(false);
+      void resolve();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setNormalizationPreviewLoading(true);
+    const timer = window.setTimeout(() => void resolve(), NORMALIZATION_PREVIEW_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [bulkCreateNormalize, bulkCreateModalOpen, normalizationSourceNames]);
 
   // Count how many names will change with normalization
   const normalizationChangeCount = useMemo(() => {
-    if (!bulkCreateNormalize || normalizedNamesPreview.size === 0) return 0;
+    if (!bulkCreateNormalize || resolvedCreateNames.size === 0) return 0;
     let count = 0;
-    for (const [original, normalized] of normalizedNamesPreview) {
+    for (const [original, normalized] of resolvedCreateNames) {
       if (original !== normalized) count++;
     }
     return count;
-  }, [bulkCreateNormalize, normalizedNamesPreview]);
+  }, [bulkCreateNormalize, resolvedCreateNames]);
 
   /**
    * The starting channel number each group gets in separate-group mode.
@@ -1546,15 +1621,39 @@ export function StreamsPane({
           channelNumber = parsedNumber.value ?? undefined;
         }
 
+        // Resolve the typed name through the SAME function the bulk path
+        // uses, so the manual-entry toggle is a real control rather than a
+        // rendered decoration: on, the configured rules are applied to what
+        // the operator typed; off, they get their literal text. Resolving
+        // HERE and passing the final name is what keeps the decision in one
+        // place — nothing downstream normalizes again, and the backend's
+        // `normalize` flag stays false by construction
+        // (bead enhancedchannelmanager-e9e5o).
+        const typedName = manualEntryChannelName.trim();
+        const { names: resolvedNames, normalizationFailed } =
+          await resolveCreateChannelNames([typedName], bulkCreateNormalize);
+        const channelName = resolvedNames.get(typedName) ?? typedName;
+
         // Create the channel. `pushDown` used to be accepted and dropped here,
         // so "Push channels down" was a button that did nothing.
         await onCreateChannel(
-          manualEntryChannelName.trim(),
+          channelName,
           channelNumber,
           groupId ?? undefined,
           newGroupName,
           pushDown
         );
+
+        // Normalization was asked for and the engine could not be reached, so
+        // the channel carries the name exactly as typed. Say so: with the
+        // toggle a real control, an unchanged name otherwise reads as "the
+        // rules matched nothing".
+        if (normalizationFailed) {
+          notifications.error(
+            'ECM could not reach the normalization engine, so the channel was created with the name exactly as you typed it.',
+            'Normalization failed',
+          );
+        }
 
         closeBulkCreateModal();
       } catch (err) {
@@ -3027,13 +3126,15 @@ export function StreamsPane({
               </div>
 
               {/* Normalization Rules - Collapsible Section.
-                  Hidden in manual entry, which has no provider name to
-                  normalize: the operator types the channel name themselves,
-                  the preview can never populate, and the create path never
-                  consulted the toggle. Every Normalization Rules control ECM
-                  renders now genuinely decides whether names are normalized
+                  Rendered in manual entry too. It was briefly hidden there on
+                  the grounds that there is no provider name to normalize —
+                  but the operator's typed name is a name, and the PO overrode
+                  the removal: a capability withdrawn is not a control made
+                  honest. It is wired instead. The preview resolves what was
+                  TYPED (see `normalizationSourceNames`) and `doBulkCreate`
+                  applies the same answer, so every Normalization Rules control
+                  ECM renders genuinely decides whether names are normalized
                   (bead enhancedchannelmanager-e9e5o). */}
-              {!isManualEntry && (
               <div className="form-group collapsible-section">
                 <div
                   className="collapsible-header"
@@ -3085,13 +3186,22 @@ export function StreamsPane({
                               Creating now would use the raw provider names.
                             </span>
                           </div>
+                        ) : normalizationSourceNames.length === 0 ? (
+                          /* Manual entry before anything is typed. Saying
+                             "no names will change" about a name that does not
+                             exist yet is the empty-box problem, so say what
+                             the operator has to do instead. */
+                          <div className="normalization-no-changes">
+                            <span className="material-icons">edit</span>
+                            <span>Type a channel name to see how the rules will change it.</span>
+                          </div>
                         ) : normalizationChangeCount > 0 ? (
                           <>
                             <div className="normalization-summary">
-                              {normalizationChangeCount} of {bulkCreateStats.streamCount} names will be normalized
+                              {normalizationChangeCount} of {normalizationSourceNames.length} name{normalizationSourceNames.length !== 1 ? 's' : ''} will be normalized
                             </div>
                             <div className="normalization-changes">
-                              {Array.from(normalizedNamesPreview.entries())
+                              {Array.from(resolvedCreateNames.entries())
                                 .filter(([original, normalized]) => original !== normalized)
                                 .slice(0, 5)
                                 .map(([original, normalized]) => (
@@ -3119,7 +3229,6 @@ export function StreamsPane({
                   </div>
                 )}
               </div>
-              )}
 
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
               {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (
@@ -3145,7 +3254,13 @@ export function StreamsPane({
                             return (
                               <div key={stream.id} className="preview-item">
                                 <span className="preview-number">{num}</span>
-                                <span className="preview-name">{stream.name}</span>
+                                {/* The resolved name, so the preview names the
+                                    channel the create will make rather than the
+                                    provider's raw stream
+                                    (bead enhancedchannelmanager-e9e5o). */}
+                                <span className="preview-name">
+                                  {resolvedCreateNames.get(stream.name) ?? stream.name}
+                                </span>
                               </div>
                             );
                           })}

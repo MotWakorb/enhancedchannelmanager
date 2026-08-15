@@ -286,7 +286,19 @@ def register(mcp: FastMCP):
             rnum = _fmt_channel_number(result.get("channel_number", "?"))
             rgrp = result.get("channel_group_id")
             grp_info = f", group_id={rgrp}" if rgrp is not None else ""
-            return f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"
+            lines = [f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"]
+            # The backend reports whether the normalization we asked for
+            # actually ran (bead enhancedchannelmanager-e9e5o). Without this
+            # line a failed run is indistinguishable from ``normalize=False``:
+            # the channel exists, the call returned 200, and the name is raw.
+            norm = result.get("normalization") or {}
+            if norm.get("requested") and not norm.get("applied"):
+                lines.append(
+                    "WARNING: normalization was requested but did NOT run "
+                    f"({norm.get('error', 'unknown error')}). The channel was "
+                    f"created with the name as given: '{norm.get('nameApplied', rname)}'."
+                )
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] create_channel failed: %s", e)
             return f"Error creating channel: {e}"
@@ -1343,6 +1355,21 @@ def register(mcp: FastMCP):
                 lines.append(f"Validation issues ({len(issues)}):")
                 for issue in issues[:10]:
                     lines.append(f"  - {issue}")
+            # createChannel ops that asked for normalization and did not get it
+            # (bead enhancedchannelmanager-e9e5o). These ops APPLIED, so they
+            # appear nowhere in `errors` and nothing else here would mention
+            # them — the channel simply carries the raw name.
+            norm_failures = result.get("normalizationFailures") or []
+            if norm_failures:
+                lines.append(
+                    f"Normalization did NOT run for {len(norm_failures)} "
+                    "channel(s), which were created with the name as given:"
+                )
+                for failure in norm_failures[:10]:
+                    lines.append(
+                        f"  - '{failure.get('name')}' "
+                        f"(tempId={failure.get('tempId')}): {failure.get('error')}"
+                    )
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_commit_channels failed: %s", e)

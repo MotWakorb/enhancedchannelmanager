@@ -423,11 +423,20 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
     logger.debug("[CHANNELS] POST /channels - name=%s number=%s normalize=%s", request.name, request.channel_number, request.normalize)
     client = get_client()
     try:
-        # Apply normalization if requested
+        # Apply normalization if requested.
+        #
+        # A failure here used to be swallowed: a log warning, the raw name, and
+        # a 200 that was observationally IDENTICAL to `normalize=false`. The
+        # caller asked for a capability, did not get it, and had no way to tell
+        # (bead enhancedchannelmanager-e9e5o). The create still succeeds — a
+        # channel that exists must not start reporting as a failure, and the
+        # affected callers are third-party MCP/REST clients we cannot see — but
+        # the response now SAYS what happened. See the `normalization` block
+        # below the create call.
         channel_name = request.name
+        normalization_error: Optional[str] = None
         if request.normalize:
             try:
-                from normalization_engine import get_normalization_engine
                 with get_session() as db:
                     engine = get_normalization_engine(db)
                     # Offload normalization off event loop (bd-w3z4h)
@@ -436,8 +445,9 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
                     if channel_name != request.name:
                         logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
             except Exception as norm_err:
+                normalization_error = str(norm_err)
                 logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, norm_err)
-                # Continue with original name
+                # Continue with the original name, and disclose it below.
 
         data = {"name": channel_name}
         if request.channel_number is not None:
@@ -453,6 +463,19 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Created channel via API in %.1fms", elapsed_ms)
         logger.info("[CHANNELS] Created channel id=%s name=%s number=%s", result.get('id'), result.get('name'), result.get('channel_number'))
+
+        # Say whether the normalization the caller asked for actually ran
+        # (bead enhancedchannelmanager-e9e5o). Present ONLY when `normalize`
+        # was requested, so a caller that never asked for it sees exactly the
+        # response body it saw before. `applied` is the flag to branch on:
+        # False means the engine did not run and `nameApplied` is the raw name.
+        if request.normalize and isinstance(result, dict):
+            result["normalization"] = {
+                "requested": True,
+                "applied": normalization_error is None,
+                "nameApplied": result.get("name", channel_name),
+                "error": normalization_error,
+            }
 
         # Log to journal
         journal.log_entry(
@@ -1585,6 +1608,14 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
         "validationIssues": [],
         "validationPassed": True,
         "partial": False,  # bd-5xciq: some-applied-some-failed outcome
+        # createChannel ops that ASKED for normalization and did not get it
+        # (bead enhancedchannelmanager-e9e5o). Always present, so a caller
+        # checks its length rather than probing for a key that may not exist.
+        # A normalization failure does NOT fail the op or the batch: the
+        # channel was created, just under the raw name — which is precisely
+        # why the envelope has to say so, since the result is otherwise
+        # indistinguishable from `normalize=false`.
+        "normalizationFailures": [],
     }
 
     # Helper to resolve temp IDs to real IDs
@@ -1993,11 +2024,14 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                         f"createChannel '{op.name}'",
                     )
 
-                    # Apply normalization if requested
+                    # Apply normalization if requested. Same contract as the
+                    # single-create path above: the op still applies, but a
+                    # swallowed failure would leave the caller unable to tell
+                    # this apart from `normalize=false`, so it is recorded in
+                    # `normalizationFailures` (bead enhancedchannelmanager-e9e5o).
                     channel_name = op.name
                     if op.normalize:
                         try:
-                            from normalization_engine import get_normalization_engine
                             with get_session() as db:
                                 engine = get_normalization_engine(db)
                                 # Offload normalization off event loop (bd-w3z4h)
@@ -2007,7 +2041,13 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
                         except Exception as norm_err:
                             logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
-                            # Continue with original name
+                            # Continue with the original name, and disclose it.
+                            result["normalizationFailures"].append({
+                                "tempId": op.tempId,
+                                "name": op.name,
+                                "nameApplied": op.name,
+                                "error": str(norm_err),
+                            })
 
                     # Handle logo - if logoUrl provided but no logoId, resolve
                     # via the per-run logo index (bd-raehx) instead of

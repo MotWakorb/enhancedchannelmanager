@@ -2065,6 +2065,13 @@ function App() {
   // rather than creating a duplicate. It used to be unreachable here, because
   // the manual path never reached the conflict dialog at all
   // (bead enhancedchannelmanager-fprsq).
+  //
+  // `name` arrives FINAL. StreamsPane has already put the operator's typed
+  // name through `resolveCreateChannelNames`, which is the one place the
+  // "Normalization Rules" question is answered, so neither branch below may
+  // normalize again and neither sets the API's `normalize` flag — doing either
+  // would normalize an already-normalized name a second time
+  // (bead enhancedchannelmanager-e9e5o).
   const handleCreateChannelManual = useCallback(
     async (
       name: string,
