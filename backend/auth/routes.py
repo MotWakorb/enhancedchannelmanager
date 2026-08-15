@@ -24,7 +24,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from config import get_settings
+from config import get_public_base_url, get_settings
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -1440,11 +1440,26 @@ async def forgot_password(
         session.add(reset_token)
         session.commit()
 
-        # Build base URL from request
-        # Use X-Forwarded headers if behind a proxy, otherwise use request URL
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
-        forwarded_host = request.headers.get("X-Forwarded-Host", request.url.netloc)
-        base_url = f"{forwarded_proto}://{forwarded_host}"
+        # Build the origin the emailed reset link points at.
+        #
+        # Bead ...-qsqfv (P1). When the operator has configured a public base
+        # URL it is used VERBATIM and the request is not consulted at all: the
+        # link goes into an email ECM sends to a third party, so nothing the
+        # caller supplies may influence where that link points. X-Forwarded-Host
+        # is caller-supplied, X-Forwarded-Proto is caller-supplied, and the old
+        # request.url.netloc fallback is just the Host header, so all three let
+        # an unauthenticated caller who knows a victim's email address have a
+        # genuine ECM email deliver a live reset token to a host they control.
+        #
+        # The unconfigured fallback below is that same unsafe construction,
+        # kept deliberately (PO decision 2026-08-15) so upgrading does not
+        # break the reset email on installs that never set the value.
+        # get_public_base_url() warns once per process while it is unset.
+        base_url = get_public_base_url()
+        if not base_url:
+            forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+            forwarded_host = request.headers.get("X-Forwarded-Host", request.url.netloc)
+            base_url = f"{forwarded_proto}://{forwarded_host}"
 
         # Send the password reset email
         email_sent = send_password_reset_email(user.email, raw_token, base_url)

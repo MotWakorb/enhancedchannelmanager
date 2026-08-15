@@ -632,6 +632,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // M3U accounts for the digest notification account-filter picker (GH #496)
   const [digestM3uAccounts, setDigestM3uAccounts] = useState<{ id: number; name: string }[]>([]);
 
+  // Canonical public origin for links ECM emails out (bead qsqfv)
+  const [publicBaseUrl, setPublicBaseUrl] = useState('');
   // Shared SMTP (Email) settings
   const [smtpHost, setSmtpHost] = useState('');
   const [smtpPort, setSmtpPort] = useState(587);
@@ -821,7 +823,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
     streamSortPriority, streamSortEnabled, m3uAccountPriorities,
     deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
-    failedStreamSortOrder, strikeThreshold, smtpHost, smtpPort, smtpUser,
+    failedStreamSortOrder, strikeThreshold, publicBaseUrl, smtpHost, smtpPort, smtpUser,
     smtpPassword, smtpFromEmail, smtpFromName, smtpUseTls, smtpUseSsl,
     discordWebhookUrl, telegramBotToken, telegramChatId,
   ]);
@@ -1150,6 +1152,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setDeprioritizeLowFps(settings.deprioritize_low_fps ?? true);
       setFailedStreamSortOrder(settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER);
       setStrikeThreshold(settings.strike_threshold ?? 3);
+      setPublicBaseUrl(settings.public_base_url ?? '');
       // Shared SMTP settings
       setSmtpHost(settings.smtp_host ?? '');
       setSmtpPort(settings.smtp_port ?? 587);
@@ -1606,6 +1609,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         deprioritize_low_fps: deprioritizeLowFps,
         failed_stream_sort_order: failedStreamSortOrder,
         strike_threshold: strikeThreshold,
+        // Canonical public origin for emailed links. Always sent (trimmed) so an
+        // operator can clear it; the backend keeps the stored value only when
+        // the field is absent entirely.
+        public_base_url: publicBaseUrl.trim(),
         // Shared SMTP settings
         smtp_host: smtpHost,
         smtp_port: smtpPort,
@@ -3586,6 +3593,42 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
+
+      {/* bead qsqfv: the origin ECM puts into links it emails out. Lives on
+          this page because every link it governs today leaves in an email, and
+          it is the first thing to get right for a password-reset email to be
+          both usable and safe. */}
+      <div className="settings-section">
+        <div className="settings-section-header">
+          <span className="material-icons">link</span>
+          <h3>Public Base URL</h3>
+          <span className={`badge badge-sm ${publicBaseUrl.trim() ? 'badge-success' : 'badge-warning'}`}>
+            {publicBaseUrl.trim() ? 'Configured' : 'Not set'}
+          </span>
+        </div>
+        <p className="section-description">
+          The address your users reach ECM at. Links ECM emails out, such as the password-reset
+          link, are built from it.
+        </p>
+
+        <div className="form-group-vertical">
+          <label htmlFor="publicBaseUrl">Public Base URL</label>
+          <input
+            type="text"
+            id="publicBaseUrl"
+            value={publicBaseUrl}
+            onChange={(e) => setPublicBaseUrl(e.target.value)}
+            placeholder="https://ecm.example.com"
+          />
+          <p className="field-hint">
+            Scheme and host only, no path (for example <code>https://ecm.example.com</code> or{' '}
+            <code>http://192.168.1.10:6100</code>). While this is empty, reset links are built from
+            the <code>Host</code> / <code>X-Forwarded-Host</code> header on the incoming request,
+            which the sender controls: anyone who knows a user's email address can then have ECM
+            mail that user a reset link pointing at a host of their choosing.
+          </p>
+        </div>
+      </div>
 
       <div className="settings-section">
         <div className="settings-section-header">

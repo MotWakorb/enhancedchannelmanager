@@ -55,7 +55,13 @@ This only applies to local accounts. A Dispatcharr SSO account's password is
 managed in Dispatcharr, not here.
 
 **Via email**, if SMTP is configured (see [Notifications & Alert
-Methods](../notifications/index.md#settings-notification-settings-smtp)):
+Methods](../notifications/index.md#settings-notification-settings-smtp)).
+Set the [Public Base
+URL](../notifications/index.md#settings-email-public-base-url) first: it is
+the address the emailed link points at, and while it is unset that address
+comes from headers on the incoming request rather than from your
+configuration, which lets someone who knows an operator's email address aim
+that operator's reset link at a host they control. Then:
 
 1. On the local sign-in form, select **Forgot password?**.
 2. Enter the account's **Email Address** and select **Send Reset Link**.

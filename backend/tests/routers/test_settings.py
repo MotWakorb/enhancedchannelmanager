@@ -81,6 +81,10 @@ def _mock_settings(**overrides):
         "disabled_builtin_tags": [],
         "custom_normalization_tags": [],
         "normalize_on_channel_create": False,
+        # bead qsqfv: real "" (not a MagicMock auto-attr) because the POST
+        # handler preserves this field into the rebuilt settings model when
+        # the body omits it, and a Mock there fails Pydantic validation.
+        "public_base_url": "",
         "smtp_host": "",
         "smtp_port": 587,
         "smtp_user": "",
@@ -2578,6 +2582,9 @@ def _full_payload(mock):
         "discord_webhook_url": mock.discord_webhook_url,
         "telegram_bot_token": mock.telegram_bot_token,
         "telegram_chat_id": mock.telegram_chat_id,
+        # bead qsqfv: echo the stored origin so the admin-field gate sees NO
+        # change unless a test deliberately flips it.
+        "public_base_url": mock.public_base_url,
         "smtp_host": mock.smtp_host,
         "smtp_port": mock.smtp_port,
         "smtp_user": mock.smtp_user,

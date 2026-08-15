@@ -92,6 +92,85 @@ ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
 })
 
 
+def normalize_public_base_url(raw_url: str) -> tuple[str, str | None]:
+    """Validate + normalize ECM's canonical public base URL (bead ...-qsqfv).
+
+    This is the ONE place the shape of ``public_base_url`` is decided, so the
+    save path (``routers.settings``, which turns an error into a 400) and the
+    read path (:func:`get_public_base_url`, which treats an error as "unset")
+    can never disagree about what a usable value looks like.
+
+    A valid value is an ORIGIN and nothing else: ``scheme://host[:port]``.
+
+    * Scheme is required and must be http or https. Requiring it is what makes
+      the value unambiguous; a bare ``ecm.example.com`` would parse as a path.
+    * A trailing slash is accepted and stripped, because every caller appends
+      its own leading-slash path (``{base}/reset-password?...``) and a stored
+      slash would emit a double slash into a link an operator has to trust.
+    * A path is REJECTED rather than stripped. ECM's frontend is built with
+      Vite's default ``base`` of ``/`` and its router serves ``/reset-password``
+      from the origin root, so a sub-path origin cannot produce a working link;
+      silently stripping it would hide the operator's mistake instead of
+      reporting it.
+    * Query string, fragment and userinfo (``user:pass@``) are rejected: none
+      of them can be meaningful in an origin, and userinfo in particular is a
+      classic way to make a link's real destination hard to read.
+    * Whitespace anywhere is rejected, which also keeps stray newlines out of a
+      value that gets interpolated into outbound email bodies.
+
+    Host is lower-cased (host names are case-insensitive) and an IPv6 literal
+    keeps its brackets. Returns ``(normalized, error)``; ``("", None)`` means
+    the operator has not configured a value, which is a legitimate state and
+    NOT an error.
+    """
+    if not raw_url:
+        return "", None
+    candidate = raw_url.strip()
+    if not candidate:
+        return "", None
+    if any(char.isspace() for char in candidate):
+        return "", "must not contain whitespace"
+
+    try:
+        parsed = urlparse(candidate)
+    except ValueError as exc:
+        return "", f"could not be parsed as a URL ({exc})"
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ALLOWED_URL_SCHEMES:
+        return "", "must start with http:// or https://"
+
+    try:
+        # Both raise ValueError on a malformed netloc (bad IPv6 literal, a
+        # non-numeric port), so they are read before anything else touches it.
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        return "", f"has an invalid host or port ({exc})"
+
+    if parsed.username or parsed.password:
+        return "", "must not contain credentials (user:password@host)"
+    if parsed.query:
+        return "", "must not contain a query string"
+    if parsed.fragment:
+        return "", "must not contain a fragment"
+    if parsed.path not in ("", "/"):
+        return "", (
+            "must not contain a path (ECM is served from the root of its "
+            "origin, so only scheme://host[:port] can produce a working link)"
+        )
+    if not hostname:
+        return "", "must include a host"
+
+    host = hostname.lower()
+    if ":" in host:
+        # ``parsed.hostname`` unwraps an IPv6 literal; put the brackets back.
+        host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
+    return f"{scheme}://{host}", None
+
+
 def validate_url_scheme(url: str, field_name: str = "URL") -> None:
     """Validate that a URL uses an allowed scheme (http/https only).
 
@@ -306,6 +385,22 @@ class DispatcharrSettings(BaseModel):
     # normalize_on_channel_create: Default state for normalization toggle when creating channels
     # When true, the "Apply normalization" checkbox will be checked by default
     normalize_on_channel_create: bool = False
+    # public_base_url: the canonical origin (scheme://host[:port]) operators
+    # reach ECM at, used VERBATIM to build links ECM sends OUT of the process,
+    # today the password-reset link in the forgot-password email.
+    #
+    # Bead ...-qsqfv (P1): that link used to be built from X-Forwarded-Host /
+    # X-Forwarded-Proto, falling back to the request's own Host header. All
+    # three are supplied by whoever sent the request, so an unauthenticated
+    # caller who knew a victim's email address could make ECM mail that victim
+    # a genuine reset email, from ECM's own SMTP, whose link pointed at the
+    # attacker's host and carried a live reset token.
+    #
+    # Empty (the default) preserves the old header-derived behaviour so no
+    # existing install's reset email stops working on upgrade; that install
+    # stays exposed, which is why get_public_base_url() warns when it is unset.
+    # Shape is decided in exactly one place, normalize_public_base_url().
+    public_base_url: str = ""
     # Shared SMTP settings for email features (M3U Digest, etc.)
     # These provide a centralized email configuration that can be used by various features
     smtp_host: str = ""
@@ -609,6 +704,14 @@ _legacy_api_key_conflict_warned: bool = False
 # Cleared by ``clear_settings_cache()`` so test isolation works.
 _dedup_threshold_floor_warned: bool = False
 
+# One-shot flags for the two ``public_base_url`` WARNs (bead ...-qsqfv), same
+# convention as the three above: fire once per process, cleared by
+# ``clear_settings_cache()`` so a settings save re-arms them and so tests can
+# assert on each warning. get_public_base_url() runs on every forgot-password
+# request, so an unguarded WARN there would be per-request log spam.
+_public_base_url_unset_warned: bool = False
+_public_base_url_invalid_warned: bool = False
+
 
 def ensure_config_dir():
     """Ensure config directory exists."""
@@ -820,16 +923,67 @@ def clear_settings_cache() -> None:
     making it impossible to assert on the warnings per test.
     """
     global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
+    global _public_base_url_unset_warned, _public_base_url_invalid_warned
     _cached_settings = None
     _legacy_api_key_warned = False
     _legacy_api_key_conflict_warned = False
     _dedup_threshold_floor_warned = False
+    _public_base_url_unset_warned = False
+    _public_base_url_invalid_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 
 def get_settings() -> DispatcharrSettings:
     """Get the current Dispatcharr settings."""
     return load_settings()
+
+
+def get_public_base_url() -> str:
+    """Canonical public origin for links ECM sends out, or "" when unset.
+
+    Callers that build a user-visible URL should use this and fall back only
+    deliberately: a falsy return means the operator has configured nothing, so
+    the caller is on its own with request-derived (caller-controlled) data.
+
+    The stored value is re-validated here rather than trusted, because
+    settings.json is also written by hand and by backup restores; an invalid
+    stored value degrades to "unset" instead of emitting a malformed link.
+
+    WARN cadence (bead ...-qsqfv): once per process for each condition, re-armed
+    by ``clear_settings_cache()`` (so a settings save warns again). ECM also
+    calls this during startup, so an operator who never configures it finds the
+    warning at the top of the log rather than only after someone happens to
+    request a password reset.
+    """
+    global _public_base_url_unset_warned, _public_base_url_invalid_warned
+
+    raw = get_settings().public_base_url
+    normalized, err = normalize_public_base_url(raw)
+    if err is not None:
+        if not _public_base_url_invalid_warned:
+            # The value is operator-entered configuration, not a credential,
+            # and the operator needs to see what was rejected to fix it.
+            logger.warning(
+                "[CONFIG] Stored public_base_url %r is not usable (%s); "
+                "treating it as unset. Outbound links will fall back to "
+                "caller-supplied request headers until it is corrected in "
+                "Settings > Email.",
+                raw, err,
+            )
+            _public_base_url_invalid_warned = True
+        normalized = ""
+
+    if not normalized and not _public_base_url_unset_warned:
+        logger.warning(
+            "[CONFIG] public_base_url is not set, so password-reset links are "
+            "built from the caller-supplied Host / X-Forwarded-Host header. An "
+            "unauthenticated caller who knows a user's email address can make "
+            "that link point at a host they control (bead qsqfv). Set the "
+            "public base URL under Settings > Email to close this."
+        )
+        _public_base_url_unset_warned = True
+
+    return normalized
 
 
 def get_http_port() -> int:

@@ -27,6 +27,7 @@ from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
     get_settings,
+    normalize_public_base_url,
     save_settings,
     clear_settings_cache,
     set_log_level,
@@ -101,6 +102,11 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     "emby_base_url": "emby_base_url",
     "plex_base_url": "plex_base_url",
     "jellyfin_base_url": "jellyfin_base_url",
+    # Canonical public origin for links ECM emails out (bead ...-qsqfv). Whoever
+    # controls this controls where a password-reset link points, which is the
+    # whole account-takeover surface the setting exists to close, so it is an
+    # admin action and never a per-user preference.
+    "public_base_url": "public_base_url",
     # Outbound notification credentials.
     "discord_webhook_url": "discord_webhook_url",
     "telegram_bot_token": "telegram_bot_token",
@@ -231,6 +237,11 @@ def _assert_admin_for_changed_fields(
         old_value = getattr(current, attr, None)
         if new_value == old_value:
             continue
+        # A preserve-on-omit field (public_base_url) absent from the body is
+        # None, which is not a value and therefore not a change attempt. The
+        # write path resolves it back to the stored value.
+        if new_value is None:
+            continue
         # 9ej7f: GET /api/settings redacts these to "" for a non-admin, so the
         # Settings UI round-trips "" back on an ordinary preference save. That
         # is the placeholder returning, not a request to clear the field, and
@@ -300,6 +311,33 @@ def _validate_outbound_base_url_on_save(field_label: str, raw_url: str) -> str:
             status_code=400, detail=f"Invalid {field_label}: {err}"
         )
     return sanitized
+
+
+def _validate_public_base_url_on_save(raw_url: str) -> str:
+    """Validate + normalize ``public_base_url`` at SAVE time (bead ...-qsqfv).
+
+    Deliberately NOT ``_validate_outbound_base_url_on_save``: that one applies
+    the SSRF host policy, which is about hosts ECM's own pollers dial. This
+    value is never dialed by ECM. It is ECM's own public origin, pasted into
+    email ECM sends to its users, so the policy that matters is "is this a bare
+    http(s) origin" and a public DNS name is exactly what a correct value looks
+    like. Shape is decided in ``config.normalize_public_base_url`` so the save
+    path and the read path cannot drift.
+
+    Empty input means the operator is clearing the setting and is allowed;
+    it returns "". Returns the normalized origin for storage.
+    """
+    normalized, err = normalize_public_base_url(raw_url)
+    if err is not None:
+        logger.info("[SETTINGS] Rejected public_base_url on save: %s", err)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid public base URL: {err}. Expected an origin such as "
+                "https://ecm.example.com or http://192.168.1.10:6100."
+            ),
+        )
+    return normalized
 
 
 def _validate_discord_webhook_on_save(raw_url: str) -> None:
@@ -414,6 +452,13 @@ class SettingsRequest(BaseModel):
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
+    # Canonical public origin (scheme://host[:port]) for links ECM emails out
+    # (bead ...-qsqfv). Preserve-on-omit (None means the field was absent from
+    # the body, so keep the stored value), the same pattern smtp_password uses
+    # below: a cached frontend bundle that predates this field must not clear a
+    # security setting and silently drop the install back to header-derived
+    # reset links. An explicit "" from the current UI still clears it.
+    public_base_url: Optional[str] = None
     # Shared SMTP settings
     smtp_host: str = ""
     smtp_port: int = 587
@@ -545,6 +590,11 @@ class SettingsResponse(BaseModel):
     strike_threshold: int  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: NormalizationSettings  # User-configurable normalization tags
     normalize_on_channel_create: bool  # Default state for normalization toggle when creating channels
+    # Canonical public origin for links ECM emails out ("" = unset, which means
+    # those links fall back to caller-supplied headers). Not a credential, so
+    # it is returned to every caller that may read settings; writing it is
+    # admin-only (bead ...-qsqfv).
+    public_base_url: str
     # Shared SMTP settings
     smtp_configured: bool  # Whether shared SMTP is configured
     smtp_host: str
@@ -808,6 +858,7 @@ async def get_current_settings(
             ]
         ),
         normalize_on_channel_create=settings.normalize_on_channel_create,
+        public_base_url=settings.public_base_url,
         # Shared SMTP settings (password not returned for security)
         smtp_configured=settings.is_smtp_configured(),
         smtp_host=settings.smtp_host,
@@ -921,6 +972,17 @@ async def update_settings(
     # change and must not be re-validated (9ej7f).
     if discord_webhook_url != current_settings.discord_webhook_url:
         _validate_discord_webhook_on_save(discord_webhook_url)
+
+    # bead ...-qsqfv: resolve public_base_url under preserve-on-omit, then
+    # validate. Unlike the outbound URLs above we validate on every supplied
+    # value, not only on change: this one is normalized on the way in (case,
+    # trailing slash), so re-saving an equal-but-differently-typed value should
+    # still land in canonical form, and there is no unreachable-LAN-host
+    # concern here because ECM never dials it.
+    if request.public_base_url is None:
+        public_base_url = current_settings.public_base_url
+    else:
+        public_base_url = _validate_public_base_url_on_save(request.public_base_url)
 
     # If password is not provided, keep the existing password (preserve-on-omit
     # lets the UI update non-auth fields without re-asking for the secret).
@@ -1096,6 +1158,8 @@ async def update_settings(
             if request.normalization_settings else current_settings.custom_normalization_tags
         ),
         normalize_on_channel_create=request.normalize_on_channel_create,
+        # Canonical public origin for emailed links, resolved + validated above.
+        public_base_url=public_base_url,
         # Shared SMTP settings
         smtp_host=request.smtp_host,
         smtp_port=request.smtp_port,
