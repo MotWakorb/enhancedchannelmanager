@@ -36,8 +36,11 @@ to this principal.
 enhancedchannelmanager-9kwzp.6 had already moved BOTH connection-test endpoints
 (``POST /api/cloud-targets/{target_id}/test`` and
 ``POST /api/cloud-targets/test``) behind ``RequireHumanAdminForOutboundTest``,
-which refuses the static MCP service principal. ``test_cloud_target`` therefore
-cannot succeed over MCP on any install with authentication enabled; its
+which refuses the static MCP service principal. Bead
+enhancedchannelmanager-2u4e0 additionally makes that gate enforce while
+authentication is disabled, on any instance that holds an operator identity.
+``test_cloud_target`` therefore cannot succeed over MCP on any install that has
+ever created a user; its
 docstring records the refusal and the human path. The list/create/update/delete
 tools are unaffected.
 """
@@ -214,7 +217,9 @@ def register(mcp: FastMCP):
         """Test connectivity to a cloud storage target. NOT USABLE OVER MCP.
 
         REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
-        (bead enhancedchannelmanager-9kwzp.6). Both backing endpoints,
+        (bead enhancedchannelmanager-9kwzp.6), and since bead
+        enhancedchannelmanager-2u4e0 also whenever authentication is DISABLED on
+        an instance that already holds an operator identity. Both backing endpoints,
         ``POST /api/cloud-targets/{target_id}/test`` and
         ``POST /api/cloud-targets/test``, carry
         ``RequireHumanAdminForOutboundTest``, which rejects the static MCP

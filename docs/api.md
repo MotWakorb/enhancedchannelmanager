@@ -478,6 +478,8 @@ MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `dele
 | `PUT /api/m3u/digest/settings` | Update digest email settings |
 | `POST /api/m3u/digest/test` | Send a test digest email, over the stored SMTP credentials and Discord webhook. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
 
+**Auth-disabled instances (bead `enhancedchannelmanager-2u4e0`):** `POST /api/m3u/digest/test` is one of twelve connection-test routes that also require an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity. Only an instance that never created a user reaches them anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits".
+
 ## EPG
 
 | Endpoint | Description |
@@ -612,6 +614,8 @@ result.
 | `POST /api/settings/jellyfin/test-connection` | Test a Jellyfin server with operator-supplied credentials. Same gate as `/test`. |
 | `POST /api/settings/restart-services` | Restart background services. Admin-only when auth is enabled; the MCP service key is still admitted, because this rebuilds the tracker/prober from already-saved settings and reaches no caller-named host (bead 9kwzp.6). |
 | `POST /api/settings/reset-stats` | Reset all statistics. Admin-only when auth is enabled; the MCP service key is refused, because the wipe is irreversible and has no rollback (bead 9kwzp.12). |
+
+**Auth-disabled instances (bead `enhancedchannelmanager-2u4e0`):** the seven test routes above (`/test`, `/test-smtp`, `/test-discord`, `/test-telegram`, and the three `*/test-connection` routes) also require an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity. They reach the network with credentials the instance already stores and report the upstream verdict back. Only an instance that never created a user reaches them anonymously; `/restart-services` and `/reset-stats` are not affected. See `docs/auth_middleware.md` → "What `require_auth: false` permits".
 
 ## Event Sync Team Aliases
 
@@ -785,7 +789,7 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `GET /api/alert-methods/{id}` | Get alert method details. **The response `config` is MASKED** on the same terms as the list route. Admin-only when auth is enabled; the MCP service key is refused, because no MCP tool calls this route. Note the refusal withholds nothing, since `GET /api/alert-methods` returns the same masked fields for every method (beads 9kwzp.10, 9kwzp.13). |
 | `PATCH /api/alert-methods/{id}` | Update alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
 | `DELETE /api/alert-methods/{id}` | Delete alert method. Admin-only when auth is enabled; the MCP service key is refused, because an alert method's `config` carries the webhook URL, bot token and SMTP password (bead 9kwzp.10). |
-| `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
+| `POST /api/alert-methods/{id}/test` | Send test notification, using the method's stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). Also requires an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity (bead 2u4e0). |
 
 An **alert method** is one configured channel (Discord webhook, Telegram bot, SMTP recipient list) that ECM uses to notify operators about scheduled-task results, probe failures, M3U/EPG refresh outcomes, and other system events. Each method carries its own per-type `config` blob, four per-severity opt-in flags (`notify_info`, `notify_success`, `notify_warning`, `notify_error`), and an optional granular `alert_sources` filter for per-EPG-source / per-M3U-account routing. **`method_type` uniqueness is NOT enforced**: multiple SMTP methods (or multiple Discord webhooks) can coexist, each with its own recipient set, severity opt-ins, and source filter; this is intentional so operators can route different alert categories to different recipients without collapsing them onto one row.
 
@@ -1130,7 +1134,7 @@ To reconstruct one batch:
 
 **Authorization (bead `enhancedchannelmanager-9kwzp.11`):** every route above requires an admin when authentication is enabled. `GET /api/tls/status` and `GET /api/tls/https/status` disclose no credential material and accept the static MCP API key. The other eleven refuse it with `403`, because they manage certificate and private-key material, the DNS-provider credentials that issue it, the HTTPS listener that serves it, or (for `GET /api/tls/settings`) a response carrying masked credential fragments. Use an operator admin JWT for those.
 
-**Auth-disabled instances (bead `enhancedchannelmanager-jy006`):** this paragraph used to end "all of these gates no-op while `require_auth` is false or setup is incomplete, so first-run and auth-disabled instances are unaffected." That is no longer true of the certificate/key-material tier. The ten routes gated by `RequireHumanAdminForTLSMaterial` (everything above except `GET /api/tls/status`, `GET /api/tls/https/status` and `POST /api/tls/test-dns-provider`) require an authenticated human admin even while `require_auth` is false, on any instance that already holds an operator identity. An instance with no operator identity (genuine first run, or a headless auth-disabled deployment that never created a user) still reaches all thirteen anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits" for the full rule and the two other surfaces it covers.
+**Auth-disabled instances (beads `enhancedchannelmanager-jy006` and `enhancedchannelmanager-2u4e0`):** this paragraph used to end "all of these gates no-op while `require_auth` is false or setup is incomplete, so first-run and auth-disabled instances are unaffected." That is no longer true of eleven of the thirteen routes. Everything above except `GET /api/tls/status` and `GET /api/tls/https/status` requires an authenticated human admin even while `require_auth` is false, on any instance that already holds an operator identity: the ten certificate/key-material routes under `jy006`, and `POST /api/tls/test-dns-provider` under `2u4e0`, which closed the whole twelve-route connection-test family on the credential-oracle axis. An instance with no operator identity (genuine first run, or a headless auth-disabled deployment that never created a user) still reaches all thirteen anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits" for the full rule and the other surfaces it covers.
 
 ## Cron
 
@@ -1263,7 +1267,7 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 | `GET /api/cloud-targets/{id}` | Get a cloud storage target. |
 | `PATCH /api/cloud-targets/{id}` | Update a cloud storage target. Admin-only when auth is enabled; the MCP service key is admitted, because bead jcj0f ships an `update_cloud_target` tool over this route. Same residual as `POST` (bead 9kwzp.10). |
 | `DELETE /api/cloud-targets/{id}` | Delete a cloud storage target. Admin-only when auth is enabled; the MCP service key is admitted, because bead jcj0f ships a `delete_cloud_target` tool over this route (bead 9kwzp.10). |
-| `POST /api/cloud-targets/{id}/test` | Test connectivity to a saved cloud storage target, using its stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
+| `POST /api/cloud-targets/{id}/test` | Test connectivity to a saved cloud storage target, using its stored credentials. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). Also requires an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity (bead 2u4e0). |
 | `POST /api/cloud-targets/test` | Test connectivity with inline (not-yet-saved) credentials. Same gate as `/{id}/test`. |
 
 **Supported provider types in v0.18.0:** `s3` (AWS S3, MinIO, Backblaze B2), `gdrive` (Google Drive), `webdav`. Adapters for `onedrive` and `dropbox` exist in the codebase but are deferred. A configured target of a deferred provider type produces a per-target failure on each backup run.

@@ -90,6 +90,12 @@ admin status, active status, and auth provider, so you can confirm you're
 resetting the right account before you type a new password. Substitute your
 own container name if it isn't `ecm-ecm-1`.
 
+The command line applies the same password rules as the web UI: at least 8
+characters, not a known common or breached password, and not containing the
+username. There are no uppercase, lowercase or digit requirements. If it
+refuses a password it prints those rules, and `--force` skips the check
+entirely.
+
 ## Going deeper
 
 - [User Management](user-management.md): creating and managing local user accounts.
