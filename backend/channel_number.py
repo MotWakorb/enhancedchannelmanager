@@ -14,7 +14,11 @@ What the contract deliberately does NOT say:
   float and its release notes state duplicates are permitted. Real lineups have
   them. Uniqueness is a separate question and is not enforced here.
 * **No maximum.** The PO's rule named none, and Dispatcharr stores a plain
-  float, so inventing an upper bound here would narrow compatibility.
+  float, so inventing an upper bound here would narrow compatibility. An
+  absurd-but-finite value such as ``1e308`` is therefore in contract: it is an
+  exact integer (every float at or above ``2**53`` is), so it carries no
+  fractional part. It is answered, not raised on. ``inf`` and ``nan`` are not
+  finite and are rejected.
 
 Out-of-contract values are **rejected at the boundary**, not silently rounded.
 That is an explicit PO choice: an import that previously succeeded may now fail,
@@ -100,7 +104,17 @@ def is_valid_channel_number(value: Any) -> bool:
         return False
     if number < 0:
         return False
-    scaled = number * _TENTHS
+    # Scale the FRACTIONAL part, not the whole value. Scaling the whole value
+    # overflows to infinity for magnitudes near ``sys.float_info.max``, and
+    # ``round(inf)`` raises ``OverflowError``. A predicate that raises instead
+    # of answering turns "reject this input" into a 500 at every entry point
+    # that consumes it. ``math.fmod`` is exact (it returns the true remainder,
+    # introducing no rounding error of its own) and its result lies in
+    # ``[0, 1)``, so the scaled value can never overflow. Every float at or
+    # above ``2**53`` is already an exact integer, so its fraction is ``0.0``
+    # and it reads as in contract, consistent with the rule naming no maximum.
+    fraction = math.fmod(number, 1.0)
+    scaled = fraction * _TENTHS
     return abs(scaled - round(scaled)) <= _TENTH_TOLERANCE
 
 

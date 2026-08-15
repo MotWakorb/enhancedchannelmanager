@@ -13,6 +13,9 @@
  *   - No uniqueness. Dispatcharr declares `channel_number` as a non-unique
  *     float and permits duplicates, and real lineups have them.
  *   - No maximum. The rule named none, and Dispatcharr stores a plain float.
+ *     An absurd-but-finite value such as `1e308` is therefore in contract: it
+ *     is an exact integer (every float at or above 2**53 is), so it carries no
+ *     fractional part. `NaN` and `Infinity` are not finite and are rejected.
  *
  * Out-of-contract input is REJECTED at the boundary, never silently rounded.
  * That is an explicit PO choice: surfacing bad data beats altering it quietly.
@@ -60,7 +63,13 @@ const CHANNEL_NUMBER_TEXT = /^\d+(?:\.\d+)?$/;
 /** Whether `value` is a channel number the contract can hold. `null` is not. */
 export function isValidChannelNumber(value: unknown): value is number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return false;
-  const scaled = value * TENTHS;
+  // Scale the FRACTIONAL part, not the whole value. Scaling the whole value
+  // reaches Infinity near Number.MAX_VALUE, and `Infinity - Infinity` is NaN,
+  // which fails every comparison. A huge finite value would therefore read as
+  // out of contract here while `backend/channel_number.py` reads it as in
+  // contract. `%` is exact and its result lies in [0, 1), so nothing overflows.
+  const fraction = value % 1;
+  const scaled = fraction * TENTHS;
   return Math.abs(scaled - Math.round(scaled)) <= TENTH_TOLERANCE;
 }
 

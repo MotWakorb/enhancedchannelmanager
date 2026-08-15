@@ -34,6 +34,20 @@ describe('isValidChannelNumber', () => {
     },
   );
 
+  it.each([1e15, 2 ** 53, 1e307, 1e308, Number.MAX_VALUE])(
+    'answers rather than overflowing at the float limit %s',
+    (value) => {
+      // Scaling the whole value by ten reaches Infinity near Number.MAX_VALUE,
+      // and Infinity - Infinity is NaN, which fails every comparison, so the
+      // old form silently reported these as out of contract while
+      // `backend/channel_number.py` reports them as in contract. The two halves
+      // are documented as enforcing the identical rule, so they must agree.
+      // Every float at or above 2**53 is an exact integer and carries no
+      // fractional part, and the contract names no maximum.
+      expect(isValidChannelNumber(value)).toBe(true);
+    },
+  );
+
   it('tolerates binary-float dust without admitting a half-tenth', () => {
     // 0.7 + 0.1 is 0.7999999999999999 and 0.2 + 0.1 is 0.30000000000000004.
     // Both are the channel numbers 0.8 and 0.3. 1.05 is a real two-decimal

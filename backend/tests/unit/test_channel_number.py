@@ -7,6 +7,7 @@ the entry-point tests that prove each boundary rejects live in
 """
 
 import math
+import sys
 
 import pytest
 
@@ -40,9 +41,31 @@ class TestIsValidChannelNumber:
             100000,
             100000.5,
             1_000_000_000,
+            # The magnitudes where scaling the whole value overflows. Every
+            # float at or above 2**53 is an exact integer, so it carries no
+            # fractional part at all and is in contract under a rule that names
+            # no maximum. See `test_answers_rather_than_raising_at_float_limits`.
+            1e307,
+            1e308,
+            sys.float_info.max,
         ],
     )
     def test_accepts_in_contract_values(self, value):
+        assert is_valid_channel_number(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [1e15, 1e16, 2.0**53, 1e307, 1e308, sys.float_info.max],
+    )
+    def test_answers_rather_than_raising_at_float_limits(self, value):
+        """A validator must answer every finite input, never raise.
+
+        Scaling the whole value by ten overflows to infinity near
+        ``sys.float_info.max``, and ``round(inf)`` raises ``OverflowError``.
+        Raising here would surface as a 500 from every entry point that
+        consumes the predicate, turning "reject this input" into "server
+        error". Only the fractional part is scaled, so no input overflows.
+        """
         assert is_valid_channel_number(value) is True
 
     @pytest.mark.parametrize(

@@ -241,13 +241,75 @@ class TestPipelineRuleSpec:
         errors = action.validate()
         assert any(CHANNEL_NUMBER_RULE_MESSAGE in e for e in errors), errors
 
-    @pytest.mark.parametrize("value", ["auto", "100-99999", "{auto}", 101, 1.1])
+    @pytest.mark.parametrize("value", ["auto", "100-99999", "{auto}", 101, "101"])
     def test_set_channel_number_accepts_the_existing_spec_vocabulary(self, value):
         """Narrowing the spec vocabulary is a different question, so it is not narrowed."""
         from channel_pipeline_schema import Action, ActionType
 
         action = Action(type=ActionType.SET_CHANNEL_NUMBER, params={"value": value})
         assert action.validate() == []
+
+    @pytest.mark.parametrize("value", [1.1, "1.1", 1.0, "1.0", 800.0, "800.5"])
+    def test_rejects_a_literal_the_executor_cannot_honour(self, value):
+        """The executor assigns an UNRELATED number for every one of these.
+
+        ``ActionExecutor._get_next_channel_number`` matches ``int`` and a
+        digits-only string; every other numeric shape, including a float that
+        happens to be whole, falls through to automatic numbering. Accepting
+        these at the schema would bless a silent wrong result, so they are
+        rejected here instead. Bead ``enhancedchannelmanager-ay3iq`` carries the
+        product question of whether the executor should honour tenths.
+        """
+        from channel_pipeline_schema import (
+            Action,
+            ActionType,
+            PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE,
+        )
+
+        for action in (
+            Action(type=ActionType.SET_CHANNEL_NUMBER, params={"value": value}),
+            Action(
+                type=ActionType.CREATE_CHANNEL,
+                params={"name_template": "{stream_name}", "channel_number": value},
+            ),
+        ):
+            errors = action.validate()
+            assert any(
+                PIPELINE_CHANNEL_NUMBER_RULE_MESSAGE in e for e in errors
+            ), (action.type, errors)
+
+    @pytest.mark.parametrize("value", [1.1, "1.1", 1.0, "1.0", 800.0, "800.5"])
+    def test_the_rejected_literals_are_the_ones_the_executor_renumbers(self, value):
+        """The rejection list is read off the executor, not guessed.
+
+        Every literal the schema now rejects is one the executor answers with a
+        DIFFERENT number, which is the whole reason for rejecting it. This test
+        calls the executor directly, so if the executor ever learns to honour
+        these the mismatch shows up here.
+        """
+        from channel_pipeline_executor import ActionExecutor
+
+        class _Executor:
+            # A lineup already holding 1 and 2, so automatic numbering lands on
+            # 3. Without occupied numbers the fallback happens to return 1 and
+            # a spec of 1.0 would look honoured by coincidence.
+            _used_channel_numbers: set = {1, 2}
+
+        assigned = ActionExecutor._get_next_channel_number(_Executor(), value)
+        assert assigned == 3, (value, assigned)
+        assert assigned != float(value), (value, assigned)
+
+    @pytest.mark.parametrize(("value", "expected"), [(101, 101), ("101", 101), (800, 800)])
+    def test_the_accepted_literals_are_the_ones_the_executor_honours(self, value, expected):
+        """The mirror of the rejection list: what passes the schema is honoured."""
+        from channel_pipeline_executor import ActionExecutor
+        from channel_pipeline_schema import validate_channel_number_spec
+
+        class _Executor:
+            _used_channel_numbers: set = set()
+
+        assert validate_channel_number_spec(value, "probe") == []
+        assert ActionExecutor._get_next_channel_number(_Executor(), value) == expected
 
     def test_create_channel_rejects_an_out_of_contract_literal(self):
         from channel_pipeline_schema import Action, ActionType
