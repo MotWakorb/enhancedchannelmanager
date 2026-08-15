@@ -29,6 +29,7 @@ import {
   resolveMoveNumbering,
   type NumberingOption,
 } from './moveChannelNumbering';
+import { WHOLE_CHANNEL_NUMBER_RULE_MESSAGE } from '../utils/channelNumber';
 
 describe('defaultNumberingOption', () => {
   it('preselects "suggested" when the destination group offers a number', () => {
@@ -82,8 +83,21 @@ describe('resolveMoveNumbering', () => {
   ])('refuses a %s custom starting number, and says why', (_label, input) => {
     const result = resolveMoveNumbering('custom', 31, input);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/1 or higher/i);
+    if (!result.ok) expect(result.reason).toBe(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE);
   });
+
+  it.each(['1.5', '38.1', '1.05'])(
+    'refuses the fractional custom starting number %s rather than truncating it',
+    (input) => {
+      // The move assigns a sequential run from this value, so it counts in
+      // whole numbers. `parseInt` used to read `1.5` as `1` and report ok, so
+      // the channels landed on numbers nobody asked for and nothing said so
+      // (bead enhancedchannelmanager-j3pyx).
+      const result = resolveMoveNumbering('custom', 31, input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE);
+    },
+  );
 
   it('never resolves to ok without something to act on', () => {
     // The whole invariant, swept: every reachable combination either carries

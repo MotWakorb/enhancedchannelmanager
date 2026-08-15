@@ -24,7 +24,7 @@ import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
 import { computeAutoRename } from './utils/channelRename';
-import { planChannelNumberShift } from './utils/channelNumberShift';
+import { planChannelNumberShift, type PlannedChannelShift } from './utils/channelNumberShift';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -1867,12 +1867,94 @@ function App() {
     [isEditMode, stageCreateChannel, defaultChannelProfileIds]
   );
 
+  /**
+   * Stage the channel-number moves a push-down plan calls for.
+   *
+   * Highest number first, so no staged update lands on a number a later update
+   * in the same batch is still about to vacate.
+   *
+   * Both push-down call sites share this: creating channels from streams and
+   * inserting a single manual channel make the operator the same promise, and
+   * the second one had no implementation at all until bead
+   * `enhancedchannelmanager-fprsq`. Writing it twice is how the two would drift.
+   */
+  const stagePushDownShifts = useCallback(
+    (shifts: readonly PlannedChannelShift<Channel>[]) => {
+      for (let i = shifts.length - 1; i >= 0; i--) {
+        const { channel: ch, toNumber: newNum } = shifts[i];
+
+        // Apply auto-rename if enabled
+        const newName = autoRenameChannelNumber
+          ? computeAutoRename(ch.name, ch.channel_number, newNum)
+          : undefined;
+
+        if (newName) {
+          stageUpdateChannel(
+            ch.id,
+            { channel_number: newNum, name: newName },
+            `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
+          );
+        } else {
+          stageUpdateChannel(
+            ch.id,
+            { channel_number: newNum },
+            `Shifted channel ${ch.channel_number} to ${newNum} to make room`
+          );
+        }
+      }
+    },
+    [autoRenameChannelNumber, stageUpdateChannel]
+  );
+
   // Create channel for manual entry mode (from StreamsPane bulk create modal)
-  // This supports creating a new group if newGroupName is provided
+  // This supports creating a new group if newGroupName is provided.
+  //
+  // `pushDownOnConflict` is the manual-entry half of the same promise the bulk
+  // path makes: inserting at an occupied number moves whatever is already there
+  // rather than creating a duplicate. It used to be unreachable here, because
+  // the manual path never reached the conflict dialog at all
+  // (bead enhancedchannelmanager-fprsq).
   const handleCreateChannelManual = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => {
+    async (
+      name: string,
+      channelNumber?: number,
+      groupId?: number,
+      newGroupName?: string,
+      pushDownOnConflict?: boolean,
+    ) => {
       try {
+        if (!isEditMode && pushDownOnConflict) {
+          // A push-down works by STAGING shifts, which only edit mode has. The
+          // manual-create button is rendered inside ChannelsPane's `isEditMode`
+          // block, so nothing can reach this; refusing loudly is what keeps it
+          // that way, rather than creating the channel on top of the occupied
+          // number and reporting success. Mirrors the edit-mode refusal
+          // `handleBulkCreateFromGroup` already makes.
+          setError('Pushing existing channels down requires edit mode');
+          return;
+        }
         if (isEditMode) {
+          // Make room BEFORE staging the creation, using the same planner and
+          // the same highest-number-first ordering as the bulk path, so no
+          // staged update lands on a number a later update is still about to
+          // vacate. One channel, so the plan claims exactly one number; the
+          // step follows the number the operator typed, which is what puts a
+          // `38.1` insert on the tenths grid instead of the whole-number one.
+          const shifts =
+            pushDownOnConflict && channelNumber !== undefined
+              ? planChannelNumberShift({
+                  channels: displayChannels,
+                  startingNumber: channelNumber,
+                  count: 1,
+                  step: channelNumber % 1 !== 0 ? 0.1 : 1,
+                }).shifts
+              : [];
+
+          if (shifts.length > 0) {
+            startBatch(`Insert channel "${name}" at ${channelNumber}`);
+            stagePushDownShifts(shifts);
+          }
+
           // In edit mode, stage the creation
           // stageCreateChannel handles newGroupName internally
           const tempId = stageCreateChannel(
@@ -1902,6 +1984,10 @@ function App() {
             trackNewlyCreatedGroup(tempId);  // tempId acts as marker for new group
           }
 
+          if (shifts.length > 0) {
+            endBatch();
+          }
+
           // Refresh UI
           await loadChannels();
         } else {
@@ -1929,7 +2015,18 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileIds, loadChannels, loadChannelGroups, trackNewlyCreatedGroup]
+    [
+      isEditMode,
+      stageCreateChannel,
+      stagePushDownShifts,
+      startBatch,
+      endBatch,
+      displayChannels,
+      defaultChannelProfileIds,
+      loadChannels,
+      loadChannelGroups,
+      trackNewlyCreatedGroup,
+    ]
   );
 
   // Check for conflicts with existing channel numbers
@@ -2098,30 +2195,7 @@ function App() {
             step: startingNumber % 1 !== 0 ? 0.1 : 1,
           });
 
-          // Highest number first, so no staged update lands on a number a
-          // later update in the same batch is still about to vacate.
-          for (let i = shiftPlan.shifts.length - 1; i >= 0; i--) {
-            const { channel: ch, toNumber: newNum } = shiftPlan.shifts[i];
-
-            // Apply auto-rename if enabled
-            const newName = autoRenameChannelNumber
-              ? computeAutoRename(ch.name, ch.channel_number, newNum)
-              : undefined;
-
-            if (newName) {
-              stageUpdateChannel(
-                ch.id,
-                { channel_number: newNum, name: newName },
-                `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
-              );
-            } else {
-              stageUpdateChannel(
-                ch.id,
-                { channel_number: newNum },
-                `Shifted channel ${ch.channel_number} to ${newNum} to make room`
-              );
-            }
-          }
+          stagePushDownShifts(shiftPlan.shifts);
         }
 
         // Create channels and assign streams
@@ -2289,7 +2363,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)

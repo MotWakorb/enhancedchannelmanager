@@ -220,7 +220,16 @@ Enhanced Channel Manager
                 server.login(smtp_user, smtp_password)
 
             server.sendmail(from_email, [to_email], msg.as_string())
-            logger.info("[AUTH] Password reset email sent to: %s", to_email)
+            # Deliberately silent on success (bead
+            # enhancedchannelmanager-5u5h9). This helper only ever receives an
+            # address, so anything it logged about a successful send named the
+            # subscriber's email; and its caller logged the SAME event on the
+            # same line, which wrote the address into the log twice and made
+            # the log read as two sends. The one success line now lives in
+            # ``forgot_password``, which holds the user and can say
+            # ``user_id=``. Failures below stay here: they carry an SMTP
+            # diagnostic the caller cannot see, and none of them names the
+            # recipient.
             return True
 
         finally:
@@ -1464,7 +1473,14 @@ async def forgot_password(
         # Send the password reset email
         email_sent = send_password_reset_email(user.email, raw_token, base_url)
         if email_sent:
-            logger.info("[AUTH] Password reset email sent to: %s", user.email)
+            # NEVER log user.email here. This is the same log operators paste
+            # into GitHub issues, and a subscriber's address is PII that the
+            # user id identifies just as well for every operational purpose.
+            # One line per event, in the ``user_id=`` shape every other [AUTH]
+            # line in this file uses: bead cb1e1 moved the failure branch
+            # below, bead 5u5h9 moved this one and removed the duplicate the
+            # send helper emitted for the same event.
+            logger.info("[AUTH] Password reset email sent for user_id=%s", user.id)
         else:
             # NEVER log raw_token on this branch. It is a live, working
             # password-reset credential, and an email outage is an ordinary

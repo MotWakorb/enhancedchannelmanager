@@ -7,9 +7,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHANNEL_NUMBER_RULE_MESSAGE,
+  WHOLE_CHANNEL_NUMBER_RULE_MESSAGE,
   channelNumberInputError,
   isValidChannelNumber,
   parseChannelNumberInput,
+  parseWholeChannelNumberInput,
+  wholeChannelNumberInputError,
 } from './channelNumber';
 
 describe('isValidChannelNumber', () => {
@@ -212,5 +215,83 @@ describe('channelNumberInputError', () => {
 
   it('returns the canonical message for unacceptable text', () => {
     expect(channelNumberInputError('1.05')).toBe(CHANNEL_NUMBER_RULE_MESSAGE);
+  });
+});
+
+/**
+ * The renumber-start rule (bead `enhancedchannelmanager-j3pyx`).
+ *
+ * A renumber start seeds a sequential run, so it is whole-number-only. The
+ * defect this rule replaces was not that `1.5` was refused: it was that `1.5`
+ * was ACCEPTED as `1`, silently, which is the normalisation the canonical
+ * contract exists to prevent one field over.
+ */
+describe('parseWholeChannelNumberInput', () => {
+  it.each([
+    ['1', 1],
+    ['7', 7],
+    ['100', 100],
+    ['1.0', 1],
+    ['07', 7],
+    ['  38  ', 38],
+  ])('accepts %s as the whole number %s', (text, expected) => {
+    expect(parseWholeChannelNumberInput(text)).toEqual({ ok: true, value: expected });
+  });
+
+  it.each(['1.5', '0.1', '38.1', '1.05', '99.9'])(
+    'refuses the fractional start %s rather than truncating it',
+    (text) => {
+      expect(parseWholeChannelNumberInput(text)).toEqual({
+        ok: false,
+        message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE,
+      });
+    },
+  );
+
+  it.each(['0', '-1', '-3', 'abc', '1e3', '.5', '7.', '1,5', 'NaN', 'Infinity'])(
+    'refuses the unusable start %s',
+    (text) => {
+      expect(parseWholeChannelNumberInput(text)).toEqual({
+        ok: false,
+        message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE,
+      });
+    },
+  );
+
+  it('reads empty text as "nothing entered", or refuses it when asked to', () => {
+    expect(parseWholeChannelNumberInput('')).toEqual({ ok: true, value: null });
+    expect(parseWholeChannelNumberInput('   ')).toEqual({ ok: true, value: null });
+    expect(parseWholeChannelNumberInput('', { allowEmpty: false })).toEqual({
+      ok: false,
+      message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE,
+    });
+  });
+
+  it('refuses a start above the safe-integer range, where +1 stops moving', () => {
+    // 2**53 and up: adding one returns the same float, so the run the operator
+    // asked for cannot be built from it.
+    expect(parseWholeChannelNumberInput('9007199254740992').ok).toBe(false);
+    expect(parseWholeChannelNumberInput('9007199254740991')).toEqual({
+      ok: true,
+      value: 9007199254740991,
+    });
+  });
+
+  it('names what IS accepted, in the same voice as the channel-number rule', () => {
+    expect(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE).toContain('whole numbers');
+    expect(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE).toContain('1 or greater');
+    expect(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE).not.toBe(CHANNEL_NUMBER_RULE_MESSAGE);
+  });
+});
+
+describe('wholeChannelNumberInputError', () => {
+  it('returns null for an acceptable or not-yet-typed start', () => {
+    expect(wholeChannelNumberInputError('12')).toBeNull();
+    expect(wholeChannelNumberInputError('')).toBeNull();
+  });
+
+  it('returns the one renumber-start message for anything else', () => {
+    expect(wholeChannelNumberInputError('1.5')).toBe(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE);
+    expect(wholeChannelNumberInputError('0')).toBe(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE);
   });
 });

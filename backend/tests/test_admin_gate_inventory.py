@@ -21,33 +21,44 @@ ECM has two admin gates that look interchangeable and are not:
 MOST gates in both families no-op while ``require_auth`` is false or setup is
 incomplete, so most of what follows is not reachable-only-by-an-admin on a
 first-run or auth-disabled instance. Read every verdict below with that
-condition attached — EXCEPT for the two named next.
+condition attached — EXCEPT for the three named next.
 
-TWO GATES NO LONGER NO-OP WHEN AUTH IS DISABLED (bead jy006)
-------------------------------------------------------------
+THREE GATES NO LONGER NO-OP WHEN AUTH IS DISABLED (beads jy006, 2u4e0)
+-----------------------------------------------------------------------
 
 This paragraph read "every gate in both families no-ops…" until bead jy006, and
-that is now wrong for ``RequireHumanAdminForServiceCredential`` and
-``RequireHumanAdminForTLSMaterial``. Both carry
+that is now wrong for ``RequireHumanAdminForServiceCredential``,
+``RequireHumanAdminForTLSMaterial`` and (since bead 2u4e0, 2026-08-15)
+``RequireHumanAdminForOutboundTest``. All three carry
 ``enforce_when_auth_disabled=True``: on an instance that HAS an operator
 identity (a user row, or ``setup_complete``), they require a real human admin
 even while ``require_auth`` is false. On an instance with none, they still
 no-op, so no first-run or headless deployment is locked out.
 
-The rule the PO decided (2026-08-13) is DURABILITY OF THE RESULTING IDENTITY,
-which is a different axis from the seven MCP rules below and cuts across them:
-minting an ``mcp_api_key`` or installing a TLS private key leaves the caller
-holding a credential that keeps working after the operator turns authentication
-back on, where a settings write does not. The third route decided the same way,
-``POST /api/backup/restore-initial``, does not appear in this inventory at all
-because it is guarded in its handler rather than by a dependency.
+Two axes, both different from the seven MCP rules below and both cutting across
+them:
 
-That axis is pinned in
+* DURABILITY OF THE RESULTING IDENTITY (jy006, 2026-08-13). Minting an
+  ``mcp_api_key`` or installing a TLS private key leaves the caller holding a
+  credential that keeps working after the operator turns authentication back
+  on, where a settings write does not. The third route decided the same way,
+  ``POST /api/backup/restore-initial``, does not appear in this inventory at
+  all because it is guarded in its handler rather than by a dependency.
+* CREDENTIAL ORACLE (2u4e0, 2026-08-15). The twelve routes of
+  ``_OUTBOUND_CREDENTIAL_TEST`` reach the network with credentials the instance
+  already stores and echo the upstream verdict back, so an anonymous caller
+  could spend a secret they never had to learn. jy006 had left them open
+  because its decision named none of them, which made ``POST
+  /api/tls/test-dns-provider`` anonymous while ``GET /api/tls/settings``, which
+  discloses the same credentials masked, was refused.
+
+Both axes are pinned in
 ``tests/routers/test_jy006_auth_disabled_identity_primitives.py``, including a
-test that exactly these two gates carry the flag, and NOT here: this module
-classifies by MCP verdict and adding a second axis to its set assertions would
-make both harder to read. What this module must not do is keep asserting the
-old blanket claim in prose.
+test that exactly these three gates carry the flag and a route-level sweep of
+everything the flag reaches, and NOT here: this module classifies by MCP
+verdict and adding a second axis to its set assertions would make both harder
+to read. What this module must not do is keep asserting the old blanket claim
+in prose.
 
 Reaching for the first when you meant the second closes the non-admin half of
 a hole and leaves the MCP half wide open, which reads as fixed in review. That

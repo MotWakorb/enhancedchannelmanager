@@ -16,6 +16,11 @@
  * Move button, and a click that fell through every case and did nothing, three
  * times, with no message anywhere (drill run 2026-08-09-run18).
  */
+import {
+  WHOLE_CHANNEL_NUMBER_RULE_MESSAGE,
+  parseWholeChannelNumberInput,
+} from '../utils/channelNumber';
+
 export type NumberingOption = 'keep' | 'suggested' | 'custom';
 
 /** Safe default when no destination is known yet: always a rendered option. */
@@ -56,11 +61,17 @@ export function resolveMoveNumbering(
       }
       return { ok: true, keepCurrentNumbers: false, startingNumber: suggestedChannelNumber };
     case 'custom': {
-      const customNumber = parseInt(customStartingNumber, 10);
-      if (isNaN(customNumber) || customNumber < 1) {
-        return { ok: false, reason: 'Enter a starting channel number of 1 or higher.' };
+      // The move assigns a sequential run from this value, so it is a renumber
+      // START and is held to the whole-number rule. It used to read the field
+      // with `parseInt`, so a typed `1.5` moved the channels to `1` and up with
+      // nothing said about it (bead enhancedchannelmanager-j3pyx).
+      const parsed = parseWholeChannelNumberInput(customStartingNumber, { allowEmpty: false });
+      // `allowEmpty: false` means an accepted result always carries a number.
+      // The null test is type narrowing, not a second rule.
+      if (!parsed.ok || parsed.value === null) {
+        return { ok: false, reason: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE };
       }
-      return { ok: true, keepCurrentNumbers: false, startingNumber: customNumber };
+      return { ok: true, keepCurrentNumbers: false, startingNumber: parsed.value };
     }
   }
 }

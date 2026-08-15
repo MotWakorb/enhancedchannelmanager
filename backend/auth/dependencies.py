@@ -344,24 +344,58 @@ def require_admin_if_enabled(
     the endpoint is publicly accessible. When auth is enabled, the
     caller must be an authenticated admin.
 
-    ``enforce_when_auth_disabled`` (bead jy006, PO decision 2026-08-13): when
-    True, the auth-disabled short-circuit above applies ONLY while the instance
-    holds no operator identity. ``require_auth: false`` is a supported ECM
-    operating mode and stays fully permissive for ordinary data and
-    configuration routes, but three IDENTITY PRIMITIVES are refused to an
-    anonymous caller even in that mode, because each one lets a caller
-    establish a durable, privileged identity that survives the operator turning
-    authentication back on:
+    ``enforce_when_auth_disabled`` (bead jy006, PO decision 2026-08-13;
+    extended by bead 2u4e0, PO decision 2026-08-15): when True, the
+    auth-disabled short-circuit above applies ONLY while the instance holds no
+    operator identity. ``require_auth: false`` is a supported ECM operating
+    mode and stays fully permissive for ordinary data and configuration routes.
+    The flag marks the surfaces that are refused to an ANONYMOUS caller even in
+    that mode.
 
-      * ``POST /api/backup/restore-initial`` — replaces every admin password
-        hash (gated in ``routers.backup._guard_initial_restore``, which needs
-        its own copy of the rule because it must also survive a damaged
-        ``setup_complete``; it shares this module's
-        :func:`instance_has_operator_identity`).
-      * ``POST``/``DELETE /api/settings/mcp-api-key`` — plants or destroys a
-        persistent, admin-equivalent bearer credential.
-      * the ``/api/tls`` certificate/key material and HTTPS lifecycle — installs
-        a caller-supplied private key as the instance's TLS identity.
+    THE RULE. A surface carries the flag when reaching it anonymously gives the
+    caller something the mode itself does not already give them — something
+    that outlives the mode, or something they could not otherwise have. Two
+    axes qualify today, and a new gate joins only by naming which:
+
+    1. DURABILITY OF THE RESULTING IDENTITY (jy006). The caller walks away
+       holding a credential or a key that keeps working after the operator
+       turns authentication back on. A settings write, however destructive,
+       does not.
+
+         * ``POST /api/backup/restore-initial`` — replaces every admin password
+           hash (gated in ``routers.backup._guard_initial_restore``, which needs
+           its own copy of the rule because it must also survive a damaged
+           ``setup_complete``; it shares this module's
+           :func:`instance_has_operator_identity`).
+         * ``POST``/``DELETE /api/settings/mcp-api-key`` — plants or destroys a
+           persistent, admin-equivalent bearer credential
+           (:data:`RequireHumanAdminForServiceCredential`).
+         * the ``/api/tls`` certificate/key material and HTTPS lifecycle —
+           installs a caller-supplied private key as the instance's TLS
+           identity (:data:`RequireHumanAdminForTLSMaterial`).
+
+    2. CREDENTIAL ORACLE (2u4e0). The route reaches the network with
+       credentials ALREADY STORED on the instance, to a host the caller can
+       often name, and echoes the upstream verdict back. The caller spends a
+       secret they never had to learn, and reads an in-band port scan off the
+       reply. That is the class beads i4qrp / 9kwzp.6 / 9kwzp.7 gated against
+       the MCP service principal, and leaving it open to an anonymous caller
+       gave a stranger on the LAN more reach than the automation credential.
+
+         * the twelve connection-test routes on
+           :data:`RequireHumanAdminForOutboundTest` — the ``/api/settings``
+           test verbs, the Emby/Plex/Jellyfin test-connection routes, the
+           alert-method and M3U-digest test sends, both ``/api/cloud-targets``
+           test verbs, and ``POST /api/tls/test-dns-provider``.
+
+    The second axis closed a shape that was incoherent inside one router: until
+    2u4e0, ``POST /api/tls/test-dns-provider`` could be driven anonymously on an
+    owned auth-disabled instance while ``GET /api/tls/settings``, which
+    discloses the same DNS-provider credentials only MASKED, was refused. The
+    cost was weighed and accepted: on such an instance a browser that is not
+    signed in now gets 403 from every Test Connection button in Settings, and
+    the remedy is to sign in at ``/login`` (bead p388h) rather than to change
+    the mode.
 
     THE NO-IDENTITY CARVE-OUT IS LOAD-BEARING, not a softening. A literal
     "always require an admin" would make these routes permanently unreachable
@@ -416,13 +450,15 @@ def require_admin_if_enabled(
             user = await get_current_user(request, session)
         except HTTPException:
             if enforcing_over_disabled_auth:
-                # The jy006 refusal an operator most wants to see in the log:
-                # an anonymous caller reaching for an identity primitive on an
-                # instance whose owner turned authentication off.
+                # The refusal an operator most wants to see in the log: an
+                # anonymous caller reaching for an identity primitive or a
+                # stored-credential probe on an instance whose owner turned
+                # authentication off. Also the line that explains a Test
+                # Connection button returning 403 in that mode (bead 2u4e0).
                 logger.warning(
-                    "[AUTH] Refused an unauthenticated request to an identity "
-                    "primitive on an auth-disabled instance that already has "
-                    "an operator identity: %s %s",
+                    "[AUTH] Refused an unauthenticated request to a guarded "
+                    "surface on an auth-disabled instance that already has an "
+                    "operator identity: %s %s",
                     request.method,
                     request.url.path,
                 )
@@ -473,9 +509,37 @@ RequireHumanAdminIfEnabled = Depends(
 # (``_build_mcp_service_principal`` sets is_admin=True) and so would leave the
 # exact principal kgz3k denies on the settings WRITE path able to drive the
 # probe.
+#
+# bead 2u4e0 (PO decision 2026-08-15) — the gate now also ENFORCES WHEN
+# ``require_auth`` IS FALSE, once the instance has an operator identity. It
+# carries twelve routes, and jy006 left every one of them open because the
+# decision it implemented named three identity primitives and none of these.
+# The shape that produced was incoherent inside a single router: an anonymous
+# caller on an owned auth-disabled instance could POST /api/tls/
+# test-dns-provider, exercising the stored DNS-provider credentials and
+# enumerating the operator's hosted zone, while GET /api/tls/settings, which
+# discloses those same credentials only MASKED, was refused.
+#
+# The jy006 axis was DURABILITY OF THE RESULTING IDENTITY. This family joins on
+# a second axis the PO accepted alongside it: each route is a CREDENTIAL ORACLE
+# — it reaches the network with credentials ALREADY STORED on the instance, to
+# a host the caller can often name, and echoes the upstream verdict back. The
+# caller never has to learn a secret to spend it, and the reply is an in-band
+# port scanner besides. That is the class beads i4qrp, 9kwzp.6 and 9kwzp.7
+# gated against the MCP principal; leaving it ungated against an ANONYMOUS
+# caller gave the automation credential less reach than a stranger on the LAN.
+#
+# THE OPERATOR COST IS REAL AND WAS ACCEPTED. On an auth-disabled instance that
+# HAS a user account, a browser that is not signed in now gets 403 from every
+# Test Connection button in Settings. The remedy is in-band and already
+# documented: browse to ``/login`` and sign in (bead p388h), which needs no
+# change to ``require_auth``. Instances that never created a user — the
+# supported headless posture — are untouched by the no-identity carve-out in
+# :func:`require_admin_if_enabled`.
 RequireHumanAdminForOutboundTest = Depends(
     require_admin_if_enabled(
         reject_mcp_service_principal=True,
+        enforce_when_auth_disabled=True,
         mcp_denial_detail=(
             "The MCP service principal cannot run connection tests. A "
             "connection test sends credentials to a caller-named host and "

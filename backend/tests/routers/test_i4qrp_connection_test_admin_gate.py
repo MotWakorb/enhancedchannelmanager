@@ -266,12 +266,27 @@ class TestAdminStillAllowed:
 
 class TestSetupModeStillAllowed:
     """The blocker the bead warned about: a first-run install must not lock
-    itself out of the connection test that configures it."""
+    itself out of the connection test that configures it.
+
+    NARROWED BY BEAD 2u4e0 (2026-08-15). This class used to parametrize a third
+    posture, ``require_auth=False, setup_complete=True``, and assert 200. That
+    combination means "auth is off AND this instance has an operator identity",
+    and the PO decided the whole ``RequireHumanAdminForOutboundTest`` family
+    requires a real human admin in it: these routes spend credentials the
+    instance already stores and report the upstream verdict, so an anonymous
+    caller was getting a credential oracle the mode itself never offered them.
+    The two postures left here both describe an instance with NO operator
+    identity, where the gate still no-ops — which is the case that actually
+    protects first run. The removed posture is asserted, inverted, in
+    ``test_owned_auth_disabled_instance_is_refused`` below and swept across the
+    whole twelve-route family in
+    ``test_jy006_auth_disabled_identity_primitives.py``.
+    """
 
     @pytest.mark.parametrize(
         "require_auth,setup_complete",
-        [(False, True), (True, False), (False, False)],
-        ids=["auth-disabled", "setup-incomplete", "both"],
+        [(True, False), (False, False)],
+        ids=["setup-incomplete", "both"],
     )
     @pytest.mark.asyncio
     async def test_anonymous_caller_reaches_handler_in_setup_mode(
@@ -287,3 +302,23 @@ class TestSetupModeStillAllowed:
 
         assert response.status_code == 200, response.json()
         assert "Invalid Discord webhook URL format" in response.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_owned_auth_disabled_instance_is_refused(self, async_client):
+        """bead 2u4e0 — auth off is not anonymous once the instance is owned.
+
+        Asserted here, next to the carve-out it is the counterpart of, so a
+        future widening of the carve-out fails against a case in the same
+        class rather than only in a file about a different bead.
+        """
+        with patch("auth.dependencies.get_auth_settings") as auth_mock, \
+             patch("httpx.AsyncClient") as client:
+            auth_mock.return_value.require_auth = False
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.post(
+                "/api/settings/test-discord",
+                json={"webhook_url": "https://evil.example.com/hook"},
+            )
+
+        assert response.status_code == 401, response.json()
+        client.assert_not_called()

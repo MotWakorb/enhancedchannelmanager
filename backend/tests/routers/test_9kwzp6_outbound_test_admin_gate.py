@@ -235,12 +235,23 @@ class TestAdminStillAllowed:
 
 class TestSetupModeStillAllowed:
     """A first-run install must not lock itself out of the tests that
-    configure it."""
+    configure it.
+
+    NARROWED BY BEAD 2u4e0 (2026-08-15). The ``require_auth=False,
+    setup_complete=True`` posture used to assert 200 here. It means "auth is
+    off AND this instance has an operator identity", and the PO closed the
+    whole ``RequireHumanAdminForOutboundTest`` family in it: a cloud-target
+    test spends stored provider credentials and reports the upstream verdict,
+    which an anonymous caller should not be able to drive just because the
+    owner turned authentication off. The remaining postures describe an
+    instance with NO operator identity, which is the case first run is actually
+    in. The removed posture is asserted, inverted, below.
+    """
 
     @pytest.mark.parametrize(
         "require_auth,setup_complete",
-        [(False, True), (True, False), (False, False)],
-        ids=["auth-disabled", "setup-incomplete", "both"],
+        [(True, False), (False, False)],
+        ids=["setup-incomplete", "both"],
     )
     @pytest.mark.asyncio
     async def test_anonymous_caller_reaches_handler_in_setup_mode(
@@ -256,6 +267,19 @@ class TestSetupModeStillAllowed:
 
         assert response.status_code == 200, response.json()
         assert "not supported" in response.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_owned_auth_disabled_instance_is_refused(self, async_client):
+        """bead 2u4e0 — auth off is not anonymous once the instance is owned."""
+        with patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = False
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.post(
+                "/api/cloud-targets/test",
+                json={"provider_type": "onedrive", "credentials": {}},
+            )
+
+        assert response.status_code == 401, response.json()
 
 
 # ---------------------------------------------------------------------------

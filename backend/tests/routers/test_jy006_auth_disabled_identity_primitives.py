@@ -31,6 +31,37 @@ of the three primitives leaves the caller holding a credential or a key that
 keeps working after the operator turns authentication back on. A settings write
 does not.
 
+THE FOLLOW-UP DECISION (2026-08-15, bead 2u4e0)
+-----------------------------------------------
+
+The twelve connection-test routes on ``RequireHumanAdminForOutboundTest`` join
+them, on a SECOND axis:
+
+    POST /api/settings/test, /test-smtp, /test-discord, /test-telegram
+    POST /api/settings/{emby,plex,jellyfin}/test-connection
+    POST /api/alert-methods/{id}/test
+    POST /api/m3u/digest/test
+    POST /api/cloud-targets/test, /api/cloud-targets/{id}/test
+    POST /api/tls/test-dns-provider                       -> admin required
+
+That axis is CREDENTIAL ORACLE, not durability: each route reaches the network
+with credentials ALREADY STORED on the instance, to a host the caller can often
+name, and echoes the upstream verdict back. The caller spends a secret they
+never had to learn and reads an in-band port scan off the reply. jy006 left the
+family open because the decision it implemented named none of these, and the
+residual it produced was incoherent inside one router — ``POST
+/api/tls/test-dns-provider`` was drivable anonymously on an owned auth-disabled
+instance while ``GET /api/tls/settings``, which discloses the same
+DNS-provider credentials only MASKED, was refused. ``TestOutboundTestFamily``
+below now pins the refusal that ``TestEverythingElseStaysOpen`` used to pin as
+an open residual.
+
+The operator cost was shown to the PO and accepted: on an auth-disabled
+instance that HAS a user account, a browser that is not signed in gets 403 from
+every Test Connection button in Settings. Signing in at ``/login`` (bead p388h)
+restores them without touching ``require_auth``, and the no-identity carve-out
+leaves the headless posture alone.
+
 THE NO-IDENTITY CARVE-OUT
 -------------------------
 
@@ -353,10 +384,10 @@ class TestMcpApiKeyUnderDisabledAuth:
 #
 # The two status reads (``GET /status``, ``GET /https/status``) keep plain
 # ``RequireAdminIfEnabled`` and therefore stay OPEN in this mode; they disclose
-# no credential material. ``POST /test-dns-provider`` also stays open, on
-# ``RequireHumanAdminForOutboundTest`` with its eleven siblings — pinned by
-# ``test_outbound_test_and_status_reads_stay_open`` below, because that is the
-# sharpest residual of the PO's line and must not be discovered by accident.
+# no credential material. ``POST /test-dns-provider`` used to stay open with
+# them, on ``RequireHumanAdminForOutboundTest`` with its eleven siblings; bead
+# 2u4e0 closed that whole family on 2026-08-15, and it is now pinned as a
+# REFUSAL by ``TestOutboundTestFamily`` below.
 
 class TestTLSMaterialUnderDisabledAuth:
     """The key-install primitive."""
@@ -502,20 +533,32 @@ class TestEverythingElseStaysOpen:
 
             assert response.status_code == 200, response.text
 
-    @pytest.mark.asyncio
-    async def test_dns_provider_probe_stays_open(self, async_client, test_session):
-        """``POST /api/tls/test-dns-provider`` stays open — the sharpest residual.
 
-        It runs on ``RequireHumanAdminForOutboundTest`` with its eleven
-        siblings, and the PO's decision names none of those, so it is
-        unenforced in this mode. That leaves a documented inconsistency INSIDE
-        one router: ``GET /api/tls/settings`` is refused to an anonymous caller
-        on an owned auth-disabled instance while this route, which exercises
-        the DNS-provider credentials that route discloses in masked form, is
-        not. Recorded here and in ``docs/auth_middleware.md`` so it is a known
-        residual rather than an oversight; revisit with the other eleven sinks,
-        not on its own.
-        """
+# ---------------------------------------------------------------------------
+# The second axis — the outbound-test family (bead 2u4e0)
+# ---------------------------------------------------------------------------
+
+class TestOutboundTestFamily:
+    """``RequireHumanAdminForOutboundTest``, closed on 2026-08-15.
+
+    This class replaces ``TestEverythingElseStaysOpen::
+    test_dns_provider_probe_stays_open``, which pinned the OPPOSITE outcome as
+    a deliberate residual of the jy006 line. The residual is the reason this
+    bead exists: it left one router self-contradictory, admitting an anonymous
+    caller to the probe that SPENDS the stored DNS-provider credentials while
+    refusing the read that discloses them masked.
+
+    The behavioural case below drives the real route the residual named. The
+    whole family is asserted structurally by
+    ``test_the_outbound_test_family_is_enforced_wholesale``, because gating one
+    member and leaving eleven open is precisely the shape the PO rejected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dns_provider_probe_is_refused_when_the_instance_is_owned(
+        self, async_client, test_session
+    ):
+        """RED BEFORE 2u4e0: this returned 200 to an anonymous caller."""
         _seed_operator(test_session)
         route = next(
             r for r in _ALL_TLS_ROUTES if r.path == "/api/tls/test-dns-provider"
@@ -524,7 +567,45 @@ class TestEverythingElseStaysOpen:
                 patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED):
             response = await gate.request()
 
+            assert response.status_code == 401, response.text
+            # The probe never happened: a 401 alone cannot tell a refusal apart
+            # from a handler that ran and then failed.
+            gate.witness.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unowned_instance_still_reaches_the_probe(
+        self, async_client, test_session
+    ):
+        """The carve-out holds: a headless instance still tests its own DNS."""
+        route = next(
+            r for r in _ALL_TLS_ROUTES if r.path == "/api/tls/test-dns-provider"
+        )
+        with _Gate(async_client, route) as gate, \
+                patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_UNOWNED):
+            response = await gate.request()
+
             assert response.status_code == 200, response.text
+            gate.witness.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_still_reaches_the_probe(self, async_client, test_session):
+        """Positive control: a refusal of anonymity, not of the mode.
+
+        Without this, the refusal above could not be told apart from an
+        operator lockout, which is exactly the cost the PO weighed.
+        """
+        _seed_operator(test_session)
+        route = next(
+            r for r in _ALL_TLS_ROUTES if r.path == "/api/tls/test-dns-provider"
+        )
+        with _Gate(async_client, route) as gate, \
+                patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED), \
+                patch("auth.dependencies.get_current_user",
+                      new=AsyncMock(return_value=_admin())):
+            response = await gate.request()
+
+            assert response.status_code == 200, response.text
+            gate.witness.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -564,34 +645,130 @@ def test_operator_identity_predicate_fails_closed():
     assert instance_has_operator_identity(exploding) is True
 
 
-def test_only_the_decided_gates_enforce_when_auth_is_disabled():
-    """Exactly two dependency gates carry ``enforce_when_auth_disabled``.
+_CHECK_ADMIN_QUALNAME = "require_admin_if_enabled.<locals>.check_admin"
 
-    The third primitive (restore-initial) is guarded in its handler, so it
-    cannot appear here. Anything ELSE appearing here means the PO's line moved
-    without the PO — every other gate in the family is supposed to keep
-    no-opping while ``require_auth`` is false, and a widened gate would show up
-    as an unexplained 401 on a supported configuration rather than as a test
-    failure anywhere else.
+
+def _enforces_when_auth_disabled(call) -> bool:
+    """Read the flag one gate closure was built with, or False if not a gate."""
+    if getattr(call, "__qualname__", "") != _CHECK_ADMIN_QUALNAME:
+        return False
+    captured = dict(
+        zip(
+            call.__code__.co_freevars,
+            (cell.cell_contents for cell in call.__closure__ or ()),
+        )
+    )
+    return bool(captured.get("enforce_when_auth_disabled"))
+
+
+def test_only_the_decided_gates_enforce_when_auth_is_disabled():
+    """Exactly three dependency gates carry ``enforce_when_auth_disabled``.
+
+    Two under jy006 (durability of the resulting identity) and one under 2u4e0
+    (credential oracle). The remaining jy006 primitive, restore-initial, is
+    guarded in its handler, so it cannot appear here. Anything ELSE appearing
+    here means the line moved without the PO — every other gate in the family
+    is supposed to keep no-opping while ``require_auth`` is false, and a
+    widened gate would show up as an unexplained 401 on a supported
+    configuration rather than as a test failure anywhere else.
     """
     import auth.dependencies as deps
 
-    enforcing = set()
-    for name in dir(deps):
-        dependency = getattr(deps, name)
-        call = getattr(dependency, "dependency", None)
-        if getattr(call, "__qualname__", "") != "require_admin_if_enabled.<locals>.check_admin":
-            continue
-        captured = dict(
-            zip(
-                call.__code__.co_freevars,
-                (cell.cell_contents for cell in call.__closure__ or ()),
-            )
+    enforcing = {
+        name
+        for name in dir(deps)
+        if _enforces_when_auth_disabled(
+            getattr(getattr(deps, name), "dependency", None)
         )
-        if captured.get("enforce_when_auth_disabled"):
-            enforcing.add(name)
+    }
 
     assert enforcing == {
         "RequireHumanAdminForServiceCredential",
         "RequireHumanAdminForTLSMaterial",
+        "RequireHumanAdminForOutboundTest",
     }, sorted(enforcing)
+
+
+# Every route the PO's two decisions cover, as the live app serves them. The
+# gate-set assertion above cannot see this: a gate could carry the flag and be
+# wired to eleven of its twelve routes, which is the partial-coverage shape
+# bead 2u4e0 was filed to remove.
+ENFORCED_WHEN_AUTH_DISABLED_ROUTES = {
+    # jy006 — the service-credential primitive.
+    ("POST", "/api/settings/mcp-api-key"),
+    ("DELETE", "/api/settings/mcp-api-key"),
+    # jy006 — the TLS certificate/key material and HTTPS lifecycle.
+    ("GET", "/api/tls/settings"),
+    ("POST", "/api/tls/configure"),
+    ("POST", "/api/tls/request-cert"),
+    ("POST", "/api/tls/complete-challenge"),
+    ("POST", "/api/tls/upload-cert"),
+    ("POST", "/api/tls/renew"),
+    ("POST", "/api/tls/https/start"),
+    ("POST", "/api/tls/https/stop"),
+    ("POST", "/api/tls/https/restart"),
+    ("DELETE", "/api/tls/certificate"),
+    # 2u4e0 — the twelve credential-oracle connection tests.
+    ("POST", "/api/settings/test"),
+    ("POST", "/api/settings/test-smtp"),
+    ("POST", "/api/settings/test-discord"),
+    ("POST", "/api/settings/test-telegram"),
+    ("POST", "/api/settings/emby/test-connection"),
+    ("POST", "/api/settings/plex/test-connection"),
+    ("POST", "/api/settings/jellyfin/test-connection"),
+    ("POST", "/api/alert-methods/{method_id}/test"),
+    ("POST", "/api/m3u/digest/test"),
+    ("POST", "/api/cloud-targets/test"),
+    ("POST", "/api/cloud-targets/{target_id}/test"),
+    ("POST", "/api/tls/test-dns-provider"),
+}
+
+
+def _routes_enforced_when_auth_disabled() -> set:
+    """Walk the live FastAPI dependency tree, as the inventory module does."""
+    from fastapi.routing import APIRoute
+
+    from main import app
+
+    def walk(dependant) -> bool:
+        if _enforces_when_auth_disabled(dependant.call):
+            return True
+        return any(walk(sub) for sub in dependant.dependencies)
+
+    found = set()
+    for route in app.routes:
+        if isinstance(route, APIRoute) and walk(route.dependant):
+            for method in route.methods - {"HEAD", "OPTIONS"}:
+                found.add((method, route.path))
+    return found
+
+
+def test_the_outbound_test_family_is_enforced_wholesale():
+    """All twelve sinks, or the decision was not implemented.
+
+    Bead 2u4e0's scope was the FAMILY, not ``/test-dns-provider`` alone: gating
+    the one route the residual happened to name would have left eleven equally
+    credential-carrying probes open and produced the same incoherence one
+    router over. A route dropping out of this set is that regression.
+    """
+    outbound_tests = {
+        entry for entry in ENFORCED_WHEN_AUTH_DISABLED_ROUTES if "test" in entry[1]
+    }
+    assert len(outbound_tests) == 12, sorted(outbound_tests)
+    assert outbound_tests <= _routes_enforced_when_auth_disabled()
+
+
+def test_no_other_route_enforces_when_auth_is_disabled():
+    """The other half: nothing joined the set without a decision.
+
+    ``require_auth: false`` is a supported posture, so a route quietly gaining
+    this enforcement is an operator-visible refusal on a configuration that
+    used to work. It must be a deliberate edit to this list, and to
+    ``docs/auth_middleware.md`` with it.
+    """
+    enforced = _routes_enforced_when_auth_disabled()
+
+    assert enforced == ENFORCED_WHEN_AUTH_DISABLED_ROUTES, {
+        "newly enforced": sorted(enforced - ENFORCED_WHEN_AUTH_DISABLED_ROUTES),
+        "no longer enforced": sorted(ENFORCED_WHEN_AUTH_DISABLED_ROUTES - enforced),
+    }

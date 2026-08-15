@@ -164,13 +164,23 @@ async def test_admin_reaches_media_server_handler(async_client, path, body):
 
 class TestSetupModeStillAllowed:
     """First-run configuration must keep working: the wizard configures a
-    media server before auth exists."""
+    media server before auth exists.
+
+    NARROWED BY BEAD 2u4e0 (2026-08-15). The ``require_auth=False,
+    setup_complete=True`` posture used to assert 200 here; it means the
+    instance has an operator identity and merely runs with authentication off,
+    and the PO closed the whole ``RequireHumanAdminForOutboundTest`` family in
+    it. The wizard is unaffected, because during first run the instance holds
+    no operator identity and the carve-out still admits it — that is exactly
+    what the two remaining postures assert. The removed posture is asserted,
+    inverted, below.
+    """
 
     @pytest.mark.parametrize("path,body", MEDIA_SERVER_ENDPOINTS, ids=MEDIA_SERVER_IDS)
     @pytest.mark.parametrize(
         "require_auth,setup_complete",
-        [(False, True), (True, False), (False, False)],
-        ids=["auth-disabled", "setup-incomplete", "both"],
+        [(True, False), (False, False)],
+        ids=["setup-incomplete", "both"],
     )
     @pytest.mark.asyncio
     async def test_anonymous_caller_reaches_handler_in_setup_mode(
@@ -186,3 +196,16 @@ class TestSetupModeStillAllowed:
         assert response.status_code == 200, response.json()
         assert response.json()["ok"] is False
         assert "scheme" in response.json()["error"].lower()
+
+    @pytest.mark.parametrize("path,body", MEDIA_SERVER_ENDPOINTS, ids=MEDIA_SERVER_IDS)
+    @pytest.mark.asyncio
+    async def test_owned_auth_disabled_instance_is_refused(
+        self, async_client, path, body
+    ):
+        """bead 2u4e0 — auth off is not anonymous once the instance is owned."""
+        with patch("auth.dependencies.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = False
+            auth_mock.return_value.setup_complete = True
+            response = await async_client.post(path, json=body)
+
+        assert response.status_code == 401, response.json()

@@ -13,8 +13,11 @@ import pytest
 
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
+    CHANNEL_NUMBER_TICKS_PER_UNIT,
     InvalidChannelNumberError,
     _EXACT_INTEGER_FLOOR,
+    channel_number_from_ticks,
+    channel_number_ticks,
     is_valid_channel_number,
     parse_channel_number_text,
     validate_channel_number,
@@ -388,3 +391,127 @@ class TestValidateChannelNumberInPayload:
     def test_non_mapping_is_ignored(self):
         validate_channel_number_in_payload(None)
         validate_channel_number_in_payload("not a dict")
+
+
+class TestChannelNumberTicks:
+    """The tenths grid (bead ``enhancedchannelmanager-ay3iq``).
+
+    Ticks exist so that a walk up the tenths grid can be exact. Every
+    assertion here is about arithmetic a float sum gets wrong.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "ticks"),
+        [
+            (0, 0),
+            (0.0, 0),
+            (1, 10),
+            (1.0, 10),
+            (1.1, 11),
+            (0.1, 1),
+            (0.7, 7),
+            (800, 8000),
+            (800.5, 8005),
+            (10000000.1, 100000001),
+        ],
+    )
+    def test_in_contract_numbers_map_onto_their_own_tick(self, value, ticks):
+        assert channel_number_ticks(value) == ticks
+
+    @pytest.mark.parametrize(
+        ("ticks", "expected"),
+        [(0, 0), (10, 1), (11, 1.1), (12, 1.2), (8000, 800), (8005, 800.5)],
+    )
+    def test_a_tick_divides_back_to_the_number_it_came_from(self, ticks, expected):
+        assert channel_number_from_ticks(ticks) == expected
+
+    def test_a_whole_tick_comes_back_as_an_int(self):
+        """``800.0`` in a channel name or a JSON body reads as a change; ``800`` does not."""
+        assert channel_number_from_ticks(8000) == 800
+        assert isinstance(channel_number_from_ticks(8000), int)
+        assert isinstance(channel_number_from_ticks(8005), float)
+
+    def test_a_tick_walk_carries_no_float_dust(self):
+        """The failure this grid exists to prevent: ``0.7 + 0.1`` is ``0.7999999999999999``."""
+        assert 0.7 + 0.1 != 0.8  # The arithmetic ticks replace.
+        walked = [
+            channel_number_from_ticks(channel_number_ticks(0.7) + step)
+            for step in range(1, 5)
+        ]
+        assert walked == [0.8, 0.9, 1, 1.1]
+        assert all(is_valid_channel_number(number) for number in walked)
+
+    def test_every_tenth_of_a_decade_round_trips_exactly(self):
+        for tick in range(0, 2001):
+            assert channel_number_ticks(channel_number_from_ticks(tick)) == tick
+
+    def test_every_tenth_just_below_the_float_bound_still_round_trips(self):
+        """The bound is ``2**49``, where adjacent floats are 0.125 apart.
+
+        Just under it the gap is 0.0625, narrower than a tenth, so every tick
+        still names its own float. This is the top of the range
+        :func:`channel_number_from_ticks` documents as reversible, and it is
+        asserted rather than described so the claim cannot rot.
+        """
+        bound = 2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT
+        for tick in range(bound - 5000, bound):
+            assert channel_number_ticks(channel_number_from_ticks(tick)) == tick
+
+    def test_a_tenth_stops_naming_its_own_float_at_the_bound(self):
+        """From ``2**49`` up, several ticks share one float, so the inverse fails.
+
+        Pinned as a real property of binary floating point, not as a defect: no
+        implementation can make a tenth distinct where the gap between adjacent
+        doubles is 0.125. The caller's obligation is to notice, which
+        ``ActionExecutor._next_free_number_from_ticks`` does.
+        """
+        bound = 2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT
+        collapsed = [
+            tick
+            for tick in range(bound, bound + 5000)
+            if channel_number_ticks(channel_number_from_ticks(tick)) != tick
+        ]
+        assert len(collapsed) == 1000
+        assert all(tick % CHANNEL_NUMBER_TICKS_PER_UNIT for tick in collapsed)
+        assert collapsed[0] == 5629499534213123
+
+    def test_a_whole_tick_round_trips_at_every_magnitude(self):
+        """Whole numbers are exempt from the bound: the int path uses no float."""
+        for tick in (
+            0,
+            10,
+            8000,
+            2**49 * CHANNEL_NUMBER_TICKS_PER_UNIT,
+            2**53 * CHANNEL_NUMBER_TICKS_PER_UNIT,
+            10**401,
+        ):
+            number = channel_number_from_ticks(tick)
+            assert isinstance(number, int)
+            assert channel_number_ticks(number) == tick
+
+    def test_a_magnitude_above_the_exact_integer_floor_does_not_overflow(self):
+        """``1e308 * 10`` is ``inf``, so the scaling has to be skipped, not attempted."""
+        assert channel_number_ticks(1e308) == int(1e308) * 10
+        assert channel_number_from_ticks(channel_number_ticks(1e308)) == 1e308
+
+    def test_an_arbitrary_precision_int_needs_no_float_at_all(self):
+        """``float(10**400)`` raises ``OverflowError``; the int path never calls it."""
+        assert channel_number_ticks(10**400) == 10**401
+        assert channel_number_from_ticks(10**401) == 10**400
+
+    @pytest.mark.parametrize(
+        "value", [None, "1.1", math.inf, -math.inf, math.nan, True, False, object()]
+    )
+    def test_a_value_that_is_not_a_finite_number_is_refused(self, value):
+        with pytest.raises(InvalidChannelNumberError):
+            channel_number_ticks(value)
+
+    def test_an_out_of_contract_number_collapses_onto_the_nearest_tenth(self):
+        """Defensive only. Dispatcharr enforces nothing, so ``1.05`` can already be in the lineup.
+
+        Collapsing is the conservative direction: the number is read as
+        occupying the slot an operator sees it in, never as leaving it free.
+        Mirrors the same collapse in ``frontend/src/utils/channelNumberShift.ts``.
+        """
+        assert channel_number_ticks(1.049) == 10
+        assert channel_number_ticks(1.16) == 12

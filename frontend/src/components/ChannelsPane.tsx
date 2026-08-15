@@ -27,7 +27,11 @@ import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
 import { planChannelNumberShift, channelNumberSlot } from '../utils/channelNumberShift';
-import { parseChannelNumberInput } from '../utils/channelNumber';
+import {
+  parseChannelNumberInput,
+  parseWholeChannelNumberInput,
+  wholeChannelNumberInputError,
+} from '../utils/channelNumber';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -87,6 +91,23 @@ const GROUP_RENDER_CHUNK_SIZE = 100;
  * Settings sub-pages.
  */
 export const NAVIGATE_TO_ORPHANED_GROUPS_EVENT = 'ecm:navigate-settings-maintenance';
+
+/**
+ * The whole number a renumber-start field resolves to, or `null` when the field
+ * is empty or carries something the renumber cannot honour
+ * (bead `enhancedchannelmanager-j3pyx`).
+ *
+ * Every renumber dialog in this pane derives three things from its start field:
+ * the number the operation actually uses, the range shown in the preview, and
+ * whether the confirm button is enabled. Deriving them independently is how a
+ * field could show "Channels will be numbered 1 - 12" over a live button for a
+ * typed `1.5`, then renumber from `1`. They all read this instead, so a value
+ * the operation will not honour cannot be previewed or confirmed.
+ */
+function renumberStartValue(text: string): number | null {
+  const parsed = parseWholeChannelNumberInput(text);
+  return parsed.ok ? parsed.value : null;
+}
 
 
 interface ChannelsPaneProps {
@@ -4340,9 +4361,44 @@ export function ChannelsPane({
     }
   };
 
+  // Renumber start fields, resolved once each (bead
+  // enhancedchannelmanager-j3pyx). `...StartNumber` is the number the operation
+  // will use, `null` when there is nothing usable; `...StartError` is the
+  // sentence to show under the input, `null` while the field is empty or
+  // acceptable. Preview strings, `disabled` expressions and the confirm
+  // handlers all read these, so none of them can disagree with the others.
+  const groupReorderCustomStartNumber = renumberStartValue(groupReorderCustomNumber);
+  const groupReorderCustomStartError = wholeChannelNumberInputError(groupReorderCustomNumber);
+  const sortRenumberStartNumber = renumberStartValue(sortRenumberStartingNumber);
+  const sortRenumberStartError = wholeChannelNumberInputError(sortRenumberStartingNumber);
+  const massRenumberStartNumber = renumberStartValue(massRenumberStartingNumber);
+  const massRenumberStartError = wholeChannelNumberInputError(massRenumberStartingNumber);
+  const renumberAllStartNumber = renumberStartValue(renumberAllStartingNumber);
+  const renumberAllStartError = wholeChannelNumberInputError(renumberAllStartingNumber);
+
+  /**
+   * The per-group override each Renumber All group carries, or `null` for a
+   * group with no override. A group whose entry is out of contract maps to an
+   * error rather than to a number, so a typed `1.5` there is refused with the
+   * same sentence instead of starting that group's run at `1`.
+   */
+  const renumberAllOverrideErrors = useMemo(() => {
+    const errors = new Map<string, string>();
+    for (const [key, value] of Object.entries(renumberAllGroupOverrides)) {
+      const message = wholeChannelNumberInputError(value);
+      if (message) errors.set(key, message);
+    }
+    return errors;
+  }, [renumberAllGroupOverrides]);
+
   // Handle group reorder confirmation
   const handleGroupReorderConfirm = () => {
     if (!groupReorderData) return;
+    // Refuse before anything is applied, so a rejected start number cannot
+    // leave the group reordered but not renumbered. The Confirm button is
+    // disabled in this state, so this is the second lock on the same door
+    // (bead enhancedchannelmanager-j3pyx).
+    if (groupReorderNumberingOption === 'custom' && groupReorderCustomStartNumber === null) return;
 
     const { groupId, channels, newPosition } = groupReorderData;
 
@@ -4371,10 +4427,10 @@ export function ChannelsPane({
       let startingNumber: number;
 
       if (groupReorderNumberingOption === 'custom') {
-        startingNumber = parseInt(groupReorderCustomNumber, 10);
-        if (isNaN(startingNumber)) {
-          startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
-        }
+        // Non-null: the guard at the top of this handler already refused the
+        // alternative. It used to fall back to the suggestion when `parseInt`
+        // returned NaN, which renumbered from a number nobody typed.
+        startingNumber = groupReorderCustomStartNumber as number;
       } else {
         startingNumber = groupReorderData.suggestedStartingNumber ?? 1;
       }
@@ -4764,10 +4820,10 @@ export function ChannelsPane({
     } else if (selectedNumberingOption === 'suggested') {
       startNumber = crossGroupMoveData.suggestedChannelNumber;
     } else if (selectedNumberingOption === 'custom') {
-      const customNum = parseInt(customStartingNumber, 10);
-      if (!isNaN(customNum) && customNum >= 1) {
-        startNumber = customNum;
-      }
+      // Read through the same rule the Move button resolves on, so the conflict
+      // list cannot be computed from a truncated `1.5` while the button is
+      // refusing that very value (bead enhancedchannelmanager-j3pyx).
+      startNumber = renumberStartValue(customStartingNumber);
     }
 
     if (startNumber === null) return { hasConflicts: false, conflicts: [], startNumber: 0 };
@@ -4826,8 +4882,8 @@ export function ChannelsPane({
   const handleSortRenumberConfirm = () => {
     if (!sortRenumberData || !onStageUpdateChannel) return;
 
-    const startingNumber = parseInt(sortRenumberStartingNumber, 10);
-    if (isNaN(startingNumber) || startingNumber < 1) return;
+    const startingNumber = sortRenumberStartNumber;
+    if (startingNumber === null) return;
 
     // Sort channels alphabetically by name (case-insensitive, natural sort
     // for numbers), applying the same optional transforms + order as the
@@ -4904,8 +4960,8 @@ export function ChannelsPane({
       return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
     }
 
-    const startNum = parseInt(massRenumberStartingNumber, 10);
-    if (isNaN(startNum) || startNum < 1) {
+    const startNum = massRenumberStartNumber;
+    if (startNum === null) {
       return { hasConflicts: false, conflicts: [] as Channel[], shiftRequired: 0 };
     }
 
@@ -4924,7 +4980,7 @@ export function ChannelsPane({
     const shiftRequired = conflicts.length > 0 ? endNum - (conflicts[0].channel_number ?? 0) + 1 : 0;
 
     return { hasConflicts: conflicts.length > 0, conflicts, shiftRequired };
-  }, [massRenumberModal.isOpen, massRenumberChannels, massRenumberStartingNumber, localChannels]);
+  }, [massRenumberModal.isOpen, massRenumberChannels, massRenumberStartNumber, localChannels]);
 
   // Renumber All Groups preview memo
   const renumberAllGroupsPreview = useMemo(() => {
@@ -4932,8 +4988,8 @@ export function ChannelsPane({
       return { groups: [] as { key: string; name: string; count: number; from: number; to: number; hasOverride: boolean }[], totalChannels: 0 };
     }
 
-    const startNum = parseInt(renumberAllStartingNumber, 10);
-    if (isNaN(startNum) || startNum < 1) {
+    const startNum = renumberAllStartNumber;
+    if (startNum === null) {
       return { groups: [] as { key: string; name: string; count: number; from: number; to: number; hasOverride: boolean }[], totalChannels: 0 };
     }
 
@@ -4967,9 +5023,12 @@ export function ChannelsPane({
     let currentNum = startNum;
 
     for (const entry of groupEntries) {
-      const overrideVal = renumberAllGroupOverrides[entry.key];
-      const overrideNum = overrideVal ? parseInt(overrideVal, 10) : NaN;
-      const hasOverride = !isNaN(overrideNum) && overrideNum >= 1;
+      // A per-group override is a renumber start of its own, so it is held to
+      // the same whole-number rule. An override the rule refuses shows its
+      // message in place of this group's range and blocks the Renumber All
+      // button, rather than being truncated (bead enhancedchannelmanager-j3pyx).
+      const overrideNum = renumberStartValue(renumberAllGroupOverrides[entry.key] ?? '');
+      const hasOverride = overrideNum !== null;
       const groupStart = hasOverride ? overrideNum : currentNum;
       groups.push({ key: entry.key, name: entry.name, count: entry.channels.length, from: groupStart, to: groupStart + entry.channels.length - 1, hasOverride });
       currentNum = groupStart + entry.channels.length;
@@ -4977,13 +5036,18 @@ export function ChannelsPane({
 
     const totalChannels = groupEntries.reduce((sum, e) => sum + e.channels.length, 0);
     return { groups, totalChannels };
-  }, [renumberAllGroupsModal.isOpen, renumberAllStartingNumber, renumberAllGroupOverrides, localChannels, sortedChannelGroups, autoSyncRelatedGroups]);
+  }, [renumberAllGroupsModal.isOpen, renumberAllStartNumber, renumberAllGroupOverrides, localChannels, sortedChannelGroups, autoSyncRelatedGroups]);
 
   const handleRenumberAllGroupsConfirm = () => {
     if (!onStageUpdateChannel) return;
 
-    const startNum = parseInt(renumberAllStartingNumber, 10);
-    if (isNaN(startNum) || startNum < 1) return;
+    const startNum = renumberAllStartNumber;
+    if (startNum === null) return;
+    // An override the whole-number rule refuses would otherwise be dropped and
+    // the group renumbered from the running position instead: a number the
+    // operator did not ask for (bead enhancedchannelmanager-j3pyx). The
+    // Renumber All button is disabled in this state.
+    if (renumberAllOverrideErrors.size > 0) return;
 
     // Build channel lists per group from localChannels (unfiltered)
     const channelsByGroupId: Record<string, Channel[]> = {};
@@ -5015,10 +5079,10 @@ export function ChannelsPane({
 
     let currentNum = startNum;
     for (const entry of groupEntries) {
-      // Check for per-group override
-      const overrideVal = renumberAllGroupOverrides[entry.key];
-      const overrideNum = overrideVal ? parseInt(overrideVal, 10) : NaN;
-      if (!isNaN(overrideNum) && overrideNum >= 1) {
+      // Check for per-group override. Read through the same rule the preview
+      // and the button use, so what runs is what was previewed.
+      const overrideNum = renumberStartValue(renumberAllGroupOverrides[entry.key] ?? '');
+      if (overrideNum !== null) {
         currentNum = overrideNum;
       }
 
@@ -5056,8 +5120,8 @@ export function ChannelsPane({
   const handleMassRenumberConfirm = (shiftConflicts: boolean) => {
     if (!onStageUpdateChannel || massRenumberChannels.length === 0) return;
 
-    const startNum = parseInt(massRenumberStartingNumber, 10);
-    if (isNaN(startNum) || startNum < 1) return;
+    const startNum = massRenumberStartNumber;
+    if (startNum === null) return;
 
     const { conflicts } = getMassRenumberConflicts;
 
@@ -6394,9 +6458,9 @@ export function ChannelsPane({
                           min="1"
                           autoFocus
                         />
-                        {customStartingNumber && !isNaN(parseInt(customStartingNumber, 10)) && parseInt(customStartingNumber, 10) >= 1 && crossGroupMoveData.channels.length > 1 && (
+                        {moveNumbering?.ok && moveNumbering.keepCurrentNumbers === false && crossGroupMoveData.channels.length > 1 && (
                           <span className="custom-number-range-inline">
-                            → {parseInt(customStartingNumber, 10)}–{parseInt(customStartingNumber, 10) + crossGroupMoveData.channels.length - 1}
+                            → {moveNumbering.startingNumber}–{moveNumbering.startingNumber + crossGroupMoveData.channels.length - 1}
                           </span>
                         )}
                       </div>
@@ -6571,10 +6635,13 @@ export function ChannelsPane({
                           min="1"
                           autoFocus
                         />
-                        {groupReorderCustomNumber && !isNaN(parseInt(groupReorderCustomNumber, 10)) && parseInt(groupReorderCustomNumber, 10) >= 1 && groupReorderData.channels.length > 1 && (
+                        {groupReorderCustomStartNumber !== null && groupReorderData.channels.length > 1 && (
                           <span className="custom-number-range-inline">
-                            → {parseInt(groupReorderCustomNumber, 10)}–{parseInt(groupReorderCustomNumber, 10) + groupReorderData.channels.length - 1}
+                            → {groupReorderCustomStartNumber}–{groupReorderCustomStartNumber + groupReorderData.channels.length - 1}
                           </span>
+                        )}
+                        {groupReorderCustomStartError && (
+                          <span className="field-error" role="alert">{groupReorderCustomStartError}</span>
                         )}
                       </div>
                     ) : (
@@ -6596,8 +6663,7 @@ export function ChannelsPane({
                 className="modal-btn modal-btn-primary"
                 onClick={handleGroupReorderConfirm}
                 disabled={
-                  groupReorderNumberingOption === 'custom' &&
-                  (!groupReorderCustomNumber || isNaN(parseInt(groupReorderCustomNumber, 10)) || parseInt(groupReorderCustomNumber, 10) < 1)
+                  groupReorderNumberingOption === 'custom' && groupReorderCustomStartNumber === null
                 }
               >
                 Confirm
@@ -6632,9 +6698,12 @@ export function ChannelsPane({
                   className="sort-renumber-input"
                   autoFocus
                 />
-                {sortRenumberStartingNumber && !isNaN(parseInt(sortRenumberStartingNumber, 10)) && parseInt(sortRenumberStartingNumber, 10) >= 1 && (
+                {sortRenumberStartError && (
+                  <span className="field-error" role="alert">{sortRenumberStartError}</span>
+                )}
+                {sortRenumberStartNumber !== null && (
                   <span className="sort-renumber-range">
-                    Channels will be numbered {parseInt(sortRenumberStartingNumber, 10)} – {parseInt(sortRenumberStartingNumber, 10) + sortRenumberData.channels.length - 1}
+                    Channels will be numbered {sortRenumberStartNumber} – {sortRenumberStartNumber + sortRenumberData.channels.length - 1}
                   </span>
                 )}
               </div>
@@ -6705,16 +6774,27 @@ export function ChannelsPane({
                   )
                   .slice(0, 5)
                   .map((ch, index) => {
-                    const startNum = parseInt(sortRenumberStartingNumber, 10) || 1;
-                    const newNumber = startNum + index;
-                    const newName = sortRenumberUpdateNames && ch.channel_number !== null
+                    // No fabricated start. This used to read
+                    // `parseInt(...) || 1`, so a refused entry previewed a run
+                    // beginning at 1 that nothing would ever produce
+                    // (bead enhancedchannelmanager-j3pyx). The sorted ORDER is
+                    // still worth showing while the field is unusable, because
+                    // it does not depend on the number.
+                    const newNumber = sortRenumberStartNumber === null
+                      ? null
+                      : sortRenumberStartNumber + index;
+                    const newName = sortRenumberUpdateNames && ch.channel_number !== null && newNumber !== null
                       ? computeAutoRename(ch.name, ch.channel_number, newNumber)
                       : undefined;
                     return (
                       <li key={ch.id}>
                         <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
-                        <span className="preview-arrow">→</span>
-                        <span className="preview-new-number">{newNumber}</span>
+                        {newNumber !== null && (
+                          <>
+                            <span className="preview-arrow">→</span>
+                            <span className="preview-new-number">{newNumber}</span>
+                          </>
+                        )}
                         {newName ? (
                           <>
                             <span className="preview-name preview-name-old">{ch.name}</span>
@@ -6743,7 +6823,7 @@ export function ChannelsPane({
               <button
                 className="modal-btn modal-btn-primary"
                 onClick={handleSortRenumberConfirm}
-                disabled={!sortRenumberStartingNumber || isNaN(parseInt(sortRenumberStartingNumber, 10)) || parseInt(sortRenumberStartingNumber, 10) < 1}
+                disabled={sortRenumberStartNumber === null}
               >
                 Sort & Renumber
               </button>
@@ -6776,9 +6856,12 @@ export function ChannelsPane({
                   className="mass-renumber-input"
                   autoFocus
                 />
-                {massRenumberStartingNumber && !isNaN(parseInt(massRenumberStartingNumber, 10)) && parseInt(massRenumberStartingNumber, 10) >= 1 && (
+                {massRenumberStartError && (
+                  <span className="field-error" role="alert">{massRenumberStartError}</span>
+                )}
+                {massRenumberStartNumber !== null && (
                   <span className="mass-renumber-range">
-                    Channels will be numbered {parseInt(massRenumberStartingNumber, 10)} – {parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length - 1}
+                    Channels will be numbered {massRenumberStartNumber} – {massRenumberStartNumber + massRenumberChannels.length - 1}
                   </span>
                 )}
               </div>
@@ -6792,14 +6875,16 @@ export function ChannelsPane({
               </label>
             </div>
 
-            {/* Conflict Warning */}
-            {getMassRenumberConflicts.hasConflicts && (
+            {/* Conflict Warning. `hasConflicts` is only ever true for a start
+                number the whole-number rule accepted, so the range below is
+                the one the operation will actually claim. */}
+            {getMassRenumberConflicts.hasConflicts && massRenumberStartNumber !== null && (
               <div className="mass-renumber-conflict-warning">
                 <span className="material-icons conflict-icon">warning</span>
                 <div className="conflict-warning-content">
                   <strong>{getMassRenumberConflicts.conflicts.length} channel{getMassRenumberConflicts.conflicts.length !== 1 ? 's' : ''} will be displaced</strong>
                   <p>
-                    The following channels are in the target range ({parseInt(massRenumberStartingNumber, 10)} – {parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length - 1}):
+                    The following channels are in the target range ({massRenumberStartNumber} – {massRenumberStartNumber + massRenumberChannels.length - 1}):
                   </p>
                   <ul className="conflict-channel-list">
                     {getMassRenumberConflicts.conflicts.slice(0, 5).map(ch => (
@@ -6821,17 +6906,25 @@ export function ChannelsPane({
               <label>Preview</label>
               <ul className="mass-renumber-preview-list">
                 {massRenumberChannels.slice(0, 5).map((ch, index) => {
-                  const startNum = parseInt(massRenumberStartingNumber, 10) || 1;
-                  const newNumber = startNum + index;
-                  const hasChange = ch.channel_number !== newNumber;
-                  const newName = massRenumberUpdateNames && ch.channel_number !== null
+                  // See the Sort & Renumber preview: no fabricated start, so a
+                  // refused entry previews no new numbers at all rather than a
+                  // run beginning at 1 (bead enhancedchannelmanager-j3pyx).
+                  const newNumber = massRenumberStartNumber === null
+                    ? null
+                    : massRenumberStartNumber + index;
+                  const hasChange = newNumber !== null && ch.channel_number !== newNumber;
+                  const newName = massRenumberUpdateNames && ch.channel_number !== null && newNumber !== null
                     ? computeAutoRename(ch.name, ch.channel_number, newNumber)
                     : undefined;
                   return (
                     <li key={ch.id} className={hasChange ? 'has-change' : ''}>
                       <span className="preview-old-number">{ch.channel_number ?? '-'}</span>
-                      <span className="preview-arrow">→</span>
-                      <span className="preview-new-number">{newNumber}</span>
+                      {newNumber !== null && (
+                        <>
+                          <span className="preview-arrow">→</span>
+                          <span className="preview-new-number">{newNumber}</span>
+                        </>
+                      )}
                       {newName ? (
                         <>
                           <span className="preview-name preview-name-old">{ch.name}</span>
@@ -6861,8 +6954,10 @@ export function ChannelsPane({
                 <button
                   className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(true)}
-                  disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
-                  title={`Shift ${getMassRenumberConflicts.conflicts.length} conflicting channel(s) to numbers ${parseInt(massRenumberStartingNumber, 10) + massRenumberChannels.length} and up`}
+                  disabled={massRenumberStartNumber === null}
+                  title={massRenumberStartNumber === null
+                    ? undefined
+                    : `Shift ${getMassRenumberConflicts.conflicts.length} conflicting channel(s) to numbers ${massRenumberStartNumber + massRenumberChannels.length} and up`}
                 >
                   <span className="material-icons">swap_vert</span>
                   Shift & Renumber
@@ -6871,7 +6966,7 @@ export function ChannelsPane({
                 <button
                   className="modal-btn modal-btn-primary"
                   onClick={() => handleMassRenumberConfirm(false)}
-                  disabled={!massRenumberStartingNumber || isNaN(parseInt(massRenumberStartingNumber, 10)) || parseInt(massRenumberStartingNumber, 10) < 1}
+                  disabled={massRenumberStartNumber === null}
                 >
                   Renumber
                 </button>
@@ -6921,6 +7016,9 @@ export function ChannelsPane({
                   onChange={(e) => setRenumberAllStartingNumber(e.target.value)}
                   autoFocus
                 />
+                {renumberAllStartError && (
+                  <span className="field-error" role="alert">{renumberAllStartError}</span>
+                )}
               </div>
 
               <label className="modal-checkbox-label">
@@ -6959,7 +7057,13 @@ export function ChannelsPane({
                           }}
                           title="Custom starting number for this group"
                         />
-                        <span className="renumber-all-group-range">{g.from}–{g.to}</span>
+                        {renumberAllOverrideErrors.has(g.key) ? (
+                          <span className="field-error" role="alert">
+                            {renumberAllOverrideErrors.get(g.key)}
+                          </span>
+                        ) : (
+                          <span className="renumber-all-group-range">{g.from}–{g.to}</span>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -6983,9 +7087,8 @@ export function ChannelsPane({
                 className="modal-btn modal-btn-primary"
                 onClick={handleRenumberAllGroupsConfirm}
                 disabled={
-                  !renumberAllStartingNumber ||
-                  isNaN(parseInt(renumberAllStartingNumber, 10)) ||
-                  parseInt(renumberAllStartingNumber, 10) < 1 ||
+                  renumberAllStartNumber === null ||
+                  renumberAllOverrideErrors.size > 0 ||
                   renumberAllGroupsPreview.totalChannels === 0
                 }
               >

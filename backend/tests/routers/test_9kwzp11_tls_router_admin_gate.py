@@ -543,6 +543,15 @@ class TestSetupModeStillAllowed:
     ``test_auth_disabled_owned_instance_splits_by_gate`` below, and the full
     jy006 matrix lives in
     ``test_jy006_auth_disabled_identity_primitives.py``.
+
+    NARROWED AGAIN BY BEAD 2u4e0 (2026-08-15). ``POST /test-dns-provider`` was
+    the one denied route still reachable anonymously in that third posture,
+    because it rides ``RequireHumanAdminForOutboundTest`` with eleven siblings
+    in other routers and jy006's decision named none of them. The PO closed the
+    whole family, so eleven of the thirteen routes here now refuse an anonymous
+    caller on an owned auth-disabled instance and only the two status reads do
+    not. The two postures parametrized below are unaffected: both still
+    describe an instance with NO operator identity.
     """
 
     @pytest.mark.parametrize("route", TLS_ROUTES, ids=_route_id)
@@ -569,16 +578,24 @@ class TestSetupModeStillAllowed:
     async def test_auth_disabled_owned_instance_splits_by_gate(
         self, async_client, route
     ):
-        """bead jy006 — the line the PO drew, restated per route.
+        """beads jy006 and 2u4e0 — the line the PO drew, restated per route.
 
         On an auth-disabled instance that HAS an operator identity, this router
-        is no longer uniform: the ten material routes refuse an anonymous
-        caller, while the two status reads and ``/test-dns-provider`` do not.
-        Asserted as one parametrized sweep over the whole route table rather
-        than as two lists, so a route that changes tier shows up here as a
-        named failure instead of silently joining the other group.
+        splits: the eleven routes that touch credential material refuse an
+        anonymous caller, while the two status reads, which disclose none, do
+        not. Asserted as one parametrized sweep over the whole route table
+        rather than as two lists, so a route that changes tier shows up here as
+        a named failure instead of silently joining the other group.
+
+        AMENDED BY BEAD 2u4e0. ``/test-dns-provider`` used to expect 200 here,
+        which made this router self-contradictory: the probe that SPENDS the
+        stored DNS-provider credentials was anonymous while ``GET /settings``,
+        which discloses them masked, was refused. The PO closed the whole
+        ``RequireHumanAdminForOutboundTest`` family on 2026-08-15, so the split
+        is now exactly the MCP-verdict split, and the expectation below is
+        derived from ``DENIED_ROUTES`` instead of naming the exception.
         """
-        expected = 401 if route in TLS_MATERIAL_ROUTES else 200
+        expected = 401 if route in DENIED_ROUTES else 200
 
         with _Gate(async_client, route) as gate, \
                 patch("auth.dependencies.get_auth_settings") as auth_mock:

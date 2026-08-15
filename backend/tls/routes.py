@@ -28,31 +28,34 @@ stamps ``is_admin=True``. Three tiers now apply, per route:
   credential material. Admin required, MCP principal admitted, which is the
   inventory's default for anything outside the denied classes.
 
-AUTH-DISABLED BEHAVIOUR (bead jy006, PO decision 2026-08-13)
+AUTH-DISABLED BEHAVIOUR (beads jy006 and 2u4e0, PO decisions 2026-08-13 and
+2026-08-15)
 ------------------------------------------------------------
 
 This paragraph used to read "all three no-op when ``require_auth`` is false or
-setup is incomplete". That is no longer true of the first tier, and the
-difference is the point of bead jy006.
+setup is incomplete". That is now true of only the third tier.
 
 * ``RequireHumanAdminForTLSMaterial`` carries ``enforce_when_auth_disabled``.
   On an instance that HAS an operator identity (a user row, or
   ``setup_complete``), all ten of its routes require a real human admin even
   while ``require_auth`` is false. Installing a caller-supplied private key is
-  one of the three identity primitives ECM refuses anonymously in every mode,
-  because the installed key becomes the instance's TLS identity and survives
-  the operator turning authentication back on. On an instance with NO operator
+  one of the identity primitives ECM refuses anonymously in every mode, because
+  the installed key becomes the instance's TLS identity and survives the
+  operator turning authentication back on. On an instance with NO operator
   identity — a genuine first run, or a deliberately headless auth-disabled
   deployment that never created a user — the gate still no-ops, so nothing is
   locked out.
-* ``RequireHumanAdminForOutboundTest`` (``POST /test-dns-provider``) and
-  ``RequireAdminIfEnabled`` (the two status reads) are UNCHANGED: they still
-  no-op whenever ``require_auth`` is false or setup is incomplete. The PO's
-  decision gates the three identity primitives and leaves the rest of the
-  auth-disabled surface open. Note the residual this leaves inside this router:
-  ``GET /settings`` is refused on such an instance while
-  ``POST /test-dns-provider``, which USES the DNS-provider credentials that
-  route discloses in masked form, is not.
+* ``RequireHumanAdminForOutboundTest`` (``POST /test-dns-provider``) carries it
+  too, since bead 2u4e0. jy006 had left this one route open because its
+  decision named only the identity primitives and this gate carries eleven
+  siblings in other routers, and the residual made this router contradict
+  itself: ``GET /settings`` was refused on an owned auth-disabled instance
+  while ``POST /test-dns-provider``, which SPENDS the DNS-provider credentials
+  that route discloses in masked form, was not. The PO closed the whole family
+  on the credential-oracle axis. The same no-identity carve-out applies.
+* ``RequireAdminIfEnabled`` (the two status reads) is UNCHANGED: it still
+  no-ops whenever ``require_auth`` is false or setup is incomplete. Those reads
+  disclose no credential material.
 
 Every verdict is pinned in ``tests/test_admin_gate_inventory.py``,
 ``tests/routers/test_9kwzp11_tls_router_admin_gate.py`` and

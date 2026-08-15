@@ -6384,15 +6384,29 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex=None):
 def _get_rule_starting_number(rule) -> Optional[int]:
     """Extract the starting channel number from a rule's create_channel action.
 
-    Returns the integer starting number, or None if the rule uses "auto" numbering
-    or has no create_channel action.
+    Returns the integer starting number, or None if the rule uses "auto"
+    numbering, names a tenth, or has no create_channel action.
+
+    A rule may name a tenth since bead enhancedchannelmanager-ay3iq, and that
+    number is honoured at creation. It is deliberately NOT carried into the
+    rule-level renumber pass: this value is handed to Dispatcharr's bulk
+    ``assign/`` endpoint, which counts up in whole numbers from wherever it is
+    told to start, so a start of 1.1 would renumber into 1.1, 2.1, 3.1 rather
+    than along the tenths grid. Returning None instead skips the renumber pass,
+    which is exactly what an "auto" rule already does (see the Auto gotcha in
+    docs/user_guide/channel-pipeline/sort-vs-numbering.md). The numbers assigned
+    at creation stand.
     """
     for action_data in rule.get_actions():
         if action_data.get("type") != "create_channel":
             continue
         spec = action_data.get("channel_number", "auto")
+        if isinstance(spec, bool):
+            return None
         if isinstance(spec, int):
             return spec
+        if isinstance(spec, float):
+            return int(spec) if spec.is_integer() else None
         if isinstance(spec, str):
             if spec == "auto":
                 return None

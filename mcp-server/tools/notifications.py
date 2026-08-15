@@ -172,7 +172,9 @@ def register(mcp: FastMCP):
         """Send a test notification through an alert method. NOT USABLE OVER MCP.
 
         REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
-        (bead enhancedchannelmanager-9kwzp.6). The backing endpoint,
+        (bead enhancedchannelmanager-9kwzp.6), and since bead
+        enhancedchannelmanager-2u4e0 also whenever authentication is DISABLED on
+        an instance that already holds an operator identity. The backing endpoint,
         ``POST /api/alert-methods/{method_id}/test``, carries
         ``RequireHumanAdminForOutboundTest``, which rejects the static MCP
         service principal with HTTP 403 and the body "The MCP service

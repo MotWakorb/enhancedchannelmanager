@@ -172,3 +172,80 @@ export function channelNumberInputError(
   const result = parseChannelNumberInput(text, options);
   return result.ok ? null : result.message;
 }
+
+/**
+ * The one operator-facing sentence every renumber-start rejection uses
+ * (bead `enhancedchannelmanager-j3pyx`).
+ *
+ * A renumber START is a narrower thing than a channel number. Sort and
+ * Renumber, Renumber All Groups and its per-group overrides, the group reorder
+ * custom number and the cross-group move custom number all seed a SEQUENTIAL
+ * run: the field's value is followed by that value plus one, plus two, and so
+ * on. Counting in tenths is not a thing any of those operations does, so the
+ * field is whole-number-only by design and its output is a strict subset of the
+ * canonical contract above.
+ *
+ * They used to read the field with `parseInt` and guard `>= 1`, which meant a
+ * typed `1.5` became `1` with no warning anywhere: the operator asked for one
+ * thing and got another. That is the silent normalisation the PO ruled against
+ * when choosing reject-over-normalize for the canonical contract, so these
+ * fields reject instead, in the same voice and with one sentence for every
+ * site.
+ */
+export const WHOLE_CHANNEL_NUMBER_RULE_MESSAGE =
+  'Starting channel numbers must be whole numbers of 1 or greater (for example 1 or 100).';
+
+/**
+ * Parse an operator-entered renumber START.
+ *
+ * Layered on `parseChannelNumberInput` rather than re-deriving the text rule,
+ * so the two agree on what a number even looks like (`7`, `7.0` and `07` all
+ * read as seven; `1e3`, `.5` and `7.` are not numbers here either). On top of
+ * that this adds the two rules the sequential renumbering needs:
+ *
+ *   - Whole. `1.5` is refused rather than truncated to `1`.
+ *   - At least 1, matching the `>= 1` guard every one of these fields already
+ *     carried. Channel number 0 is in contract, but no renumber dialog has ever
+ *     offered it as a start and widening that is a separate product question.
+ *
+ * `Number.isSafeInteger` rather than `Number.isInteger`: the run is built by
+ * repeatedly adding one, and above `2**53` that addition stops producing
+ * distinct numbers, so a start there could not seed the run the operator asked
+ * for. Empty text yields `null` ("nothing entered") when `allowEmpty`, which is
+ * the default and is what lets a field render no error until something is
+ * typed; the Renumber All per-group overrides also read an empty entry as
+ * "inherit from the running position" rather than as a value.
+ */
+export function parseWholeChannelNumberInput(
+  text: string,
+  options: { allowEmpty?: boolean } = {},
+): ChannelNumberParseResult {
+  const { allowEmpty = true } = options;
+  const trimmed = (text ?? '').trim();
+  if (!trimmed) {
+    return allowEmpty
+      ? { ok: true, value: null }
+      : { ok: false, message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE };
+  }
+  const parsed = parseChannelNumberInput(trimmed, { allowEmpty: false });
+  if (!parsed.ok || parsed.value === null) {
+    return { ok: false, message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE };
+  }
+  if (!Number.isSafeInteger(parsed.value) || parsed.value < 1) {
+    return { ok: false, message: WHOLE_CHANNEL_NUMBER_RULE_MESSAGE };
+  }
+  return { ok: true, value: parsed.value };
+}
+
+/**
+ * The rejection message for a renumber START, or `null` when it is acceptable.
+ * The render-time counterpart of `parseWholeChannelNumberInput`, mirroring
+ * `channelNumberInputError`.
+ */
+export function wholeChannelNumberInputError(
+  text: string,
+  options: { allowEmpty?: boolean } = {},
+): string | null {
+  const result = parseWholeChannelNumberInput(text, options);
+  return result.ok ? null : result.message;
+}
