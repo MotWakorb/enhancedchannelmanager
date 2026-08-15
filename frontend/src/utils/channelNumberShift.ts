@@ -134,6 +134,19 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
  * happen; see the `toNumber` computation below. Defining and enforcing a
  * canonical channel-number domain is bead `enhancedchannelmanager-ic884.1`;
  * this module has to cope with whatever is already in the lineup.
+ *
+ * Concretely: with only channel `1.0004` present, inserting one channel at
+ * `1` moves it to `2.0004` even though the exact number `1` was free,
+ * because `1.0004` rounds to the same tick as `1`. That is the collapse
+ * working as designed, not a bug — an exact-equality comparison would avoid
+ * the move but would also let `1.0001` and `1.0004` end up looking like two
+ * channels sharing one slot to an operator after an insert that was supposed
+ * to clear it. The behaviour, both the over-move and the boundary where it
+ * stops applying, is pinned in `channelNumberShift.test.ts`'s "tick-collapse
+ * comparison contract" tests, and the randomised property suite there
+ * samples sub-tick jitter (values differing only past the third decimal) so
+ * duplicate-freedom and minimality are checked against inputs like this, not
+ * only against numbers that happen to land on the tick grid exactly.
  */
 const TICK_SCALE = 1000;
 

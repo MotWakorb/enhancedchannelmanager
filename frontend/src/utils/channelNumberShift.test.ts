@@ -20,6 +20,19 @@
  * generator now emits decimals, off-lattice numbers and mixed lineups. No
  * expectation in the properties above changed, because none of their fixtures
  * could distinguish the two rules; the gap was coverage, not wrong answers.
+ *
+ * A second Codex re-review then found that `bruteForceStopTick` below shares
+ * the planner's own tick-collapse comparison (both round to three decimals
+ * before comparing occupancy), so it cannot see the planner over-move a
+ * sub-tick channel that collapses onto the insertion slot, and the generator
+ * never produced such a channel to begin with. That collapse is a deliberate,
+ * kept choice — see the `TICK_SCALE` comment in `channelNumberShift.ts` — so
+ * this is not a bug to fix. The "tick-collapse comparison contract" describe
+ * block below pins the deliberate behaviour explicitly, and the sampled
+ * property test now also generates sub-tick jitter and checks a weaker,
+ * genuinely independent minimality property against it (`preciseBruteForceStopTick`,
+ * rounded to a resolution 1000x finer than the planner's own), since the
+ * tick-sharing oracle cannot be used to check that case.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
@@ -131,6 +144,52 @@ function bruteForceStopNumber(
   step: number,
 ): number {
   return bruteForceStopTick(channels, startingNumber, count, step) / SCALE;
+}
+
+/**
+ * Same rule as `bruteForceStopTick`, at a resolution 1000x finer than the
+ * planner's own three-decimal comparison. This is what an EXACT-equality
+ * planner (no tick-collapse at all) would compute, so it is NOT independent
+ * of `bruteForceStopTick` in the way that function is independent of the
+ * planner's stop-search loop — it shares the same "try each candidate stop,
+ * check the claimed and stayed-put sets" method — but it IS independent of
+ * the planner's occupancy-equivalence assumption, which is the thing
+ * `bruteForceStopTick` cannot check (see the file header comment on the
+ * second Codex re-review).
+ *
+ * Never asserted equal to the planner's stop: the planner is deliberately
+ * coarser than this, and over-moving relative to it is the documented,
+ * intended behaviour. It is used only for the weaker "never fewer moves than
+ * exact necessity" check in the sampled property test below.
+ */
+const PRECISE_SCALE = 1_000_000;
+const preciseTickOf = (n: number) => Math.round(n * PRECISE_SCALE);
+
+function preciseBruteForceStopTick(
+  channels: TestChannel[],
+  startingNumber: number,
+  count: number,
+  step: number,
+): number {
+  const startTick = preciseTickOf(startingNumber);
+  const stepTicks = preciseTickOf(step);
+  const shiftTicks = stepTicks * count;
+
+  const occupied = new Set<number>();
+  for (const c of channels) {
+    if (c.channel_number !== null) occupied.add(preciseTickOf(c.channel_number));
+  }
+  const above = [...occupied].filter((t) => t >= startTick).sort((a, b) => a - b);
+
+  const newChannelTicks: number[] = [];
+  for (let k = 0; k < count; k++) newChannelTicks.push(startTick + k * stepTicks);
+
+  for (const stop of [startTick, ...above.map((t) => t + 1)]) {
+    const stayed = new Set(above.filter((t) => t >= stop));
+    const claimed = [...newChannelTicks, ...above.filter((t) => t < stop).map((t) => t + shiftTicks)];
+    if (claimed.every((c) => !stayed.has(c))) return stop;
+  }
+  throw new Error('precise brute force found no stop point, which cannot happen above the highest number');
 }
 
 /** The numbers the newly inserted channels will take, on the insertion lattice. */
@@ -275,6 +334,16 @@ describe('planChannelNumberShift', () => {
     // suite passed against a planner that confused them.
     const OFFSETS = [0, 0, 0, 0.1, 0.2, 0.25, 0.5, 0.05, 0.75, 0.9];
 
+    // Sub-tick jitter: magnitudes stay under 0.0005 so they never cross a
+    // tick boundary (Math.round(x * 1000) is unchanged by adding one of
+    // these), which reliably produces channels that are genuinely distinct
+    // at exact resolution but collapse onto the same tick as their neighbour
+    // for the planner's comparison — the case the second Codex re-review
+    // found uncovered. See the file header comment and the "tick-collapse
+    // comparison contract" describe block above for the deliberate rule this
+    // exercises.
+    const MICRO_OFFSETS = [0, 0, 0, 0.00004, 0.00013, 0.00027, 0.00041, -0.00004, -0.00019, -0.00033];
+
     for (let iteration = 0; iteration < 400; iteration++) {
       nextId = 1;
       const step = rand(2) === 0 ? 1 : 0.1;
@@ -287,7 +356,7 @@ describe('planChannelNumberShift', () => {
           // Holes, off-lattice numbers, and occasionally a second occupant on
           // the same number.
           if (rand(5) === 0) continue;
-          const value = n + OFFSETS[rand(OFFSETS.length)];
+          const value = n + OFFSETS[rand(OFFSETS.length)] + MICRO_OFFSETS[rand(MICRO_OFFSETS.length)];
           channels.push(channel(value, bucket));
           if (rand(11) === 0) channels.push(channel(value, bucket));
         }
@@ -320,6 +389,31 @@ describe('planChannelNumberShift', () => {
         .filter((n) => tickOf(n) >= tickOf(startingNumber) && tickOf(n) < stopTick)
         .sort((a, b) => a - b);
       expect(shiftedNumbers(plan), seedNote).toEqual(required);
+
+      // Weaker minimality, checked independently of the tick-collapse
+      // assumption: the planner must never move FEWER channels than an
+      // exact-equality planner would require. `bruteForceStopTick` above
+      // cannot check this — it shares the same three-decimal rounding as the
+      // planner, so it agrees with every over-move by construction (see the
+      // file header comment). `preciseBruteForceStopTick` rounds 1000x finer,
+      // so a channel it says must move because it sits at an exact number the
+      // plan claims is a real, non-collapsed requirement. This is
+      // deliberately NOT `toEqual`: the planner is allowed, and by the
+      // TICK_SCALE contract in channelNumberShift.ts sometimes required, to
+      // move MORE than this exact reference — only moving fewer would be a
+      // bug (a channel genuinely in the way left behind, which the strict
+      // tick-model check above cannot see either, because it would agree with
+      // the planner having skipped it).
+      const preciseStopTick = preciseBruteForceStopTick(channels, startingNumber, count, step);
+      const preciseStartTick = preciseTickOf(startingNumber);
+      const exactlyRequired = channels
+        .filter((c) => c.channel_number !== null)
+        .map((c) => c.channel_number as number)
+        .filter((n) => preciseTickOf(n) >= preciseStartTick && preciseTickOf(n) < preciseStopTick);
+      const shiftedSet = new Set(shiftedNumbers(plan));
+      for (const n of exactlyRequired) {
+        expect(shiftedSet.has(n), `${seedNote}: exact-required ${n} was left behind`).toBe(true);
+      }
     }
   });
 
@@ -379,6 +473,72 @@ describe('planChannelNumberShift', () => {
     const finals = applyPlan(channels, plan);
     expectNoNewDuplicates(channels, finals);
     expect(new Set(plan.shifts.map((s) => s.toNumber)).size).toBe(plan.shifts.length);
+  });
+
+  // Second Codex pre-merge re-review, MEDIUM finding. These tests pin the
+  // CURRENT behaviour on purpose — they do not describe a bug to fix. The
+  // tick-collapse comparison in channelNumberShift.ts (see the `TICK_SCALE`
+  // comment) is a deliberate, kept design choice: it can only ever cause the
+  // planner to move a channel it did not strictly have to, never to merge two
+  // channels onto one output number (the previous test above already pins
+  // that half). Making the comparison exact instead would remove these
+  // over-moves, but it would also let two channels that read as the same
+  // slot to an operator (e.g. `1.0001` and `1.0004`, both "channel 1") end up
+  // sitting on what looks like one slot after an insert that was supposed to
+  // clear it — the earlier engineer's judgment, which this suite agrees
+  // with. The real fix for sub-tick input in the first place is bead
+  // `enhancedchannelmanager-ic884.1` ("Define and enforce valid canonical
+  // channel-number values"); nothing here implements that invariant.
+  describe('tick-collapse comparison contract (deliberate conservative choice)', () => {
+    it('moves a sub-tick occupant that collapses onto the insertion slot, even though its exact number is free', () => {
+      // Codex's exact case: no channel sits at exactly 1, so a human reading
+      // raw numbers would call the insertion slot free. But
+      // Math.round(1.0004 * 1000) === Math.round(1 * 1000) === 1000, so the
+      // tick-collapse comparison treats 1.0004 as occupying the slot and
+      // moves it — the over-move the TICK_SCALE comment documents as the
+      // conservative cost of collapsing at three decimals.
+      const channels = [channel(1.0004, GROUP_A)];
+      const plan = planChannelNumberShift({ channels, startingNumber: 1, count: 1 });
+
+      expect(plan.shifts.map((s) => [s.fromNumber, s.toNumber])).toEqual([[1.0004, 2.0004]]);
+      expect(plan.stopNumber).toBe(2);
+      expectNoNewDuplicates(channels, applyPlan(channels, plan));
+    });
+
+    it('moves every sub-tick occupant sharing the insertion slot, not just one of them', () => {
+      // Both 1.0001 and 1.0004 round to the same tick as the insertion
+      // point, so the collapse treats the slot as occupied by both. Neither
+      // is special-cased out: both move, and their output numbers (computed
+      // from the original floats, not the shared tick — see the `toNumber`
+      // computation in the planner) stay distinct rather than merging.
+      const channels = [channel(1.0001, GROUP_A), channel(1.0004, GROUP_A)];
+      const plan = planChannelNumberShift({ channels, startingNumber: 1, count: 1 });
+
+      // Expected `toNumber`s are computed the same way the planner computes
+      // them (fromNumber + shiftAmount by plain addition, not re-emitted from
+      // the shared tick — see the `toNumber` computation in the planner) so
+      // this assertion isn't tripped up by IEEE 754 float representation
+      // (`1.0001 + 1` is `2.0000999999999998`, not the decimal `2.0001`).
+      expect(plan.shifts.map((s) => [s.fromNumber, s.toNumber]).sort((a, b) => a[0] - b[0])).toEqual([
+        [1.0001, 1.0001 + 1],
+        [1.0004, 1.0004 + 1],
+      ]);
+      expect(plan.stopNumber).toBe(2);
+      expectNoNewDuplicates(channels, applyPlan(channels, plan));
+    });
+
+    it('does not collapse a channel one tick above the insertion slot', () => {
+      // Contrast case: 1.0006 rounds UP to the next tick
+      // (Math.round(1.0006 * 1000) === 1001), one above the insertion
+      // point's 1000, so it is not treated as occupying the slot. The
+      // collapse is bounded to "same tick," not a general closeness fuzz —
+      // it does not reach into a neighbouring tick.
+      const channels = [channel(1.0006, GROUP_A)];
+      const plan = planChannelNumberShift({ channels, startingNumber: 1, count: 1 });
+
+      expect(plan.shifts).toEqual([]);
+      expect(plan.stopNumber).toBe(1);
+    });
   });
 
   // Property 6
