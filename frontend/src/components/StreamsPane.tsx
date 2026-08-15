@@ -120,6 +120,11 @@ interface StreamsPaneProps {
   // Callback to check for conflicts with existing channel numbers
   // Returns the number of conflicting channels
   onCheckConflicts?: (startingNumber: number, count: number) => number;
+  // Callback to count how many EXISTING channels a "Push channels down" would
+  // renumber. Always at least the conflict count, and often far more: the
+  // push-down ripples upward until it reaches a wide enough run of free
+  // numbers (bead enhancedchannelmanager-i85dg).
+  onCountPushDownShift?: (startingNumber: number, count: number) => number;
   // Callback to get the highest existing channel number (for "insert at end" option)
   onGetHighestChannelNumber?: () => number;
   // Appearance settings
@@ -183,6 +188,7 @@ export function StreamsPane({
   onBulkCreateFromGroup,
   onCreateChannel,
   onCheckConflicts,
+  onCountPushDownShift,
   onGetHighestChannelNumber,
   showStreamUrls = true,
   hideUngroupedStreams = true,
@@ -547,6 +553,10 @@ export function StreamsPane({
   const [bulkCreateShowConflict, setBulkCreateShowConflict] = useState(false);
   const { titleId: conflictTitleId, containerRef: conflictContainerRef } = useOwnedDialog(bulkCreateShowConflict);
   const [bulkCreateConflictCount, setBulkCreateConflictCount] = useState(0);
+  // How many existing channels the push-down option would renumber. `null`
+  // means the parent did not supply a counter, in which case the dialog falls
+  // back to describing the shift without a figure.
+  const [bulkCreatePushDownCount, setBulkCreatePushDownCount] = useState<number | null>(null);
   const [bulkCreateEndOfSequenceNumber, setBulkCreateEndOfSequenceNumber] = useState(0);
   const [bulkCreateTimezone, setBulkCreateTimezone] = useState<TimezonePreference>('both');
   const [bulkCreateStripCountry, setBulkCreateStripCountry] = useState(false);
@@ -1584,8 +1594,16 @@ export function StreamsPane({
         // Calculate end-of-sequence number (highest existing + 1)
         const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
         setBulkCreateEndOfSequenceNumber(highestNumber + 1);
-        // Show conflict dialog
+        // Show conflict dialog. The push-down count is planned from the
+        // unfloored starting number, because that is what the push-down
+        // itself uses; the conflict count above stays on the floored
+        // integer range it has always used.
         setBulkCreateConflictCount(conflictCount);
+        setBulkCreatePushDownCount(
+          onCountPushDownShift
+            ? onCountPushDownShift(parseFloat(bulkCreateStartingNumber), bulkCreateStats.channelCount)
+            : null
+        );
         setBulkCreateShowConflict(true);
         return;
       }
@@ -1603,6 +1621,7 @@ export function StreamsPane({
     bulkCreateStats.channelCount,
     onBulkCreateFromGroup,
     onCheckConflicts,
+    onCountPushDownShift,
     onGetHighestChannelNumber,
     doBulkCreate,
     isManualEntry,
@@ -2980,7 +2999,11 @@ export function StreamsPane({
                 <span className="material-icons">vertical_align_bottom</span>
                 <div className="conflict-option-text">
                   <strong>Push channels down</strong>
-                  <span>Insert at {bulkCreateStartingNumber} and shift existing channels by {bulkCreateStats.channelCount}</span>
+                  <span>
+                    {bulkCreatePushDownCount === null
+                      ? `Insert at ${bulkCreateStartingNumber} and shift existing channels by ${bulkCreateStats.channelCount}`
+                      : `Insert at ${bulkCreateStartingNumber}, renumbering ${bulkCreatePushDownCount} existing channel${bulkCreatePushDownCount === 1 ? '' : 's'} upward by ${bulkCreateStats.channelCount}`}
+                  </span>
                 </div>
               </button>
               <button

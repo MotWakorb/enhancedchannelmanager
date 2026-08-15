@@ -24,6 +24,7 @@ import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
 import { computeAutoRename } from './utils/channelRename';
+import { planChannelNumberShift } from './utils/channelNumberShift';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -1943,6 +1944,19 @@ function App() {
     return conflictingChannels.length;
   }, [displayChannels]);
 
+  // How many existing channels a "Push channels down" would renumber. The
+  // conflict count above only covers the numbers the new channels claim, which
+  // understates the blast radius whenever the insert has to ripple further up
+  // (bead enhancedchannelmanager-i85dg).
+  const handleCountPushDownShift = useCallback((startingNumber: number, count: number): number => {
+    return planChannelNumberShift({
+      channels: displayChannels,
+      startingNumber,
+      count,
+      step: startingNumber % 1 !== 0 ? 0.1 : 1,
+    }).shifts.length;
+  }, [displayChannels]);
+
   // Get the highest existing channel number (for "insert at end" option)
   const handleGetHighestChannelNumber = useCallback((): number => {
     let highest = 0;
@@ -2070,85 +2084,24 @@ function App() {
 
         // Only push down channels if explicitly requested via pushDownOnConflict
         if (pushDownOnConflict) {
-          // Calculate the decimal/integer mode for shifting
-          const hasDecimalShift = startingNumber % 1 !== 0;
-          const incrementShift = hasDecimalShift ? 0.1 : 1;
+          // Plan the push-down purely from which channel numbers are occupied
+          // in the staged working copy. Group membership decided WHERE the
+          // operator is inserting; it plays no part in the arithmetic, because
+          // groups are free to contain holes and outliers, to overlap and to
+          // interleave. See utils/channelNumberShift.ts for why the group
+          // interval model this replaced could not be repaired
+          // (bead enhancedchannelmanager-i85dg).
+          const shiftPlan = planChannelNumberShift({
+            channels: displayChannels,
+            startingNumber,
+            count: channelCount,
+            step: startingNumber % 1 !== 0 ? 0.1 : 1,
+          });
 
-          // Shift amount is the total range taken by new channels
-          const shiftAmount = channelCount * incrementShift;
-
-          // Group-aware push down: only shift channels within the target group,
-          // then cascade into subsequent groups only if shifting would cause collisions.
-          // e.g., Cable 200-312, Sports 400-425: inserting at 220 should only shift Cable,
-          // not Sports (there's a gap between 312 and 400).
-
-          // Build a sorted list of groups by their minimum channel number
-          const groupMap = new Map<number | null, { channels: typeof displayChannels; minNum: number; maxNum: number }>();
-          for (const ch of displayChannels) {
-            if (ch.channel_number === null) continue;
-            const gid = ch.channel_group_id;
-            const existing = groupMap.get(gid);
-            if (existing) {
-              existing.channels.push(ch);
-              existing.minNum = Math.min(existing.minNum, ch.channel_number);
-              existing.maxNum = Math.max(existing.maxNum, ch.channel_number);
-            } else {
-              groupMap.set(gid, { channels: [ch], minNum: ch.channel_number, maxNum: ch.channel_number });
-            }
-          }
-
-          // Sort groups by their minimum channel number
-          const sortedGroups = Array.from(groupMap.entries())
-            .sort((a, b) => a[1].minNum - b[1].minNum);
-
-          // Find the target group (the one we're inserting into)
-          const targetGroupId = channelGroupId;
-          const targetGroupIdx = sortedGroups.findIndex(([gid]) => gid === targetGroupId);
-
-          // Collect channels to shift: start with channels in the target group at or after insertion point
-          const channelsToShift: typeof displayChannels = [];
-
-          if (targetGroupIdx !== -1) {
-            const [, targetGroup] = sortedGroups[targetGroupIdx];
-
-            // Shift channels in the target group at or after the starting number
-            const targetShiftChannels = targetGroup.channels.filter(
-              (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber
-            );
-            channelsToShift.push(...targetShiftChannels);
-
-            // Cascade into subsequent groups only if the shifted max would collide
-            let currentMaxAfterShift = targetGroup.maxNum + shiftAmount;
-
-            for (let i = targetGroupIdx + 1; i < sortedGroups.length; i++) {
-              const [, nextGroup] = sortedGroups[i];
-              // If there's a gap between the shifted max and the next group's min, stop
-              if (currentMaxAfterShift < nextGroup.minNum) break;
-
-              // Collision: need to shift this group's channels too
-              channelsToShift.push(...nextGroup.channels);
-              currentMaxAfterShift = nextGroup.maxNum + shiftAmount;
-            }
-          } else {
-            // Fallback: target group not found, only shift channels at/after starting number
-            // that would actually collide with the new channel range
-            const endOfNewRange = startingNumber + shiftAmount;
-            channelsToShift.push(
-              ...displayChannels.filter(
-                (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber && ch.channel_number < endOfNewRange
-              )
-            );
-          }
-
-          // Sort descending to avoid conflicts when shifting
-          channelsToShift.sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0));
-
-          // Shift each channel by the amount needed to make room for new channels
-          for (const ch of channelsToShift) {
-            const rawNewNum = ch.channel_number! + shiftAmount;
-            const newNum = hasDecimalShift
-              ? Math.round(rawNewNum * 10) / 10
-              : rawNewNum;
+          // Highest number first, so no staged update lands on a number a
+          // later update in the same batch is still about to vacate.
+          for (let i = shiftPlan.shifts.length - 1; i >= 0; i--) {
+            const { channel: ch, toNumber: newNum } = shiftPlan.shifts[i];
 
             // Apply auto-rename if enabled
             const newName = autoRenameChannelNumber
@@ -2914,6 +2867,7 @@ function App() {
               onCreateChannelManual={handleCreateChannelManual}
               defaultNormalizeOnCreate={normalizeOnChannelCreate}
               onCheckConflicts={handleCheckConflicts}
+              onCountPushDownShift={handleCountPushDownShift}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
               // Dispatcharr URL for channel stream URLs
