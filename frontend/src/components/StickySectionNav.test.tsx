@@ -34,6 +34,29 @@ describe('StickySectionNav', () => {
     expect(document.getElementById('stats-section-watch-history')).toHaveClass('sticky-section-target');
   });
 
+  // An in-page section jump is not a navigation, and this component's own
+  // contract (see `dropSectionFromHash`) says so: it preserves the history
+  // state rather than nulling it, because `useHashRoute` keeps the route index
+  // that makes Back/Forward addressable there. Activation was replacing state
+  // with `null`, which quietly un-numbers the entry the operator is sitting on
+  // — the exact "entry this router did not number" case the Edit Mode exit
+  // guard then has no delta to rewind (bead enhancedchannelmanager-6fi7p).
+  it('keeps the route index on the entry when a section is activated', async () => {
+    window.history.replaceState({ ecmRouteIndex: 4, ecmRouteEpoch: 0 }, '', '#stats');
+    Element.prototype.scrollIntoView = vi.fn();
+    const ref = createRef<HTMLDivElement>();
+    render(<div ref={ref}>
+      <StickySectionNav containerRef={ref} selector=".target" routeKey="stats" />
+      <section className="target"><h2>Current activity</h2></section>
+      <section className="target"><h2>Watch history</h2></section>
+    </div>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Watch history' }));
+
+    expect(window.location.hash).toBe('#stats?section=stats-section-watch-history');
+    expect(window.history.state).toEqual(expect.objectContaining({ ecmRouteIndex: 4 }));
+  });
+
   it('defaults to the top bar and opts into the right-hand rail', async () => {
     const ref = createRef<HTMLDivElement>();
     const { rerender } = render(<div ref={ref}>

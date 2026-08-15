@@ -204,7 +204,10 @@ export function StickySectionNav({
     honouredSection.current = id;
     setUnresolvedSection('');
     const base = window.location.hash.split('?')[0];
-    window.history.replaceState(null, '', `${base}?section=${encodeURIComponent(id)}`);
+    // State preserved, not nulled — same contract as `dropSectionFromHash`
+    // above. `useHashRoute` keeps its route index here, and an entry without
+    // one is an entry Back/Forward cannot be rewound to.
+    window.history.replaceState(window.history.state, '', `${base}?section=${encodeURIComponent(id)}`);
     window.dispatchEvent(new CustomEvent('ecm:route-replaced', { detail: { hash: window.location.hash } }));
     const target = document.getElementById(id);
     const container = containerRef.current;
