@@ -5,7 +5,7 @@ import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
-import type { ChannelDefaults } from '../StreamsPane';
+import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import type { SourceLoadState } from '../sourceLoadState';
 import { aggregateWorkspaceSources, retryFailedSources, type WorkspaceSource } from '../workspaceLoadState';
@@ -222,7 +222,7 @@ export interface ChannelManagerTabProps {
     profileIds?: number[],
     pushDownOnConflict?: boolean,
     normalize?: boolean
-  ) => Promise<void>;
+  ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode - supports new group
   // creation). `pushDownOnConflict` moves whatever already occupies
   // `channelNumber` out of the way instead of creating a duplicate

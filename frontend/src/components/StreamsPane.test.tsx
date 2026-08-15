@@ -14,6 +14,7 @@ import { render, screen, within, fireEvent, waitFor } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
+import { NotificationProvider } from '../contexts/NotificationContext';
 import { server } from '../test/mocks/server';
 import { tabUntil } from '../test/utils/keyboardNav';
 import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup } from '../types';
@@ -56,6 +57,7 @@ const PROVIDERS: M3UAccount[] = [];
 
 function renderPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
   return render(
+    <NotificationProvider>
     <StreamsPane
       streams={STREAMS}
       providers={PROVIDERS}
@@ -70,6 +72,7 @@ function renderPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>>
       onGroupExpand={vi.fn()}
       {...overrides}
     />
+    </NotificationProvider>
   );
 }
 
@@ -150,6 +153,7 @@ describe('StreamsPane category headers', () => {
     // Clearing the search restores the default collapsed state -- the
     // auto-expand during search must not have written to localStorage.
     rerender(
+      <NotificationProvider>
       <StreamsPane
         streams={STREAMS}
         providers={PROVIDERS}
@@ -163,6 +167,7 @@ describe('StreamsPane category headers', () => {
         loading={false}
         onGroupExpand={vi.fn()}
       />
+      </NotificationProvider>
     );
     expect(screen.queryByText('CA | Documentary')).not.toBeInTheDocument();
   });
@@ -267,7 +272,11 @@ describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896
         />
       );
     }
-    render(<KeyboardGroupHarness />);
+    render(
+      <NotificationProvider>
+        <KeyboardGroupHarness />
+      </NotificationProvider>,
+    );
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
     const handle = screen.getByRole('button', {
       name: 'Drag stream group CA | Documentary to Channels pane to create channels',
@@ -376,6 +385,7 @@ describe('StreamsPane inventory count semantics', () => {
     expect(screen.getByLabelText('20 filtered streams')).toHaveTextContent('20');
 
     rerender(
+      <NotificationProvider>
       <StreamsPane
         streams={STREAMS}
         providers={PROVIDERS}
@@ -393,7 +403,8 @@ describe('StreamsPane inventory count semantics', () => {
         loading={false}
         selectedStreamGroups={[]}
         onSelectedStreamGroupsChange={vi.fn()}
-      />,
+      />
+      </NotificationProvider>,
     );
     expect(screen.getByLabelText('70 total streams')).toHaveTextContent('70');
   });
@@ -658,6 +669,7 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
         await screen.findByRole('heading', { name: /Create Channels from 1 Selected Stream/i })
       ).toBeInTheDocument();
     });
+
   });
 });
 

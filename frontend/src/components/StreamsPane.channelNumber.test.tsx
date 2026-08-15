@@ -12,6 +12,7 @@ import { useState, type ComponentProps } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StreamsPane } from './StreamsPane';
+import { NotificationProvider } from '../contexts/NotificationContext';
 import { CHANNEL_NUMBER_RULE_MESSAGE } from '../utils/channelNumber';
 import type { Stream, StreamGroupInfo, Channel, ChannelGroup } from '../types';
 
@@ -57,6 +58,7 @@ const TRIGGER_STREAM_IDS = [1];
 
 function renderBulkCreate(onBulkCreateFromGroup = vi.fn()) {
   render(
+    <NotificationProvider>
     <StreamsPane
       streams={STREAMS}
       providers={[]}
@@ -77,7 +79,8 @@ function renderBulkCreate(onBulkCreateFromGroup = vi.fn()) {
       onBulkCreateFromGroup={onBulkCreateFromGroup}
       onCreateChannel={vi.fn()}
       onExternalTriggerHandled={vi.fn()}
-    />,
+    />
+    </NotificationProvider>,
   );
   return { onBulkCreateFromGroup };
 }
@@ -123,7 +126,11 @@ function SeparateGroupHarness({
 }
 
 function renderSeparateGroupBulkCreate(onBulkCreateFromGroup = vi.fn()) {
-  render(<SeparateGroupHarness onBulkCreateFromGroup={onBulkCreateFromGroup} />);
+  render(
+    <NotificationProvider>
+      <SeparateGroupHarness onBulkCreateFromGroup={onBulkCreateFromGroup} />
+    </NotificationProvider>,
+  );
   return { onBulkCreateFromGroup };
 }
 

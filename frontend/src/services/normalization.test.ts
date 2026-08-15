@@ -9,6 +9,8 @@ import {
   getSettings,
   saveSettings,
   createChannel,
+  normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 } from './api';
 
 // Start/stop the mock server for these tests
@@ -209,6 +211,105 @@ describe('Normalization API', () => {
 
       // normalize should be undefined when not specified
       expect(requestBody!.normalize).toBeUndefined();
+    });
+  });
+
+  /**
+   * bead enhancedchannelmanager-e9e5o.
+   *
+   * Two different situations put an UNNORMALIZED name on a new channel:
+   * the operator turned the Create Channels dialog's "Normalization Rules"
+   * toggle off, and the backend normalization call failed. Before this bead
+   * the service collapsed both into the same value — an identity map — so
+   * neither the caller nor the operator could tell them apart. These tests
+   * pin the two outcomes as distinguishable at the service boundary.
+   */
+  describe('normalizeStreamNamesWithBackend', () => {
+    it('returns the backend mapping on success', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [
+              { original: 'US: CNN HD', normalized: 'CNN', changed: true },
+            ],
+          })
+        )
+      );
+
+      const result = await normalizeStreamNamesWithBackend(['US: CNN HD']);
+
+      expect(result.get('US: CNN HD')).toBe('CNN');
+    });
+
+    it('rejects when the backend call fails instead of silently returning the originals', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({ detail: 'boom' }, { status: 500 })
+        )
+      );
+
+      await expect(
+        normalizeStreamNamesWithBackend(['US: CNN HD'])
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('resolveCreateChannelNames', () => {
+    it('does not call the backend and keeps the raw provider names when normalization is off', async () => {
+      let called = false;
+      server.use(
+        http.post('/api/normalization/normalize', async () => {
+          called = true;
+          return HttpResponse.json({
+            results: [
+              { original: 'US: CNN HD', normalized: 'CNN', changed: true },
+            ],
+          });
+        })
+      );
+
+      const result = await resolveCreateChannelNames(['US: CNN HD'], false);
+
+      expect(called).toBe(false);
+      expect(result.names.get('US: CNN HD')).toBe('US: CNN HD');
+      expect(result.normalizationFailed).toBe(false);
+    });
+
+    it('returns the normalized names when normalization is on', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [
+              { original: 'US: CNN HD', normalized: 'CNN', changed: true },
+            ],
+          })
+        )
+      );
+
+      const result = await resolveCreateChannelNames(['US: CNN HD'], true);
+
+      expect(result.names.get('US: CNN HD')).toBe('CNN');
+      expect(result.normalizationFailed).toBe(false);
+    });
+
+    it('reports the failure while still yielding usable names when normalization was requested and broke', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({ detail: 'boom' }, { status: 500 })
+        )
+      );
+
+      const result = await resolveCreateChannelNames(['US: CNN HD'], true);
+
+      expect(result.normalizationFailed).toBe(true);
+      expect(result.names.get('US: CNN HD')).toBe('US: CNN HD');
+    });
+
+    it('reports no failure for an empty selection', async () => {
+      const result = await resolveCreateChannelNames([], true);
+
+      expect(result.names.size).toBe(0);
+      expect(result.normalizationFailed).toBe(false);
     });
   });
 });

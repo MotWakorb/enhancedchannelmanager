@@ -123,6 +123,7 @@ import {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 } from './streamNormalization';
 // Re-export stream normalization utilities for backward compatibility
 export type PrefixOrder = 'number-first' | 'country-first';
@@ -148,7 +149,9 @@ export {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 };
+export type { ResolvedCreateChannelNames } from './streamNormalization';
 
 const API_BASE = '/api';
 

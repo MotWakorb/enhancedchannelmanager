@@ -1997,8 +1997,7 @@ function App() {
             undefined,     // logoId
             undefined,     // logoUrl
             undefined,     // tvgId
-            undefined,     // tvcGuideStationId
-            false          // normalize
+            undefined      // tvcGuideStationId
           );
 
           // Track profile assignments (use default profiles for manual creation)
@@ -2135,17 +2134,22 @@ function App() {
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Normalize stream names using the backend normalization engine
-        // This applies all configured rules (country prefixes, network tags, etc.)
+        // Resolve the names these channels will be created with. This is the
+        // ONE place the dialog's "Normalization Rules" toggle is answered
+        // (bead enhancedchannelmanager-e9e5o): on, the backend engine applies
+        // all configured rules (country prefixes, network tags, ...); off, the
+        // operator gets the raw provider names. The names below are FINAL —
+        // nothing downstream may normalize them again.
         const streamNames = filteredStreams.map(s => s.name);
-        const normalizedNames = await api.normalizeStreamNamesWithBackend(streamNames);
+        const { names: normalizedNames, normalizationFailed } =
+          await api.resolveCreateChannelNames(streamNames, normalize ?? false);
 
         // Group streams by normalized base name (also stripping quality suffixes to merge variants)
         // The grouping key is the normalized name with quality suffixes stripped
         // The channel name will be the normalized name (without quality stripping)
         const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          // Get the backend-normalized name, fallback to original if not found
+          // Get the resolved name, fallback to original if not found
           const normalizedName = normalizedNames.get(stream.name) || stream.name;
           // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
           const groupingKey = api.stripQualitySuffixes(normalizedName);
@@ -2333,7 +2337,12 @@ function App() {
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
           // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
-          // Pass normalize flag to apply normalization rules during channel creation
+          // `channelName` is already the final name — resolveCreateChannelNames
+          // above answered the normalization toggle, and the number/country
+          // prefixes were applied on top of its answer. That is why no
+          // normalize flag travels with the staged operation: a backend-side
+          // pass would normalize an already-normalized name a second time
+          // (bead enhancedchannelmanager-e9e5o).
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
@@ -2342,8 +2351,7 @@ function App() {
             undefined, // logoId - will be resolved during commit
             logoUrl,
             tvgId,
-            tvcGuideStationId,
-            normalize
+            tvcGuideStationId
           );
 
           // Assign all streams in this group to the new channel
@@ -2389,6 +2397,10 @@ function App() {
           increment, // Use the same increment calculated for channel creation
         });
 
+        // The caller owns the operator-facing message: StreamsPane sits inside
+        // the notification provider, App renders it (bead
+        // enhancedchannelmanager-e9e5o).
+        return { normalizationFailed };
       } catch (err) {
         logger.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');

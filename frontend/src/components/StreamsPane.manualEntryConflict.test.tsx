@@ -25,6 +25,7 @@ import { useState } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StreamsPane } from './StreamsPane';
+import { NotificationProvider } from '../contexts/NotificationContext';
 import { planChannelNumberShift } from '../utils/channelNumberShift';
 import type { Channel, ChannelGroup, Stream, StreamGroupInfo } from '../types';
 
@@ -133,7 +134,11 @@ function ManualEntryHarness({
 
 function renderManualEntry() {
   const onCreateChannel = vi.fn().mockResolvedValue(undefined);
-  render(<ManualEntryHarness onCreateChannel={onCreateChannel} />);
+  render(
+    <NotificationProvider>
+      <ManualEntryHarness onCreateChannel={onCreateChannel} />
+    </NotificationProvider>,
+  );
   return { onCreateChannel };
 }
 

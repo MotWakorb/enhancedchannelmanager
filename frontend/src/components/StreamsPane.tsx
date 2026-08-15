@@ -18,6 +18,7 @@ import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { ShowMoreRows } from './ShowMoreRows';
 import { StreamDedupModal } from './StreamDedupModal';
 import { logger } from '../utils/logger';
+import { useNotifications } from '../contexts/NotificationContext';
 import { setStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import './StreamsPane.css';
 
@@ -25,6 +26,24 @@ interface StreamGroup {
   name: string;
   streams: Stream[];
   expanded: boolean;
+}
+
+/**
+ * What the bulk create reports back about itself
+ * (bead enhancedchannelmanager-e9e5o).
+ *
+ * The caller stages the channels; this pane owns the operator-facing message,
+ * because it is the surface the operator is looking at and it sits inside the
+ * notification provider.
+ */
+export interface BulkCreateFromGroupResult {
+  /**
+   * True only when the operator asked for normalization and the backend call
+   * failed, so the staged channels carry raw provider names nobody chose.
+   * An operator who turned the toggle OFF gets raw names too — and `false`
+   * here, because that is what they asked for.
+   */
+  normalizationFailed?: boolean;
 }
 
 // Incremental rendering for large groups (bd-bed9r): expanding a group
@@ -126,7 +145,7 @@ interface StreamsPaneProps {
     profileIds?: number[],
     pushDownOnConflict?: boolean,
     normalize?: boolean
-  ) => Promise<void>;
+  ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode). `pushDownOnConflict`
   // carries the operator's answer to the Channel Number Conflict dialog, which
   // manual entry now reaches: it moves whatever already occupies
@@ -217,6 +236,7 @@ export function StreamsPane({
   defaultNormalizeOnCreate = false,
   dedupReturningStreamIds,
 }: StreamsPaneProps) {
+  const notifications = useNotifications();
   const [keyboardDrag, setKeyboardDrag] = useState<
     | { kind: 'stream'; label: string; streamIds: number[] }
     | { kind: 'group'; label: string; groupNames: string[]; streamIds: number[] }
@@ -592,6 +612,10 @@ export function StreamsPane({
   const [bulkCreateNormalize, setBulkCreateNormalize] = useState(defaultNormalizeOnCreate);
   const [normalizedNamesPreview, setNormalizedNamesPreview] = useState<Map<string, string>>(new Map());
   const [normalizationPreviewLoading, setNormalizationPreviewLoading] = useState(false);
+  // True when the preview fetch failed. Without it a failed preview renders as
+  // "No names will change", which is indistinguishable from a genuinely
+  // no-op rule set (bead enhancedchannelmanager-e9e5o).
+  const [normalizationPreviewFailed, setNormalizationPreviewFailed] = useState(false);
   const [normalizationExpanded, setNormalizationExpanded] = useState(false);
 
   // Sync normalization default when settings change
@@ -1361,6 +1385,7 @@ export function StreamsPane({
   useEffect(() => {
     if (!bulkCreateNormalize || !bulkCreateModalOpen || bulkCreateStats.filteredStreams.length === 0) {
       setNormalizedNamesPreview(new Map());
+      setNormalizationPreviewFailed(false);
       return;
     }
 
@@ -1370,9 +1395,11 @@ export function StreamsPane({
         const streamNames = bulkCreateStats.filteredStreams.map(s => s.name);
         const normalizedMap = await normalizeStreamNamesWithBackend(streamNames);
         setNormalizedNamesPreview(normalizedMap);
+        setNormalizationPreviewFailed(false);
       } catch (error) {
         logger.error('Failed to fetch normalization preview:', error);
         setNormalizedNamesPreview(new Map());
+        setNormalizationPreviewFailed(true);
       } finally {
         setNormalizationPreviewLoading(false);
       }
@@ -1510,6 +1537,10 @@ export function StreamsPane({
     setBulkCreateLoading(true);
     setBulkCreateShowConflict(false);
 
+    // Aggregated across every call below, so a separate-groups run reports the
+    // failure once rather than per group (bead enhancedchannelmanager-e9e5o).
+    let normalizationFailed = false;
+
     try {
       // Handle multi-group mode with separate groups
       if (useSeparateMode) {
@@ -1527,7 +1558,7 @@ export function StreamsPane({
           const groupId = existingGroup?.id ?? null;
           const newGroupName = existingGroup ? undefined : customGroupName;
 
-          await onBulkCreateFromGroup(
+          const groupResult = await onBulkCreateFromGroup(
             group.streams,
             currentNumber,
             groupId,
@@ -1547,6 +1578,7 @@ export function StreamsPane({
             pushDown,
             bulkCreateNormalize
           );
+          if (groupResult?.normalizationFailed) normalizationFailed = true;
         }
       } else {
         // Single group or combined mode
@@ -1575,7 +1607,7 @@ export function StreamsPane({
           newGroupName = bulkCreateNewGroupName.trim();
         }
 
-        await onBulkCreateFromGroup(
+        const result = await onBulkCreateFromGroup(
           streamsToCreate,
           startingNum,
           groupId,
@@ -1594,6 +1626,18 @@ export function StreamsPane({
           bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
           pushDown,
           bulkCreateNormalize
+        );
+        if (result?.normalizationFailed) normalizationFailed = true;
+      }
+
+      // Normalization was asked for and the engine could not be reached, so the
+      // staged channels carry raw provider names. Say so: with the toggle now a
+      // real control, an unnormalized name otherwise reads as "the operator
+      // turned normalization off" (bead enhancedchannelmanager-e9e5o).
+      if (normalizationFailed) {
+        notifications.error(
+          'ECM could not reach the normalization engine, so the staged channels use the raw provider names. Undo the staged creations and retry if you need normalized names.',
+          'Normalization failed',
         );
       }
 
@@ -1643,6 +1687,7 @@ export function StreamsPane({
     onCreateChannel,
     channelDefaults?.customNetworkPrefixes,
     channelDefaults?.customNetworkSuffixes,
+    notifications,
   ]);
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts
@@ -2945,7 +2990,14 @@ export function StreamsPane({
                 )}
               </div>
 
-              {/* Normalization Rules - Collapsible Section */}
+              {/* Normalization Rules - Collapsible Section.
+                  Hidden in manual entry, which has no provider name to
+                  normalize: the operator types the channel name themselves,
+                  the preview can never populate, and the create path never
+                  consulted the toggle. Every Normalization Rules control ECM
+                  renders now genuinely decides whether names are normalized
+                  (bead enhancedchannelmanager-e9e5o). */}
+              {!isManualEntry && (
               <div className="form-group collapsible-section">
                 <div
                   className="collapsible-header"
@@ -2957,9 +3009,11 @@ export function StreamsPane({
                     {bulkCreateNormalize
                       ? normalizationPreviewLoading
                         ? 'Loading...'
-                        : normalizationChangeCount > 0
-                          ? `${normalizationChangeCount} name${normalizationChangeCount !== 1 ? 's' : ''} will change`
-                          : 'Enabled (no changes)'
+                        : normalizationPreviewFailed
+                          ? 'Preview unavailable'
+                          : normalizationChangeCount > 0
+                            ? `${normalizationChangeCount} name${normalizationChangeCount !== 1 ? 's' : ''} will change`
+                            : 'Enabled (no changes)'
                       : 'Disabled'}
                   </span>
                 </div>
@@ -2986,6 +3040,14 @@ export function StreamsPane({
                           <div className="normalization-loading">
                             <span className="material-icons spinning">sync</span>
                             <span>Loading preview...</span>
+                          </div>
+                        ) : normalizationPreviewFailed ? (
+                          <div className="normalization-preview-failed">
+                            <span className="material-icons">error_outline</span>
+                            <span>
+                              Could not reach the normalization engine, so there is no preview.
+                              Creating now would use the raw provider names.
+                            </span>
                           </div>
                         ) : normalizationChangeCount > 0 ? (
                           <>
@@ -3021,6 +3083,7 @@ export function StreamsPane({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
               {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (

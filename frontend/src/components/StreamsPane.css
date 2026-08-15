@@ -1798,3 +1798,22 @@ button.group-selection-checkbox {
   font-size: var(--icon-status);
   color: var(--success);
 }
+
+/* Preview could not be fetched. Deliberately NOT styled like
+   .normalization-no-changes: the two used to look identical because a failed
+   preview fell back to "no names will change"
+   (bead enhancedchannelmanager-e9e5o). */
+.normalization-preview-failed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--error);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
+}
+
+.normalization-preview-failed .material-icons {
+  font-size: var(--icon-status);
+  color: var(--error);
+}

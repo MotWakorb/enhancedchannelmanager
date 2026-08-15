@@ -484,31 +484,85 @@ import { normalizeTexts } from './api';
  * Normalize stream names using the backend normalization engine.
  * This uses the configurable rules defined in the Settings tab.
  *
+ * REJECTS on a backend failure. It used to swallow the error and return each
+ * original name mapped to itself, which made "normalization is off" and
+ * "normalization broke" the same value to every caller — and, once the
+ * Create Channels toggle became a real control (bead
+ * enhancedchannelmanager-e9e5o), the same thing on screen too. Callers that
+ * want to carry on with the raw names must now say so explicitly; the
+ * bulk-create path does that in {@link resolveCreateChannelNames}.
+ *
  * @param names Array of stream names to normalize
  * @returns Promise resolving to map of original name -> normalized name
+ * @throws whatever the `/api/normalization/normalize` call throws
  */
 export async function normalizeStreamNamesWithBackend(names: string[]): Promise<Map<string, string>> {
   if (names.length === 0) {
     return new Map();
   }
 
+  const response = await normalizeTexts(names);
+  const resultMap = new Map<string, string>();
+
+  for (const result of response.results) {
+    resultMap.set(result.original, result.normalized);
+  }
+
+  return resultMap;
+}
+
+/** Outcome of {@link resolveCreateChannelNames}. */
+export interface ResolvedCreateChannelNames {
+  /** Original stream name -> the name the channel should be created with. */
+  names: Map<string, string>;
+  /**
+   * True only when normalization was REQUESTED and the backend call failed,
+   * so `names` holds raw provider names the operator did not ask for. False
+   * when the operator turned normalization off — those raw names are the
+   * requested outcome, not a failure.
+   */
+  normalizationFailed: boolean;
+}
+
+/**
+ * Decide, in ONE place, what name a channel created from a stream gets
+ * (bead enhancedchannelmanager-e9e5o).
+ *
+ * The Create Channels dialog's "Normalization Rules" toggle used to drive
+ * only the preview: the caller normalized unconditionally and then passed the
+ * toggle along as a separate flag that was dropped before it reached the
+ * backend. Resolving the name here — before it is staged — is what makes the
+ * toggle real, and it is deliberately the ONLY place the question is asked.
+ * The name this returns is final; nothing downstream may normalize again, or
+ * an already-normalized name would be normalized twice.
+ *
+ * @param streamNames Raw provider names of the streams being created from.
+ * @param normalize The operator's "Normalization Rules" toggle.
+ */
+export async function resolveCreateChannelNames(
+  streamNames: string[],
+  normalize: boolean,
+): Promise<ResolvedCreateChannelNames> {
+  const identity = (): Map<string, string> => {
+    const map = new Map<string, string>();
+    for (const name of streamNames) {
+      map.set(name, name);
+    }
+    return map;
+  };
+
+  if (!normalize || streamNames.length === 0) {
+    return { names: identity(), normalizationFailed: false };
+  }
+
   try {
-    const response = await normalizeTexts(names);
-    const resultMap = new Map<string, string>();
-
-    for (const result of response.results) {
-      resultMap.set(result.original, result.normalized);
-    }
-
-    return resultMap;
+    return { names: await normalizeStreamNamesWithBackend(streamNames), normalizationFailed: false };
   } catch (error) {
+    // Carry on with the raw names rather than abandoning a create the
+    // operator already confirmed — but say so, so the resulting names are
+    // explainable. The caller surfaces `normalizationFailed` to the operator.
     logger.error('Backend normalization failed:', error);
-    // Return original names as fallback
-    const resultMap = new Map<string, string>();
-    for (const name of names) {
-      resultMap.set(name, name);
-    }
-    return resultMap;
+    return { names: identity(), normalizationFailed: true };
   }
 }
 
