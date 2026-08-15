@@ -48,7 +48,7 @@
  * The first version instead required an entire `shift`-wide CONTINUOUS
  * interval to be free. That conflates the lattice with the interval it spans.
  * Inserting one channel at 300 claims the single number 300; it does not claim
- * `[300.000, 300.999]`. With only `300.5` in the lineup, the interval test
+ * `[300.0, 300.9]`. With only `300.5` in the lineup, the interval test
  * moved it to `301.5` although the insertion slot 300 was free; with `300` and
  * `300.5`, it moved both although moving `300 -> 301` was already enough. The
  * two rules coincide for whole numbers on a whole-number step, which is why a
@@ -62,13 +62,13 @@
  * both move) because leaving it behind would put it below the channel that
  * was at 300, reversing two channels the operator never asked to reorder.
  *
- * All planning is done in integer ticks. The previous implementation compared
- * an unrounded running maximum against group minimums, so `0.7 + 0.1` compared
- * below `0.8` and invented a gap, while other combinations compared above an
- * exact boundary and invented a cascade. Float drift was a cause of both a
- * wrong stop and a wrong cascade, not merely untidy output. Ticks remove the
- * comparison entirely; the division back to channel numbers happens once, at
- * the end.
+ * All planning is done in integer ticks, one tick per tenth. The previous
+ * implementation compared an unrounded running maximum against group minimums,
+ * so `0.7 + 0.1` compared below `0.8` and invented a gap, while other
+ * combinations compared above an exact boundary and invented a cascade. Float
+ * drift was a cause of both a wrong stop and a wrong cascade, not merely untidy
+ * output. Ticks remove the comparison entirely; the division back to channel
+ * numbers happens once, at the end.
  *
  * Tests: `channelNumberShift.test.ts`.
  */
@@ -93,11 +93,12 @@ export interface ChannelNumberShiftPlan<T extends ShiftableChannel> {
   /**
    * Where the moved run ends, reported on the insertion lattice
    * (`startingNumber`, `+ step`, ...). Every shifted channel's CURRENT number
-   * is below it, and no channel at or above it moves. The walk itself stops at
-   * a finer resolution than the lattice, so this is that stop rounded up to
-   * the next number an operator would recognise: in the PO's 201-500 example
-   * it reads 501, not 500.001. It is not a claim that everything below it
-   * moves: a number off the lattice can sit below it and stay put.
+   * is below it, and no channel at or above it moves. The walk stops at tick
+   * resolution, which for a whole-number step is finer than the lattice, so
+   * this is that stop rounded up to the next number an operator would
+   * recognise: in the PO's 201-500 example it reads 501, not 500.1. It is not
+   * a claim that everything below it moves: a number off the lattice can sit
+   * below it and stay put.
    *
    * Reporting only. Nothing in ECM plans from this field; which channels move
    * is decided at tick resolution inside the planner.
@@ -112,7 +113,13 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
   startingNumber: number;
   /** How many numbers they claim. */
   count: number;
-  /** Spacing between claimed numbers: 1 for whole numbers, 0.1 for decimal inserts. Defaults to 1. */
+  /**
+   * Spacing between claimed numbers: 1 for whole numbers, 0.1 for decimal
+   * inserts. Defaults to 1. A tenth is the finest step there is, because it
+   * is the finest number Dispatcharr holds; anything finer rounds onto the
+   * tenths grid (see `TICK_SCALE`) and a step below 0.05 rounds to zero,
+   * which returns an empty plan. Both call sites pass 1 or 0.1.
+   */
   step?: number;
   /** Channels that vacate their number as part of the same operation (a cross-group move) and so do not occupy it. */
   excludeIds?: Iterable<number>;
@@ -120,35 +127,41 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
 
 /**
  * Comparisons are made on a fixed integer grid so that every one of them is
- * exact. Three decimal places covers ECM's 0.1 decimal step with room to
- * spare, and keeps two numbers that differ in the third decimal from
- * collapsing onto one slot.
+ * exact. The grid is TENTHS, because that is Dispatcharr's channel-number
+ * resolution: a channel number carries at most one decimal place, and ECM's
+ * decimal insert steps by exactly `0.1`. Grid resolution and data contract
+ * therefore coincide, and for any number the system can actually hold the
+ * number-to-tick mapping is one-to-one. No two distinct valid channel numbers
+ * share a tick, and no valid free number can be read as taken, so on
+ * in-contract data the tick comparison IS exact equality; the grid is not an
+ * approximation of it.
  *
- * Two numbers finer than that, `1.0001` and `1.0004`, do land on the same
- * tick, and nothing in ECM, the CSV importer (`backend/csv_handler.py`
- * accepts any positive float) or Dispatcharr's contract stops an import from
- * carrying them. Collapsing them for COMPARISON is deliberate: at three
- * decimals they are the same slot to an operator, and treating them as one is
- * conservative, since it can only make the planner move a channel it might
- * have left alone. Collapsing them on OUTPUT would not be, so it does not
- * happen; see the `toNumber` computation below. Defining and enforcing a
- * canonical channel-number domain is bead `enhancedchannelmanager-ic884.1`;
- * this module has to cope with whatever is already in the lineup.
+ * Nothing enforces that contract on the way in yet. `backend/csv_handler.py`
+ * accepts any positive float for `channel_number` with no precision check,
+ * there is no ECM column for `channel_number` at all, and the frontend parses
+ * with a bare `parseFloat`, so an import can still carry an out-of-contract
+ * value like `1.05`. Such a value collapses onto the nearest tenth for
+ * COMPARISON, and lands on the tenths grid on OUTPUT (see the `toNumber`
+ * computation below). Both are deliberate:
  *
- * Concretely: with only channel `1.0004` present, inserting one channel at
- * `1` moves it to `2.0004` even though the exact number `1` was free,
- * because `1.0004` rounds to the same tick as `1`. That is the collapse
- * working as designed, not a bug — an exact-equality comparison would avoid
- * the move but would also let `1.0001` and `1.0004` end up looking like two
- * channels sharing one slot to an operator after an insert that was supposed
- * to clear it. The behaviour, both the over-move and the boundary where it
- * stops applying, is pinned in `channelNumberShift.test.ts`'s "tick-collapse
- * comparison contract" tests, and the randomised property suite there
- * samples sub-tick jitter (values differing only past the third decimal) so
- * duplicate-freedom and minimality are checked against inputs like this, not
- * only against numbers that happen to land on the tick grid exactly.
+ *   - Collapsing for comparison is conservative. An out-of-contract number is
+ *     treated as occupying the slot an operator reads it as, so the planner
+ *     can only move a channel it might have left alone; it can never leave one
+ *     sitting on a number the insert was supposed to free.
+ *   - Snapping on output returns a number the contract can represent. Emitting
+ *     `2.05` instead would carry the out-of-contract value forward into a
+ *     value Dispatcharr cannot hold at that precision.
+ *
+ * This module does NOT enforce the invariant; it only has to cope with
+ * whatever is already in the lineup. Defining and enforcing the canonical
+ * channel-number domain is bead `enhancedchannelmanager-ic884.1` ("Define and
+ * enforce valid canonical channel-number values"), which now carries the PO's
+ * one-decimal constraint. The collapse is pinned by the "collapses an
+ * out-of-contract number onto the nearest tenth" test in
+ * `channelNumberShift.test.ts`; it is a pinned behaviour, not an enforced
+ * guarantee about the data.
  */
-const TICK_SCALE = 1000;
+const TICK_SCALE = 10;
 
 function toTicks(value: number): number {
   return Math.round(value * TICK_SCALE);
@@ -257,13 +270,11 @@ export function planChannelNumberShift<T extends ShiftableChannel>({
     shifts.push({
       channel,
       fromNumber,
-      // A number the tick grid represents exactly is re-emitted from ticks,
-      // which a float sum is not: `38.1 + 0.3` is `38.400000000000006`. A
-      // number finer than the grid is shifted by addition instead, because
-      // re-emitting it from its tick would round it onto the grid, and two
-      // such numbers that share a tick would then land on the SAME number,
-      // turning a pair that was merely close into a genuine duplicate.
-      toNumber: fromTicks(tick) === fromNumber ? fromTicks(tick + shiftTicks) : fromNumber + shiftAmount,
+      // Re-emitted from ticks, which a float sum is not: `38.1 + 0.3` is
+      // `38.400000000000006`. Every in-contract number is on the tenths grid,
+      // so this is exact for anything the system can hold; an out-of-contract
+      // number lands on the grid, which is the intended repair (see TICK_SCALE).
+      toNumber: fromTicks(tick + shiftTicks),
     });
   }
 
