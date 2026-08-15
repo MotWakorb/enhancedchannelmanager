@@ -1054,9 +1054,21 @@ export function StreamsPane({
   // the §D2 floor the operator sees StreamDedupModal and chooses Merge /
   // Create New / Cancel. For multi-stream selections we proceed unchanged
   // — bulk dedup is BD-J's surface, not this one.
+  //
+  // Every branch below now says what the duplicate check did (bead
+  // enhancedchannelmanager-ok8tj). Silence used to cover four different
+  // stories — a candidate was found, nothing was similar enough, the lookup
+  // broke, or the check never ran because more than one stream was selected —
+  // and the report that opened this bead is an operator who could not tell
+  // the last two apart from the second. The lookup is on the RAW stream name
+  // and runs before the Create Channels dialog exists, so the dialog's
+  // "Normalization Rules" toggle cannot change whether it happens.
   const handleCreateInGroup = useCallback((groupId: number) => {
     const streamIds = Array.from(selectedIds);
     if (streamIds.length === 0) return;
+
+    const groupName = channelGroups.find(g => g.id === groupId)?.name;
+    const groupLabel = groupName ? `"${groupName}"` : 'this group';
 
     if (streamIds.length === 1) {
       const cache = selectedStreamsCacheRef.current;
@@ -1068,17 +1080,41 @@ export function StreamsPane({
           { id: stream.id, name: stream.name },
           groupId,
           () => openBulkCreateModalForStreamIds(streamIds, groupId),
-        );
+        ).then((outcome) => {
+          if (outcome === 'no_candidate') {
+            notifications.info(
+              `No channel in ${groupLabel} was close enough to "${stream.name}" to offer a merge, so a new channel will be created. Lower the dedup confidence threshold in Settings if you expected a prompt.`,
+              'No duplicate found',
+            );
+          } else if (outcome === 'lookup_failed') {
+            notifications.warning(
+              `ECM could not check ${groupLabel} for a matching channel, so this stream is being created without a duplicate check.`,
+              'Duplicate check unavailable',
+            );
+          }
+        });
         return;
       }
+
+      // Defensive: the stream is neither on the current page nor in the
+      // selection cache, so the dedup hook would have no stream_name.
+      notifications.info(
+        'ECM could not read the selected stream\'s name, so no duplicate check ran for this creation.',
+        'Duplicate check skipped',
+      );
+      openBulkCreateModalForStreamIds(streamIds, groupId);
+      return;
     }
 
-    // Multi-stream selection or stream lookup miss — preserve the prior
-    // behavior. The miss case is defensive: if the stream is not in the
-    // current page and not in the cache, the dedup hook would have no
-    // stream_name to look up, so we let the bulk-create modal handle it.
+    // Multi-stream selection — preserve the prior behavior. Bulk dedup is a
+    // separate surface, so say the check did not run rather than leaving the
+    // absent merge prompt to be read as "nothing matched".
+    notifications.info(
+      `The duplicate check runs on a single-stream selection only, so it did not run for these ${streamIds.length} streams.`,
+      'Duplicate check skipped',
+    );
     openBulkCreateModalForStreamIds(streamIds, groupId);
-  }, [selectedIds, openBulkCreateModalForStreamIds, streams, addStreamDedup]);
+  }, [selectedIds, openBulkCreateModalForStreamIds, streams, addStreamDedup, channelGroups, notifications]);
 
   // Handler for "Create in new group…" from the selection strip's
   // "Create in…" menu (bead zwhw4 — migrated from the deleted right-click

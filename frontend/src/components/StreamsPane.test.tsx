@@ -670,6 +670,131 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
       ).toBeInTheDocument();
     });
 
+    /**
+     * bead enhancedchannelmanager-ok8tj. A doc tester created channels from
+     * two streams into a group already holding a similarly-named channel, saw
+     * no StreamDedupModal, and could not tell whether nothing had cleared the
+     * confidence threshold or the feature had not run. It had not run: the
+     * check is single-stream only. These tests pin every outcome as something
+     * the operator can read.
+     */
+    describe('outcome is legible to the operator (bead enhancedchannelmanager-ok8tj)', () => {
+      it('says the duplicate check did not run for a multi-stream selection', async () => {
+        const candidatesSpy = vi.fn();
+        server.use(
+          http.get('/api/channel-merges/candidates', () => {
+            candidatesSpy();
+            return HttpResponse.json({
+              stream_name: '', candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            });
+          })
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1', 'UK Sports Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('Duplicate check skipped')).toBeInTheDocument();
+        expect(
+          screen.getByText(/runs on a single-stream selection only/i)
+        ).toBeInTheDocument();
+        expect(candidatesSpy).not.toHaveBeenCalled();
+      });
+
+      it('says nothing matched when the single-stream lookup returns no candidate', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('No duplicate found')).toBeInTheDocument();
+        expect(screen.getByText(/close enough to "US News Stream 1"/i)).toBeInTheDocument();
+      });
+
+      it('says the check was unavailable when the candidates lookup fails', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({ detail: 'boom' }, { status: 500 })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('Duplicate check unavailable')).toBeInTheDocument();
+      });
+
+      it('says nothing at all when a candidate is found — the modal is the message', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [
+                { channel_id: '77', channel_name: 'US News', confidence: 1.0 },
+              ],
+              total: 1, page: 1, page_size: 1, total_pages: 1,
+            })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(
+          await screen.findByRole('heading', { name: /Stream matches an existing channel/i })
+        ).toBeInTheDocument();
+        expect(screen.queryByText('No duplicate found')).not.toBeInTheDocument();
+        expect(screen.queryByText('Duplicate check skipped')).not.toBeInTheDocument();
+      });
+
+      /**
+       * PIN, not a red-proven regression test: the lookup already sent the raw
+       * stream name and always did. It is pinned because bead e9e5o made the
+       * Create Channels dialog's normalization toggle change the SUBMITTED
+       * name, and an operator must not lose dedup protection by turning
+       * normalization off. The lookup runs before that dialog exists, on the
+       * provider name, so the toggle cannot reach it — this test fails if a
+       * later change routes a normalized name into the lookup.
+       */
+      it('PIN: looks the candidate up under the RAW provider name, independent of any normalization', async () => {
+        const candidatesSpy = vi.fn();
+        server.use(
+          http.get('/api/channel-merges/candidates', ({ request }) => {
+            candidatesSpy(new URL(request.url).searchParams.get('stream_name'));
+            return HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            });
+          })
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        await waitFor(() => expect(candidatesSpy).toHaveBeenCalledWith('US News Stream 1'));
+      });
+    });
   });
 });
 

@@ -54,6 +54,24 @@ export interface AddStreamRequestStream {
 /** Caller-supplied callback that runs the original "Add Stream" creation path. */
 export type OnProceedCreate = () => void | Promise<void>;
 
+/**
+ * What the dedup lookup actually did, reported back to the caller
+ * (bead enhancedchannelmanager-ok8tj).
+ *
+ * All three outcomes used to look identical from outside the hook: the
+ * create path ran and nothing was said. An operator who saw no merge prompt
+ * could not tell "nothing in the group was similar enough" from "the check
+ * never happened", which is exactly the report this bead was filed on. The
+ * caller decides what to show; the hook only says which case it was.
+ */
+export type AddStreamDedupOutcome =
+  /** A candidate cleared the threshold and the modal is open. */
+  | 'candidate'
+  /** The lookup ran and nothing in the target group cleared the threshold. */
+  | 'no_candidate'
+  /** The lookup itself failed; the create path ran without a dedup check. */
+  | 'lookup_failed';
+
 export interface UseAddStreamDedupReturn {
   modalState: AddStreamDedupModalState;
   /**
@@ -68,12 +86,14 @@ export interface UseAddStreamDedupReturn {
    *   candidate is returned, when the operator picks "Create New", or when
    *   the candidate lookup itself fails (so the operator action is never
    *   silently swallowed).
+   * @returns which of the three outcomes happened, so the caller can make it
+   *   visible to the operator (bead enhancedchannelmanager-ok8tj).
    */
   requestAddStream: (
     stream: AddStreamRequestStream,
     groupId: number | null,
     onProceed: OnProceedCreate,
-  ) => Promise<void>;
+  ) => Promise<AddStreamDedupOutcome>;
   /** Operator chose Merge: append the source stream to the candidate channel. */
   handleMerge: (channelId: string) => Promise<void>;
   /** Operator chose Create New: run the original create-channel path. */
@@ -106,7 +126,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
       stream: AddStreamRequestStream,
       groupId: number | null,
       onProceed: OnProceedCreate,
-    ): Promise<void> => {
+    ): Promise<AddStreamDedupOutcome> => {
       let response;
       try {
         response = await getChannelMergeCandidates(stream.name, groupId);
@@ -119,7 +139,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
           err,
         );
         await onProceed();
-        return;
+        return 'lookup_failed';
       }
 
       const candidate = response.candidates[0] ?? null;
@@ -127,7 +147,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         // No candidate cleared the §D2 floor — proceed with the original
         // create-channel path (auto-creation rules apply there as usual).
         await onProceed();
-        return;
+        return 'no_candidate';
       }
 
       setPendingStream(stream);
@@ -140,6 +160,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         streamName: stream.name,
         candidate,
       });
+      return 'candidate';
     },
     [],
   );
