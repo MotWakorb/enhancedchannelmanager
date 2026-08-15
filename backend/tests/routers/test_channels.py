@@ -1972,6 +1972,57 @@ class TestBulkCommitDeleteChannelGroup:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_channel_moved_out_of_the_group_since_the_read_is_left_alone(
+        self, async_client
+    ):
+        """The concurrent-move guard is in the SHARED helper, so it holds here too.
+
+        The mirror of
+        ``tests/routers/test_channel_groups.py::TestDeleteChannelGroupReparentsMembers``
+        ``::test_a_channel_moved_out_of_the_group_since_the_read_is_left_alone``.
+        The whole point of bead …-auocn is that these two delete paths must not
+        drift, and a guard that only one of them has would be exactly that drift.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [
+                {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+                {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+            ],
+            "count": 2,
+            "next": None,
+        }
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+        # Another operator moved PBS 1 to group 500 after the list read.
+        mock_client.get_channel.side_effect = lambda channel_id: {
+            11: {"id": 11, "name": "PBS 1", "channel_group_id": 500},
+            12: {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+        }[channel_id]
+
+        calls: list = []
+        mock_client.update_channel.side_effect = _channel_patch_double(calls)
+        mock_client.delete_channel_group.side_effect = (
+            lambda gid: calls.append(("delete", gid, None))
+        )
+
+        ops = [{"type": "deleteChannelGroup", "groupId": 377}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {"operations": ops})
+
+        assert response.status_code == 202
+        assert data["operationsFailed"] == 0
+        assert calls == [
+            ("patch", 12, {"channel_group_id": 42}),
+            ("delete", 377, None),
+        ]
+
+    @pytest.mark.asyncio
     async def test_the_target_group_is_resolved_by_name_not_by_id(self, async_client):
         """Nothing may depend on the baseline group's id being 1.
 

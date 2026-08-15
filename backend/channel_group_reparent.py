@@ -78,6 +78,46 @@ async def resolve_ungrouped_target_group(client) -> Optional[dict]:
     return None
 
 
+async def _still_belongs_to_group(client, channel_id: int, group_id: int, log_prefix: str) -> bool:
+    """Is this channel STILL in the group we are emptying? Re-read and say.
+
+    Only ever withholds a write on positive evidence that the channel has
+    moved. A re-read that fails, or that comes back in a shape without a
+    readable ``channel_group_id``, answers ``True`` — refusing the write on no
+    evidence would leave the group non-empty and turn a working delete into
+    Dispatcharr's "Cannot delete group with associated channels", which is a
+    worse outcome than the race this guards. Same ``isinstance(..., dict)``
+    shape discipline as :func:`resolve_ungrouped_target_group`.
+    """
+    try:
+        current = await client.get_channel(channel_id)
+    except Exception as exc:  # noqa: BLE001 — any failure means "no evidence"
+        logger.warning(
+            "%s Could not re-read channel %s before moving it out of group %s (%s); "
+            "moving it anyway",
+            log_prefix, channel_id, group_id, exc,
+        )
+        return True
+
+    if not isinstance(current, dict) or "channel_group_id" not in current:
+        logger.warning(
+            "%s Re-read of channel %s returned no channel_group_id; moving it anyway",
+            log_prefix, channel_id,
+        )
+        return True
+
+    live_group_id = current.get("channel_group_id")
+    if live_group_id == group_id:
+        return True
+
+    logger.warning(
+        "%s Channel %s left group %s before it could be moved (it is in group %s now); "
+        "leaving it where it is",
+        log_prefix, channel_id, group_id, live_group_id,
+    )
+    return False
+
+
 async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GROUPS]") -> int:
     """Move every channel out of ``group_id`` before it is deleted; return how many.
 
@@ -103,6 +143,27 @@ async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GRO
     skipping the delete — when the channels cannot be moved. A member that will
     not move must NOT be followed by a delete Dispatcharr is going to reject: the
     reason is the thing the operator needs.
+
+    KNOWN LIMITATION, not closed by anything below: the read is live relative to
+    the CALLER, but it is not atomic relative to these writes. Another operator
+    who moves a channel to a third group between our read and our write will have
+    that move replaced. Dispatcharr offers nothing to make the write conditional
+    — measured against the live 0.28.2 schema on 2026-08-15,
+    ``GET /api/schema/?format=json`` declares no ``If-Match``, no
+    ``If-Unmodified-Since``, no ``ETag`` and no ``412`` anywhere in the document,
+    ``PATCH /api/channels/channels/{id}/`` takes the path ``id`` and nothing
+    else, and the ``Channel`` serializer carries no version or modified-at field
+    to compare against even client-side. There is no compare-and-set to reach for.
+
+    What each write IS preceded by is a re-read (:func:`_still_belongs_to_group`),
+    which skips a channel that has already left. That is a CHECK, not atomicity:
+    a move landing between the re-read and the PATCH is still lost. Its value is
+    that it removes the LONG window — without it, a channel's exposure runs from
+    its row being read, through the remaining pages of the scan, the group
+    resolution, and every earlier PATCH in this loop, which grows with the size
+    of the group. With it, the exposure is one round trip. The cost is one extra
+    GET per member on a path that already issues one PATCH per member, and it
+    changes the failure from a silent overwrite into a logged skip.
     """
     member_ids: list[int] = []
     page = 1
@@ -141,6 +202,12 @@ async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GRO
         "%s Moving %s channel(s) from group %s to '%s' (id=%s) before deleting it",
         log_prefix, len(member_ids), group_id, target.get("name"), target["id"],
     )
+    moved = 0
     for channel_id in member_ids:
+        if not await _still_belongs_to_group(client, channel_id, group_id, log_prefix):
+            continue
         await client.update_channel(channel_id, {"channel_group_id": target["id"]})
-    return len(member_ids)
+        moved += 1
+    # What actually moved, not what was read — the count is reported to the
+    # operator as ``channels_moved``, and a skipped channel did not move.
+    return moved

@@ -483,6 +483,87 @@ class TestDeleteChannelGroupReparentsMembers:
         assert response.json()["channels_moved"] == 2
 
     @pytest.mark.asyncio
+    async def test_a_channel_moved_out_of_the_group_since_the_read_is_left_alone(
+        self, async_client, test_session
+    ):
+        """Another operator's move is not overwritten by ours.
+
+        The member list is read live, but the read is not atomic with respect to
+        the writes that follow it: the remaining pages, the group resolution and
+        every earlier PATCH all sit between a given channel's row being read and
+        that channel being written. Another operator who moves a channel to a
+        third group inside that span used to have their move silently replaced
+        by ``Default Group``.
+
+        Dispatcharr offers no conditional update to close this — the live 0.28.2
+        schema declares no ``If-Match``/``ETag``/``412`` anywhere, and its Channel
+        serializer carries no version or modified-at field — so the write is
+        preceded by a re-read and skipped when the channel has already left. That
+        is a check, not atomicity: a move landing between the re-read and the
+        PATCH is still lost. What it removes is the long window, which is the one
+        a real operator is exposed to.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+            {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+        ])
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+        # Between the list read and the write loop, someone moved PBS 1 to
+        # group 500. PBS 2 is where we left it.
+        mock_client.get_channel.side_effect = lambda channel_id: {
+            11: {"id": 11, "name": "PBS 1", "channel_group_id": 500},
+            12: {"id": 12, "name": "PBS 2", "channel_group_id": 377},
+        }[channel_id]
+        calls: list = []
+        mock_client.update_channel.side_effect = _channel_patch_double(calls)
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        # PBS 1 keeps the group the other operator gave it; only PBS 2 moves,
+        # and the reported count is what actually moved, not what was read.
+        assert calls == [("patch", 12, {"channel_group_id": 42})]
+        assert response.json()["channels_moved"] == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_re_read_still_moves_the_channel(
+        self, async_client, test_session
+    ):
+        """The guard is best-effort: when it cannot run, behaviour is unchanged.
+
+        A transient failure on the re-read tells us nothing about where the
+        channel is. Refusing the write on no evidence would leave the group
+        non-empty and turn a working delete into Dispatcharr's "Cannot delete
+        group with associated channels", so the guard only ever WITHHOLDS a
+        write on positive evidence that the channel has moved.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_all_m3u_group_settings.return_value = {}
+        mock_client.get_channels.return_value = _channel_page([
+            {"id": 11, "name": "PBS 1", "channel_group_id": 377},
+        ])
+        mock_client.get_channel_groups.return_value = [
+            {"id": 377, "name": "Drill17 PBS West"},
+            _DEFAULT_GROUP,
+        ]
+        mock_client.get_channel.side_effect = RuntimeError("upstream hiccup")
+        calls: list = []
+        mock_client.update_channel.side_effect = _channel_patch_double(calls)
+
+        with patch("routers.channel_groups.get_client", return_value=mock_client):
+            response = await async_client.delete("/api/channel-groups/377")
+
+        assert response.status_code == 200
+        assert calls == [("patch", 11, {"channel_group_id": 42})]
+        assert response.json()["channels_moved"] == 1
+
+    @pytest.mark.asyncio
     async def test_an_m3u_synced_group_is_hidden_without_touching_its_channels(
         self, async_client, test_session
     ):
