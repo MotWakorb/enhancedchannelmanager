@@ -5813,7 +5813,9 @@ class ActionExecutor:
 
         Ranges stay whole-number. Widening the range vocabulary is a separate
         question from honouring a fractional literal, and the schema rejects a
-        fractional range rather than letting it arrive here.
+        fractional range rather than letting it arrive here. A range that is
+        fully occupied spills above its own top and keeps walking from there,
+        so "exhausted" never means "hand back an occupied number".
 
         Args:
             spec: ``"auto"``, a literal number (``int``, ``float`` or the text
@@ -5858,9 +5860,21 @@ class ActionExecutor:
                     if channel_number_ticks(num) not in self._used_channel_number_ticks:
                         logger.debug("[AUTO-CREATE-EXEC] spec='%s' (range) -> %s", spec, num)
                         return num
-                # Range exhausted, use next after max
-                logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, max_num + 1)
-                return max_num + 1
+                # Range exhausted. Spilling past the top of the range is the
+                # intended behaviour — a full range assigns above itself rather
+                # than failing — but the spill has to keep searching, because
+                # ``max_num + 1`` can be occupied just as easily as anything
+                # inside the range. Returning it raw handed back a number this
+                # engine had already recorded as taken (a range of "1-2" against
+                # channels 1, 2, 3 answered 3), so two channels ended up sharing
+                # a number and nothing said so. Same walk the literal and
+                # ``auto`` branches use, by whole numbers because ranges are
+                # whole-number: never occupied, and it terminates.
+                num = self._next_free_number_from_ticks(
+                    channel_number_ticks(max_num + 1), CHANNEL_NUMBER_TICKS_PER_UNIT
+                )
+                logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, num)
+                return num
 
         # Fallback to auto. A template such as "{auto}" is documented rule
         # vocabulary and belongs here, so the fallback itself is not a defect.

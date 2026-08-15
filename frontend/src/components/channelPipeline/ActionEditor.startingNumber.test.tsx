@@ -355,4 +355,112 @@ describe('the RuleBuilder save seam refuses a rule whose start was refused', () 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0].actions[0].channel_number).toBeUndefined();
   });
+
+  /**
+   * Editing the action LIST must not discard a refusal (bead
+   * `enhancedchannelmanager-ay3iq`, found by external adversarial review).
+   *
+   * The registry is keyed per editor INSTANCE, so it is only as stable as the
+   * instances are. While the list was keyed by array index, deleting an earlier
+   * action re-pointed every surviving editor at a different action: React kept
+   * the index-0 instance and unmounted the LAST one, so the unmounted instance
+   * released the only refusal entry while the surviving instance kept its
+   * mount-derived text from the DELETED action. The red error vanished, Save
+   * went through, and the surviving Create Channel action carried no
+   * `channel_number` at all: automatic numbering, silently, which is the exact
+   * result the refusal exists to prevent.
+   *
+   * The same substitution corrupts a reorder, so both list edits are pinned
+   * here. There is no duplicate control in this editor.
+   */
+  const SKIP: Action = { type: 'skip' };
+
+  it('still refuses the save after the action above the refused one is deleted', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([SKIP, CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: 'Remove action' })[0]);
+
+    // The refused entry is still on screen, on the action that still exists.
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText('Starting channel number') as HTMLInputElement).value
+    ).toBe('1.5');
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  it('still refuses the save after the refused action is moved up the list', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([SKIP, CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+
+    // The Create Channel action is second, so its own card carries "Move up".
+    const moveUps = screen.getAllByRole('button', { name: 'Move up' });
+    await user.click(moveUps[moveUps.length - 1]);
+
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText('Starting channel number') as HTMLInputElement).value
+    ).toBe('1.5');
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(WHOLE_CHANNEL_NUMBER_RULE_MESSAGE)).toBeInTheDocument();
+  });
+
+  /**
+   * Blocking the save is only half of what the operator needs: the point of
+   * blocking is to put them on the entry they have to fix. `handleSave` routes
+   * back to the Logic step, but `setCurrentStep` only SCHEDULES that render, so
+   * focusing in the same tick aimed at an input still inside a `hidden`
+   * container, which the browser refuses to focus. Pressing Save from a later
+   * step left focus on the Save button with the red error off screen.
+   */
+  it('focuses the refused entry when Save is pressed from a later step', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <RuleBuilder
+        rule={ruleWith([CREATE_CHANNEL]) as ChannelPipelineRule}
+        onSave={onSave}
+        onCancel={() => {}}
+      />
+    );
+
+    const input = screen.getByLabelText('Starting channel number') as HTMLInputElement;
+    await retype(user, input, '1.5');
+
+    await user.click(screen.getByTestId('rule-step-3'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByLabelText('Starting channel number')).toHaveFocus()
+    );
+  });
 });

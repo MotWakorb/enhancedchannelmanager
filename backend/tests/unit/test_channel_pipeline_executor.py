@@ -5790,3 +5790,57 @@ class TestChannelNumberOccupancy:
         assigned = executor._get_next_channel_number(start)
         assert assigned == 281474976710656.6
         assert executor._is_channel_number_used(assigned) is False
+
+    # -- Ranges -----------------------------------------------------------
+
+    def test_a_range_still_answers_the_first_free_number_inside_it(self):
+        """Unchanged behaviour: a range is searched from its own bottom up."""
+        executor = self._executor([100, 101])
+        assigned = executor._get_next_channel_number("100-105")
+        assert assigned == 102
+        assert isinstance(assigned, int)
+
+    def test_an_exhausted_range_does_not_hand_back_an_occupied_number(self):
+        """The defect: ``"1-2"`` against 1, 2, 3 used to answer 3.
+
+        Spilling past the top of an exhausted range is the intended behaviour.
+        Spilling onto a number this engine recorded as taken at startup is the
+        silent-wrong-value class the epic exists to close: two channels end up
+        sharing a number, and nothing says so.
+        """
+        executor = self._executor([1, 2, 3])
+        assigned = executor._get_next_channel_number("1-2")
+        assert assigned == 4
+        assert executor._is_channel_number_used(assigned) is False
+
+    def test_an_exhausted_range_spills_past_a_whole_run_of_occupied_numbers(self):
+        """One step past the top is not enough when the spill target is a run."""
+        executor = self._executor([1, 2, 3, 4, 5])
+        assigned = executor._get_next_channel_number("1-2")
+        assert assigned == 6
+        assert executor._is_channel_number_used(assigned) is False
+
+    def test_an_exhausted_range_still_spills_past_the_top_when_the_top_is_free(self):
+        """The behaviour the spill exists for, unchanged: never fail, go above."""
+        executor = self._executor([10, 11, 12])
+        assigned = executor._get_next_channel_number("10-12")
+        assert assigned == 13
+        assert is_valid_channel_number(assigned)
+
+    def test_an_exhausted_range_answers_a_whole_number_not_a_tenth(self):
+        """Ranges stay whole-number, so the spill must not walk onto a tenth."""
+        executor = self._executor([1, 2, 3, 3.1, 3.2])
+        assigned = executor._get_next_channel_number("1-2")
+        assert assigned == 4
+        assert isinstance(assigned, int)
+
+    def test_consecutive_range_assignments_are_all_distinct(self):
+        """Marking one used must move the next answer along, inside and above."""
+        executor = self._executor([1])
+        assigned = []
+        for _ in range(4):
+            number = executor._get_next_channel_number("1-2")
+            executor._mark_channel_number_used(number)
+            assigned.append(number)
+        assert assigned == [2, 3, 4, 5]
+        assert all(is_valid_channel_number(number) for number in assigned)
