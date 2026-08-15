@@ -28,19 +28,39 @@
  * and where); it is not an input to the arithmetic. The rule is pure occupancy:
  *
  *   Given the occupied channel numbers of the working copy, an insertion point
- *   `s` and a count `n` of numbers to claim, walk upward from `s` and stop at
- *   the first run of free numbers wide enough to absorb the shift. Shift every
- *   channel occupying a number from `s` up to (not including) that stop point,
- *   each by `n` steps. Every occupant of a number moves, so pre-existing
- *   duplicates stay together instead of being split apart.
+ *   `s`, a count `n` and a spacing `step`, the new channels take the INSERTION
+ *   LATTICE points `s, s + step, ..., s + (n-1) * step`. Shift every channel
+ *   occupying a number from `s` up to (not including) a stop point, each by
+ *   `shift = n * step`, choosing the smallest stop that collides with nothing.
+ *   Every occupant of a number moves, so pre-existing duplicates stay together
+ *   instead of being split apart.
  *
- * Why that is sufficient: after the move, the claimed region runs from `s` to
- * `stop + shift`. New channels take the lattice points in `[s, s + shift)`,
- * moved channels land in `[s + shift, stop + shift)`, and every channel that
- * did not move sits at or above `stop`. So the plan is collision-free exactly
- * when nothing occupies `[stop, stop + shift)`, which is the stop condition
- * the walk enforces. Choosing the SMALLEST such `stop` is what makes the plan
- * minimal: no channel moves whose number is not required to move.
+ * What "collides with nothing" means, precisely, because this is where the
+ * first version of this planner was wrong. The plan CLAIMS exactly two sets of
+ * numbers: the lattice points the new channels take, and the number each
+ * shifted channel lands on (`t + shift` for every occupied `t` in `[s, stop)`).
+ * A stop is valid when no claimed number is still held by a channel that did
+ * not move: that is, by an occupant at or above `stop`. Nothing else can
+ * clash: a shifted channel lands at or above `s + shift`, which is above every
+ * lattice point the new channels take, and the shift is order-preserving and
+ * injective, so shifted channels cannot land on each other.
+ *
+ * The first version instead required an entire `shift`-wide CONTINUOUS
+ * interval to be free. That conflates the lattice with the interval it spans.
+ * Inserting one channel at 300 claims the single number 300; it does not claim
+ * `[300.000, 300.999]`. With only `300.5` in the lineup, the interval test
+ * moved it to `301.5` although the insertion slot 300 was free; with `300` and
+ * `300.5`, it moved both although moving `300 -> 301` was already enough. The
+ * two rules coincide for whole numbers on a whole-number step, which is why a
+ * suite of integer fixtures could not tell them apart.
+ *
+ * Choosing the SMALLEST valid stop is what makes the plan minimal. Note that
+ * minimality is over the family "shift the contiguous RUN `[s, stop)`", which
+ * is the rule the operator was given ("the shift propagates only as far as it
+ * must, and terminates at the first free number"). A channel sitting off the
+ * lattice INSIDE that run moves with it (`300.5` moves when `300` and `301`
+ * both move) because leaving it behind would put it below the channel that
+ * was at 300, reversing two channels the operator never asked to reorder.
  *
  * All planning is done in integer ticks. The previous implementation compared
  * an unrounded running maximum against group minimums, so `0.7 + 0.1` compared
@@ -71,11 +91,16 @@ export interface ChannelNumberShiftPlan<T extends ShiftableChannel> {
   /** How far each shifted channel moves: `count * step`, free of float drift. */
   shiftAmount: number;
   /**
-   * First number on the insertion lattice (`startingNumber`, `+ step`, ...)
-   * that the shift leaves alone. Every shifted channel sits below it. The walk
-   * itself stops at a finer resolution than the lattice, so this is that stop
-   * rounded up to the next number an operator would recognise: in the PO's
-   * 201-500 example it reads 501, not 500.001.
+   * Where the moved run ends, reported on the insertion lattice
+   * (`startingNumber`, `+ step`, ...). Every shifted channel's CURRENT number
+   * is below it, and no channel at or above it moves. The walk itself stops at
+   * a finer resolution than the lattice, so this is that stop rounded up to
+   * the next number an operator would recognise: in the PO's 201-500 example
+   * it reads 501, not 500.001. It is not a claim that everything below it
+   * moves: a number off the lattice can sit below it and stay put.
+   *
+   * Reporting only. Nothing in ECM plans from this field; which channels move
+   * is decided at tick resolution inside the planner.
    */
   stopNumber: number;
 }
@@ -94,10 +119,21 @@ export interface ChannelNumberShiftOptions<T extends ShiftableChannel> {
 }
 
 /**
- * Channel numbers are planned on a fixed integer lattice so that every
- * comparison is exact. Three decimal places covers ECM's 0.1 decimal step with
- * room to spare, and keeps two numbers that differ in the third decimal from
+ * Comparisons are made on a fixed integer grid so that every one of them is
+ * exact. Three decimal places covers ECM's 0.1 decimal step with room to
+ * spare, and keeps two numbers that differ in the third decimal from
  * collapsing onto one slot.
+ *
+ * Two numbers finer than that, `1.0001` and `1.0004`, do land on the same
+ * tick, and nothing in ECM, the CSV importer (`backend/csv_handler.py`
+ * accepts any positive float) or Dispatcharr's contract stops an import from
+ * carrying them. Collapsing them for COMPARISON is deliberate: at three
+ * decimals they are the same slot to an operator, and treating them as one is
+ * conservative, since it can only make the planner move a channel it might
+ * have left alone. Collapsing them on OUTPUT would not be, so it does not
+ * happen; see the `toNumber` computation below. Defining and enforcing a
+ * canonical channel-number domain is bead `enhancedchannelmanager-ic884.1`;
+ * this module has to cope with whatever is already in the lineup.
  */
 const TICK_SCALE = 1000;
 
@@ -107,6 +143,17 @@ function toTicks(value: number): number {
 
 function fromTicks(ticks: number): number {
   return Math.round(ticks) / TICK_SCALE;
+}
+
+/**
+ * The slot key for a channel number: two numbers share a key exactly when this
+ * module treats them as the same channel number. Exported so that a caller
+ * deciding whether a number is already taken uses the planner's own notion of
+ * "same number" rather than `===` on two floats that a decimal insert has
+ * already made non-identical (`20.7 + 0.1 !== 20.8`).
+ */
+export function channelNumberSlot(value: number): number {
+  return toTicks(value);
 }
 
 /**
@@ -147,6 +194,7 @@ export function planChannelNumberShift<T extends ShiftableChannel>({
   // Channels below the insertion point can never be affected, so they are
   // dropped here rather than carried through the walk.
   const occupants: Array<{ channel: T; tick: number }> = [];
+  const occupiedTicks = new Set<number>();
   for (const channel of channels) {
     const number = channel.channel_number;
     if (number === null || !Number.isFinite(number)) continue;
@@ -154,27 +202,55 @@ export function planChannelNumberShift<T extends ShiftableChannel>({
     const tick = toTicks(number);
     if (tick < startTick) continue;
     occupants.push({ channel, tick });
+    occupiedTicks.add(tick);
   }
   occupants.sort((a, b) => a.tick - b.tick);
 
-  // Walk upward from the insertion point and stop at the first run of
-  // `shiftTicks` free ticks. A free run can only begin at the insertion point
-  // itself or immediately after an occupied tick, so scanning the occupied
-  // ticks in order finds the smallest stop without probing every tick. The
-  // walk always terminates: past the highest occupied tick every run is free.
+  // Walk the occupied numbers upward from the insertion point, extending the
+  // moved run past any number the plan would otherwise land on. A number that
+  // is already inside the run (`tick < stopTick`) is moving, so it cannot be
+  // landed on; anything at or above the run stays put, so it can. It is in the
+  // way for exactly two reasons: a new channel takes it, or a channel already
+  // inside the run lands on it. Either way the run has to swallow it.
+  //
+  // One ascending pass is enough even though extending the run turns numbers
+  // the walk already passed into movers. If `u` was left behind and the run
+  // later grows past it, the run grew because of some number above `u + shift`
+  // (nothing below is examined again), so `u + shift` is inside the run too
+  // and moves by the same amount, so the two can never meet.
   let stopTick = startTick;
+  let previousTick = Number.NEGATIVE_INFINITY;
   for (const { tick } of occupants) {
-    if (tick >= stopTick + shiftTicks) break;
-    if (tick >= stopTick) stopTick = tick + 1;
+    if (tick === previousTick) continue; // Duplicates share one number.
+    previousTick = tick;
+    if (tick < stopTick) continue;
+
+    const offsetFromStart = tick - startTick;
+    const takenByNewChannel =
+      offsetFromStart % stepTicks === 0 && offsetFromStart / stepTicks < claimCount;
+    const landedOnByMovedChannel =
+      tick - shiftTicks >= startTick &&
+      tick - shiftTicks < stopTick &&
+      occupiedTicks.has(tick - shiftTicks);
+
+    if (takenByNewChannel || landedOnByMovedChannel) stopTick = tick + 1;
   }
 
+  const shiftAmount = fromTicks(shiftTicks);
   const shifts: Array<PlannedChannelShift<T>> = [];
   for (const { channel, tick } of occupants) {
     if (tick >= stopTick) break;
+    const fromNumber = channel.channel_number as number;
     shifts.push({
       channel,
-      fromNumber: channel.channel_number as number,
-      toNumber: fromTicks(tick + shiftTicks),
+      fromNumber,
+      // A number the tick grid represents exactly is re-emitted from ticks,
+      // which a float sum is not: `38.1 + 0.3` is `38.400000000000006`. A
+      // number finer than the grid is shifted by addition instead, because
+      // re-emitting it from its tick would round it onto the grid, and two
+      // such numbers that share a tick would then land on the SAME number,
+      // turning a pair that was merely close into a genuine duplicate.
+      toNumber: fromTicks(tick) === fromNumber ? fromTicks(tick + shiftTicks) : fromNumber + shiftAmount,
     });
   }
 
@@ -184,7 +260,7 @@ export function planChannelNumberShift<T extends ShiftableChannel>({
 
   return {
     shifts,
-    shiftAmount: fromTicks(shiftTicks),
+    shiftAmount,
     stopNumber: fromTicks(startTick + latticeSteps * stepTicks),
   };
 }

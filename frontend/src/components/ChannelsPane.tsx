@@ -26,7 +26,7 @@ import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAcc
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
-import { planChannelNumberShift } from '../utils/channelNumberShift';
+import { planChannelNumberShift, channelNumberSlot } from '../utils/channelNumberShift';
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
@@ -4464,36 +4464,6 @@ export function ChannelsPane({
       }
     }
 
-    // Handle source group renumbering (close gaps)
-    if (shouldRenumberSource && sourceGroupMinChannel !== null) {
-      // Get remaining channels in source group (excluding those being moved)
-      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
-      const remainingSourceChannels = localChannels
-        .filter((ch) => {
-          if (sourceGroupId === null) {
-            return ch.channel_group_id === null && !movedChannelIds.has(ch.id);
-          }
-          return ch.channel_group_id === sourceGroupId && !movedChannelIds.has(ch.id);
-        })
-        .filter(ch => ch.channel_number !== null)
-        .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
-
-      // Renumber sequentially starting from the original minimum
-      remainingSourceChannels.forEach((channel, index) => {
-        const newNumber = sourceGroupMinChannel + index;
-        if (newNumber !== channel.channel_number) {
-          let finalName = channel.name;
-          if (autoRenameChannelNumber) {
-            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
-            if (newName) {
-              finalName = newName;
-            }
-          }
-          sourceRenumberUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
-        }
-      });
-    }
-
     channelsToMove.forEach((channel, index) => {
       // Determine the final channel number
       let finalChannelNumber = channel.channel_number;
@@ -4513,6 +4483,78 @@ export function ChannelsPane({
 
       channelUpdates.push({ channel, finalChannelNumber, finalName });
     });
+
+    // Handle source group renumbering (close gaps).
+    //
+    // This runs LAST and against the numbers the two phases above have already
+    // claimed, because it used to run against `localChannels` alone and so
+    // could not see them. Moving channel 15 out to a custom number 11, with 10
+    // and 30 left behind, compacted 30 onto 11 as well: a duplicate produced
+    // two phases after a planner whose whole purpose is to prevent them
+    // (bead enhancedchannelmanager-i85dg, Codex pre-merge review).
+    //
+    // The push-down plan and this compaction are separate operations. One
+    // makes room at an insertion point, the other closes holes in a group, so
+    // they are not merged into one planner; `utils/channelNumberShift.ts`
+    // deliberately knows nothing about groups. They share the thing that made
+    // them collide instead: one occupancy set, which this phase reads and
+    // extends as it allocates, so the second phase cannot land on the first.
+    if (shouldRenumberSource && sourceGroupMinChannel !== null) {
+      const movedChannelIds = new Set(channelsToMove.map(ch => ch.id));
+      // A channel the push-down has already moved keeps that number. It was
+      // chosen to keep the insert collision-free, so this phase allocates
+      // around it rather than handing the same channel a second, different
+      // number, which also staged two conflicting updates for one channel.
+      const shiftedChannelIds = new Set(shiftUpdates.map(u => u.channel.id));
+
+      const remainingSourceChannels = localChannels
+        .filter((ch) => {
+          if (movedChannelIds.has(ch.id) || shiftedChannelIds.has(ch.id)) return false;
+          if (sourceGroupId === null) {
+            return ch.channel_group_id === null;
+          }
+          return ch.channel_group_id === sourceGroupId;
+        })
+        .filter(ch => ch.channel_number !== null)
+        .sort((a, b) => (a.channel_number ?? 0) - (b.channel_number ?? 0));
+
+      const renumberedIds = new Set(remainingSourceChannels.map(ch => ch.id));
+      const movedFinalNumbers = new Map(channelUpdates.map(u => [u.channel.id, u.finalChannelNumber]));
+      const shiftedFinalNumbers = new Map(shiftUpdates.map(u => [u.channel.id, u.finalChannelNumber]));
+
+      // Every number that will be occupied once the move and the push-down are
+      // applied, minus the ones this phase is about to reassign.
+      const claimedSlots = new Set<number>();
+      for (const ch of localChannels) {
+        if (renumberedIds.has(ch.id)) continue;
+        const finalNumber = movedFinalNumbers.has(ch.id)
+          ? movedFinalNumbers.get(ch.id) as number | null
+          : shiftedFinalNumbers.get(ch.id) ?? ch.channel_number;
+        if (finalNumber !== null) claimedSlots.add(channelNumberSlot(finalNumber));
+      }
+
+      // Compact from the source group's original minimum, skipping anything
+      // already claimed. Ascending order is preserved, so the gap close never
+      // reorders the channels it leaves behind.
+      let nextNumber = sourceGroupMinChannel;
+      for (const channel of remainingSourceChannels) {
+        while (claimedSlots.has(channelNumberSlot(nextNumber))) nextNumber += 1;
+        const newNumber = nextNumber;
+        claimedSlots.add(channelNumberSlot(newNumber));
+        nextNumber += 1;
+
+        if (newNumber !== channel.channel_number) {
+          let finalName = channel.name;
+          if (autoRenameChannelNumber) {
+            const newName = computeAutoRename(channel.name, channel.channel_number, newNumber);
+            if (newName) {
+              finalName = newName;
+            }
+          }
+          sourceRenumberUpdates.push({ channel, finalChannelNumber: newNumber, finalName });
+        }
+      }
+    }
 
     // Update local state immediately (moved, shifted, and source-renumbered channels)
     const updatedChannels = localChannels.map((ch) => {

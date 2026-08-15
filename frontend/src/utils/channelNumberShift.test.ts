@@ -9,6 +9,17 @@
  *
  * Numbering matches the brief so a future reader can map a regression back to
  * the behaviour it broke.
+ *
+ * A Codex pre-merge review then found that the first planner treated a whole
+ * `step`-wide continuous interval as claimed rather than the lattice points
+ * the new channels actually take, and that THIS FILE could not catch it: the
+ * reference implementation below encoded the same assumption, and the
+ * randomised generator emitted whole numbers only, for which the two readings
+ * are identical. Both were rewritten from the rule. The reference decides
+ * validity by applying a candidate plan and looking for collisions, and the
+ * generator now emits decimals, off-lattice numbers and mixed lineups. No
+ * expectation in the properties above changed, because none of their fixtures
+ * could distinguish the two rules; the gap was coverage, not wrong answers.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
@@ -60,36 +71,73 @@ function shiftedNumbers(plan: { shifts: Array<{ fromNumber: number }> }): number
   return plan.shifts.map((s) => s.fromNumber).sort((a, b) => a - b);
 }
 
+const SCALE = 1000;
+const tickOf = (n: number) => Math.round(n * SCALE);
+
 /**
- * Independent reference for the stop point, deliberately written the slow
- * obvious way: walk one tick at a time and return the start of the first run
- * of free ticks wide enough for the shift. Used to check the planner's
- * gap-scan shortcut, which is the part that could silently stop too early.
+ * Independent reference for the stop point, derived from the RULE rather than
+ * from the planner, and deliberately written the slow obvious way.
  *
- * This returns the raw stop, not the lattice-rounded `stopNumber` the planner
- * reports, so nothing about the planner's rounding leaks into the reference.
+ * The rule, restated so this reference does not inherit the planner's
+ * reasoning: `count` channels inserted at `startingNumber` with spacing `step`
+ * take the LATTICE POINTS `startingNumber + k * step` for `k < count`. They do
+ * not occupy the continuous interval spanned by those points, so a number
+ * sitting between two of them is not in the way. Shifting the run of channels
+ * occupying `[startingNumber, stop)` up by `count * step` is collision-free
+ * exactly when nothing the plan CLAIMS (those lattice points, plus the number
+ * each shifted channel lands on) is still held by a channel that stayed put.
+ *
+ * So: try each candidate stop in ascending order, build the claimed and
+ * stayed-put sets the long way, and return the first stop where they are
+ * disjoint. The plan depends on `stop` only through which occupied ticks fall
+ * below it, so `startingNumber` and one tick past each occupied number are the
+ * only values that can ever be the smallest valid stop.
+ *
+ * Returns the raw stop in ticks, not the lattice-rounded `stopNumber` the
+ * planner reports, so nothing about the planner's rounding leaks in here.
  */
+function bruteForceStopTick(
+  channels: TestChannel[],
+  startingNumber: number,
+  count: number,
+  step: number,
+): number {
+  const startTick = tickOf(startingNumber);
+  const stepTicks = tickOf(step);
+  const shiftTicks = stepTicks * count;
+
+  const occupied = new Set<number>();
+  for (const c of channels) {
+    if (c.channel_number !== null) occupied.add(tickOf(c.channel_number));
+  }
+  // Numbers below the insertion point are never claimed and never move.
+  const above = [...occupied].filter((t) => t >= startTick).sort((a, b) => a - b);
+
+  const newChannelTicks: number[] = [];
+  for (let k = 0; k < count; k++) newChannelTicks.push(startTick + k * stepTicks);
+
+  for (const stop of [startTick, ...above.map((t) => t + 1)]) {
+    const stayed = new Set(above.filter((t) => t >= stop));
+    const claimed = [...newChannelTicks, ...above.filter((t) => t < stop).map((t) => t + shiftTicks)];
+    if (claimed.every((c) => !stayed.has(c))) return stop;
+  }
+  throw new Error('brute force found no stop point, which cannot happen above the highest number');
+}
+
 function bruteForceStopNumber(
   channels: TestChannel[],
   startingNumber: number,
   count: number,
   step: number,
 ): number {
-  const scale = 1000;
-  const occupied = new Set<number>();
-  for (const c of channels) {
-    if (c.channel_number !== null) occupied.add(Math.round(c.channel_number * scale));
-  }
-  const startTick = Math.round(startingNumber * scale);
-  const shiftTicks = Math.round(step * scale) * count;
-  const maxTick = occupied.size > 0 ? Math.max(...occupied) : startTick;
+  return bruteForceStopTick(channels, startingNumber, count, step) / SCALE;
+}
 
-  let freeRun = 0;
-  for (let tick = startTick; tick <= maxTick + shiftTicks + 1; tick++) {
-    freeRun = occupied.has(tick) ? 0 : freeRun + 1;
-    if (freeRun >= shiftTicks) return (tick - shiftTicks + 1) / scale;
-  }
-  throw new Error('brute force found no stop point, which cannot happen above the highest number');
+/** The numbers the newly inserted channels will take, on the insertion lattice. */
+function claimedLatticeTicks(startingNumber: number, count: number, step: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < count; k++) out.push(tickOf(startingNumber) + k * tickOf(step));
+  return out;
 }
 
 /** Apply a plan and return every channel's resulting number. */
@@ -211,7 +259,7 @@ describe('planChannelNumberShift', () => {
   });
 
   // Property 5, sampled
-  it('never creates a duplicate over randomised lineups with holes, overlaps and duplicates', () => {
+  it('never creates a duplicate over randomised lineups with holes, overlaps, duplicates and decimals', () => {
     // Deterministic 32-bit LCG so a failure is reproducible from the seed.
     let seed = 0x5eed1e;
     const rand = (n: number) => {
@@ -219,35 +267,118 @@ describe('planChannelNumberShift', () => {
       return seed % n;
     };
 
-    for (let iteration = 0; iteration < 250; iteration++) {
+    // Real lineups are not integers-only: ECM's own decimal insert produces
+    // x.1 spacing, and imports carry whatever the provider had. A generator
+    // that emits only whole numbers cannot tell the insertion lattice apart
+    // from the continuous interval between its points, because for step 1 and
+    // integer data the two coincide, which is why the first version of this
+    // suite passed against a planner that confused them.
+    const OFFSETS = [0, 0, 0, 0.1, 0.2, 0.25, 0.5, 0.05, 0.75, 0.9];
+
+    for (let iteration = 0; iteration < 400; iteration++) {
       nextId = 1;
+      const step = rand(2) === 0 ? 1 : 0.1;
       const channels: TestChannel[] = [];
       const bucketCount = 1 + rand(4);
       for (let bucket = 0; bucket < bucketCount; bucket++) {
         const from = 1 + rand(120);
         const width = rand(40);
         for (let n = from; n <= from + width; n++) {
-          // Holes, and occasionally a second occupant on the same number.
+          // Holes, off-lattice numbers, and occasionally a second occupant on
+          // the same number.
           if (rand(5) === 0) continue;
-          channels.push(channel(n, bucket));
-          if (rand(11) === 0) channels.push(channel(n, bucket));
+          const value = n + OFFSETS[rand(OFFSETS.length)];
+          channels.push(channel(value, bucket));
+          if (rand(11) === 0) channels.push(channel(value, bucket));
         }
       }
       if (channels.length === 0) continue;
 
-      const startingNumber = 1 + rand(160);
+      // The insertion point is on the lattice by construction (it IS the
+      // lattice origin), but it is not always a whole number.
+      const startingNumber = 1 + rand(160) + OFFSETS[rand(OFFSETS.length)];
       const count = 1 + rand(6);
-      const plan = planChannelNumberShift({ channels, startingNumber, count });
+      const plan = planChannelNumberShift({ channels, startingNumber, count, step });
       const finals = applyPlan(channels, plan);
+      const seedNote = `iteration ${iteration}: start ${startingNumber} count ${count} step ${step}`;
 
       expectNoNewDuplicates(channels, finals);
 
-      // The claimed window must end up empty of everything that stayed behind.
+      // Every lattice point the new channels take must end up free.
+      const claimed = new Set(claimedLatticeTicks(startingNumber, count, step));
       for (const [, finalNumber] of finals) {
-        const claimsIt = finalNumber >= startingNumber && finalNumber < startingNumber + count;
-        expect(claimsIt).toBe(false);
+        expect(claimed.has(tickOf(finalNumber)), seedNote).toBe(false);
       }
+
+      // Exactly the channels the independent reference says must move, and no
+      // others. This is the minimality half: a planner that moves a channel it
+      // did not have to fails here even though the lineup stays duplicate-free.
+      const stopTick = bruteForceStopTick(channels, startingNumber, count, step);
+      const required = channels
+        .filter((c) => c.channel_number !== null)
+        .map((c) => c.channel_number as number)
+        .filter((n) => tickOf(n) >= tickOf(startingNumber) && tickOf(n) < stopTick)
+        .sort((a, b) => a - b);
+      expect(shiftedNumbers(plan), seedNote).toEqual(required);
     }
+  });
+
+  // Property 5, the insertion lattice specifically. Both cases come from the
+  // Codex pre-merge review of the first version of this planner, which walked
+  // continuous ticks and so treated a whole `step`-wide interval as claimed.
+  it('leaves an off-lattice neighbour alone when the insertion slot itself is free', () => {
+    // A whole-number insert at 300 takes the lattice point 300 and nothing
+    // else. 300.5 is not 300, so no channel has to move at all.
+    const channels = [channel(300.5, GROUP_A)];
+    const plan = planChannelNumberShift({ channels, startingNumber: 300, count: 1 });
+
+    expect(plan.shifts).toEqual([]);
+    expect(plan.stopNumber).toBe(300);
+    expect(bruteForceStopNumber(channels, 300, 1, 1)).toBe(300);
+  });
+
+  it('moves only the channel on the claimed slot, not the off-lattice one above it', () => {
+    // 300 is in the way and moves to 301, which is free. 300.5 is above the
+    // moved run and below the next lattice point, so it is not required to
+    // move and must not be moved.
+    const channels = [channel(300, GROUP_A), channel(300.5, GROUP_A)];
+    const plan = planChannelNumberShift({ channels, startingNumber: 300, count: 1 });
+
+    expect(plan.shifts.map((s) => [s.fromNumber, s.toNumber])).toEqual([[300, 301]]);
+    expect(plan.stopNumber).toBe(301);
+    expectNoNewDuplicates(channels, applyPlan(channels, plan));
+  });
+
+  it('carries an off-lattice channel that sits inside the moved run along with it', () => {
+    // Here 300.5 IS inside the run that has to move (300 goes to 301, which
+    // pushes 301 to 302), so it moves too and keeps its place in the order.
+    // Moving it is not optional: leaving it behind would put it below 301,
+    // which the channel formerly at 300 now occupies, reversing the two.
+    const channels = [channel(300, GROUP_A), channel(300.5, GROUP_A), channel(301, GROUP_A)];
+    const plan = planChannelNumberShift({ channels, startingNumber: 300, count: 1 });
+
+    expect(plan.shifts.map((s) => [s.fromNumber, s.toNumber])).toEqual([
+      [300, 301],
+      [300.5, 301.5],
+      [301, 302],
+    ]);
+    expect(plan.stopNumber).toBe(302);
+    expectNoNewDuplicates(channels, applyPlan(channels, plan));
+  });
+
+  it('does not merge two numbers that differ below tick resolution', () => {
+    // Nothing in ECM, the CSV importer or Dispatcharr constrains a channel
+    // number to three decimals, so an import can carry 1.0001 and 1.0004.
+    // Both round to the same tick, which is deliberate for COMPARISON, since
+    // they are the same slot to an operator, but the numbers the plan emits must
+    // stay as distinct as the numbers it was given (bead ic884.1 owns whether
+    // such values should be accepted in the first place).
+    const channels = [channel(1.0001, GROUP_A), channel(1.0004, GROUP_A)];
+    const plan = planChannelNumberShift({ channels, startingNumber: 1, count: 1 });
+
+    const finals = applyPlan(channels, plan);
+    expectNoNewDuplicates(channels, finals);
+    expect(new Set(plan.shifts.map((s) => s.toNumber)).size).toBe(plan.shifts.length);
   });
 
   // Property 6
