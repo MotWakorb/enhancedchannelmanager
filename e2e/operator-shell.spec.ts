@@ -3444,6 +3444,170 @@ test.describe('operator shell navigation behavior', () => {
     await expect(page.locator('.settings-nav-item[aria-current="page"]')).toHaveAttribute('data-settings-page', 'general')
   })
 
+  // Bead enhancedchannelmanager-6fi7p. Two App.tsx event handlers used to call
+  // setHash directly, so the two in-page actions that leave Channel Manager
+  // WITHOUT touching the rail walked straight past the Edit Mode exit guard and
+  // abandoned the staged work silently. Both entry points are exercised through
+  // the real control the operator clicks, not by dispatching the event, because
+  // the reachability of those controls from inside an edit session is the whole
+  // premise of the bead.
+  async function stageOneChannelRename(page: Page, name: string) {
+    await page.getByRole('button', { name: 'Edit Mode' }).click()
+    await page.getByText('Sports', { exact: true }).click()
+    const channelName = page.locator('.channels-pane .channel-item .channel-name').first()
+    await expect(channelName).toBeVisible()
+    await channelName.dblclick()
+    const nameInput = page.locator('.channel-name-input')
+    await nameInput.fill(name)
+    await nameInput.press('Enter')
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+  }
+
+  test('the empty-group cleanup link is guarded and keeps its destination', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await stageOneChannelRename(page, 'Renamed before the cleanup link')
+
+    // Renaming a channel also selects it, and the selection action bar is a
+    // portal that sits over the filter panel. Clear it so the click under test
+    // lands on the link rather than on the toolbar.
+    await page.getByRole('button', { name: 'Clear selection' }).click()
+    await expect(page.getByRole('toolbar', { name: 'Selection actions' })).toHaveCount(0)
+
+    // "Clean up empty groups…" lives in the Channel List Filters panel, whose
+    // toggle has no Edit Mode gating of any kind, so it is reachable with work
+    // staged.
+    await page.getByRole('button', { name: 'Channel List Filters' }).click()
+    await page.getByRole('button', { name: /Clean up empty groups/ }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+
+    // Cancelling keeps the route, the session and the staged rename.
+    await expect(page).toHaveURL(/#channel-manager$/)
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Done' })).toBeVisible()
+
+    // Asking again and discarding still lands on the destination the link
+    // promises: routing through the guard must defer the navigation, not drop
+    // it.
+    await page.getByRole('button', { name: 'Channel List Filters' }).click()
+    await page.getByRole('button', { name: /Clean up empty groups/ }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Discard' }).click()
+    await expect(page).toHaveURL(/#settings\/maintenance$/)
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / MAINTENANCE')
+  })
+
+  test('the notification task-editor link is guarded and cancelling drops its stored intent', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await page.route(/\/api\/notifications(?:\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notifications: [{
+          id: 3001,
+          type: 'warning',
+          title: 'Scheduled task needs attention',
+          message: 'The M3U refresh schedule has not run in three days.',
+          read: false,
+          source: 'tasks',
+          source_id: 'm3u_refresh',
+          action_label: 'Edit Schedule',
+          action_url: null,
+          metadata: { action_type: 'configure_task', task_id: 'm3u_refresh' },
+          created_at: '2026-07-27T12:00:00Z',
+          read_at: null,
+          expires_at: null,
+        }],
+        total: 1,
+        unread_count: 1,
+        page: 1,
+        page_size: 20,
+      }),
+    }))
+    await page.route(/\/api\/notifications\/3001(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ id: 3001, read: true }),
+    }))
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await stageOneChannelRename(page, 'Renamed before the task-editor link')
+
+    await page.getByRole('button', { name: /^Notifications/ }).click()
+    await page.getByRole('button', { name: 'Edit Schedule' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    await page.getByRole('button', { name: 'Keep Editing' }).click()
+    await expect(page).toHaveURL(/#channel-manager$/)
+    await expect(page.getByText('1 change', { exact: true })).toBeVisible()
+
+    // NotificationCenter writes its handoff to sessionStorage BEFORE dispatching
+    // the event, and SettingsTab reads that key in a mount-only effect. Deferring
+    // the navigation without clearing the key on cancel converts this bug into a
+    // worse one, so the key is pinned directly as well as through its effect.
+    expect(await page.evaluate(() => sessionStorage.getItem('ecm:open-task-editor'))).toBeNull()
+
+    // The operator-visible consequence: the NEXT Settings visit, to a different
+    // page entirely, must be the page they asked for.
+    await page.getByRole('button', { name: 'Undo staged change (Cmd+Z)' }).click()
+    await expect(page.getByText('1 change', { exact: true })).toHaveCount(0)
+    await page.getByRole('link', { name: 'Settings' }).click()
+    await expect(page).toHaveURL(/#settings$/)
+    await page.getByRole('link', { name: 'Channel Defaults' }).click()
+    await expect(page).toHaveURL(/#settings\/channel-defaults$/)
+    await expect(page.locator('#main-content h1')).toHaveText('SYSTEM / SETTINGS / CHANNEL DEFAULTS')
+  })
+
+  test('the notification task-editor link still reaches Scheduled Tasks when the operator leaves', async ({ page }) => {
+    await seedChannelWorkspace(page, true)
+    await page.route(/\/api\/notifications(?:\?|$)/, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notifications: [{
+          id: 3001,
+          type: 'warning',
+          title: 'Scheduled task needs attention',
+          message: 'The M3U refresh schedule has not run in three days.',
+          read: false,
+          source: 'tasks',
+          source_id: 'm3u_refresh',
+          action_label: 'Edit Schedule',
+          action_url: null,
+          metadata: { action_type: 'configure_task', task_id: 'm3u_refresh' },
+          created_at: '2026-07-27T12:00:00Z',
+          read_at: null,
+          expires_at: null,
+        }],
+        total: 1,
+        unread_count: 1,
+        page: 1,
+        page_size: 20,
+      }),
+    }))
+    await page.route(/\/api\/notifications\/3001(?:\/|\?|$)/, (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ id: 3001, read: true }),
+    }))
+    // An empty task list so ScheduledTasksSection's own consumer of the key
+    // never fires. Anything left in sessionStorage at the end is then evidence
+    // about App.tsx's cancel hook and nothing else.
+    await page.route(/\/api\/tasks(?:\?|$)/, (route) => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({ tasks: [] }),
+    }))
+    await openShellWithPipelineFixture(page)
+    await dismissFirstRunPromptIfPresent(page)
+    await stageOneChannelRename(page, 'Renamed before leaving for the task editor')
+
+    await page.getByRole('button', { name: /^Notifications/ }).click()
+    await page.getByRole('button', { name: 'Edit Schedule' }).click()
+    await expect(page.getByRole('heading', { name: 'Exit Edit Mode' })).toBeVisible()
+    // Discarding takes the deferred route, so the guard must not have cost the
+    // operator the destination OR the stored intent that opens the editor there.
+    await page.getByRole('button', { name: 'Discard', exact: true }).click()
+    await expect(page).toHaveURL(/#settings\/scheduled-tasks$/)
+    expect(await page.evaluate(() => sessionStorage.getItem('ecm:open-task-editor')))
+      .toBe(JSON.stringify({ taskId: 'm3u_refresh' }))
+  })
+
   test('the Channel Manager primary action belongs to its page header', async ({ appPage }) => {
     await dismissFirstRunPromptIfPresent(appPage)
     const action = appPage.locator('.route-page-header .enter-edit-mode-btn')

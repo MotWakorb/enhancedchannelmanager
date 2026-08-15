@@ -23,6 +23,11 @@ import { useEffect, useMemo, useState } from 'react';
 import * as api from '../../services/api';
 import type { ChannelPipelineRule } from '../../types/channelPipeline';
 import { logger } from '../../utils/logger';
+import {
+  OPEN_TASK_EDITOR_EVENT,
+  OPEN_TASK_EDITOR_STORAGE_KEY,
+  type OpenTaskEditorIntent,
+} from '../../utils/openTaskEditor';
 import './AutoCreationGateBanner.css';
 
 /** localStorage key — stores the rule-set fingerprint the dismissal applies to. */
@@ -89,13 +94,9 @@ export function AutoCreationGateBanner({ rules }: AutoCreationGateBannerProps) {
     // Same contract NotificationCenter/BackupScheduleBanner use: stash intent
     // + fire the event App.tsx listens for to switch to Settings > Scheduled
     // Tasks and open the editor for this task.
-    sessionStorage.setItem(
-      'ecm:open-task-editor',
-      JSON.stringify({ taskId: AUTO_CREATION_TASK_ID }),
-    );
-    window.dispatchEvent(
-      new CustomEvent('ecm:open-task-editor', { detail: { taskId: AUTO_CREATION_TASK_ID } }),
-    );
+    const intent: OpenTaskEditorIntent = { taskId: AUTO_CREATION_TASK_ID };
+    sessionStorage.setItem(OPEN_TASK_EDITOR_STORAGE_KEY, JSON.stringify(intent));
+    window.dispatchEvent(new CustomEvent(OPEN_TASK_EDITOR_EVENT, { detail: intent }));
   };
 
   const ruleCount = runOnRefreshRules.length;

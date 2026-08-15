@@ -4,6 +4,11 @@ import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
 import { getDateLocale } from '../utils/formatting';
+import {
+  OPEN_TASK_EDITOR_EVENT,
+  OPEN_TASK_EDITOR_STORAGE_KEY,
+  type OpenTaskEditorIntent,
+} from '../utils/openTaskEditor';
 import { decoratePendingMergesToast } from './pendingMergesToast';
 import {
   collapseTaskNotificationPairs,
@@ -431,9 +436,13 @@ export function NotificationCenter({
     // Close the notification panel
     setIsOpen(false);
     // Store intent in sessionStorage so components can pick it up when they mount
-    sessionStorage.setItem('ecm:open-task-editor', JSON.stringify({ taskId }));
-    // Dispatch event so App.tsx can switch to settings tab immediately
-    window.dispatchEvent(new CustomEvent('ecm:open-task-editor', { detail: { taskId } }));
+    const intent: OpenTaskEditorIntent = { taskId };
+    sessionStorage.setItem(OPEN_TASK_EDITOR_STORAGE_KEY, JSON.stringify(intent));
+    // Dispatch event so App.tsx can switch to settings tab. The route change may
+    // be DEFERRED by the Edit Mode exit guard, and App.tsx removes the stored
+    // intent above if the operator cancels it (bead
+    // enhancedchannelmanager-6fi7p).
+    window.dispatchEvent(new CustomEvent(OPEN_TASK_EDITOR_EVENT, { detail: intent }));
   };
 
   // Render progress bar for probe notifications

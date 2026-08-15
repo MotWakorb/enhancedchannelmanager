@@ -23,6 +23,7 @@ import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
+import { OPEN_TASK_EDITOR_EVENT, OPEN_TASK_EDITOR_STORAGE_KEY } from './utils/openTaskEditor';
 import { computeAutoRename } from './utils/channelRename';
 import { planChannelNumberShift, type PlannedChannelShift } from './utils/channelNumberShift';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
@@ -321,7 +322,16 @@ function App() {
   // enhancedchannelmanager-9kwzp.10); the navigation into it was the one place
   // still resolving unknown to hidden.
   const adminNavVisible = useAdminNavVisible();
-  const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
+  // `onCancel` undoes whatever the REQUESTER did before asking to navigate, and
+  // runs only if the operator keeps editing. A caller that leaves state behind
+  // for its destination to pick up (see the task-editor handoff below) needs a
+  // way to take it back when the guard refuses the navigation, or a deferred
+  // route becomes a stale intent (bead enhancedchannelmanager-6fi7p).
+  const [pendingRouteChange, setPendingRouteChange] = useState<{
+    tab: TabId;
+    settingsPage?: SettingsPage;
+    onCancel?: () => void;
+  } | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
     status: null as HTMLDivElement | null,
@@ -620,14 +630,26 @@ function App() {
     }
   }, [discard, clearHistory, pendingRouteChange, setHash]);
 
+  // The ONE cancel path. The three handlers above all navigate through to the
+  // pending route, so `onCancel` must not fire from any of them: this is the
+  // only place the requested navigation is genuinely abandoned.
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
+    pendingRouteChange?.onCancel?.();
     setPendingRouteChange(null);
     focusHeadingOnRouteChangeRef.current = false;
-  }, []);
+  }, [pendingRouteChange]);
 
   // Handle tab change - check for edit mode with pending changes
-  const handleRouteChange = useCallback((newTab: TabId, settingsPage?: SettingsPage) => {
+  const handleRouteChange = useCallback((
+    newTab: TabId,
+    settingsPage?: SettingsPage,
+    options?: { onCancel?: () => void },
+  ) => {
+    // A same-route request with no settings page never navigates and never
+    // defers, so it can neither strand an intent nor cancel one — it just moves
+    // focus. `onCancel` deliberately does not fire here: nothing was abandoned.
+    // Both event callers below pass a settings page, so they cannot reach it.
     if (newTab === activeTab && !settingsPage) {
       routeHeadingRef.current?.focus();
       return;
@@ -638,7 +660,7 @@ function App() {
     if (decision === 'confirm') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
-      setPendingRouteChange({ tab: newTab, settingsPage });
+      setPendingRouteChange({ tab: newTab, settingsPage, onCancel: options?.onCancel });
       return;
     }
 
@@ -655,25 +677,35 @@ function App() {
     handleRouteChange(newTab);
   }, [handleRouteChange]);
 
-  // Listen for task editor navigation events from NotificationCenter
+  // Listen for task editor navigation events from NotificationCenter.
+  //
+  // Routed through the guard, so an operator with staged channel edits is asked
+  // before the work is abandoned (bead enhancedchannelmanager-6fi7p). The guard
+  // can DEFER this navigation, and NotificationCenter has already written its
+  // sessionStorage handoff by the time the event arrives — so if the operator
+  // keeps editing, that entry has to go with the cancelled request. Left behind,
+  // it redirects their next visit to ANY Settings page to Scheduled Tasks,
+  // because SettingsTab reads the key in a mount-only effect.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'scheduled-tasks');
+      handleRouteChange('settings', 'scheduled-tasks', {
+        onCancel: () => sessionStorage.removeItem(OPEN_TASK_EDITOR_STORAGE_KEY),
+      });
     };
-    window.addEventListener('ecm:open-task-editor', handler);
-    return () => window.removeEventListener('ecm:open-task-editor', handler);
-  }, [setHash]);
+    window.addEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+    return () => window.removeEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+  }, [handleRouteChange]);
 
   // Listen for "Clean up empty groups" navigation from ChannelsPane's
   // Channel List Filters panel (bead 09x38.15 item 3) — links to Settings →
   // Maintenance → Orphaned Channel Groups rather than embedding the tool.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'maintenance');
+      handleRouteChange('settings', 'maintenance');
     };
     window.addEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
     return () => window.removeEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
-  }, [setHash]);
+  }, [handleRouteChange]);
 
   // Check settings and load initial data
   useEffect(() => {

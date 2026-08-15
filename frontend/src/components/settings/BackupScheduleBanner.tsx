@@ -21,6 +21,11 @@
 import { useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
+import {
+  OPEN_TASK_EDITOR_EVENT,
+  OPEN_TASK_EDITOR_STORAGE_KEY,
+  type OpenTaskEditorIntent,
+} from '../../utils/openTaskEditor';
 import './BackupScheduleBanner.css';
 
 /** localStorage flag — set once the operator dismisses the banner. */
@@ -71,13 +76,9 @@ export function BackupScheduleBanner() {
     // Same contract NotificationCenter uses: stash intent + fire the event
     // App.tsx listens for to switch to Settings > Scheduled Tasks and open the
     // editor for this task.
-    sessionStorage.setItem(
-      'ecm:open-task-editor',
-      JSON.stringify({ taskId: BACKUP_TASK_ID }),
-    );
-    window.dispatchEvent(
-      new CustomEvent('ecm:open-task-editor', { detail: { taskId: BACKUP_TASK_ID } }),
-    );
+    const intent: OpenTaskEditorIntent = { taskId: BACKUP_TASK_ID };
+    sessionStorage.setItem(OPEN_TASK_EDITOR_STORAGE_KEY, JSON.stringify(intent));
+    window.dispatchEvent(new CustomEvent(OPEN_TASK_EDITOR_EVENT, { detail: intent }));
   };
 
   return (
