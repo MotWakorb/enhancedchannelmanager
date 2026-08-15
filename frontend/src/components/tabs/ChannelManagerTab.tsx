@@ -223,8 +223,11 @@ export interface ChannelManagerTabProps {
     pushDownOnConflict?: boolean,
     normalize?: boolean
   ) => Promise<void>;
-  // Create a single channel (for manual entry mode - supports new group creation)
-  onCreateChannelManual?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => Promise<void>;
+  // Create a single channel (for manual entry mode - supports new group
+  // creation). `pushDownOnConflict` moves whatever already occupies
+  // `channelNumber` out of the way instead of creating a duplicate
+  // (bead enhancedchannelmanager-fprsq).
+  onCreateChannelManual?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean) => Promise<void>;
   // Default value for normalization toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers

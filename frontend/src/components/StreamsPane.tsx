@@ -32,6 +32,19 @@ interface StreamGroup {
 // renders the next chunk on scroll or click. Mirrors ChannelsPane.
 const GROUP_RENDER_CHUNK_SIZE = 100;
 
+/**
+ * How many channels a manual entry creates: exactly one
+ * (bead `enhancedchannelmanager-fprsq`).
+ *
+ * Named rather than inlined because the value it replaces,
+ * `bulkCreateStats.channelCount`, is ZERO in manual entry: that count is
+ * derived from the selected streams, and manual entry has none. Every place
+ * the conflict flow needs "how many numbers is this insert claiming" reads
+ * this in manual entry, so the dialog cannot offer to "shift existing channels
+ * by 0".
+ */
+const MANUAL_ENTRY_CHANNEL_COUNT = 1;
+
 // Channel defaults from settings
 export interface ChannelDefaults {
   includeChannelNumberInName: boolean;
@@ -114,8 +127,12 @@ interface StreamsPaneProps {
     pushDownOnConflict?: boolean,
     normalize?: boolean
   ) => Promise<void>;
-  // Create a single channel (for manual entry mode)
-  onCreateChannel?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => Promise<void>;
+  // Create a single channel (for manual entry mode). `pushDownOnConflict`
+  // carries the operator's answer to the Channel Number Conflict dialog, which
+  // manual entry now reaches: it moves whatever already occupies
+  // `channelNumber` rather than creating a duplicate
+  // (bead enhancedchannelmanager-fprsq).
+  onCreateChannel?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean) => Promise<void>;
   // Default value for normalize toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
@@ -1326,6 +1343,15 @@ export function StreamsPane({
     return { streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
   }, [streamsToCreate, bulkCreateTimezone]);
 
+  /**
+   * How many channel numbers the pending create claims, which is what the
+   * conflict dialog's copy and the push-down plan are both sized by
+   * (bead `enhancedchannelmanager-fprsq`).
+   */
+  const bulkCreateInsertCount = isManualEntry
+    ? MANUAL_ENTRY_CHANNEL_COUNT
+    : bulkCreateStats.channelCount;
+
   // Update normalize default when prop changes
   useEffect(() => {
     setBulkCreateNormalize(defaultNormalizeOnCreate);
@@ -1417,6 +1443,11 @@ export function StreamsPane({
       if (!manualEntryChannelName.trim()) return;
 
       setBulkCreateLoading(true);
+      // Manual entry can now arrive here FROM the conflict dialog, so it has to
+      // dismiss it the way the bulk path below does. Without this the dialog
+      // would still be sitting over the pane after the channel was created
+      // (bead enhancedchannelmanager-fprsq).
+      setBulkCreateShowConflict(false);
       try {
         // Determine group
         let groupId: number | null = null;
@@ -1433,19 +1464,33 @@ export function StreamsPane({
         // Parse channel number (optional). Manual entry reaches the API without
         // going through `handleBulkCreate`'s guard, so it applies the canonical
         // contract itself (bead enhancedchannelmanager-ic884.1).
-        const parsedNumber = parseChannelNumberInput(bulkCreateStartingNumber);
-        if (!parsedNumber.ok) {
-          alert(parsedNumber.message);
-          return;
+        //
+        // `startingNumberOverride` is the conflict dialog's "Insert at end"
+        // answer. It is already a resolved number and it is the number the
+        // operator chose, so it wins over the typed field, which this branch
+        // used to read unconditionally: picking "Insert at end" created the
+        // channel back at the conflicting number
+        // (bead enhancedchannelmanager-fprsq).
+        let channelNumber: number | undefined;
+        if (startingNumberOverride !== undefined) {
+          channelNumber = startingNumberOverride;
+        } else {
+          const parsedNumber = parseChannelNumberInput(bulkCreateStartingNumber);
+          if (!parsedNumber.ok) {
+            alert(parsedNumber.message);
+            return;
+          }
+          channelNumber = parsedNumber.value ?? undefined;
         }
-        const channelNumber = parsedNumber.value ?? undefined;
 
-        // Create the channel
+        // Create the channel. `pushDown` used to be accepted and dropped here,
+        // so "Push channels down" was a button that did nothing.
         await onCreateChannel(
           manualEntryChannelName.trim(),
           channelNumber,
           groupId ?? undefined,
-          newGroupName
+          newGroupName,
+          pushDown
         );
 
         closeBulkCreateModal();
@@ -1602,12 +1647,46 @@ export function StreamsPane({
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
-    // Handle manual entry mode separately
+    // Handle manual entry mode separately. It still creates one channel rather
+    // than a run, but it goes through the SAME conflict check as the bulk path:
+    // this branch used to return before ever reaching it, so inserting a
+    // channel onto an occupied number produced a duplicate silently and the
+    // "Channel Number Conflict" dialog was never shown at all
+    // (bead enhancedchannelmanager-fprsq).
     if (isManualEntry) {
       if (!manualEntryChannelName.trim()) {
         alert('Please enter a channel name');
         return;
       }
+
+      const parsedStart = parseChannelNumberInput(bulkCreateStartingNumber);
+      if (!parsedStart.ok) {
+        alert(parsedStart.message);
+        return;
+      }
+
+      // A manual channel with no number is unassigned, which is a normal state
+      // in Dispatcharr and cannot collide with anything.
+      if (parsedStart.value !== null && onCheckConflicts) {
+        // One channel claims exactly one number, so the check runs on the
+        // number as typed. The bulk path floors its start because it asks about
+        // an integer RANGE; there is no range here, and flooring would ask
+        // about 38 when the operator is inserting at 38.1.
+        const conflictCount = onCheckConflicts(parsedStart.value, MANUAL_ENTRY_CHANNEL_COUNT);
+        if (conflictCount > 0) {
+          const highestNumber = onGetHighestChannelNumber ? onGetHighestChannelNumber() : 0;
+          setBulkCreateEndOfSequenceNumber(highestNumber + 1);
+          setBulkCreateConflictCount(conflictCount);
+          setBulkCreatePushDownCount(
+            onCountPushDownShift
+              ? onCountPushDownShift(parsedStart.value, MANUAL_ENTRY_CHANNEL_COUNT)
+              : null
+          );
+          setBulkCreateShowConflict(true);
+          return;
+        }
+      }
+
       await doBulkCreate(false);
       return;
     }
@@ -2536,7 +2615,11 @@ export function StreamsPane({
                       <div className="field-error" role="alert">{startError}</div>
                     ) : null;
                   })()}
-                  {bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
+                  {/* Manual entry claims a single number, so there is no range
+                      to preview. It used to render one anyway, off a channel
+                      count of zero, so a typed 38.1 previewed "Channels 38.1 -
+                      38.0" (bead enhancedchannelmanager-fprsq). */}
+                  {!isManualEntry && bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
                       {(() => {
                         const startNum = parseFloat(bulkCreateStartingNumber);
@@ -3071,8 +3154,8 @@ export function StreamsPane({
                   <strong>Push channels down</strong>
                   <span>
                     {bulkCreatePushDownCount === null
-                      ? `Insert at ${bulkCreateStartingNumber} and shift existing channels by ${bulkCreateStats.channelCount}`
-                      : `Insert at ${bulkCreateStartingNumber}, renumbering ${bulkCreatePushDownCount} existing channel${bulkCreatePushDownCount === 1 ? '' : 's'} upward by ${bulkCreateStats.channelCount}`}
+                      ? `Insert at ${bulkCreateStartingNumber} and shift existing channels by ${bulkCreateInsertCount}`
+                      : `Insert at ${bulkCreateStartingNumber}, renumbering ${bulkCreatePushDownCount} existing channel${bulkCreatePushDownCount === 1 ? '' : 's'} upward by ${bulkCreateInsertCount}`}
                   </span>
                 </div>
               </button>
