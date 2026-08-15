@@ -7,6 +7,10 @@ import { getChannelGroups, getEPGSources, getStreamProfiles, getChannelProfiles 
 import type { EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
+import {
+  parseWholeChannelNumberInput,
+  wholeChannelNumberInputError,
+} from '../../utils/channelNumber';
 import './ActionEditor.css';
 
 interface ChannelGroup {
@@ -73,6 +77,38 @@ function parseStartingNumber(spec: string | number | undefined): number | null {
   const match = s.match(/^(\d+)-\d+$/);
   if (match) return parseInt(match[1], 10);
   return null;
+}
+
+/**
+ * The whole number a starting-number entry resolves to, or `null` when the
+ * entry is empty or carries something the action cannot honour (beads
+ * `enhancedchannelmanager-ay3iq`, `enhancedchannelmanager-j3pyx`).
+ *
+ * Both starting-number fields in this editor seed a SEQUENTIAL run of whole
+ * numbers, so both are held to the narrower renumber-start rule rather than to
+ * the canonical channel-number contract, which admits a tenth:
+ *
+ *   - Create Channel's "Starting from..." writes the entry into a `min-max`
+ *     range, and the executor reads a range as two WHOLE numbers.
+ *     `validate_channel_number_spec` in `backend/channel_pipeline_schema.py`
+ *     refuses a range naming a tenth for exactly that reason.
+ *   - Sort Group's "Starting Channel Number" renumbers a group by adding one at
+ *     a time from the start.
+ *
+ * Both used to read their field with `parseInt`, so a typed `1.5` became `1`
+ * with nothing saying the value had changed. For Create Channel that also meant
+ * the backend's fractional-range refusal could never be reached from the UI,
+ * because the truncation ran first and handed the backend a whole range.
+ *
+ * The entry is REFUSED rather than altered: an entry this returns `null` for
+ * stores no start at all, so the action can never carry a number the operator
+ * did not type. `wholeChannelNumberInputError` supplies the sentence shown
+ * under the field, and it is the same sentence every renumber-start field in
+ * the app uses.
+ */
+function startingNumberValue(text: string): number | null {
+  const parsed = parseWholeChannelNumberInput(text);
+  return parsed.ok ? parsed.value : null;
 }
 
 // Source fields available for set_variable regex modes
@@ -268,6 +304,23 @@ export function ActionEditor({
   const [nameTransformEnabled, setNameTransformEnabled] = useState(
     !!action.name_transform_pattern
   );
+  // The two starting-number entries live here as TEXT rather than being derived
+  // from the action, because the action cannot hold an entry the rule refuses:
+  // Create Channel stores a `min-max` spec and Sort Group stores a `number`, and
+  // a refused entry stores neither. Keeping the text means a refused `1.5` stays
+  // on screen next to its message instead of snapping back to a value nobody
+  // typed. Derived at mount like `channelNumberMode` above.
+  const [channelNumberStartText, setChannelNumberStartText] = useState(() => {
+    const start = parseStartingNumber(action.channel_number);
+    return start === null ? '' : String(start);
+  });
+  const [sortGroupStartText, setSortGroupStartText] = useState(() =>
+    action.starting_number === undefined || action.starting_number === null
+      ? ''
+      : String(action.starting_number)
+  );
+  const channelNumberStartError = wholeChannelNumberInputError(channelNumberStartText);
+  const sortGroupStartError = wholeChannelNumberInputError(sortGroupStartText);
 
   // Fetch channel groups for group selector
   useEffect(() => {
@@ -669,6 +722,7 @@ export function ActionEditor({
                   const { channel_number: _, ...rest } = action;
                   onChange(rest);
                 } else {
+                  setChannelNumberStartText('100');
                   onChange({ ...action, channel_number: '100-99999' });
                 }
               }}
@@ -685,10 +739,20 @@ export function ActionEditor({
                   id={`${id}-ch-start`}
                   type="number"
                   className="action-input"
-                  value={parseStartingNumber(action.channel_number) ?? 100}
+                  value={channelNumberStartText}
                   onChange={e => {
-                    const start = parseInt(e.target.value, 10);
-                    if (!isNaN(start) && start >= 1) {
+                    const text = e.target.value;
+                    setChannelNumberStartText(text);
+                    // Derive the spec from the entry instead of truncating it.
+                    // An entry the rule refuses stores NO spec, so the action
+                    // cannot end up carrying `1-99999` for a typed `1.5`, nor
+                    // the previous `100-99999`, which the operator has not asked
+                    // for either. The field goes red while that is the case.
+                    const start = startingNumberValue(text);
+                    if (start === null) {
+                      const { channel_number: _dropped, ...rest } = action;
+                      onChange(rest);
+                    } else {
                       onChange({ ...action, channel_number: `${start}-99999` });
                     }
                   }}
@@ -696,7 +760,14 @@ export function ActionEditor({
                   placeholder="Starting number"
                   disabled={readonly}
                   aria-label="Starting channel number"
+                  aria-invalid={!!channelNumberStartError}
+                  aria-describedby={channelNumberStartError ? `${id}-ch-start-error` : undefined}
                 />
+                {channelNumberStartError && (
+                  <span id={`${id}-ch-start-error`} className="field-error" role="alert">
+                    {channelNumberStartError}
+                  </span>
+                )}
                 <span className="field-hint">Channels will be numbered starting from this value</span>
               </div>
             )}
@@ -1342,16 +1413,28 @@ export function ActionEditor({
                 id={`${id}-sort-group-start`}
                 type="number"
                 className="action-input"
-                value={action.starting_number ?? ''}
-                onChange={e => onChange({
-                  ...action,
-                  starting_number: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                })}
+                value={sortGroupStartText}
+                onChange={e => {
+                  const text = e.target.value;
+                  setSortGroupStartText(text);
+                  // Same rule as Create Channel's start: honoured or refused,
+                  // never truncated. A refused entry leaves no starting number,
+                  // which is the documented blank behaviour (the group's current
+                  // lowest), not a number nobody typed.
+                  onChange({ ...action, starting_number: startingNumberValue(text) ?? undefined });
+                }}
                 min={1}
                 placeholder="Auto (group's current lowest, or 1)"
                 disabled={readonly}
                 aria-label="Starting channel number"
+                aria-invalid={!!sortGroupStartError}
+                aria-describedby={sortGroupStartError ? `${id}-sort-group-start-error` : undefined}
               />
+              {sortGroupStartError && (
+                <span id={`${id}-sort-group-start-error`} className="field-error" role="alert">
+                  {sortGroupStartError}
+                </span>
+              )}
               <span className="field-hint">
                 Leave blank to keep the group&apos;s current lowest channel number (or start at 1 if none is set).
               </span>
