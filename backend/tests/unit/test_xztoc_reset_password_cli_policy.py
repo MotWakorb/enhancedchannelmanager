@@ -27,8 +27,14 @@ against a real SQLite ``users`` table, not through the validator in isolation:
 Nothing here asserts on the printed error text. The CLI reads only the boolean
 half of ``PasswordValidationResult`` on purpose, so that no part of a password
 can reach a printed string by data flow; what it prints instead is the constant
-``PASSWORD_POLICY_HINT``, and that is asserted as a constant.
+``POLICY_HINT``, and that is asserted as a constant.
+
+That constant's NAME is pinned here too. It shipped as ``PASSWORD_POLICY_HINT``
+and drew CodeQL alerts 1864 and 1865 on PR #869, because
+``py/clear-text-logging-sensitive-data`` picks its sources by name rather than
+by value. See ``TestPolicyHintNameIsNotClassifiedSensitiveByCodeQL`` below.
 """
+import re
 import runpy
 from unittest.mock import patch
 
@@ -154,6 +160,23 @@ class TestCliMode:
         assert after != before
         assert verify_password(value, after)
 
+    @pytest.mark.parametrize("value", REJECTED_VALUES)
+    def test_a_refused_value_names_the_real_policy_on_stderr(self, cli_conn, capsys, value):
+        """The non-interactive path owes the operator the same guidance.
+
+        Before this bead the CLI printed only "does not meet requirements" and
+        left the operator to guess which rule they had broken, which is a bad
+        place to be when this tool is the documented way out of a lockout. The
+        interactive loop's equivalent is
+        ``TestInteractiveMode::test_a_refused_value_reprompts_and_names_the_real_policy``;
+        both are asserted so a future edit cannot drop the guidance from one
+        mode while the other keeps it.
+        """
+        with pytest.raises(SystemExit):
+            reset_password.cli_mode(cli_conn, CLI_USERNAME, value)
+
+        assert reset_password.POLICY_HINT in capsys.readouterr().err
+
     def test_an_unknown_username_is_still_refused(self, cli_conn):
         """Positive control on the fixture: the row lookup really runs."""
         with pytest.raises(SystemExit) as exit_info:
@@ -199,7 +222,7 @@ class TestInteractiveMode:
         )
 
         printed = capsys.readouterr().out
-        assert reset_password.PASSWORD_POLICY_HINT in printed
+        assert reset_password.POLICY_HINT in printed
         assert verify_password(
             NO_COMPOSITION_PHRASE, _stored_hash(cli_conn)
         )
@@ -235,13 +258,99 @@ class TestOnePolicyNotTwo:
 
     def test_the_printed_hint_states_the_real_policy(self):
         """The hint is operator-facing text and the only place the rules are named."""
-        hint = reset_password.PASSWORD_POLICY_HINT
+        hint = reset_password.POLICY_HINT
 
         assert "8 characters" in hint
         assert "common or breached" in hint
         assert "username" in hint
         # It must not re-introduce the dropped rules as advice.
         assert "no uppercase, lowercase or digit requirements" in hint.lower()
+
+
+class TestPolicyHintNameIsNotClassifiedSensitiveByCodeQL:
+    """``POLICY_HINT`` must keep a name CodeQL does not read as a password.
+
+    ``py/clear-text-logging-sensitive-data`` picks its taint SOURCES by name,
+    not by value. A variable whose name matches ``maybePassword()`` has
+    whatever it holds treated as a password, and every ``print`` of it is
+    reported as clear-text logging. That is what happened while this constant
+    was named ``PASSWORD_POLICY_HINT``: CodeQL alerts 1864 and 1865 (both HIGH,
+    both on PR #869) landed on ``reset_password.py`` lines 179 and 215, the only
+    two lines in the file that read it. The SARIF code flow for each ran
+    string literal -> constant -> ``print`` in three steps, sourced at the fixed
+    policy sentence itself. No typed password appeared in either path, and the
+    neighbouring ``print(f"{RED}Password does not meet requirements.{NC}")``
+    lines, whose TEXT also contains the word, were not reported: the name was
+    the finding.
+
+    Both regexes below are transcribed from ``maybePassword()`` and
+    ``notSensitiveRegexp()`` in
+    ``shared/concepts/codeql/concepts/internal/SensitiveDataHeuristics.qll`` in
+    github/codeql, verbatim. Unlike the secret-class transcription in
+    ``test_cloud_upload_security.py::TestRedactorNameIsNotClassifiedSensitiveByCodeQL``
+    no rewrite was needed: every lookbehind in these two is fixed-width, so
+    Python's ``re`` accepts them as written. ``re.fullmatch`` is used because
+    CodeQL's ``regexpMatch`` is whole-string.
+
+    This test is self-demonstrating: it asserts that the OLD name would still
+    be classified as a source, so a green result cannot come from a regex that
+    matches nothing.
+
+    Scope: the password class only, which is the class that fired. The other
+    four classes in the same file (secret, id, certificate, private) are not
+    transcribed here.
+    """
+
+    # (?is).*(pass(wd|word|code|.?phrase)(?!.*question)|(auth(entication|ori[sz]ation)?).?key|oauth|
+    #   api.?(key|tok)|([_-]|\b)mfa([_-]|\b)).*
+    _MAYBE_PASSWORD = (
+        r"(?is).*(pass(wd|word|code|.?phrase)(?!.*question)"
+        r"|(auth(entication|ori[sz]ation)?).?key|oauth"
+        r"|api.?(key|tok)|([_-]|\b)mfa([_-]|\b)).*"
+    )
+
+    _NOT_SENSITIVE = (
+        r"(?is).*([^\w$.-]|redact|censor|obfuscate|hash|md5|sha|random"
+        r"|(?<!unen)crypt|(?<!un)encode|certain|concert|secretar|wildcard"
+        r"|coauthor|account(ant|ab|ing|ed)|(?<!pro)file|path|([_-]|\b)url).*"
+    )
+
+    @classmethod
+    def _is_password_source(cls, name: str) -> bool:
+        """Mirror of ``nameIndicatesSensitiveData(name, password())``."""
+        return bool(re.fullmatch(cls._MAYBE_PASSWORD, name)) and not bool(
+            re.fullmatch(cls._NOT_SENSITIVE, name)
+        )
+
+    def test_the_old_name_would_be_a_taint_source(self):
+        """Known-bad input: without this, a broken regex would pass silently."""
+        assert self._is_password_source("PASSWORD_POLICY_HINT") is True
+
+    def test_the_shipping_hint_name_is_not_a_taint_source(self):
+        """Bound to the module, so renaming the constant back fails HERE too."""
+        assert "POLICY_HINT" in vars(reset_password)
+        assert self._is_password_source("POLICY_HINT") is False
+
+    def test_no_printable_module_constant_carries_a_sensitive_name(self):
+        """The whole surface, not just the one constant that got caught.
+
+        Every module-level string constant here is operator-facing text a
+        future edit could pass to ``print``. Any one of them named after a
+        password re-opens this alert class in a file that has now drawn it
+        twice, for two different reasons (alerts 556/557 in 2026-02 were a real
+        flow from the old local error strings; 1864/1865 were this name).
+        """
+        offenders = [
+            name
+            for name, value in vars(reset_password).items()
+            if name.isupper() and isinstance(value, str) and self._is_password_source(name)
+        ]
+
+        assert offenders == [], (
+            "%s hold operator-facing text under a name CodeQL classifies as a "
+            "password; printing them will be reported as clear-text logging"
+            % offenders
+        )
 
 
 def test_the_module_imports_without_the_app_directory():

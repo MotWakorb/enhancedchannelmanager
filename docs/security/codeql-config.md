@@ -190,6 +190,20 @@ data: `redact_secret_values` sits in the same call chain and also contains
 `secret`, but contains `redact` too, and it appeared in all six data-flow paths
 as an ordinary intermediate step and never as a source.
 
+**It is not only function names.** Any name the heuristic classifies makes the
+value bound to it taint, including a module-level constant holding a fixed
+string. PR #869 (bead `enhancedchannelmanager-xztoc`) drew two HIGH alerts
+(1864, 1865) on `backend/reset_password.py` for `print(PASSWORD_POLICY_HINT)`
+and its stderr twin, where `PASSWORD_POLICY_HINT` is a hard-coded sentence
+describing the password policy and contains no secret. `maybePassword()` matched
+the name, so the SARIF code flow ran string literal -> constant -> `print` in
+three steps and was sourced at the sentence itself. The tell was in the same
+file: the adjacent `print(f"{RED}Password does not meet requirements.{NC}")`
+lines, whose *text* also contains the word, were never reported, so the
+classification could only be coming from the name. Renaming the constant to
+`POLICY_HINT`, in a module whose entire subject is the password policy, closed
+both alerts without changing a character of what the operator reads.
+
 Two cautions:
 
 - **Only do this when the new name is more truthful, not less.** Renaming a
@@ -202,6 +216,10 @@ Two cautions:
   `backend/tests/test_cloud_upload_security.py` pins it with both regexes
   transcribed, including an assertion that the OLD name would still classify as
   a source so the test cannot pass vacuously.
+  `TestPolicyHintNameIsNotClassifiedSensitiveByCodeQL` in
+  `backend/tests/unit/test_xztoc_reset_password_cli_policy.py` is the same
+  pattern for the password class, and adds a sweep over every module-level
+  string constant so a differently-named future constant is caught too.
 
 **How to tell a name-caused alert from a real one.** Read the data-flow path,
 not the sink line. The alert JSON from the REST API omits code flows; fetch the
