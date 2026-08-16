@@ -298,6 +298,86 @@ describe('JournalTab', () => {
     });
   });
 
+  /**
+   * The backend records a before-state it could not read under a reserved key
+   * rather than defaulting it to `null`, because "it held null" and "I never
+   * saw it" are different facts (bead enhancedchannelmanager-kz089, commit
+   * 0cc5efdf). The wire key is correct; rendering it raw is not — an operator
+   * reading the Before block saw the literal string `__before_state_unknown__`
+   * with no way to know what it meant.
+   */
+  describe('an unreadable before-state (bd-kz089)', () => {
+    const expandFirstRow = async () => {
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+      fireEvent.keyDown(document.querySelector('.entry-row') as HTMLElement, { key: 'Enter' });
+    };
+
+    it('never shows the operator the reserved key', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name', 'tvg_id'], channel_number: 5 },
+        after_value: { name: 'ESPN', tvg_id: 'espn.us', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const details = document.querySelector('.entry-details') as HTMLElement;
+      expect(details.textContent).not.toContain('__before_state_unknown__');
+    });
+
+    it('names the fields it could not read, in words', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name', 'tvg_id'], channel_number: 5 },
+        after_value: { name: 'ESPN', tvg_id: 'espn.us', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const unknown = screen.getByTestId('journal-before-unknown');
+      expect(unknown.textContent).toContain('name');
+      expect(unknown.textContent).toContain('tvg_id');
+    });
+
+    it('still shows the before-values it DID read', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name'], channel_number: 5 },
+        after_value: { name: 'ESPN', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const before = document.querySelector('.detail-section pre') as HTMLElement;
+      expect(before.textContent).toContain('channel_number');
+      expect(before.textContent).toContain('5');
+    });
+
+    it('says so plainly when the whole before-state was unreadable', async () => {
+      // Nothing was read at all, so there is no JSON worth rendering and the
+      // note is the entire Before block.
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name'] },
+        after_value: { name: 'ESPN' },
+      })]));
+      await expandFirstRow();
+
+      expect(screen.getByTestId('journal-before-unknown')).toBeInTheDocument();
+      expect(document.querySelector('.entry-details')!.textContent)
+        .not.toContain('__before_state_unknown__');
+    });
+
+    it('leaves an ordinary before-state exactly as it was', async () => {
+      // The anti-vacuity control: the presentation only appears for the key.
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { name: 'Old' },
+        after_value: { name: 'New' },
+      })]));
+      await expandFirstRow();
+
+      expect(screen.queryByTestId('journal-before-unknown')).not.toBeInTheDocument();
+      expect((document.querySelector('.detail-section pre') as HTMLElement).textContent)
+        .toContain('Old');
+    });
+  });
+
   describe('entry-row keyboard accessibility (bd-6n14l)', () => {
     it('exposes the entry row as a focusable button with aria-expanded reflecting collapsed state', async () => {
       renderWithProviders(<JournalTab />);

@@ -95,6 +95,44 @@ function formatMutationSource(source: MutationSource | null | undefined): string
   }
 }
 
+/**
+ * The reserved key the backend writes into `before_value` for a field whose
+ * before-state it could not read at all — a channel created earlier in the
+ * same batch, a catalog read that failed, a payload field Dispatcharr does not
+ * return (bead enhancedchannelmanager-kz089, `BEFORE_STATE_UNKNOWN_KEY` in
+ * `backend/routers/channels.py`).
+ *
+ * The WIRE key is deliberately machine-shaped and stays as it is: it has to be
+ * unmistakably not a Dispatcharr field name. What was wrong is that this tab
+ * rendered `before_value` as raw JSON, so an operator opening a row read the
+ * literal string `__before_state_unknown__` with nothing to tell them it meant
+ * "ECM never saw these fields" rather than "these fields were called that".
+ */
+const BEFORE_STATE_UNKNOWN_KEY = '__before_state_unknown__';
+
+/**
+ * Split a `before_value` into the values ECM actually read and the names of
+ * the fields it could not.
+ *
+ * "It held null" and "I never saw it" are different facts, and the whole point
+ * of the reserved key is to keep them apart; presenting them apart is the same
+ * requirement one layer up.
+ */
+function splitBeforeValue(
+  beforeValue: Record<string, unknown>,
+): { known: Record<string, unknown>; unknownFields: string[] } {
+  const known: Record<string, unknown> = {};
+  let unknownFields: string[] = [];
+  for (const [key, value] of Object.entries(beforeValue)) {
+    if (key === BEFORE_STATE_UNKNOWN_KEY) {
+      unknownFields = Array.isArray(value) ? value.map(String) : [String(value)];
+      continue;
+    }
+    known[key] = value;
+  }
+  return { known, unknownFields };
+}
+
 export function JournalTab() {
   const notifications = useNotifications();
 
@@ -470,12 +508,29 @@ export function JournalTab() {
                 {expandedId === entry.id && (entry.before_value || entry.after_value) && (
                   <div className="entry-details">
                     <div className="details-grid">
-                      {entry.before_value && (
-                        <div className="detail-section">
-                          <h4>Before</h4>
-                          <pre>{JSON.stringify(entry.before_value, null, 2)}</pre>
-                        </div>
-                      )}
+                      {entry.before_value && (() => {
+                        const { known, unknownFields } = splitBeforeValue(
+                          entry.before_value as Record<string, unknown>,
+                        );
+                        return (
+                          <div className="detail-section">
+                            <h4>Before</h4>
+                            {Object.keys(known).length > 0 && (
+                              <pre>{JSON.stringify(known, null, 2)}</pre>
+                            )}
+                            {unknownFields.length > 0 && (
+                              <p
+                                className="detail-unknown-before"
+                                data-testid="journal-before-unknown"
+                              >
+                                ECM could not read the previous value of{' '}
+                                {unknownFields.join(', ')} — the change was recorded, but what
+                                these held beforehand is not known.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {entry.after_value && (
                         <div className="detail-section">
                           <h4>After</h4>
