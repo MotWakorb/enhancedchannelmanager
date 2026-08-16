@@ -1097,6 +1097,131 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # ─── Edit Mode numbering safeguards (epic enhancedchannelmanager-r93hq) ─
+  # Fails the PR if Edit Mode's channel-numbering safeguards stop holding in a
+  # real browser (beads `-vdxbx` and `-ic884.2`):
+  #   1. staging a number another channel already holds must warn before it is
+  #      accepted, and the operator's acknowledgement must reach the server;
+  #   2. an Apply whose FINAL state collides must be refused — with the
+  #      anti-vacuity control that makes the refusal mean something: the same
+  #      page first applies a clean plan and the bulk-commit request is watched
+  #      going out, and only then is the colliding plan staged and the absence
+  #      of a request asserted.
+  # The unit suites prove each layer on its own side of that seam
+  # (`channelNumberPlan.test.ts`, `ChannelsPane.duplicateNumber.test.tsx`,
+  # `useEditMode.numberingPreflight.test.ts`); none of them crosses it, and a
+  # guard that only runs when somebody remembers to run it is documentation.
+  #
+  # Same safety property as the immediacy guard above: the spec stubs every
+  # /api call itself and THROWS at collection time unless E2E_EXACT_BUILD and
+  # E2E_START_SERVER are both set, so it cannot be aimed at an operator's live
+  # ECM — which matters, because it drives Apply.
+  #
+  # NOT a required context; may skip at the job level (see fake-test-guard).
+  edit-mode-numbering-guards:
+    name: Edit Mode Numbering Guards
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Edit Mode numbering guards
+        run: npm run test:css-guard:edit-mode-numbering -- --reporter=github,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-mode-numbering-guards-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ─── Edit Mode session restore (epic enhancedchannelmanager-r93hq) ─────
+  # Fails the PR if a staged ledger stops surviving a dead session, or starts
+  # surviving one it must not:
+  #   1. a ledger this operator left behind is offered, accounted for, and
+  #      restored into Edit Mode;
+  #   2. a ledger stamped with a DIFFERENT operator is never offered and is
+  #      gone from the store by the time the app has painted. Two operators
+  #      sharing a workstation is the case that matters — handing A's staged
+  #      edits to B means B Applies them under B's credentials and the journal
+  #      attributes every change to B.
+  # The seam is a real `sessionStorage` surviving a real page load, read on the
+  # first render of the real `App`; `stagedLedgerStorage.test.ts`,
+  # `useEditMode.sessionSurvival.test.ts` and `EditModeRestoreDialog.test.tsx`
+  # each prove one side of it and none of them crosses it.
+  #
+  # Same safety property as the two guards above: the spec stubs every /api
+  # call itself and THROWS at collection time unless E2E_EXACT_BUILD and
+  # E2E_START_SERVER are both set, so it cannot be aimed at a live ECM.
+  #
+  # NOT a required context; may skip at the job level (see fake-test-guard).
+  edit-mode-session-restore:
+    name: Edit Mode Session Restore Guard
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Edit Mode session restore guard
+        run: npm run test:css-guard:edit-mode-session-restore -- --reporter=github,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-mode-session-restore-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
