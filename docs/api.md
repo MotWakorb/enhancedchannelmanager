@@ -94,19 +94,49 @@ Bulk variant of `/add-stream`: fetches the channel once, appends every requested
 | `type` | Fields | Notes |
 |-|-|-|
 | `createChannel` | `tempId` (int, negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`) | `tempId` is echoed back in `tempIdMap` → real id. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. |
-| `updateChannel` | `channelId` (int), `data` (dict) | `data` is forwarded as-is to Dispatcharr (e.g. `{"name": ..., "channel_group_id": ..., "tvg_id": ...}`). |
+| `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, opt) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). |
 | `deleteChannel` | `channelId` (int) | |
 | `addStreamToChannel` | `channelId` (int), `streamId` (int) | |
 | `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | |
 | `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. |
-| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | |
+| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. |
 | `createGroup` | `name` (str) | Group name → real id appears in `groupIdMap`. |
 | `deleteChannelGroup` | `groupId` (int) | |
 | `renameChannelGroup` | `groupId` (int), `newName` (str) | |
+| `setProfileMembership` | `profileId` (int, `> 0`), `channelId` (int), `enabled` (bool) | All three required, no defaults. `channelId` may be a **negative temp id** from a `createChannel` earlier in the same batch; one that never resolves becomes a per-operation error, not a `422`. A `profileId` that names no profile is an `invalid_operation` validation issue at **error** severity. |
+| `restoreChannelGroup` | `groupId` (int, `> 0`) | Un-hides a group ECM is hiding. A group that is **not** hidden is a **warning**, not an error: the executor treats it as a no-op and says so rather than failing. |
+| `clearStreamStats` | `streamIds` (list[int], `min_length=1`, all `> 0`, no duplicates) | Duplicates are refused at schema level with the custom error `type` `duplicate_stream_ids`. Stream ids that no longer exist are **warnings** only, deliberately, so orphaned probe stats stay clearable. |
 
 Request-level fields: `operations` (required list), `groupsToCreate` (opt list of `{name, ...}` dicts to create before processing), `validateOnly` (bool, default `false`: return `validationIssues` without applying), `continueOnError` (bool, default `false`), `consolidate` (bool, default `false`: collapse redundant ops first).
 
-Response: `{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed, partial, normalizationFailures }`. Pre-validation (missing referenced channels/streams) surfaces in `validationIssues` on a `200` response. Only schema-shape failures produce a `422`.
+`groupIdMap` maps a group **name** to a real id. It is not a list of groups this batch created: Phase 1 also puts groups it resolved by name into the same map.
+
+#### The response is a job handle, not the envelope
+
+`POST /api/channels/bulk-commit` has **two response shapes**, and the default is the one that does not carry the result:
+
+| Request | Status | Body |
+|-|-|-|
+| `validateOnly: true` | `200` | The full envelope, synchronously. Validation runs against ECM-cached lookups plus a single Dispatcharr page fetch, so it fits the request budget. |
+| `validateOnly: false` (**the default**) | `202` | `{ "job_id": str, "status": "running", "message": str }`. The work runs in a supervised background task. |
+
+Poll `GET /api/channels/bulk-commit/{job_id}` until the status is terminal:
+
+- `{ job_id, status: "running" }`
+- `{ job_id, status: "failed", error: str }`
+- `{ job_id, status: "completed", result: <envelope> }`
+
+**The job is evicted the moment a terminal read succeeds**, so a second poll for the same id returns `404`. Read the result once and keep it. Abandoned jobs are pruned after 30 minutes.
+
+This shape exists because an Apply All over a large lineup does not fit inside the 30-second gateway budget. It predates the numbering work and is easy to miss, because everything below describes the **envelope**, which on the default path arrives under `result`, not as the POST body.
+
+#### The envelope
+
+`{ success, operationsApplied, operationsFailed, errors, tempIdMap, groupIdMap, validationIssues, validationPassed, partial, normalizationFailures, journalRowsUnwritten, numberingRecovery }`.
+
+All twelve keys are initialised unconditionally, so **every one is always present** on every path that returns an envelope. Branch on values, never on key presence. Pre-validation (missing referenced channels or streams) surfaces in `validationIssues` on a success status. Only schema-shape failures produce a `422`.
+
+**Do not read `BulkCommitResponse` in `backend/routers/channels.py` as the schema.** That Pydantic model declares nine of these twelve fields and is not wired as a `response_model` anywhere, because the handler returns a plain dict. It looks authoritative and is not.
 
 **`normalizationFailures`** is the batch counterpart of the [`normalization` block on `POST /api/channels`](#post-apichannels-the-normalization-disclosure-block). It is **always present** and is an empty list on a clean batch, so check its length rather than probing for the key. It carries one entry per `createChannel` operation that set `normalize: true` and did not get it:
 
@@ -128,6 +158,162 @@ Those operations **applied**. They appear nowhere in `errors`, `operationsFailed
 Both fields are additive (bead `enhancedchannelmanager-e9e5o`): a caller that never sends `normalize` on any operation sees an empty list and an otherwise unchanged envelope.
 
 `normalize` on `createChannel` is still accepted, but **ECM's own Edit Mode no longer sends it.** The Create Channels dialog resolves the final name client-side before staging, precisely so no backend pass can normalize an already-normalized name a second time (the staged name carries the channel-number and country prefixes applied on top of the engine's output). In practice `normalizationFailures` therefore reports on third-party REST and MCP callers, not on the ECM UI.
+
+### `errors`: an entry may say the write already landed
+
+The `errors` array is **heterogeneous**. Most entries describe one submitted operation; four kinds describe something outside the operation list and carry only `operationId` and `error`:
+
+| `operationId` | Means |
+|-|-|
+| `create-group-{name}` | A Phase 1 group creation failed |
+| `bulk-commit-journal` | The journal flush failed. See [`journalRowsUnwritten`](#journalrowsunwritten-the-write-landed-the-audit-trail-did-not) |
+| `bulk-commit-numbering-recovery` | A half-applied numbering plan could not be fully put back. See [`numberingRecovery`](#numberingrecovery-what-to-do-by-hand) |
+| `bulk-commit` | The run crashed outside the per-operation handler |
+
+A per-operation entry carries `operationId` (`op-{index}-{type}`), `operationType`, `error`, and whichever of `channelId`, `channelName`, `streamId`, `streamName` and `entityName` apply. Note `channelId` here is the id **as submitted**, so for a staged create it is the negative temp id, not the resolved one.
+
+One field on that entry changes what a caller must do:
+
+```json
+{
+  "operationId": "op-4-createChannel",
+  "operationType": "createChannel",
+  "error": "journal row could not be written",
+  "applied": true
+}
+```
+
+**`applied: true` means the upstream write LANDED and only ECM's own bookkeeping afterwards failed. Do not retry this operation.** Retrying is what creates the entity a second time, which is the whole reason the flag exists.
+
+Such an operation **is counted in `operationsApplied` and is never counted in `operationsFailed`.** That is not a convention. `backend/bulk_commit_accounting.py` makes `OperationLedger` the only writer of both counters, and `bulk_commit_accounting_violations` audits the finished envelope by partitioning `errors` on exactly this flag: an entry without `applied: true` must correspond to something counted in `operationsFailed` or to a setup failure. A mismatch raises `BulkCommitAccountingError` rather than logging, so it cannot ship as a quiet log line.
+
+An `applied: true` entry does still force `success: false`, and sets `partial: true` whenever anything else in the batch applied cleanly.
+
+### `journalRowsUnwritten`: the write landed, the audit trail did not
+
+`journalRowsUnwritten` (int, always present, `0` normally) counts this run's journal rows that could not be written, including the batch summary row.
+
+**Non-zero means the mutations landed and their record did not, so the operations must not be retried.** It is accompanied by a `bulk-commit-journal` entry in `errors` and forces `success: false`, but it does **not** inflate `operationsFailed`, because nothing upstream failed.
+
+`PATCH /api/channels/{id}` returns the same field with the same meaning for its single row, merged into the returned channel object. One caveat specific to the PATCH: when Dispatcharr answers with something that is not an object, ECM has nowhere to put the field and **omits it**, logging instead of inventing a wrapper. A caller cannot distinguish that case from an older build by inspecting the body.
+
+### `numberingRecovery`: what to do by hand
+
+`numberingRecovery` (list, always present, empty normally) is populated only when a numbering plan was half-applied **and** at least one compensating write also failed. Each entry names one channel and the exact step that fixes it:
+
+```json
+{
+  "numberingRecovery": [
+    {
+      "channelId": 812,
+      "channelName": "BBC One",
+      "currentNumber": 204.0,
+      "targetNumber": 101.0,
+      "step": "Set \"BBC One\" (channel 812) back to channel number 101; this run left it on 204.",
+      "error": "502 Bad Gateway"
+    }
+  ]
+}
+```
+
+`currentNumber` and `targetNumber` are `float | null`. The `bulk-commit-numbering-recovery` entry in `errors` carries no per-channel detail of its own; it points here and says not to retry the batch until these are fixed.
+
+**Be clear about the guarantee.** ECM guarantees a compensating write is *attempted* for every numbering write that landed, replayed newest-first. It does **not** guarantee the compensating write succeeds, and it cannot: Dispatcharr 0.28.x offers no conditional update, so this is a best-effort repair rather than a rollback. Where the repair fails, `numberingRecovery` is the operator's instruction list. Two further limits worth knowing: compensation runs only when the plan is genuinely half-applied, and it does not run at all on the crash or cancellation paths, which sit outside the block that performs it.
+
+### Validation issues
+
+`validationIssues` entries always carry `type`, `severity` and `message`. Six `type` values exist:
+
+| `type` | Severity | Extra fields |
+|-|-|-|
+| `missing_channel` | error | `operationIndex`, `channelId`, sometimes `channelName` / `streamId` |
+| `missing_stream` | error, or **warning** from `clearStreamStats` | `operationIndex`, `streamId`, and on the error form `channelId` / `channelName` |
+| `invalid_operation` | error (unknown profile), or **warning** (`restoreChannelGroup` on a group that is not hidden) | `operationIndex`, and `channelId` on the error form |
+| `numbering_preflight_unavailable` | error | none |
+| `duplicate_channel_number` | error | `channelNumber`, `channelIds`, `operationIndex`, `operationIndexes`, `channelId` |
+| `invalid_channel_number` | error | same set as above |
+
+The frontend's own `ValidationIssue` union names only three of the six, so do not take it as the list.
+
+On the last two, `operationIndex` is simply the first element of `operationIndexes`, and `channelId` the first of `channelIds`. They are scalars kept for schema compatibility, not independent facts.
+
+**`numbering_preflight_unavailable` is the one to handle deliberately.** It is raised when the batch places a channel but ECM could not read the current lineup to check the resulting final state against. Under the **default `continueOnError: false` it refuses the commit**: nothing is executed, and because execution never started there is no journal trace at all. Under `continueOnError: true` the run proceeds unchecked, which is what ECM's own Edit Mode sends, because by that point the browser has already run its own preflight against a lineup it fetched itself.
+
+A batch that places nobody is never refused on this ground. "Places a channel" means a create carrying an explicit number, an `updateChannel` whose `data` contains `channel_number`, or a `bulkAssignChannelNumbers` with a non-empty `channelIds`.
+
+### `acknowledgedDuplicate`: consent to a specific collision
+
+Accepted on `updateChannel` and `createChannel` only. Both fields are **required**, with no defaults:
+
+```json
+{ "acknowledgedDuplicate": { "number": 102, "occupantChannelIds": [57] } }
+```
+
+It is ECM bookkeeping and is never forwarded to Dispatcharr. It tells the final-state preflight that this collision is deliberate, so it is not reported as a duplicate.
+
+Three properties that are easy to get wrong:
+
+- **The occupants are load-bearing, not decoration.** Consent is checked as a subset test against who actually stands on the number. Consenting to share `102` with `{57}` while `{57, 91}` really stand there is **refused**, because the operator was never shown 91. The reverse (consenting to `{57, 91}` while only `{57}` stands) is accepted.
+- **A caller meaning "nobody was there" must send `[]` explicitly.** There is no default, precisely so that omission cannot be read as consent.
+- **It replaces, it does not accumulate.** A later placement of the same channel that carries no acknowledgement clears the earlier one.
+
+### `expectedNumber`: refuse to overwrite a change you have not seen
+
+On `updateChannel` only. It is a **wrapper object, not a bare number**:
+
+```json
+{ "expectedNumber": { "number": 101 } }
+```
+
+The wrapper exists because `null` is a legitimate expectation, meaning "I believe this channel has no number", and a bare optional cannot tell that apart from "I am making no claim". **The object's presence is the claim; its `number` is the value.** Document and send it as `{number: number | null}`, never as `expectedNumber: 101`.
+
+Semantics:
+
+- Ignored entirely unless `data` carries `channel_number`. An operation that does not write the number cannot overwrite anyone's change to it.
+- Compared against the lineup snapshot taken **at the start of the run**, not the running working copy, so an earlier operation in the same request moving the channel is not reported as a conflict.
+- On mismatch the PATCH is **not sent**. The operation becomes an ordinary per-operation error entry and increments `operationsFailed`; it is not an HTTP `409` and carries no `applied` flag, because nothing landed.
+- If the lineup could not be read at all, the operation is refused rather than attempted.
+
+**It is a check, not a guarantee**, and that was measured rather than assumed: the live Dispatcharr 0.28.x schema contains no `If-Match`, `If-None-Match`, `If-Unmodified-Since`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version or modified-at field. A change landing between ECM's read and its PATCH is still lost. What it closes is the much wider window between a browser reading the lineup and the executor writing to it.
+
+Range assignments deliberately send no `expectedNumber`, so a `bulkAssignChannelNumbers` has no server-side concurrency guard. That is a decision, not an oversight; the browser-side check is the only one covering it.
+
+### Range assignment defaults
+
+`bulkAssignChannelNumbers` has three edge cases worth stating exactly:
+
+- **`startingNumber` omitted defaults to `1`** in consolidation, in the final-state materialiser, and in the executor's journal and compensation bookkeeping. There is one gap: on the `consolidate: false` path the executor forwards the raw `None` upstream and lets Dispatcharr choose, while journaling as though the start were `1`. ECM's own UI always sends `consolidate: true`, which rewrites the range with an explicit `startingNumber`, so this is not reachable from the interface. Send `startingNumber` explicitly if you are not consolidating.
+- **An explicit `0` is honoured.** Zero is in contract, and an earlier implementation that collapsed "omitted" and "explicitly zero" into one branch was fixed deliberately.
+- **An empty `channelIds` is a no-op only under `consolidate: true`.** With `consolidate: false` the executor still issues one upstream assign call with an empty id list and records the operation as applied. It changes no channel, but calling it a pure no-op overstates it.
+
+### What `consolidate` guarantees
+
+`consolidate` defaults to `false` and none of this runs unless it is set. ECM's own Edit Mode always sets it.
+
+Consolidation collapses redundant operations, and the property it exists to hold is:
+
+**Submitted last-write-wins on `channel_number` is preserved across operation kinds, and exactly one emitted operation writes any given channel's number.**
+
+Both halves matter. Ownership of a channel's number is decided by **submitted position** across every kind that places a channel (`createChannel`, `updateChannel`, `bulkAssignChannelNumbers`), not per-kind. When a later operation owns the number:
+
+- a superseded `createChannel` is **still emitted, without its number and without its `acknowledgedDuplicate`**, because every operation naming its temp id depends on it existing;
+- a superseded `updateChannel` loses `channel_number`, `acknowledgedDuplicate` and `expectedNumber`, and is dropped entirely if nothing else remains to PATCH;
+- a range assignment is filtered down to the channels it still owns.
+
+The one-writer property is enforced as a property rather than observed as an outcome: the unit suite asserts it over generated mixed-kind operation lists, with an anti-vacuity control confirming the same check **fails** on the unconsolidated list.
+
+One consequence that surprises people: a `createChannel` records itself as its own number's owner **even when it carries no number**. So a range assignment sent *before* the create it names places nothing.
+
+### The `data` field bag is unvalidated
+
+`updateChannel`'s `data`, and the body of `PATCH /api/channels/{id}`, are **free-form dicts forwarded to Dispatcharr wholesale.** There is no allowlist and no schema. Whatever keys you send are what Dispatcharr receives.
+
+Two key-level checks exist, and they are the only ones:
+
+- `channel_number`, on both paths, is held to ECM's canonical channel-number contract.
+- `channel_group_id`, on the **bulk path only**, is rejected if it is still a negative staging placeholder.
+
+This is a documented residual rather than an unexamined default, tracked as open bead `enhancedchannelmanager-t683u`. The reasoning for leaving it open is recorded there: an allowlist guessed too narrow would silently refuse an Apply All that used to work. The mitigating change already made is that the journal's change describer is now total over the payload, so the surface is auditable even though it is unconstrained.
 
 ## Channel Groups
 

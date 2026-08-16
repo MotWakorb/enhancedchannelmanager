@@ -413,10 +413,12 @@ User interaction
             ├─ api.bulkCommit()              → POST /api/channels/bulk-commit
             ├─ api.bulkMergeChannels()       → POST /api/channels/bulk-merge
             └─ api.bulkAssignChannelNumbers() → POST /api/channels/assign-numbers
-                  └─ backend atomically applies N operations
+                  └─ backend applies N operations, one at a time
 ```
 
-Why: the channel list spans 27k+ streams. Per-change network calls would be unusably slow and would prevent the preview-and-commit UX entirely. Staging enables undo/redo, preview diffs, pre-commit validation, and rollback on bulk failure.
+Why: the channel list spans 27k+ streams. Per-change network calls would be unusably slow and would prevent the preview-and-commit UX entirely. Staging enables undo/redo, preview diffs, pre-commit validation, and a readable account of what landed when a bulk run goes wrong.
+
+**The commit is not atomic, and nothing downstream should assume it is.** Dispatcharr exposes no transaction and no conditional update, so a bulk commit is N independent writes. Everything below about accounting, numbering order and compensation exists because that is the substrate. `POST /api/channels/bulk-commit` is also not one request per session: an Apply All issues one request for the creates and then one per 200 further operations, correlated by a shared `X-ECM-Batch-Id`.
 
 **Lazy per-group stream loading** is a related optimization: the 27k streams are never loaded at once. Streams are fetched on demand per channel group as the user navigates.
 
@@ -439,6 +441,88 @@ Two design points worth carrying forward:
 - **A deferred navigation can leave state behind.** A caller that writes handoff state before requesting a route change (the Notification Center writes which scheduled task to open) must be able to take it back when the operator chooses **Keep Editing**. Otherwise the cancelled intent survives in `sessionStorage` and hijacks the next visit to any Settings page. Any new deferred-navigation caller inherits this obligation.
 
 Before extending the guard, read the current implementation rather than this table: the coverage above is settled, the internals are in flight.
+
+### The staged ledger: one persisted unit, three derived views
+
+`stagedOperations` is **the** staged state. It is the list of operations Apply will send, and it is the only thing serialised when the ledger has to survive a dead session (`frontend/src/utils/stagedLedgerStorage.ts`).
+
+`stagedGroups` and `stagedSideEffects` are **derived from it**, recomputed rather than maintained alongside it. That is a correctness property, not a tidiness one: the two were previously updated in parallel with the operation list, and an Undo that took an operation back could leave its group or side effect behind. Deriving them makes that class of drift unrepresentable.
+
+**One companion is not derived, and it is not a derivation defect: the undo *grouping*.** `stagedOperations` records *what* will be applied; the undo stack records *how the operator grouped it*. Setting profile membership across twenty channels is twenty operations and one undo entry. `stagedOperationCount` is the undo-entry count, and the exit guard tests it before it will open the Apply dialog at all, so the two possible derivations are both wrong: one entry per operation would report twenty changes for one action, and none would make Apply unreachable. The grouping is therefore persisted alongside the operations as `undoGroups`.
+
+Survival rules, all of them deliberate:
+
+| Property | Behaviour |
+|-|-|
+| Storage | `sessionStorage`, so the ledger dies with the tab rather than sitting on disk |
+| Key | **Fixed**, not per-operator: a foreign ledger has to be *findable* in order to be destroyed |
+| Operator binding | Stamped with `auth_provider#user.id`. A ledger belonging to a different operator is **destroyed, not withheld**, in the first-render lazy initializer before the persistence effect can run |
+| Age bound | 12 hours, covering an interrupted session while making "restored days later", where every id has had time to move, impossible |
+| Restore | **Offered, never automatic**, because part of a ledger may fail staleness checks and a silent restore drops the operator into Edit Mode holding a quietly smaller ledger with Apply as the next action |
+| Format version | A persisted record from an older shape is discarded rather than migrated |
+
+The baseline snapshot is deliberately **not** persisted. A restored session re-captures it from the current lineup, so concurrency checks compare against today's server state rather than a stale one.
+
+### Router history: the `ecmRouteIndex` / `ecmRouteEpoch` contract
+
+`useHashRoute` keeps two values in `window.history.state` on every entry it creates:
+
+- **`ecmRouteIndex`** is an **ordinal within a numbering run**, not a global position in the browser's history stack. The router cannot see the real stack, so it numbers only the entries it created itself.
+- **`ecmRouteEpoch`** identifies the run. It increments whenever the router has to re-anchor, which happens when it accepts an entry it never numbered or when a correction chase spends its budget.
+
+**Deltas are only ever computed inside one run.** A delta across an epoch boundary is *refused* rather than computed wrongly, and callers fall back to navigating by hash. This is what makes the Edit Mode exit guard able to replay a vetoed Back or Forward: it needs to know how far to travel, and a wrong delta moves the operator somewhere they never asked to go.
+
+The practical consequence for anyone touching routing code is the rule in [`docs/style_guide.md`](style_guide.md#frontend-react): **never pass `null` as the state argument to `replaceState` on a route entry.** It un-numbers the entry the operator is standing on, and an unnumbered entry is exactly the case the guard cannot rewind by delta.
+
+### Channel numbering: preflight, ordering, compensation
+
+Four mechanisms, in the order a commit meets them.
+
+**1. Final-state preflight, run on both sides.** Validating staged numbering operations one at a time misses collisions that only the combined result produces. So both sides materialise the proposed final lineup (server state plus every staged create, update, move, delete and range assignment) and validate *that*.
+
+| | Browser | Server |
+|-|-|-|
+| Modules | `frontend/src/utils/channelNumberPlan.ts` | `backend/channel_number_plan.py` |
+| Can name | the staged operations the operator recognises | the request's own operations |
+| Covers | the ECM UI | any caller, including ones that never touch the UI |
+| If the lineup cannot be read | **refuses**, and nothing is sent | reports `numbering_preflight_unavailable` and lets `continueOnError` decide |
+
+The asymmetry in that last row is intentional. The browser has already run its own check by the time it sends, so ECM's Apply sends `continueOnError: true`; a third-party caller has not, so the default refuses.
+
+**These are two hand-mirrored implementations, not one shared contract.** The magnitude constants and the placement algorithm are duplicated across the language boundary and cross-referenced only in comments. There is no parity test between them. Treat the agreement as a maintained convention and the highest drift risk in this area, not as a guarantee.
+
+**2. Write ordering (`order_numbering_writes`, `backend/channel_number_apply.py`).** Ordering does not make a swap *possible*: duplicate numbers are legal upstream, so any order eventually converges. It makes every intermediate state one the operator would recognise, which is what makes a half-finished run readable.
+
+The pass builds edges from each write's target slot to every write still leaving that slot, then emits everything unblocked, repeatedly. When nothing is unblocked, there is a cycle, and one member must be released early onto a transiently shared number. **The member chosen is the earliest-submitted member of the *discovered* cycle**, not the walk's starting node, which may be a chain feeding into the cycle rather than part of it. Termination is guaranteed because each pass emits at least one write and no write is emitted twice; the ordering invariant is verified exhaustively over every plan shape fitting in four channels and four numbers.
+
+Cycles are logged and go nowhere else. They are not surfaced in the envelope or the UI, so nothing tells the operator a number was transiently shared.
+
+**3. Compensation.** When some numbering writes landed and others failed, a compensating write back to each channel's pre-run value is **attempted**, replayed newest-first (the landed set is a prefix of the safe order, so walking it backwards is itself a safe order). Where a compensating write also fails, the channel and the exact remedial step surface as `numberingRecovery` on the envelope, and the UI folds them into the existing "Some Changes Were Not Applied" dialog rather than inventing a new surface.
+
+**This is best effort, not a rollback**, and the boundary matters: a compensating write is attempted for every write that landed, but nothing guarantees it succeeds. It also does not run at all on the crash and cancellation paths, which sit outside the block that performs it.
+
+**4. Pre-Apply read and reconcile.** Before Apply writes anything, the browser re-reads the lineup and compares **baseline against server**, scoped to the channels this session will actually write. Re-asserting the same value is not exempt, because agreeing by accident is not agreeing.
+
+Where a number moved underneath the session, the operator answers per channel. There is **no default selection** and Apply stays disabled until every row is answered, because a pre-ticked "keep mine" is a silent overwrite wearing a checkbox. Two rules fall out of that reconciliation and are easy to get wrong:
+
+- **A range renumber is dropped whole, never partially.** Its numbers run in sequence, so keeping the server's value for one member would move every channel after it to a number the operator was never shown.
+- **An automatic rename travels with a surrendered number.** If the staged name is exactly what the numbering-driven rename would have produced, it is withdrawn alongside the number. A name the operator *typed* is untouched, because it is not what the rename would have produced.
+
+**A created channel whose number a later staged operation owns is created unnumbered**, and placed by that operation. The create is still emitted, because everything naming its temp id depends on it existing; only the number and its duplicate consent come off. Dispatcharr therefore picks a number at creation and the owning write moves it. The deliberate trade: if that owning write fails, the channel exists on Dispatcharr's number rather than on a superseded number the operator typed.
+
+### `backend/bulk_commit_accounting.py`: the accounting authority
+
+Bulk commit reports counters an integrator acts on, and for a long time no single place enforced that they were consistent. Three review rounds fixed three reproductions of the same defect before the *property* was enforced in one place, over every operation type. `OperationLedger` is that place.
+
+It is the **sole writer of `operationsApplied` and `operationsFailed`**. A branch in `routers/channels.py` cannot get the counters wrong by forgetting to increment, because it has nothing to increment; `finalize_bulk_commit_result` derives `success` and `partial` from the ledger alone.
+
+It is also the **sole queue for journal rows**. Both of its "a write landed" methods take a required journal row, so there is no way to record a landed upstream write without also recording what to journal about it. A write that genuinely has nothing to record must say so by name, with a reason, through `nothing_to_journal`: an explicit sentence a reviewer can disagree with, rather than an omission nobody can see.
+
+**Be precise about that second role: the ledger is the queue, not the writer.** Rows are drained and written by a separate module-level function, and the batch summary row bypasses the ledger entirely and is counted by hand. `journalRowsUnwritten` on the envelope is likewise not a ledger concept; it is the count of rows the journal refused, plus one if the summary row also failed.
+
+Enforcement is by raised exception, never by assertion or log line. `bulk_commit_accounting_violations` audits the finished envelope and `finalize_bulk_commit_result` raises `BulkCommitAccountingError` on any violation, so a self-contradictory envelope cannot ship quietly. The invariants are stated in full in the module docstring; the two that most affect callers are that every operation resolves to exactly one outcome, and that an operation whose upstream write landed is never reported as a total failure, because reporting one as a failure is what makes an integrator retry and create the entity twice.
+
+One limit is deliberately not papered over: an operation with more than one upstream side effect can land the first and fail the second. `deleteChannelGroup` reparents a group's channels and then deletes the group. The envelope has one outcome per operation and cannot express "the channels moved but the group is still there", so such an operation is reported as a failure, because marking it applied would be the worse lie. What the journal rules recover is visibility: the partial side effect is recorded per moved channel.
 
 ## MCP Server
 
