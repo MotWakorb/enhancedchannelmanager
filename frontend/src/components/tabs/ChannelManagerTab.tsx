@@ -4,7 +4,7 @@ import { PendingMergesPage } from './PendingMergesPage';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
-import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
+import type { TimezonePreference, NumberSeparator, PrefixOrder, ResolvedCreateChannelNames } from '../../services/api';
 import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
 import type { DedupDropReport } from '../../hooks/useDedupOnDrop';
 import { SourceLoadStatus } from '../SourceLoadStatus';
@@ -228,7 +228,10 @@ export interface ChannelManagerTabProps {
     customNetworkSuffixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean,
-    normalize?: boolean
+    // The names, already resolved by the dialog. Pass-through only; see
+    // `StreamsPaneProps.onBulkCreateFromGroup`
+    // (bead enhancedchannelmanager-e9e5o).
+    nameResolution?: ResolvedCreateChannelNames
   ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode - supports new group
   // creation). `pushDownOnConflict` moves whatever already occupies

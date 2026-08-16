@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, resolveCreateChannelNames, stripQualitySuffixes, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, resolveCreateChannelNames, stripQualitySuffixes, type ResolvedCreateChannelNames, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { channelNumberInputError, parseChannelNumberInput } from '../utils/channelNumber';
 import { categorizeStreamGroups } from '../utils/streamGroupCategories';
@@ -153,7 +153,21 @@ interface StreamsPaneProps {
     customNetworkSuffixes?: string[],
     profileIds?: number[],
     pushDownOnConflict?: boolean,
-    normalize?: boolean
+    /**
+     * The names these channels get, ALREADY RESOLVED by the dialog
+     * (bead enhancedchannelmanager-e9e5o).
+     *
+     * This used to be the operator's `normalize` boolean, which the callee then
+     * answered a second time by calling `resolveCreateChannelNames` itself. Two
+     * independent resolutions of one question are free to disagree — by timing,
+     * by the rules changing between them, or by grouping the answer differently
+     * — and the operator sees the dialog's answer while the callee stages its
+     * own. Passing the resolution the operator was SHOWN is what removes that.
+     *
+     * A missing entry means the raw name, exactly as an absent resolution
+     * means raw names throughout: the callee must never normalize.
+     */
+    nameResolution?: ResolvedCreateChannelNames
   ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode). `pushDownOnConflict`
   // carries the operator's answer to the Channel Number Conflict dialog, which
@@ -630,9 +644,16 @@ export function StreamsPane({
    * the raw names whatever the toggle said, while submission counted off the
    * resolved ones, so on the default path it could promise two channels and
    * stage one.
+   *
+   * `null` means NOT RESOLVED YET, and it is a state of its own. The map used
+   * to start empty with every reader falling back to the raw name, which made
+   * "the resolver has not answered yet" indistinguishable from "the resolver
+   * answered, and the name is unchanged" — so during the debounce plus the
+   * round trip the dialog rendered a confident wrong count, and that count fed
+   * the conflict check, the push-down plan and the Create button. Nothing may
+   * render or plan while this is `null`.
    */
-  const [resolvedCreateNames, setResolvedCreateNames] = useState<Map<string, string>>(new Map());
-  const [normalizationPreviewLoading, setNormalizationPreviewLoading] = useState(false);
+  const [resolvedCreateNames, setResolvedCreateNames] = useState<Map<string, string> | null>(null);
   // True when the preview fetch failed. Without it a failed preview renders as
   // "No names will change", which is indistinguishable from a genuinely
   // no-op rule set (bead enhancedchannelmanager-e9e5o).
@@ -1390,6 +1411,14 @@ export function StreamsPane({
 
   const isFromGroup = !!bulkCreateGroup;
   const isFromMultipleGroups = bulkCreateGroups.length > 0;
+  /**
+   * True when submission will run the create once PER GROUP rather than once
+   * over the whole selection. Hoisted out of the two handlers that used to
+   * derive it privately, because the preview has to model the same thing: the
+   * count, the merge decision and the number plan all differ between the modes
+   * (bead enhancedchannelmanager-e9e5o).
+   */
+  const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
 
   // Detect if streams have regional variants (East/West)
   const hasRegionalVariants = useMemo(() => {
@@ -1424,39 +1453,86 @@ export function StreamsPane({
     return bulkCreateFilteredStreams.map((s) => s.name);
   }, [isManualEntry, manualEntryChannelName, bulkCreateFilteredStreams]);
 
-  // Compute stream stats for the modal display
-  // Applies timezone filtering when a preference is selected
-  const bulkCreateStats = useMemo(() => {
+  /**
+   * Stream stats for the modal, including the channel count every planning
+   * surface is sized by.
+   *
+   * `resolved: false` means the resolver has not answered yet, and the counts
+   * are `null` rather than a provisional guess — see `resolvedCreateNames`.
+   */
+  const bulkCreateStats = useMemo((): {
+    streamCount: number;
+    excludedCount: number;
+    filteredStreams: Stream[];
+  } & (
+    | { resolved: true; channelCount: number; mergedCount: number; channelMap: Map<string, { name: string; streams: Stream[] }> }
+    | { resolved: false; channelCount: null; mergedCount: null; channelMap: null }
+  ) => {
     const filteredStreams = bulkCreateFilteredStreams;
     const streamCount = filteredStreams.length;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
 
-    // Group on the RESOLVED name, exactly as `handleBulkCreateFromGroup` does
-    // (App.tsx): resolve first, strip quality suffixes from that, and merge on
-    // the result. Grouping on the raw name here was the drift — with a rule
-    // that strips `US:`, "US: CNN" and "CNN" are one channel on submit and
-    // used to be shown as two (bead enhancedchannelmanager-e9e5o).
+    if (resolvedCreateNames === null) {
+      return {
+        resolved: false,
+        streamCount,
+        excludedCount,
+        filteredStreams,
+        channelCount: null,
+        mergedCount: null,
+        channelMap: null,
+      };
+    }
+
+    // Model whichever mode submission will actually run in.
+    //
+    // Separate mode calls `onBulkCreateFromGroup` once per group, and each
+    // call groups only ITS OWN streams, so group boundaries survive: two
+    // groups whose names resolve to the same key are two channels, in two
+    // target groups, on two channel numbers. One global grouping map merged
+    // them and promised a single channel — and that count is what sizes the
+    // conflict check and the push-down plan, so it was not cosmetic
+    // (bead enhancedchannelmanager-e9e5o). Combined mode really does hand
+    // everything to one call, so there the single bucket is correct.
+    const includedStreamIds = new Set(filteredStreams.map((s) => s.id));
+    const buckets = useSeparateMode
+      ? bulkCreateGroups.map((group) => ({
+        key: group.name,
+        streams: group.streams.filter((s) => includedStreamIds.has(s.id)),
+      }))
+      : [{ key: '', streams: filteredStreams }];
+
+    // Within a bucket, group on the RESOLVED name exactly as
+    // `handleBulkCreateFromGroup` does (App.tsx): resolve first, strip quality
+    // suffixes from that, and merge on the result.
     const channelMap = new Map<string, { name: string; streams: Stream[] }>();
-    for (const stream of filteredStreams) {
-      const resolvedName = resolvedCreateNames.get(stream.name) ?? stream.name;
-      const groupingKey = stripQualitySuffixes(resolvedName);
-      const existing = channelMap.get(groupingKey);
-      if (existing) {
-        existing.streams.push(stream);
-      } else {
-        channelMap.set(groupingKey, { name: resolvedName, streams: [stream] });
+    for (const bucket of buckets) {
+      for (const stream of bucket.streams) {
+        const resolvedName = resolvedCreateNames.get(stream.name) ?? stream.name;
+        // The bucket key namespaces the map so the same resolved name in two
+        // groups is two entries rather than a collision. NUL is the joiner
+        // because a group name may contain any printable separator, and
+        // "A B" + "C" must not collide with "A" + "B C".
+        const groupingKey = `${bucket.key}\u0000${stripQualitySuffixes(resolvedName)}`;
+        const existing = channelMap.get(groupingKey);
+        if (existing) {
+          existing.streams.push(stream);
+        } else {
+          channelMap.set(groupingKey, { name: resolvedName, streams: [stream] });
+        }
       }
     }
     const channelCount = channelMap.size;
     const mergedCount = streamCount - channelCount;
 
-    return { streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
-  }, [streamsToCreate, bulkCreateFilteredStreams, resolvedCreateNames]);
+    return { resolved: true, streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
+  }, [streamsToCreate, bulkCreateFilteredStreams, resolvedCreateNames, useSeparateMode, bulkCreateGroups]);
 
   /**
    * How many channel numbers the pending create claims, which is what the
    * conflict dialog's copy and the push-down plan are both sized by
-   * (bead `enhancedchannelmanager-fprsq`).
+   * (bead `enhancedchannelmanager-fprsq`). `null` while the names are
+   * unresolved, because there is no honest figure yet.
    */
   const bulkCreateInsertCount = isManualEntry
     ? MANUAL_ENTRY_CHANNEL_COUNT
@@ -1482,12 +1558,14 @@ export function StreamsPane({
    * keystroke.
    */
   useEffect(() => {
-    if (!bulkCreateModalOpen) {
-      setResolvedCreateNames(new Map());
-      setNormalizationPreviewFailed(false);
-      setNormalizationPreviewLoading(false);
-      return;
-    }
+    // Anything that changes the question invalidates the answer, so drop it
+    // FIRST. Leaving the previous map in place while a new resolution is in
+    // flight is the provisional-value trap in another form: the count on
+    // screen would answer the question the operator asked a moment ago.
+    setResolvedCreateNames(null);
+    setNormalizationPreviewFailed(false);
+
+    if (!bulkCreateModalOpen) return;
 
     let cancelled = false;
     const resolve = async () => {
@@ -1498,20 +1576,17 @@ export function StreamsPane({
       if (cancelled) return;
       setResolvedCreateNames(names);
       setNormalizationPreviewFailed(normalizationFailed);
-      setNormalizationPreviewLoading(false);
     };
 
     // Only a normalize-on run with something to resolve reaches the network.
     const willFetch = bulkCreateNormalize && normalizationSourceNames.length > 0;
     if (!willFetch) {
-      setNormalizationPreviewLoading(false);
       void resolve();
       return () => {
         cancelled = true;
       };
     }
 
-    setNormalizationPreviewLoading(true);
     const timer = window.setTimeout(() => void resolve(), NORMALIZATION_PREVIEW_DEBOUNCE_MS);
     return () => {
       cancelled = true;
@@ -1519,9 +1594,18 @@ export function StreamsPane({
     };
   }, [bulkCreateNormalize, bulkCreateModalOpen, normalizationSourceNames]);
 
+  /**
+   * Whether the resolver still owes an answer.
+   *
+   * Derived from the one piece of state rather than tracked beside it: a
+   * separate `loading` flag is a second copy of the same fact, and the two can
+   * disagree (bead enhancedchannelmanager-e9e5o).
+   */
+  const normalizationPreviewPending = resolvedCreateNames === null;
+
   // Count how many names will change with normalization
   const normalizationChangeCount = useMemo(() => {
-    if (!bulkCreateNormalize || resolvedCreateNames.size === 0) return 0;
+    if (!bulkCreateNormalize || !resolvedCreateNames || resolvedCreateNames.size === 0) return 0;
     let count = 0;
     for (const [original, normalized] of resolvedCreateNames) {
       if (original !== normalized) count++;
@@ -1576,6 +1660,12 @@ export function StreamsPane({
   // Actually perform the bulk create with the specified pushDown option
   // startingNumberOverride: optionally override the starting number (used by "insert at end" option)
   const doBulkCreate = useCallback(async (pushDown: boolean, startingNumberOverride?: number) => {
+    // Nothing is submitted off a name the dialog has not resolved. The Create
+    // button is disabled in this state; this is the second lock, because a
+    // create staged from a provisional name is the exact failure the resolved
+    // count exists to prevent (bead enhancedchannelmanager-e9e5o).
+    if (resolvedCreateNames === null) return;
+
     // Handle manual entry mode - create a single channel without streams
     if (isManualEntry && onCreateChannel) {
       if (!manualEntryChannelName.trim()) return;
@@ -1621,18 +1711,17 @@ export function StreamsPane({
           channelNumber = parsedNumber.value ?? undefined;
         }
 
-        // Resolve the typed name through the SAME function the bulk path
-        // uses, so the manual-entry toggle is a real control rather than a
-        // rendered decoration: on, the configured rules are applied to what
-        // the operator typed; off, they get their literal text. Resolving
-        // HERE and passing the final name is what keeps the decision in one
-        // place — nothing downstream normalizes again, and the backend's
-        // `normalize` flag stays false by construction
-        // (bead enhancedchannelmanager-e9e5o).
+        // Take the name the DIALOG resolved, rather than resolving the typed
+        // text a second time. The toggle is a real control either way — on,
+        // the configured rules are applied to what the operator typed; off,
+        // they get their literal text — but a second call is a second answer
+        // to the same question, and the operator would have been shown the
+        // first one. Consuming the preview is what makes the name in the
+        // preview and the name on the channel the same name by construction.
+        // Nothing downstream normalizes again, and the backend's `normalize`
+        // flag stays false (bead enhancedchannelmanager-e9e5o).
         const typedName = manualEntryChannelName.trim();
-        const { names: resolvedNames, normalizationFailed } =
-          await resolveCreateChannelNames([typedName], bulkCreateNormalize);
-        const channelName = resolvedNames.get(typedName) ?? typedName;
+        const channelName = resolvedCreateNames.get(typedName) ?? typedName;
 
         // Create the channel. `pushDown` used to be accepted and dropped here,
         // so "Push channels down" was a button that did nothing.
@@ -1648,7 +1737,7 @@ export function StreamsPane({
         // the channel carries the name exactly as typed. Say so: with the
         // toggle a real control, an unchanged name otherwise reads as "the
         // rules matched nothing".
-        if (normalizationFailed) {
+        if (normalizationPreviewFailed) {
           notifications.error(
             'ECM could not reach the normalization engine, so the channel was created with the name exactly as you typed it.',
             'Normalization failed',
@@ -1667,10 +1756,17 @@ export function StreamsPane({
 
     if (streamsToCreate.length === 0 || !onBulkCreateFromGroup) return;
 
-    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
-
     setBulkCreateLoading(true);
     setBulkCreateShowConflict(false);
+
+    // The resolution the dialog SHOWED, handed to every call below rather than
+    // a flag each call would answer for itself. This is what makes the names,
+    // the count, the merge decisions and the number plan the same on both
+    // sides by construction (bead enhancedchannelmanager-e9e5o).
+    const nameResolution: ResolvedCreateChannelNames = {
+      names: resolvedCreateNames,
+      normalizationFailed: normalizationPreviewFailed,
+    };
 
     // Aggregated across every call below, so a separate-groups run reports the
     // failure once rather than per group (bead enhancedchannelmanager-e9e5o).
@@ -1711,7 +1807,7 @@ export function StreamsPane({
             channelDefaults?.customNetworkSuffixes,
             bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
             pushDown,
-            bulkCreateNormalize
+            nameResolution
           );
           if (groupResult?.normalizationFailed) normalizationFailed = true;
         }
@@ -1760,7 +1856,7 @@ export function StreamsPane({
           channelDefaults?.customNetworkSuffixes,
           bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
           pushDown,
-          bulkCreateNormalize
+          nameResolution
         );
         if (result?.normalizationFailed) normalizationFailed = true;
       }
@@ -1792,10 +1888,9 @@ export function StreamsPane({
   }, [
     streamsToCreate,
     isFromGroup,
-    isFromMultipleGroups,
+    useSeparateMode,
     bulkCreateGroup,
     bulkCreateGroups,
-    bulkCreateMultiGroupOption,
     bulkCreateCustomGroupNames,
     separateGroupStartNumbers,
     bulkCreateStartingNumber,
@@ -1812,7 +1907,8 @@ export function StreamsPane({
     bulkCreateStripNetwork,
     bulkCreateStripSuffix,
     bulkCreateSelectedProfiles,
-    bulkCreateNormalize,
+    resolvedCreateNames,
+    normalizationPreviewFailed,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -1827,6 +1923,13 @@ export function StreamsPane({
 
   // Check for conflicts and show dialog, or proceed directly if no conflicts
   const handleBulkCreate = useCallback(async () => {
+    // Nothing is planned off a name the dialog has not resolved: the resolved
+    // name decides how many channels there are, which is what sizes the
+    // conflict check and the push-down plan below. The Create button is
+    // disabled in this state; this is the second lock
+    // (bead enhancedchannelmanager-e9e5o).
+    if (!bulkCreateStats.resolved) return;
+
     // Handle manual entry mode separately. It still creates one channel rather
     // than a run, but it goes through the SAME conflict check as the bulk path:
     // this branch used to return before ever reaching it, so inserting a
@@ -1875,8 +1978,6 @@ export function StreamsPane({
 
     // For separate groups mode, we use per-group starting numbers
     // For other modes, we need a valid global starting number
-    const useSeparateMode = isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate';
-
     if (useSeparateMode) {
       // Each group's start number is a channel number, so each one is held to
       // the canonical contract and refused with the same sentence the API
@@ -1939,13 +2040,12 @@ export function StreamsPane({
     await doBulkCreate(false);
   }, [
     streamsToCreate,
-    isFromMultipleGroups,
-    bulkCreateMultiGroupOption,
+    useSeparateMode,
     bulkCreateGroupStartNumbers,
     separateGroupStartErrors,
     bulkCreateGroups,
     bulkCreateStartingNumber,
-    bulkCreateStats.channelCount,
+    bulkCreateStats,
     onBulkCreateFromGroup,
     onCheckConflicts,
     onCountPushDownShift,
@@ -2760,7 +2860,14 @@ export function StreamsPane({
               <div className="bulk-create-info">
                 <span className="material-icons">info</span>
                 <span>
-                  {bulkCreateStats.mergedCount > 0 ? (
+                  {/* No channel figure until the names are resolved: the merge
+                      decision IS the resolution, so a count here before it
+                      lands would be a guess (bead enhancedchannelmanager-e9e5o). */}
+                  {!bulkCreateStats.resolved ? (
+                    <>
+                      <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} selected, resolving names...
+                    </>
+                  ) : bulkCreateStats.mergedCount > 0 ? (
                     <>
                       <strong>{bulkCreateStats.streamCount}</strong> stream{bulkCreateStats.streamCount !== 1 ? 's' : ''} → <strong>{bulkCreateStats.channelCount}</strong> channel{bulkCreateStats.channelCount !== 1 ? 's' : ''} ({bulkCreateStats.mergedCount} duplicate{bulkCreateStats.mergedCount !== 1 ? 's' : ''} merged)
                     </>
@@ -2776,7 +2883,7 @@ export function StreamsPane({
               </div>
 
               {/* Starting Channel Number - hide when multi-group with separate mode (per-group numbers used instead) */}
-              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
+              {!useSeparateMode && (
                 <div className="form-group">
                   <label>Starting Channel Number</label>
                   <input
@@ -2799,7 +2906,7 @@ export function StreamsPane({
                       to preview. It used to render one anyway, off a channel
                       count of zero, so a typed 38.1 previewed "Channels 38.1 -
                       38.0" (bead enhancedchannelmanager-fprsq). */}
-                  {!isManualEntry && bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
+                  {!isManualEntry && bulkCreateStats.resolved && bulkCreateStartingNumber && !isNaN(parseFloat(bulkCreateStartingNumber)) && (
                     <div className="number-range-preview">
                       {(() => {
                         const startNum = parseFloat(bulkCreateStartingNumber);
@@ -2817,7 +2924,7 @@ export function StreamsPane({
 
               {/* Channel Group - Collapsible Section */}
               {/* Hide when multi-group with separate option is selected */}
-              {!(isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate') && (
+              {!useSeparateMode && (
               <div className="form-group collapsible-section">
                 <div
                   className="collapsible-header"
@@ -3144,7 +3251,7 @@ export function StreamsPane({
                   <span className="collapsible-title">Normalization Rules</span>
                   <span className="collapsible-summary">
                     {bulkCreateNormalize
-                      ? normalizationPreviewLoading
+                      ? normalizationPreviewPending
                         ? 'Loading...'
                         : normalizationPreviewFailed
                           ? 'Preview unavailable'
@@ -3173,7 +3280,7 @@ export function StreamsPane({
                     {/* Preview of normalized names */}
                     {bulkCreateNormalize && (
                       <div className="normalization-preview">
-                        {normalizationPreviewLoading ? (
+                        {normalizationPreviewPending ? (
                           <div className="normalization-loading">
                             <span className="material-icons spinning">sync</span>
                             <span>Loading preview...</span>
@@ -3201,7 +3308,7 @@ export function StreamsPane({
                               {normalizationChangeCount} of {normalizationSourceNames.length} name{normalizationSourceNames.length !== 1 ? 's' : ''} will be normalized
                             </div>
                             <div className="normalization-changes">
-                              {Array.from(resolvedCreateNames.entries())
+                              {Array.from((resolvedCreateNames ?? new Map<string, string>()).entries())
                                 .filter(([original, normalized]) => original !== normalized)
                                 .slice(0, 5)
                                 .map(([original, normalized]) => (
@@ -3231,11 +3338,13 @@ export function StreamsPane({
               </div>
 
               {/* Preview - show per-group preview in separate mode, otherwise show combined preview */}
-              {isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate' ? (
+              {useSeparateMode ? (
                 <div className="bulk-create-preview">
                   <label>Preview (first 3 channels per group)</label>
                   <div className="preview-list">
-                    {bulkCreateGroups.map((group) => {
+                    {!bulkCreateStats.resolved ? (
+                      <div className="preview-more">Resolving names...</div>
+                    ) : bulkCreateGroups.map((group) => {
                       // The preview reads the same resolution the creation call
                       // uses, so what the operator is shown is what gets
                       // created. It used to re-derive the numbers with
@@ -3259,7 +3368,7 @@ export function StreamsPane({
                                     provider's raw stream
                                     (bead enhancedchannelmanager-e9e5o). */}
                                 <span className="preview-name">
-                                  {resolvedCreateNames.get(stream.name) ?? stream.name}
+                                  {resolvedCreateNames?.get(stream.name) ?? stream.name}
                                 </span>
                               </div>
                             );
@@ -3276,7 +3385,10 @@ export function StreamsPane({
                 <div className="bulk-create-preview">
                   <label>Channels (first 10)</label>
                   <div className="preview-list">
-                    {Array.from(bulkCreateStats.channelMap.entries()).slice(0, 10).map(([key, { name, streams }], idx) => {
+                    {!bulkCreateStats.resolved && (
+                      <div className="preview-more">Resolving names...</div>
+                    )}
+                    {Array.from(bulkCreateStats.channelMap?.entries() ?? []).slice(0, 10).map(([key, { name, streams }], idx) => {
                       // Support decimal channel numbers (e.g., 38.1, 38.2, 38.3)
                       let num: string | number = '?';
                       if (bulkCreateStartingNumber) {
@@ -3298,7 +3410,7 @@ export function StreamsPane({
                         </div>
                       );
                     })}
-                    {bulkCreateStats.channelCount > 10 && (
+                    {bulkCreateStats.resolved && bulkCreateStats.channelCount > 10 && (
                       <div className="preview-more">
                         ... and {bulkCreateStats.channelCount - 10} more
                       </div>
@@ -3316,13 +3428,20 @@ export function StreamsPane({
                 className="btn-create"
                 onClick={handleBulkCreate}
                 disabled={bulkCreateLoading || (
+                  // Until the names are resolved there is no honest count and
+                  // no final name, so there is nothing to create: submitting
+                  // inside the debounce window used to stage a different set of
+                  // channels from the one the dialog promised
+                  // (bead enhancedchannelmanager-e9e5o).
+                  !bulkCreateStats.resolved
+                ) || (
                   isManualEntry
                     // Manual entry: require channel name
                     ? !manualEntryChannelName.trim()
                     // In separate groups mode, check first group has a start number
                     // Separate groups mode: the first group must have a start
                     // number, and no group may carry an out-of-contract one.
-                    : isFromMultipleGroups && bulkCreateMultiGroupOption === 'separate'
+                    : useSeparateMode
                       ? !bulkCreateGroupStartNumbers.get(bulkCreateGroups[0]?.name) ||
                         separateGroupStartErrors.size > 0
                       : !bulkCreateStartingNumber || !!channelNumberInputError(bulkCreateStartingNumber)
@@ -3336,7 +3455,9 @@ export function StreamsPane({
                 ) : (
                   <>
                     <span className="material-icons">add</span>
-                    {isManualEntry ? 'Create Channel' : `Create ${bulkCreateStats.channelCount} Channels`}
+                    {!bulkCreateStats.resolved
+                      ? 'Resolving names...'
+                      : isManualEntry ? 'Create Channel' : `Create ${bulkCreateStats.channelCount} Channels`}
                   </>
                 )}
               </button>

@@ -2249,7 +2249,7 @@ function App() {
       _customNetworkSuffixes?: string[],
       profileIds?: number[],
       pushDownOnConflict?: boolean,
-      normalize?: boolean
+      nameResolution?: api.ResolvedCreateChannelNames
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -2268,15 +2268,20 @@ function App() {
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Resolve the names these channels will be created with. This is the
-        // ONE place the dialog's "Normalization Rules" toggle is answered
-        // (bead enhancedchannelmanager-e9e5o): on, the backend engine applies
-        // all configured rules (country prefixes, network tags, ...); off, the
-        // operator gets the raw provider names. The names below are FINAL —
-        // nothing downstream may normalize them again.
-        const streamNames = filteredStreams.map(s => s.name);
-        const { names: normalizedNames, normalizationFailed } =
-          await api.resolveCreateChannelNames(streamNames, normalize ?? false);
+        // The names these channels will be created with, as ALREADY RESOLVED
+        // by the dialog (bead enhancedchannelmanager-e9e5o).
+        //
+        // This used to receive the operator's toggle and call
+        // `resolveCreateChannelNames` itself, which made two independent
+        // answers to one question: the dialog resolved for its preview and
+        // count, this resolved again at submit, and the two were free to
+        // disagree — by timing, by the rules changing in between, or because
+        // the dialog grouped its answer differently. Consuming the resolution
+        // the operator was SHOWN is what removes that gap. The names are
+        // FINAL: nothing here or downstream may normalize them again, and a
+        // name with no entry keeps its raw value.
+        const normalizedNames = nameResolution?.names ?? new Map<string, string>();
+        const normalizationFailed = nameResolution?.normalizationFailed ?? false;
 
         // Group streams by normalized base name (also stripping quality suffixes to merge variants)
         // The grouping key is the normalized name with quality suffixes stripped
