@@ -502,9 +502,28 @@ test.describe('the irreversible notice takes its own line in the modal footer an
 // ============================================ ARM 3: immediate-action notes
 
 /**
+ * Widest a three-dot dropdown menu may become, in px.
+ *
+ * `.channel-menu-dropdown` and `.group-menu-dropdown` are shrink-to-fit boxes
+ * with `min-width: 180px` and no upper bound, so the immediacy note — the only
+ * prose either menu has ever contained — laid itself out on one line and took
+ * the menu with it: measured at roughly 3.5x the menu's natural width. Nothing
+ * clipped, nothing off-screen, just a menu that no longer reads as a menu. The
+ * PO's 2026-08-16 decision is to cap the menu and let the note wrap rather than
+ * shorten the note, whose whole purpose is to be unmissable.
+ *
+ * This is a CAP, not a tolerance: the assertion below pairs it with a wrap
+ * check, so a regression that removes the cap fails on the width and a
+ * regression that "fixes" the width by clipping or truncating the note fails on
+ * the wrap.
+ */
+const DROPDOWN_MAX_WIDTH = 320;
+
+/**
  * Every place the note is injected, and how to get there. `container` is the
  * element the note must stay inside; `minSiblings` is the anti-vacuity floor on
- * the controls it must not displace.
+ * the controls it must not displace. `maxWidth`, where present, is the cap that
+ * container may not exceed.
  */
 const IMMEDIACY_NOTES = [
   {
@@ -512,6 +531,8 @@ const IMMEDIACY_NOTES = [
     testId: 'probe-immediate-note-bulk',
     container: '.selection-action-bar-shell',
     minSiblings: 1,
+    // The floating bar is a full-width row by design; it is not a menu.
+    maxWidth: null,
     open: async (page: Page) => { await selectChannels(page, 2); },
   },
   {
@@ -519,6 +540,7 @@ const IMMEDIACY_NOTES = [
     testId: 'probe-immediate-note',
     container: '.channel-menu-dropdown',
     minSiblings: 4,
+    maxWidth: DROPDOWN_MAX_WIDTH,
     open: async (page: Page) => {
       await page.locator('.channels-pane .channel-item').first().hover();
       await page.locator('.channels-pane .channel-item .channel-menu-btn').first().click();
@@ -530,6 +552,7 @@ const IMMEDIACY_NOTES = [
     testId: 'probe-immediate-note-group',
     container: '.group-menu-dropdown',
     minSiblings: 3,
+    maxWidth: DROPDOWN_MAX_WIDTH,
     open: async (page: Page) => {
       const header = page.locator('.channels-pane .group-header').filter({ hasText: 'Entertainment' }).first();
       await header.hover();
@@ -542,6 +565,8 @@ const IMMEDIACY_NOTES = [
     testId: 'profile-admin-immediate-note',
     container: '.channel-profiles-modal .modal-toolbar',
     minSiblings: 2,
+    // A modal toolbar sizes with its modal.
+    maxWidth: null,
     open: async (page: Page) => {
       await openPaneToolbarItem(page, 'Channel Profiles');
       await page.waitForSelector('.channel-profiles-modal', { timeout: 15_000 });
@@ -579,6 +604,15 @@ test.describe('the immediate-action note renders at every entry point without di
             note.getBoundingClientRect().left + 4,
             note.getBoundingClientRect().top + note.getBoundingClientRect().height / 2,
           );
+          // The prose block inside the note, and how many lines it occupies.
+          // `lineHeight` is resolved off the note because the body inherits it;
+          // a `normal` line-height would report NaN, so it falls back to the
+          // font size, which under-counts rather than inventing a pass.
+          const body = note.querySelector<HTMLElement>('.immediate-action-note-body') ?? note;
+          const noteStyle = getComputedStyle(note);
+          const lineHeight = Number.parseFloat(noteStyle.lineHeight)
+            || Number.parseFloat(noteStyle.fontSize);
+
           return {
             innerWidth: window.innerWidth,
             innerHeight: window.innerHeight,
@@ -588,6 +622,8 @@ test.describe('the immediate-action note renders at every entry point without di
             noteIsInsideHost: host.contains(note),
             noteIsHitTestable: centre ? note.contains(centre) || note === centre : false,
             textLength: (note.textContent ?? '').trim().length,
+            bodyLines: Math.round(body.getBoundingClientRect().height / lineHeight),
+            bodyOverflowsHorizontally: body.scrollWidth > body.clientWidth + 1,
           };
         }, { testId: site.testId, container: site.container });
 
@@ -608,6 +644,26 @@ test.describe('the immediate-action note renders at every entry point without di
         expect(m.note.right).toBeLessThanOrEqual(m.host.right + EPSILON);
         expect(m.note.top).toBeGreaterThanOrEqual(m.host.top - EPSILON);
         expect(m.note.bottom).toBeLessThanOrEqual(m.host.bottom + EPSILON);
+
+        // -- a menu stays a menu ----------------------------------------------
+        // The note is prose in a shrink-to-fit box. Without a cap it lays out
+        // on one line and drags the whole menu out to roughly 3.5x its natural
+        // width. Both halves are asserted: the cap holds, AND the note answered
+        // the cap by WRAPPING rather than by being clipped or truncated.
+        if (site.maxWidth !== null) {
+          expect(
+            m.host.width,
+            `${site.name}: the menu is ${m.host.width}px wide — the immediacy note stretched it instead of wrapping`,
+          ).toBeLessThanOrEqual(site.maxWidth + EPSILON);
+          expect(
+            m.bodyLines,
+            'the note must wrap onto more than one line inside a capped menu; one line means it is being clipped or the cap is not applying',
+          ).toBeGreaterThanOrEqual(2);
+          expect(
+            m.bodyOverflowsHorizontally,
+            'the note overflows its own box horizontally — the menu was capped by hiding text rather than by wrapping it',
+          ).toBe(false);
+        }
 
         // -- and the container stays on screen --------------------------------
         expect(m.host.left, `${site.name} was pushed off the left edge`).toBeGreaterThanOrEqual(0);
