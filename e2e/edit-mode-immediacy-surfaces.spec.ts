@@ -59,6 +59,14 @@
  * `IrreversibleActionNotice.css` (or a modal chassis change that outranks it).
  * Arm 3 is `ImmediateActionNote.css` or the menu stylesheet it sits in. None of
  * them has a tolerance to widen.
+ *
+ * ONE FAILURE THAT IS NOT A REGRESSION AT ALL, because it cost a merge round
+ * once: a `measured` of `null` means the subject was not on the page when it
+ * was measured, which is a different claim from "the CSS is wrong". The app
+ * rebuilds the whole channel list shortly after mount and takes the two
+ * dropdown portals with it; `settleChannelList` below is what keeps every
+ * measurement on the far side of that. If a null appears again, check there
+ * before reading it as a rendering fault.
  */
 import { expect, test } from './fixtures/base';
 import type { Browser, Page } from '@playwright/test';
@@ -168,9 +176,29 @@ const STUBS: ReadonlyArray<readonly [RegExp, unknown]> = [
   }]],
 ];
 
+/**
+ * The channel-list endpoint, and when this page last asked for it.
+ *
+ * `App.tsx`'s "Reload channels when search changes" effect debounces a SECOND
+ * full `loadChannels()` 500ms after mount, and `loadChannels()` flips
+ * `loadingStates.channels` before it awaits — so `.pane-content` swaps the
+ * whole group tree for `<div class="loading">` and back. Every `ChannelListItem`
+ * and `GroupHeader` unmounts across that swap, which resets the `menuOpen`
+ * state holding the two three-dot dropdowns open and removes the portal they
+ * render into. Measured on the preview build: the list is torn down 619ms after
+ * navigation and rebuilt 4ms later, against an arm-3 measurement that lands at
+ * ~618ms. That is a race the spec loses on a slower runner and won here, which
+ * is exactly how it reported green locally and null in CI.
+ */
+const CHANNEL_LIST_REQUEST = /\/api\/channels(?:\/|\?|$)/;
+const lastChannelListRequestAt = new WeakMap<Page, number>();
+
 async function stubBackend(page: Page): Promise<void> {
   await page.route(/\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (CHANNEL_LIST_REQUEST.test(path) && !/\/api\/channels\/logos/.test(path)) {
+      lastChannelListRequestAt.set(page, Date.now());
+    }
     const json = (body: unknown, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
@@ -186,6 +214,42 @@ async function stubBackend(page: Page): Promise<void> {
 }
 
 // ------------------------------------------------------------- page helpers
+
+/**
+ * Block until the channel list has stopped rebuilding itself.
+ *
+ * The invariant this enforces is general, not a patch for one symptom: NOTHING
+ * this spec measures may be measured while the surface holding it can still be
+ * unmounted by an app-initiated reload. Waiting for `.channel-item` is not that
+ * — the rows are present both before and after the debounced reload described
+ * on `CHANNEL_LIST_REQUEST`, and a fixed `waitForTimeout` only moves the
+ * collision. So this waits for two things at once: no loading placeholder on
+ * screen, and no channel-list request for a full second — comfortably past the
+ * one 500ms debounce App.tsx arms at mount, and self-extending if a future
+ * reload path is added, because any new request restarts the quiet window.
+ *
+ * It runs for all three arms, not only the two dropdowns that failed: the
+ * selection bar and the Channel Profiles toolbar sit on the same list and are
+ * only accidentally on the winning side of the same race.
+ */
+async function settleChannelList(page: Page): Promise<void> {
+  const QUIET_MS = 1_000;
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const stillLoading = await page.locator('.channels-pane .pane-content > .loading').count();
+    const quietFor = Date.now() - (lastChannelListRequestAt.get(page) ?? 0);
+    if (stillLoading === 0 && quietFor >= QUIET_MS) break;
+    if (Date.now() > deadline) {
+      throw new Error(
+        'the channel list never stopped reloading; every measurement below would be racing a rebuild',
+      );
+    }
+    await page.waitForTimeout(100);
+  }
+  // The rebuild replaces the rows, so re-establish that they are back before
+  // any caller reaches for one.
+  await page.waitForSelector('.channels-pane .channel-item', { timeout: 15_000 });
+}
 
 async function openChannelManagerInEditMode(
   browser: Browser,
@@ -205,6 +269,7 @@ async function openChannelManagerInEditMode(
   // Groups render collapsed; the channel rows this spec selects are inside one.
   await page.locator('.channels-pane .group-header').filter({ hasText: 'Entertainment' }).first().click();
   await page.waitForSelector('.channels-pane .channel-item', { timeout: 15_000 });
+  await settleChannelList(page);
   return page;
 }
 
