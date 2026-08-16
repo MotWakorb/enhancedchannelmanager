@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+import { useModalFocusLifecycle } from '../hooks/useModalFocusLifecycle';
 import type { StagedOperation } from '../types';
 import type {
   DroppedLedgerOperation,
@@ -45,7 +47,19 @@ export interface EditModeRestoreDialogProps {
  *
  * NEITHER BUTTON IS A DEFAULT ESCAPE. There is no Escape handler and no
  * click-away: both would destroy staged work by accident, which is the exact
- * failure the epic's exit guard exists to stop.
+ * failure the epic's exit guard exists to stop. That is also why this dialog
+ * does NOT compose `ModalOverlay`, whose entire behaviour is Escape-to-close;
+ * it marks its own backdrop `data-modal-overlay` instead, which is what the
+ * shared focus lifecycle keys Tab containment off and what
+ * `e2e/visual/modal-typography-inventory.spec.ts` counts as a real modal. The
+ * two are deliberately separable: this dialog takes the focus contract and
+ * declines the dismissal one.
+ *
+ * FOCUS LANDS ON RESTORE, NOT DISCARD. `useModalFocusLifecycle` would
+ * otherwise take the first focusable control, and the first control here
+ * throws staged work away — one stray Enter from an operator who has not read
+ * the account yet. When nothing is restorable there is no Restore button, and
+ * the fallback is the only remaining action.
  */
 export function EditModeRestoreDialog({
   isOpen,
@@ -56,6 +70,14 @@ export function EditModeRestoreDialog({
   onRestore,
   onDiscard,
 }: EditModeRestoreDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreButtonRef = useRef<HTMLButtonElement>(null);
+  useModalFocusLifecycle({
+    containerRef: dialogRef,
+    initialFocusRef: restoreButtonRef,
+    active: isOpen,
+  });
+
   if (!isOpen) return null;
 
   const staged = new Date(savedAt);
@@ -63,9 +85,10 @@ export function EditModeRestoreDialog({
   const droppedCount = dropped.length;
 
   return (
-    <div className="edit-mode-dialog-overlay">
+    <div className="edit-mode-dialog-overlay" data-modal-overlay>
       <div
         className="edit-mode-dialog"
+        ref={dialogRef}
         data-testid="edit-mode-restore-dialog"
         role="dialog"
         aria-modal="true"
@@ -146,7 +169,7 @@ export function EditModeRestoreDialog({
             Discard {restorableCount > 0 ? 'Them' : 'and Continue'}
           </button>
           {restorableCount > 0 && (
-            <button className="edit-mode-dialog-btn primary" onClick={onRestore} autoFocus>
+            <button className="edit-mode-dialog-btn primary" ref={restoreButtonRef} onClick={onRestore}>
               Restore {restorableCount} Change{restorableCount !== 1 ? 's' : ''}
             </button>
           )}

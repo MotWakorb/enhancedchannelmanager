@@ -48,6 +48,7 @@ import { M3ULinkedAccountsModal } from '../components/M3ULinkedAccountsModal'
 import { M3UProfileModal } from '../components/M3UProfileModal'
 import { MergeChannelsModal } from '../components/MergeChannelsModal'
 import { NormalizeNamesModal } from '../components/NormalizeNamesModal'
+import { NumberingConflictDialog } from '../components/NumberingConflictDialog'
 import { PreviewStreamModal } from '../components/PreviewStreamModal'
 import { PrintGuideModal } from '../components/PrintGuideModal'
 import { ScheduledTasksSection } from '../components/ScheduledTasksSection'
@@ -275,7 +276,7 @@ const RENDERERS = {
           {
             id: 'op-5',
             description: 'Changed channel number from 106 to 105',
-            detail: 'The channels using number 105 changed while you were away, so your confirmation of that duplicate no longer applies. The number will be checked again before anything is applied.',
+            detail: 'A channel you were not shown has joined number 105 while you were away, so your confirmation of that duplicate no longer describes it. The number will be checked again before anything is applied.',
           },
         ]}
         onRestore={stub.noop}
@@ -409,6 +410,45 @@ const RENDERERS = {
   'normalize-names': {
     render: () => (
       <NormalizeNamesModal channels={stub.channels} onConfirm={stub.noop} onCancel={stub.noop} />
+    ),
+  },
+
+  // Both conflict kinds at once, and the range-assignment note, because those
+  // are the three sentences an operator has to read correctly under pressure.
+  // Rendered UNANSWERED — Apply disabled — which is the state the dialog opens
+  // in and the state its focus contract is written for
+  // (bead enhancedchannelmanager-ic884.4).
+  'numbering-conflict': {
+    render: () => (
+      <NumberingConflictDialog
+        isOpen
+        conflicts={[
+          {
+            kind: 'number-changed',
+            channelId: 1,
+            name: 'BBC One HD',
+            baselineNumber: 101,
+            serverNumber: 105,
+            proposedNumber: 102,
+            operationIds: ['op-1'],
+            operationDescriptions: ['Renumber "BBC One HD" to 102'],
+            fromRangeAssignment: true,
+          },
+          {
+            kind: 'channel-deleted',
+            channelId: 2,
+            name: 'ITV1 HD',
+            baselineNumber: 103,
+            serverNumber: null,
+            proposedNumber: 104,
+            operationIds: ['op-2'],
+            operationDescriptions: ['Renumber "ITV1 HD" to 104'],
+            fromRangeAssignment: false,
+          },
+        ]}
+        onReconcile={stub.noop}
+        onKeepEditing={stub.noop}
+      />
     ),
   },
 

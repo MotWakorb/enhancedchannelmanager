@@ -21,8 +21,10 @@
  * number is correct — `harnessCoverage.test.ts` re-derives it. But several of
  * those files contain more than one dialog (ChannelPipelineTab has nine,
  * NormalizationEngineSection five) and one contains none of its own, so the
- * real dialog count is 83: the length of this array. Measuring "62" would
- * have measured about three quarters of the estate.
+ * real dialog count is the length of this array — 83 at the first baseline
+ * capture, 84 once epic enhancedchannelmanager-r93hq's numbering-conflict
+ * reconcile dialog was given the semantics that make it discoverable.
+ * Measuring "62" would have measured about three quarters of the estate.
  */
 
 export interface DialogCatalogEntry {
@@ -73,6 +75,7 @@ export const DIALOG_CATALOG = [
   { id: 'm3u-profile', file: 'src/components/M3UProfileModal.tsx', label: 'M3U profile editor', status: 'stubbed', via: 'direct' },
   { id: 'merge-channels', file: 'src/components/MergeChannelsModal.tsx', label: 'Merge channels', status: 'stubbed', via: 'direct' },
   { id: 'normalize-names', file: 'src/components/NormalizeNamesModal.tsx', label: 'Normalize names', status: 'stubbed', via: 'direct' },
+  { id: 'numbering-conflict', file: 'src/components/NumberingConflictDialog.tsx', label: 'Edit Mode numbering conflict reconcile', status: 'stubbed', via: 'direct' },
   { id: 'preview-stream', file: 'src/components/PreviewStreamModal.tsx', label: 'Preview stream', status: 'stubbed', via: 'direct' },
   { id: 'print-guide', file: 'src/components/PrintGuideModal.tsx', label: 'Print guide', status: 'stubbed', via: 'direct' },
   { id: 'security-first-run', file: 'src/components/SecurityFirstRunModal.tsx', label: 'Security first run', status: 'stubbed', via: 'direct' },

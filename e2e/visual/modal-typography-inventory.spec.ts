@@ -77,7 +77,7 @@ test('all catalogued modal text has a reviewed type-scale owner at 1280x720', as
       }).__MODAL_HARNESS__.catalog,
   )
 
-  expect(catalog).toHaveLength(82)
+  expect(catalog).toHaveLength(84)
   expect(catalog.filter((entry) => entry.status === 'gap').map((entry) => entry.id)).toEqual([
     'modal-overlay-base',
   ])

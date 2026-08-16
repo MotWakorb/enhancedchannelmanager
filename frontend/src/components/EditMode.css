@@ -198,8 +198,19 @@
   color: var(--text-primary);
 }
 
+/* Running text inside every Edit Mode dialog — the exit summary, the restore
+   account, the numbering-conflict rows. The chassis never named a type role,
+   so its bare <p>, <li>, <strong> and <label> inherited the 16px document
+   default and read three sizes larger than the same sentence anywhere else in
+   the app. Naming the body role here owns them all in one place rather than
+   per-tag: `e2e/visual/modal-typography-inventory.spec.ts` fails on any bare
+   governed tag left at 16px, which is what caught it once the restore and
+   numbering-conflict dialogs entered the catalog
+   (docs/css_guidelines.md → Typography). */
 .edit-mode-dialog-content {
   padding: 1.25rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .edit-mode-dialog-summary-intro {

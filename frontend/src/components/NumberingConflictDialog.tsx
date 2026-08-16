@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useModalFocusLifecycle } from '../hooks/useModalFocusLifecycle';
 import type {
   NumberingConflict,
   ReconcileChoice,
@@ -21,6 +22,22 @@ import './EditMode.css';
  * Apply stays disabled until every row has an answer: a pre-ticked "keep mine"
  * is a silent overwrite wearing a checkbox, which is the exact outcome this
  * whole bead exists to prevent.
+ *
+ * IT IS A REAL MODAL TO ASSISTIVE TECHNOLOGY, AND TO THE INVENTORY THAT PROVES
+ * IT. `role="dialog"` + `aria-modal` + a name from its own heading, its own
+ * backdrop marked `data-modal-overlay`, and the shared focus lifecycle for
+ * initial focus and Tab containment. Those markers are also what
+ * `frontend/src/devHarness/discoverDialogs.ts` scans for, so this dialog is
+ * catalogued as `numbering-conflict` and measured every run by
+ * `e2e/visual/modal-typography-inventory.spec.ts` rather than being invisible
+ * to it. It keeps its OWN Escape handler (Escape means Keep Editing, and is
+ * suppressed mid-commit) rather than composing `ModalOverlay`, because the
+ * suppression is the point: Escape must not abandon an Apply in flight.
+ *
+ * INITIAL FOCUS IS "KEEP EDITING", NOT "APPLY". Apply is disabled until every
+ * row is answered, so the focus lifecycle skips it and lands on the control
+ * that costs nothing to press. Once the operator has answered, Apply is a
+ * deliberate act, not the thing their first keystroke happens to hit.
  */
 export interface NumberingConflictDialogProps {
   isOpen: boolean;
@@ -52,6 +69,9 @@ export function NumberingConflictDialog({
   isCommitting = false,
 }: NumberingConflictDialogProps) {
   const [choices, setChoices] = useState<Record<number, ReconcileChoice>>({});
+  const titleId = `${useId()}-numbering-conflict-title`;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const applyButtonRef = useRef<HTMLButtonElement>(null);
 
   // A fresh set of conflicts is a fresh set of questions. Carrying an answer
   // over from a previous read would be answering about a value that has since
@@ -75,6 +95,12 @@ export function NumberingConflictDialog({
     return () => document.removeEventListener('keydown', handler);
   }, [isOpen, isCommitting, onKeepEditing]);
 
+  useModalFocusLifecycle({
+    containerRef: dialogRef,
+    initialFocusRef: applyButtonRef,
+    active: isOpen && conflicts.length > 0,
+  });
+
   const answered = conflicts.every((conflict) => choices[conflict.channelId] !== undefined);
 
   const handleReconcile = useCallback(() => {
@@ -89,10 +115,18 @@ export function NumberingConflictDialog({
   if (!isOpen || conflicts.length === 0) return null;
 
   return (
-    <div className="edit-mode-dialog-overlay">
-      <div className="edit-mode-dialog numbering-conflict-dialog" onClick={(e) => e.stopPropagation()}>
+    <div className="edit-mode-dialog-overlay" data-modal-overlay>
+      <div
+        className="edit-mode-dialog numbering-conflict-dialog"
+        ref={dialogRef}
+        data-testid="numbering-conflict-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="edit-mode-dialog-header">
-          <h2>Channel Numbers Changed While You Were Editing</h2>
+          <h2 id={titleId}>Channel Numbers Changed While You Were Editing</h2>
         </div>
 
         <div className="edit-mode-dialog-content">
@@ -189,9 +223,9 @@ export function NumberingConflictDialog({
           </button>
           <button
             className="edit-mode-dialog-btn primary"
+            ref={applyButtonRef}
             onClick={handleReconcile}
             disabled={!answered || isCommitting}
-            autoFocus
           >
             Apply With These Choices
           </button>

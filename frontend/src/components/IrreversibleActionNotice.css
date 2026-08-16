@@ -21,6 +21,13 @@
   border-radius: 4px;
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   color: var(--text-primary);
+  /* The notice is running text, so it takes the body role rather than the
+     16px document default its `.modal-footer` host leaves it on. Its bare
+     <strong> had no owner at all, which is what
+     e2e/visual/modal-typography-inventory.spec.ts reports as a residual
+     (docs/css_guidelines.md -> Typography). */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .irreversible-action-notice-icon {
@@ -39,11 +46,11 @@
 
 .irreversible-action-notice-body strong {
   color: var(--warning-text);
+  font-weight: var(--type-item-title-weight);
 }
 
 .irreversible-action-notice-body p {
   margin: 0;
-  font-size: 0.9em;
   line-height: 1.45;
 }
 
@@ -52,7 +59,6 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 0.9em;
   font-weight: 600;
 }
 
