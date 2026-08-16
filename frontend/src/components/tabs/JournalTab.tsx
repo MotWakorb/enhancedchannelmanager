@@ -382,6 +382,7 @@ export function JournalTab() {
             { value: 'stream_remove', label: 'Stream Remove' },
             { value: 'stream_reorder', label: 'Stream Reorder' },
             { value: 'reorder', label: 'Reorder' },
+            { value: 'merge_unapplied', label: 'Merge Not Applied' },
           ]}
         />
         <CustomSelect

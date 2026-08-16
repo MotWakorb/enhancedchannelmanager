@@ -4877,7 +4877,24 @@ export interface AcceptMergeOutcome {
   journal_entry_id: number;
   source_stream_id: string;
   confidence: number;
+  /**
+   * The QUEUE ROW's state, which always reaches `merged`. This is NOT a claim
+   * that Dispatcharr was updated — see `dispatcharr_updated`.
+   */
   status: 'merged';
+  /**
+   * Whether the candidate channel ends the request holding the stream.
+   * `false` when the stream-name lookup matched zero or several streams, was
+   * truncated at its page ceiling, or failed — the decision is recorded and no
+   * upstream write happens. `null` on an idempotent replay, which made no
+   * Dispatcharr call and has no evidence either way
+   * (bead enhancedchannelmanager-i5ic0).
+   */
+  dispatcharr_updated: boolean | null;
+  /** Operator-actionable prose whenever `dispatcharr_updated` is not `true`. */
+  unapplied_reason: string | null;
+  /** Journal rows this request could not write. Always present. */
+  journal_rows_unwritten: number;
 }
 
 /**

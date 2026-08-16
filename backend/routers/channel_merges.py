@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import List, Literal, Optional
+from typing import List, Literal, NamedTuple, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -99,6 +99,10 @@ from database import get_session
 from dispatcharr_client import get_client
 from models import PendingMerge, PendingMergeJournal
 from observability import get_metric
+# The ONE journal writer, which CHECKS both of `journal`'s return values (bead
+# …-kz089 fix round 5, reused here for …-i5ic0). No import cycle —
+# `routers.channels` does not import this module.
+from routers.channels import write_journal_rows
 from services.dedup_matcher import CONFIDENCE_FLOOR, find_candidate, MatchResult
 from services.m3u_dedup_hook import enqueue_pending_merge
 
@@ -223,6 +227,64 @@ class PendingMergesSnapshotResponse(BaseModel):
     total: int
 
 
+class StreamLookup(NamedTuple):
+    """What a stream-name resolution actually established.
+
+    ``matches`` empty means three different things and the caller must be able
+    to tell them apart, because two of them are statements about ECM and one is
+    a statement about the operator's data (bead
+    ``enhancedchannelmanager-i5ic0``):
+
+    * ``failed`` — the lookup itself did not complete. NO evidence either way
+      about whether the stream exists. Reported as "no match", an upstream
+      outage became an accusation against the operator's catalogue.
+    * ``truncated`` — the search filled its single page, so an exact match may
+      exist on a page nobody asked for. Also not evidence of absence.
+    * neither — the search completed, saw everything it asked for, and nothing
+      matched. This is the only one that means "that stream is not there".
+    """
+
+    matches: list[dict]
+    truncated: bool
+    failed: bool
+
+
+def _unapplied_reason(lookup: StreamLookup, stream_name: str) -> Optional[str]:
+    """Why the Dispatcharr-side merge did not happen, in words, or ``None``.
+
+    Every branch names the stream, because the operator's next action is to go
+    and look for it. ``None`` means the merge applied and there is nothing to
+    report — the flag has to be able to read clean or it carries no information.
+    """
+    if lookup.failed:
+        return (
+            f"The Dispatcharr stream lookup for \"{stream_name}\" could not be "
+            "completed, so this merge was recorded but NOT applied upstream. "
+            "The stream may well exist. Retry once Dispatcharr is reachable, or "
+            "add the stream to the channel by hand."
+        )
+    if len(lookup.matches) > 1:
+        return (
+            f"{len(lookup.matches)} Dispatcharr streams are named "
+            f"\"{stream_name}\", so this merge was recorded but NOT applied "
+            "upstream — ECM cannot tell which one you meant. Add the right "
+            "stream to the channel by hand, or rename the duplicates."
+        )
+    if lookup.truncated:
+        return (
+            f"The search for \"{stream_name}\" filled its single page of "
+            f"{STREAM_LOOKUP_PAGE_SIZE} results without an exact match, so a "
+            "matching stream may exist beyond it. This merge was recorded but "
+            "NOT applied upstream. Narrow the stream's name or add it to the "
+            "channel by hand."
+        )
+    return (
+        f"No Dispatcharr stream is named \"{stream_name}\", so this merge was "
+        "recorded but NOT applied upstream. The stream may have been renamed or "
+        "removed since it was queued."
+    )
+
+
 class AcceptOutcome(BaseModel):
     """Flat-outcome response for POST /api/channel-merges/{id}/accept.
 
@@ -238,6 +300,28 @@ class AcceptOutcome(BaseModel):
     ``confidence`` is the RapidFuzz score captured at queue-time, mirrored
     here so the operator's UI / MCP client sees what the decision was
     made against without a second round-trip to the journal.
+
+    ``status`` stays ``'merged'`` because it describes the QUEUE ROW, whose
+    transition is what this endpoint owns and which genuinely happened. Whether
+    DISPATCHARR was updated is a separate fact and used to be unanswerable from
+    this response — the queue row went terminal, the audit row was written and
+    the caller got a ``200`` whether the stream had been added upstream or the
+    name had matched nothing at all (bead ``enhancedchannelmanager-i5ic0``).
+    Three fields carry that fact now:
+
+    ``dispatcharr_updated``
+        ``True`` when the candidate channel ends this request holding the
+        stream — whether this call PATCHed it or it was already there. ``False``
+        when it does not. ``None`` on an idempotent replay, which performed no
+        Dispatcharr call and therefore has no evidence about what the original
+        one did; guessing ``True`` there would be the same false claim one
+        branch over.
+    ``unapplied_reason``
+        Operator-actionable prose for anything other than a clean apply, naming
+        the stream and WHY it could not be resolved. ``None`` when applied.
+    ``journal_rows_unwritten``
+        Rows of the operator-facing journal this request could not write.
+        Always present, so a caller checks a number rather than probing.
     """
 
     merged_into_channel_id: str
@@ -245,6 +329,9 @@ class AcceptOutcome(BaseModel):
     source_stream_id: str
     confidence: float
     status: Literal["merged"] = "merged"
+    dispatcharr_updated: Optional[bool] = True
+    unapplied_reason: Optional[str] = None
+    journal_rows_unwritten: int = 0
 
 
 class DismissOutcome(BaseModel):
@@ -1021,6 +1108,17 @@ async def accept_pending_merge(
             journal_entry_id=journal_id,
             source_stream_id=source_stream_id,
             confidence=row.confidence,
+            # NOT `True`. This request made no Dispatcharr call, so it has no
+            # evidence about what the original one did, and asserting an
+            # outcome it did not observe is the same false success claim bead
+            # …-i5ic0 is about — one branch over (see `AcceptOutcome`).
+            dispatcharr_updated=None,
+            unapplied_reason=(
+                "This merge was already resolved by an earlier request, which "
+                "this one replayed without contacting Dispatcharr. Whether "
+                "Dispatcharr was updated is recorded in the journal against "
+                f"channel {row.candidate_channel_id}, not here."
+            ),
         )
 
     if row.status == "dismissed":
@@ -1086,31 +1184,35 @@ async def accept_pending_merge(
     # in pending_merges) means we search; ambiguity is a WARN, not an
     # abort — the audit-first contract still records the decision.
     source_stream_identifier = row.stream_name  # used by the journal if unresolved
+    # What actually happened upstream, decided here and reported verbatim
+    # rather than assumed from the fact that the request did not raise (bead
+    # …-i5ic0). `patched` is narrower than `dispatcharr_updated`: a stream
+    # already on the channel means the merge IS applied and no row is owed.
+    dispatcharr_updated = False
+    unapplied_reason: Optional[str] = None
+    patched = False
+    resolved_stream_id: Optional[int] = None
     try:
-        matched_streams = await _resolve_streams_by_name(client, row.stream_name)
-        if len(matched_streams) == 1:
-            stream = matched_streams[0]
-            stream_id = stream.get("id")
-            if stream_id is not None:
-                source_stream_identifier = str(stream_id)
-                await _add_stream_to_channel(
-                    client=client,
-                    channel=channel,
-                    stream_id=stream_id,
-                )
-        elif len(matched_streams) == 0:
-            logger.warning(
-                "[DEDUP] accept: no streams in Dispatcharr matched name=%r "
-                "(pending_merges.id=%s) — recording operator decision in "
-                "audit trail without a Dispatcharr-side update",
-                row.stream_name, row.id,
+        lookup = await _resolve_streams_by_name(client, row.stream_name)
+        matched_streams = lookup.matches
+        if len(matched_streams) == 1 and matched_streams[0].get("id") is not None:
+            stream_id = matched_streams[0]["id"]
+            resolved_stream_id = stream_id
+            source_stream_identifier = str(stream_id)
+            patched = await _add_stream_to_channel(
+                client=client,
+                channel=channel,
+                stream_id=stream_id,
             )
+            dispatcharr_updated = True
         else:
+            # Includes the single-match-with-no-usable-id case, which used to
+            # fall through the inner `if` and out of the block silently — a
+            # fourth way to report a merge that never touched Dispatcharr.
+            unapplied_reason = _unapplied_reason(lookup, row.stream_name)
             logger.warning(
-                "[DEDUP] accept: %d streams matched name=%r "
-                "(pending_merges.id=%s) — ambiguous; recording operator "
-                "decision in audit trail without a Dispatcharr-side update",
-                len(matched_streams), row.stream_name, row.id,
+                "[DEDUP] accept: pending_merges.id=%s recorded WITHOUT a "
+                "Dispatcharr-side update: %s", row.id, unapplied_reason,
             )
     except Exception as e:  # noqa: BLE001 — any Dispatcharr failure is SLI-10c
         _bump_metric("error")
@@ -1169,11 +1271,58 @@ async def accept_pending_merge(
         "candidate=%s journal_entry_id=%s actor=%s",
         row.id, row.candidate_channel_id, entry.id, _actor_token_id(user),
     )
+    # The operator-facing journal, which is where the user guide tells an
+    # operator to trace a channel's history — and the only place a merge that
+    # was NOT applied upstream becomes findable afterwards. The
+    # `pending_merge_journal` row above records the DECISION (ADR-008 §D6); this
+    # records the OUTCOME, which is a different fact and was recorded nowhere
+    # (bead …-i5ic0). A merge that landed by already being in the desired state
+    # gets no row: nothing changed, so there is nothing to trace.
+    channel_name = channel.get("name") or f"Channel {row.candidate_channel_id}"
+    outcome_rows: list[dict] = []
+    if patched:
+        outcome_rows.append({
+            "category": "channel",
+            "action_type": "stream_add",
+            "entity_id": None,
+            "entity_name": channel_name,
+            "description": (
+                f"Added stream '{row.stream_name}' to channel "
+                f"'{channel_name}' from the pending-merge queue"
+            ),
+            "after_value": {
+                "streams": [resolved_stream_id],
+                "channel_id": row.candidate_channel_id,
+                "pending_merge_id": row.id,
+            },
+        })
+    elif not dispatcharr_updated:
+        outcome_rows.append({
+            "category": "channel",
+            "action_type": "merge_unapplied",
+            "entity_id": None,
+            "entity_name": channel_name,
+            "description": (
+                f"Accepted the pending merge of stream '{row.stream_name}' into "
+                f"channel '{channel_name}', but Dispatcharr was NOT updated: "
+                f"{unapplied_reason}"
+            ),
+            "after_value": {
+                "channel_id": row.candidate_channel_id,
+                "pending_merge_id": row.id,
+                "stream_name": row.stream_name,
+                "dispatcharr_updated": False,
+            },
+        })
+
     return AcceptOutcome(
         merged_into_channel_id=row.candidate_channel_id,
         journal_entry_id=int(entry.id),
         source_stream_id=source_stream_identifier,
         confidence=row.confidence,
+        dispatcharr_updated=dispatcharr_updated,
+        unapplied_reason=unapplied_reason,
+        journal_rows_unwritten=write_journal_rows(outcome_rows, log_tag="DEDUP"),
     )
 
 
@@ -1312,8 +1461,14 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     but it may also be on a later page; downstream audit-first
     semantics still record the operator decision.
 
-    Returns ``[]`` when nothing matches or the API call fails — the
-    caller's audit-first contract handles the empty case.
+    Returns a :class:`StreamLookup`, not a bare list. The three ways this can
+    come back empty are NOT the same fact and the caller has to tell them apart
+    (bead ``enhancedchannelmanager-i5ic0``): nothing matched, the search was
+    truncated at the page ceiling so a match may exist on a page nobody asked
+    for, or the lookup itself failed. Collapsing all three into ``[]`` is what
+    let an outage and a truncated page be reported to the operator as "no
+    streams matched that name" — a claim about their data that the search never
+    established.
     """
     try:
         response = await client.get_streams(
@@ -1324,9 +1479,9 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     except Exception:  # noqa: BLE001 — caller decides what to do with empty results
         logger.warning(
             "[DEDUP] stream-name resolution failed for name=%r; "
-            "treating as no-match", stream_name,
+            "no evidence either way about whether the stream exists", stream_name,
         )
-        return []
+        return StreamLookup(matches=[], truncated=False, failed=True)
 
     results = response.get("results", []) if isinstance(response, dict) else []
 
@@ -1336,7 +1491,8 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     # trace. The exact-name filter below still selects the intended
     # stream if it is in this page, but operators should know when the
     # response was truncated.
-    if len(results) >= STREAM_LOOKUP_PAGE_SIZE:
+    truncated = len(results) >= STREAM_LOOKUP_PAGE_SIZE
+    if truncated:
         logger.warning(
             "[DEDUP] Stream-name lookup hit page_size ceiling (%d) for "
             "stream=%r; exact match may be in untested pages",
@@ -1345,10 +1501,14 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
 
     # Exact-name filter — case-insensitive to match operator expectation.
     needle = stream_name.lower()
-    return [s for s in results if str(s.get("name", "")).lower() == needle]
+    return StreamLookup(
+        matches=[s for s in results if str(s.get("name", "")).lower() == needle],
+        truncated=truncated,
+        failed=False,
+    )
 
 
-async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
+async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> bool:
     """Add ``stream_id`` to ``channel``'s stream list via Dispatcharr.
 
     Mirrors the proven pattern in ``backend/routers/channels.py``
@@ -1356,6 +1516,11 @@ async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
     (``_add_stream_to_channel``). No-op if the stream is already
     present — Dispatcharr would silently dedup the list, but skipping
     the PATCH saves an HTTP round-trip.
+
+    Returns whether a PATCH was actually sent. The caller needs the difference
+    for the JOURNAL, not for the outcome: either way the channel ends holding
+    the stream, so the merge IS applied, but only one of the two is a mutation
+    worth a row (bead ``enhancedchannelmanager-i5ic0``).
     """
     current_streams = channel.get("streams", [])
     # The streams collection in Dispatcharr's channel payload can be
@@ -1367,10 +1532,11 @@ async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
             "[DEDUP] stream %s already present in channel %s — skipping PATCH",
             stream_id, channel.get("id"),
         )
-        return
+        return False
     new_streams = list(normalized) + [stream_id]
     await client.update_channel(channel["id"], {"streams": new_streams})
     logger.info(
         "[DEDUP] added stream %s to channel %s as part of pending-merge accept",
         stream_id, channel.get("id"),
     )
+    return True

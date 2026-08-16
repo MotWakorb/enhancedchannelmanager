@@ -317,3 +317,48 @@
   font-size: var(--type-body-size);
   line-height: var(--type-body-line-height);
 }
+
+/* Merges recorded without a Dispatcharr update (bead
+   enhancedchannelmanager-i5ic0). Warning, not error: the request succeeded and
+   the queue row resolved — what did not happen is the upstream write. Styled
+   here rather than reusing `.warning-banner`, which is SettingsTab-local; the
+   shared catalogue in `src/shared/common.css` carries `.error-banner` only. */
+.pending-merges-unapplied {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  background-color: var(--warning-bg);
+  color: var(--warning-text, #fbbf24);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+}
+
+.pending-merges-unapplied .material-icons {
+  font-size: var(--icon-status);
+  flex-shrink: 0;
+}
+
+.pending-merges-unapplied-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.pending-merges-unapplied-heading {
+  margin: 0;
+}
+
+.pending-merges-unapplied-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

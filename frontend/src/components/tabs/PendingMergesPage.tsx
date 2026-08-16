@@ -55,7 +55,30 @@ interface BulkProgress {
   completed: number;
   total: number;
   failures: number;
+  /**
+   * Accepts that SUCCEEDED and left Dispatcharr untouched. Counted apart from
+   * `failures` because nothing failed — the request returned 200 and the queue
+   * row resolved — and apart from the plain completed count because the
+   * operator has work left to do (bead enhancedchannelmanager-i5ic0).
+   */
+  unapplied: number;
   phase: 'running' | 'stopping' | 'stopped' | 'completed';
+}
+
+/**
+ * A merge the operator accepted that ECM could not apply to Dispatcharr.
+ *
+ * Held at page level rather than per row, because the row is REMOVED on
+ * accept — correctly, its queue state is terminal and a `status=pending`
+ * reload would not return it. That removal is exactly what made the defect
+ * invisible: the operator saw the merge confirmed and the row leave, with no
+ * in-product signal that anything had been skipped and no way to find the
+ * affected merges afterwards. This notice is that signal.
+ */
+interface UnappliedMerge {
+  rowId: number;
+  streamName: string;
+  reason: string;
 }
 
 /** Format a 0.0–1.0 confidence as an integer-percent badge string. */
@@ -77,6 +100,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   // single page-wide "submitting" flag.
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
+  const [unapplied, setUnapplied] = useState<UnappliedMerge[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const selectedIdsRef = useRef(selectedIds);
   const rowsRef = useRef(rows);
@@ -183,6 +207,40 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     loadRows();
   }, [loadRows]);
 
+  /**
+   * Record an accept that succeeded without updating Dispatcharr.
+   *
+   * A non-throwing response used to be taken as proof the merge had been
+   * applied. It is not: `status: 'merged'` describes the QUEUE ROW, and the
+   * backend now says separately whether the upstream write happened
+   * (bead enhancedchannelmanager-i5ic0). `dispatcharr_updated === false` is the
+   * only value that means "it did not" — `null` is an idempotent replay, which
+   * has no evidence either way and must not be reported as a skip.
+   *
+   * Returns whether it recorded one, so the bulk loop can count it.
+   */
+  const noteUnappliedMerge = useCallback(
+    (row: { id: number; stream_name: string }, outcome: unknown): boolean => {
+      const result = outcome as Partial<api.AcceptMergeOutcome> | undefined;
+      if (!result || result.dispatcharr_updated !== false) return false;
+      const reason =
+        result.unapplied_reason ??
+        'ECM recorded this merge but did not update Dispatcharr.';
+      setUnapplied((previous) =>
+        previous.some((entry) => entry.rowId === row.id)
+          ? previous
+          : [...previous, { rowId: row.id, streamName: row.stream_name, reason }],
+      );
+      logger.warn(
+        'PendingMergesPage: merge %s recorded without a Dispatcharr update: %s',
+        row.id,
+        reason,
+      );
+      return true;
+    },
+    [],
+  );
+
   const handleAction = useCallback(
     async (
       rowId: number,
@@ -196,7 +254,9 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
       });
       setRowBusy((prev) => ({ ...prev, [rowId]: true }));
       try {
-        await action(rowId);
+        const outcome = await action(rowId);
+        const acted = rowsRef.current.find((item) => item.id === rowId);
+        if (acted) noteUnappliedMerge(acted, outcome);
         // Optimistic remove — the backend has flipped the row to a terminal
         // state and the list endpoint defaults to status='pending', so the
         // row would not be returned on the next reload anyway. Removing it
@@ -222,7 +282,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         });
       }
     },
-    [],
+    [noteUnappliedMerge],
   );
 
   const handleMerge = useCallback(
@@ -427,12 +487,14 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     const count = targets.length;
     let completed = 0;
     let failures = 0;
+    let unappliedCount = 0;
     setBulkProgress({
       scope,
       operation,
       completed,
       total: count,
       failures,
+      unapplied: unappliedCount,
       phase: 'running',
     });
       setRowErrors((previous) => {
@@ -454,7 +516,8 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
             operation === 'Merge'
               ? api.acceptPendingMerge
               : api.dismissPendingMerge;
-          await action(row.id);
+          const outcome = await action(row.id);
+          if (noteUnappliedMerge(row, outcome)) unappliedCount += 1;
           setRows((previous) => previous.filter((item) => item.id !== row.id));
           setTotalRows((previous) => Math.max(0, previous - 1));
           setSelectedIds((previous) => {
@@ -491,6 +554,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
           completed,
           total: count,
           failures,
+          unapplied: unappliedCount,
           phase: stopRequestedRef.current ? 'stopping' : 'running',
         });
       }
@@ -513,13 +577,14 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         completed,
         total: count,
         failures,
+        unapplied: unappliedCount,
         phase: stopped ? 'stopped' : 'completed',
       });
     } finally {
       confirmingRef.current = false;
       bulkLockRef.current = false;
     }
-  }, []);
+  }, [noteUnappliedMerge]);
 
   const cancelBulkIntent = useCallback(() => {
     const previousView = preConfirmViewRef.current;
@@ -652,9 +717,9 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
             {bulkProgress.phase === 'stopping' &&
               `Stopping after the current item… ${bulkProgress.completed} of ${bulkProgress.total} processed.`}
             {bulkProgress.phase === 'stopped' &&
-              `Stopped after ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}. ${bulkProgress.total - bulkProgress.completed} remaining.`}
+              `Stopped after ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}${bulkProgress.unapplied ? ` and ${bulkProgress.unapplied} not applied to Dispatcharr` : ''}. ${bulkProgress.total - bulkProgress.completed} remaining.`}
             {bulkProgress.phase === 'completed' &&
-              `Completed ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}.`}
+              `Completed ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}${bulkProgress.unapplied ? ` and ${bulkProgress.unapplied} not applied to Dispatcharr` : ''}.`}
           </span>
           {(bulkProgress.phase === 'running' ||
             bulkProgress.phase === 'stopping') && (
@@ -674,6 +739,47 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         <div className="error-banner" role="alert">
           <span className="material-icons">error</span>
           <span>{loadError}</span>
+        </div>
+      )}
+
+      {/* Merges the backend recorded WITHOUT updating Dispatcharr. A warning
+          rather than an error banner, and `role="status"` rather than
+          `role="alert"`: nothing failed — the request succeeded and the queue
+          row resolved — so sending the operator to retry would be wrong. What
+          is true is that the upstream write did not happen and only they can
+          finish it. The rows named here are already gone from the list above,
+          which is why the notice has to carry the stream names itself (bead
+          enhancedchannelmanager-i5ic0). */}
+      {unapplied.length > 0 && (
+        <div
+          className="pending-merges-unapplied"
+          role="status"
+          aria-live="polite"
+          data-testid="pending-merges-unapplied"
+        >
+          <span className="material-icons" aria-hidden="true">warning</span>
+          <div className="pending-merges-unapplied-body">
+            <p className="pending-merges-unapplied-heading">
+              {unapplied.length === 1
+                ? '1 merge was recorded but not applied to Dispatcharr.'
+                : `${unapplied.length} merges were recorded but not applied to Dispatcharr.`}{' '}
+              Look for them in the Journal under “Merge Not Applied”.
+            </p>
+            <ul className="pending-merges-unapplied-list">
+              {unapplied.map((entry) => (
+                <li key={entry.rowId}>
+                  <strong>{entry.streamName}</strong>: {entry.reason}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setUnapplied([])}
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 

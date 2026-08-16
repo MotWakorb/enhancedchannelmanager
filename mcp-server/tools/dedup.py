@@ -157,9 +157,20 @@ def register(mcp: FastMCP):
         The merge is idempotent: calling accept on a row that is already merged
         returns the original outcome envelope without error.
 
+        CHECK `dispatcharr_updated` BEFORE reporting the merge as done.
+        `status: 'merged'` describes the ECM QUEUE ROW, which always reaches a
+        terminal state. It does NOT mean Dispatcharr was updated: when the
+        stream-name lookup matches zero streams, several streams, or is
+        truncated at its page ceiling, the decision is recorded and no upstream
+        write happens. `dispatcharr_updated` is False in that case and
+        `unapplied_reason` says why in operator-actionable terms — relay it
+        rather than reporting success. It is None on an idempotent replay,
+        which performed no Dispatcharr call and has no evidence either way.
+
         On success, returns:
             {merged_into_channel_id, journal_entry_id, source_stream_id,
-             confidence, status}
+             confidence, status, dispatcharr_updated, unapplied_reason,
+             journal_rows_unwritten}
 
         On 4xx (returns structured error envelope — does NOT raise):
             404 TARGET_NOT_FOUND: The candidate channel no longer exists in

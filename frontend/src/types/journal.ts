@@ -14,6 +14,14 @@ export type JournalActionType =
   | 'stream_remove'
   | 'stream_reorder'
   | 'reorder'
+  /**
+   * A pending merge the operator accepted that ECM could NOT apply to
+   * Dispatcharr — the stream name matched zero or several streams, or the
+   * search could not establish an answer. Its own action type so the affected
+   * merges are findable by filter rather than by reading every row's prose
+   * (bead enhancedchannelmanager-i5ic0).
+   */
+  | 'merge_unapplied'
   | 'refresh'
   | 'start'
   | 'stop'
