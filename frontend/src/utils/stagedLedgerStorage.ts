@@ -12,7 +12,7 @@
  * available at that moment either: the session is already gone, so every
  * commit call would 401.
  *
- * THREE PROPERTIES, IN THE ORDER THEY MATTER.
+ * FOUR PROPERTIES, IN THE ORDER THEY MATTER.
  *
  * 1. THE LEDGER IS BOUND TO THE OPERATOR WHO STAGED IT. "Signing back in on
  *    the same tab" is not "the same person". A ledger stamped with a different
@@ -33,6 +33,15 @@
  *    and what cannot, with a reason per operation. A partial restore the
  *    operator can read is fine; a silent one is not.
  *
+ * 4. A CONFIRMATION IS CHECKED AGAINST THE LINEUP IT DESCRIBED, not merely
+ *    carried. The operator who confirmed "102 is used by Bravo — use it
+ *    anyway?" consented to sharing 102 WITH BRAVO. If Bravo moved off 102 and
+ *    Delta moved on while the session was dead, that is a collision nobody was
+ *    ever shown, so {@link planLedgerRestore} withdraws the confirmation and
+ *    reports it. The EDIT still comes back — losing the operator's work over a
+ *    stale confirmation would be a worse trade — but the final-state preflight
+ *    asks again before Apply.
+ *
  * WHAT IS DELIBERATELY NOT CHECKED, so the gaps are decisions and not
  * accidents: a stream id being ATTACHED by `addStreamToChannel` (the channel
  * list carries stream ids, not a stream inventory, so a vanished stream is
@@ -42,13 +51,21 @@
  * ids when the caller does not supply {@link LedgerRestoreContext.profileIds}.
  */
 import type { Channel, ChannelGroup, StagedOperation, ApiCallSpec, User } from '../types';
+import { acknowledgementOf, sameChannelNumber } from './channelNumberPlan';
 
 /** sessionStorage key. Fixed, not per-operator: a foreign ledger has to be
  *  FINDABLE in order to be destroyed (see the identity guard above). */
 export const STAGED_LEDGER_STORAGE_KEY = 'ecm.channelManager.stagedLedger';
 
-/** Bumped whenever the persisted shape changes; a mismatch is discarded. */
-export const STAGED_LEDGER_FORMAT_VERSION = 1;
+/** Bumped whenever the persisted shape changes; a mismatch is discarded.
+ *
+ *  2: a duplicate-number confirmation became `acknowledgedDuplicate`, an
+ *  object carrying the occupants alongside the number, replacing the bare
+ *  `acknowledgedDuplicateNumber` (bead enhancedchannelmanager-vdxbx, fix
+ *  round 2). A version-1 record has no occupants to check the restore
+ *  against, so it is discarded rather than restored with consent that
+ *  cannot be verified. */
+export const STAGED_LEDGER_FORMAT_VERSION = 2;
 
 /**
  * How long a persisted ledger stays offerable.
@@ -286,9 +303,27 @@ export interface LedgerRestoreContext {
   profileIds?: number[];
 }
 
+/**
+ * An operation restored WITHOUT the duplicate-number confirmation it was
+ * staged with, because the collision that confirmation described no longer
+ * exists (bead enhancedchannelmanager-vdxbx, fix round 2).
+ *
+ * The operation itself survives — the operator's edit is not the problem, only
+ * the consent attached to it — so nothing is lost. The final-state preflight
+ * asks again before Apply, and if there is still a collision the operator is
+ * shown the one that is really there.
+ */
+export interface WithdrawnAcknowledgement {
+  id: string;
+  description: string;
+  /** One sentence naming what moved under the acknowledgement. */
+  detail: string;
+}
+
 export interface LedgerRestorePlan {
   restorable: StagedOperation[];
   dropped: DroppedLedgerOperation[];
+  withdrawnAcknowledgements: WithdrawnAcknowledgement[];
 }
 
 /** A single reference an operation makes to something that must still exist. */
@@ -391,8 +426,19 @@ export function planLedgerRestore(
     return seeded;
   };
 
+  /**
+   * Where each channel sits as the surviving operations are replayed. Seeded
+   * from the server list, so it is the same EFFECTIVE lineup the staging-time
+   * duplicate warning was computed against — which is what makes an ordinary
+   * restore, where nothing moved, withdraw nothing.
+   */
+  const numberByChannel = new Map<number, number | null>(
+    context.channels.map((channel) => [channel.id, channel.channel_number]),
+  );
+
   const restorable: StagedOperation[] = [];
   const dropped: DroppedLedgerOperation[] = [];
+  const withdrawnAcknowledgements: WithdrawnAcknowledgement[] = [];
 
   const drop = (
     operation: StagedOperation,
@@ -476,11 +522,55 @@ export function planLedgerRestore(
       continue;
     }
 
+    // --- the confirmation, against the lineup as it stands NOW --------------
+    //
+    // An acknowledgement is consent to ONE collision: this channel, this
+    // number, these occupants. While the session was dead the occupant could
+    // have moved off and a stranger moved on, and a confirmation carrying only
+    // a number would authorise that stranger — a collision the operator was
+    // never shown. So the occupants it named are compared against the ones the
+    // projection puts on that number at this point in the replay, and a
+    // mismatch withdraws the consent while keeping the edit.
+    let restored = operation;
+    const acknowledged = acknowledgementOf(apiCall);
+    if (
+      acknowledged !== undefined &&
+      (apiCall.type === 'updateChannel' || apiCall.type === 'createChannel')
+    ) {
+      const self =
+        apiCall.type === 'updateChannel' ? apiCall.channelId : tempChannelIdOf(operation);
+      const occupantsNow = new Set<number>();
+      for (const [channelId, number] of numberByChannel) {
+        if (channelId === self) continue;
+        if (sameChannelNumber(number, acknowledged.number)) occupantsNow.add(channelId);
+      }
+      const named = new Set(acknowledged.occupantChannelIds ?? []);
+      const unchanged =
+        named.size === occupantsNow.size && [...named].every((id) => occupantsNow.has(id));
+      if (!unchanged) {
+        restored = {
+          ...operation,
+          apiCall: { ...apiCall, acknowledgedDuplicate: undefined },
+        };
+        withdrawnAcknowledgements.push({
+          id: operation.id,
+          description: operation.description,
+          detail:
+            `The channels using number ${acknowledged.number} changed while you were away, so ` +
+            'your confirmation of that duplicate no longer applies. The number will be checked ' +
+            'again before anything is applied.',
+        });
+      }
+    }
+
     // --- accepted: record what it creates and how it moves the projection -
     switch (apiCall.type) {
       case 'createChannel': {
         const tempId = tempChannelIdOf(operation);
-        if (tempId !== undefined) stagedChannelIds.add(tempId);
+        if (tempId !== undefined) {
+          stagedChannelIds.add(tempId);
+          numberByChannel.set(tempId, apiCall.channelNumber ?? null);
+        }
         if (apiCall.newGroupName && typeof apiCall.stagedGroupId === 'number') {
           stagedGroupIds.add(apiCall.stagedGroupId);
         }
@@ -503,12 +593,27 @@ export function planLedgerRestore(
       case 'reorderChannelStreams':
         projectedStreams.set(apiCall.channelId, [...apiCall.streamIds]);
         break;
+      case 'updateChannel':
+        if (apiCall.data.channel_number !== undefined) {
+          numberByChannel.set(apiCall.channelId, apiCall.data.channel_number ?? null);
+        }
+        break;
+      case 'deleteChannel':
+        numberByChannel.delete(apiCall.channelId);
+        break;
+      case 'bulkAssignChannelNumbers': {
+        const start = apiCall.startingNumber ?? 1;
+        apiCall.channelIds.forEach((channelId, offset) => {
+          numberByChannel.set(channelId, start + offset);
+        });
+        break;
+      }
       default:
         break;
     }
 
-    restorable.push(operation);
+    restorable.push(restored);
   }
 
-  return { restorable, dropped };
+  return { restorable, dropped, withdrawnAcknowledgements };
 }

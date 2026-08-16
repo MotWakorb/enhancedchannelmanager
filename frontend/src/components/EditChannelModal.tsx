@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useId, useMemo, memo } from 'react';
-import type { Channel, Logo } from '../types';
+import type { Channel, Logo, DuplicateNumberAcknowledgement } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
@@ -21,12 +21,13 @@ export interface ChannelMetadataChanges {
 /** Bookkeeping travelling back with a save that is not part of the payload. */
 export interface ChannelMetadataSaveOptions {
   /**
-   * The channel number the operator was warned about and chose to use anyway
-   * (bead enhancedchannelmanager-vdxbx). The caller puts it on the staged
-   * operation, so the final-state preflight does not refuse at Apply the very
-   * duplicate that was just approved here.
+   * The collision the operator was warned about and chose to accept (bead
+   * enhancedchannelmanager-vdxbx). The caller puts it on the staged operation,
+   * so the final-state preflight does not refuse at Apply the very duplicate
+   * that was just approved here. It names the OCCUPANTS as well as the number,
+   * so it cannot outlive the collision it consented to.
    */
-  acknowledgedDuplicateNumber?: number;
+  acknowledgedDuplicate?: DuplicateNumberAcknowledgement;
 }
 
 export interface EditChannelModalProps {
@@ -233,12 +234,12 @@ export const EditChannelModal = memo(function EditChannelModal({
   /**
    * Save, having decided about any duplicate.
    *
-   * `acknowledgedDuplicateNumber` is passed on as a second argument only when
-   * there is one, so an ordinary save's call shape is exactly what it has
-   * always been and no caller has to learn a new signature to keep behaving
-   * the way it did.
+   * `acknowledgedDuplicate` is passed on as a second argument only when there
+   * is one, so an ordinary save's call shape is exactly what it has always
+   * been and no caller has to learn a new signature to keep behaving the way
+   * it did.
    */
-  const commitSave = async (acknowledgedDuplicateNumber?: number) => {
+  const commitSave = async (acknowledgedDuplicate?: DuplicateNumberAcknowledgement) => {
     setSaving(true);
     try {
       const changes: ChannelMetadataChanges = {};
@@ -265,10 +266,10 @@ export const EditChannelModal = memo(function EditChannelModal({
         changes.stream_profile_id = selectedStreamProfileId;
       }
 
-      if (acknowledgedDuplicateNumber === undefined) {
+      if (acknowledgedDuplicate === undefined) {
         await onSave(changes);
       } else {
-        await onSave(changes, { acknowledgedDuplicateNumber });
+        await onSave(changes, { acknowledgedDuplicate });
       }
     } finally {
       setSaving(false);
@@ -1140,7 +1141,17 @@ export const EditChannelModal = memo(function EditChannelModal({
                   className="discard-confirm-discard"
                   onClick={async () => {
                     setShowDuplicateConfirm(false);
-                    await commitSave(parsedChannelNumber ?? undefined);
+                    // The occupants recorded are the ones this dialog NAMED,
+                    // so the acknowledgement describes the collision the
+                    // operator actually read rather than the number alone.
+                    await commitSave(
+                      parsedChannelNumber === null
+                        ? undefined
+                        : {
+                            number: parsedChannelNumber,
+                            occupantChannelIds: duplicateConflicts.map((c) => c.id),
+                          },
+                    );
                   }}
                 >
                   Use It Anyway

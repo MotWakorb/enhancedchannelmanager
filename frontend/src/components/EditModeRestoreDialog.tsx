@@ -1,5 +1,8 @@
 import type { StagedOperation } from '../types';
-import type { DroppedLedgerOperation } from '../utils/stagedLedgerStorage';
+import type {
+  DroppedLedgerOperation,
+  WithdrawnAcknowledgement,
+} from '../utils/stagedLedgerStorage';
 import './EditMode.css';
 
 export interface EditModeRestoreDialogProps {
@@ -10,6 +13,12 @@ export interface EditModeRestoreDialogProps {
   restorable: StagedOperation[];
   /** Operations that are not, with the reason each one moved. */
   dropped: DroppedLedgerOperation[];
+  /**
+   * Operations restored WITHOUT the duplicate-number confirmation they were
+   * staged with, because the channels on that number changed while the session
+   * was dead. The change itself is coming back; only the consent is not.
+   */
+  withdrawnAcknowledgements: WithdrawnAcknowledgement[];
   onRestore: () => void;
   onDiscard: () => void;
 }
@@ -29,7 +38,10 @@ export interface EditModeRestoreDialogProps {
  * was told about is not.
  *
  * SO THE ACCOUNT IS NOT COLLAPSIBLE AND NOT TRUNCATED. Every dropped operation
- * gets its own line naming what it was and what moved.
+ * gets its own line naming what it was and what moved, and so does every
+ * duplicate-number confirmation the lineup outgrew — that change IS coming
+ * back, but the operator has to know it will be asked about again rather than
+ * discovering it at Apply.
  *
  * NEITHER BUTTON IS A DEFAULT ESCAPE. There is no Escape handler and no
  * click-away: both would destroy staged work by accident, which is the exact
@@ -40,6 +52,7 @@ export function EditModeRestoreDialog({
   savedAt,
   restorable,
   dropped,
+  withdrawnAcknowledgements,
   onRestore,
   onDiscard,
 }: EditModeRestoreDialogProps) {
@@ -96,6 +109,24 @@ export function EditModeRestoreDialog({
               </p>
               <ul data-testid="edit-mode-restore-dropped">
                 {dropped.map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.description}</strong> — {entry.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {withdrawnAcknowledgements.length > 0 && (
+            <div className="edit-mode-restore-dropped">
+              <p role="alert">
+                <span className="material-icons" aria-hidden="true">error_outline</span>
+                {withdrawnAcknowledgements.length} duplicate channel number
+                {withdrawnAcknowledgements.length !== 1 ? 's you' : ' you'} confirmed will be
+                checked again:
+              </p>
+              <ul data-testid="edit-mode-restore-withdrawn">
+                {withdrawnAcknowledgements.map((entry) => (
                   <li key={entry.id}>
                     <strong>{entry.description}</strong> — {entry.detail}
                   </li>

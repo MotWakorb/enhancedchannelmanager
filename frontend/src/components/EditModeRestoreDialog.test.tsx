@@ -20,7 +20,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { EditModeRestoreDialog } from './EditModeRestoreDialog';
 import type { StagedOperation } from '../types';
-import type { DroppedLedgerOperation } from '../utils/stagedLedgerStorage';
+import type {
+  DroppedLedgerOperation,
+  WithdrawnAcknowledgement,
+} from '../utils/stagedLedgerStorage';
 
 function operation(id: string, description: string): StagedOperation {
   return {
@@ -61,6 +64,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof EditModeRes
       savedAt={SAVED_AT}
       restorable={[operation('op-1', 'Rename "Alpha"'), operation('op-2', 'Delete "Bravo"')]}
       dropped={[]}
+      withdrawnAcknowledgements={[]}
       onRestore={onRestore}
       onDiscard={onDiscard}
       {...overrides}
@@ -142,5 +146,30 @@ describe('EditModeRestoreDialog', () => {
     const discard = screen.getByRole('button', { name: /discard/i });
     expect(discard.textContent).toMatch(/discard/i);
     expect(screen.queryByRole('button', { name: /^cancel$/i })).toBeNull();
+  });
+
+  // A confirmation the lineup outgrew (bead enhancedchannelmanager-vdxbx,
+  // round 2). The CHANGE comes back; the consent does not, and the operator
+  // has to learn that here rather than at Apply.
+  describe('a duplicate-number confirmation that no longer applies', () => {
+    const WITHDRAWN: WithdrawnAcknowledgement[] = [
+      {
+        id: 'op-11',
+        description: 'Changed channel number from 106 to 105',
+        detail: 'The channels using number 105 changed while you were away.',
+      },
+    ];
+
+    it('names it on its own line rather than summarising it', () => {
+      renderDialog({ withdrawnAcknowledgements: WITHDRAWN });
+      const list = screen.getByTestId('edit-mode-restore-withdrawn');
+      expect(list.textContent).toContain('Changed channel number from 106 to 105');
+      expect(list.textContent).toContain('The channels using number 105 changed while you were away.');
+    });
+
+    it('says nothing at all when every confirmation still holds', () => {
+      renderDialog({ withdrawnAcknowledgements: [] });
+      expect(screen.queryByTestId('edit-mode-restore-withdrawn')).not.toBeInTheDocument();
+    });
   });
 });

@@ -22,7 +22,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode, StagedSideEffects, StageUpdateChannelOptions } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode, StagedSideEffects, StageUpdateChannelOptions, DuplicateNumberAcknowledgement } from '../types';
 import { EMPTY_STAGED_SIDE_EFFECTS } from '../types/editMode';
 import { ImmediateActionNote } from './ImmediateActionNote';
 import { logger } from '../utils/logger';
@@ -3483,15 +3483,15 @@ export function ChannelsPane({
     channelId: number,
     updateData: { channel_number: number | null; name?: string },
     description: string,
-    acknowledgedDuplicateNumber?: number,
+    acknowledgedDuplicate?: DuplicateNumberAcknowledgement,
   ) => {
     const nameChanged = updateData.name !== undefined;
     if (isEditMode && onStageUpdateChannel) {
       // In edit mode, stage the operation locally
-      if (acknowledgedDuplicateNumber === undefined) {
+      if (acknowledgedDuplicate === undefined) {
         onStageUpdateChannel(channelId, updateData, description);
       } else {
-        onStageUpdateChannel(channelId, updateData, description, { acknowledgedDuplicateNumber });
+        onStageUpdateChannel(channelId, updateData, description, { acknowledgedDuplicate });
       }
     } else {
       // Normal mode - call API directly
@@ -3587,8 +3587,15 @@ export function ChannelsPane({
       // Only a duplicate is acknowledged. Confirming a clear says nothing
       // about any number, and recording one would tell the preflight the
       // operator accepted a collision they were never shown.
+      //
+      // The occupants travel with the number, and they are the ones the dialog
+      // NAMED — `pending.conflicts` is what was rendered, not a fresh lookup —
+      // so what is recorded is exactly what the operator was asked about.
       pending.conflicts.length > 0 && pending.newNumber !== null
-        ? pending.newNumber
+        ? {
+            number: pending.newNumber,
+            occupantChannelIds: pending.conflicts.map((conflict) => conflict.id),
+          }
         : undefined,
     );
   };
@@ -6804,11 +6811,11 @@ export function ChannelsPane({
               // The acknowledgement travels onto the staged operation, or the
               // final-state preflight refuses at Apply the very duplicate the
               // operator just approved in the modal (bd-vdxbx).
-              if (saveOptions?.acknowledgedDuplicateNumber === undefined) {
+              if (saveOptions?.acknowledgedDuplicate === undefined) {
                 onStageUpdateChannel(channelToEdit.id, changes, description);
               } else {
                 onStageUpdateChannel(channelToEdit.id, changes, description, {
-                  acknowledgedDuplicateNumber: saveOptions.acknowledgedDuplicateNumber,
+                  acknowledgedDuplicate: saveOptions.acknowledgedDuplicate,
                 });
               }
             } else {

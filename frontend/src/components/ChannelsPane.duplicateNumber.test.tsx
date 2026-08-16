@@ -139,7 +139,7 @@ describe('inline channel-number editor — duplicate warning', () => {
       1,
       expect.objectContaining({ channel_number: 2 }),
       expect.any(String),
-      { acknowledgedDuplicateNumber: 2 },
+      { acknowledgedDuplicate: { number: 2, occupantChannelIds: [2] } },
     );
   });
 

@@ -43,6 +43,14 @@ class Op:
         return None
 
 
+class Ack:
+    """Stand-in for :class:`routers.channels.AcknowledgedDuplicate`."""
+
+    def __init__(self, number, occupantChannelIds):
+        self.number = number
+        self.occupantChannelIds = list(occupantChannelIds)
+
+
 def channel(cid: int, name: str, number):
     return {"id": cid, "name": name, "channel_number": number}
 
@@ -172,7 +180,7 @@ class TestEvaluateFinalNumbering:
                     "updateChannel",
                     channelId=2,
                     data={"channel_number": 5},
-                    acknowledgedDuplicateNumber=5,
+                    acknowledgedDuplicate=Ack(5, [1]),
                 )
             ],
         )
@@ -186,7 +194,7 @@ class TestEvaluateFinalNumbering:
                     "updateChannel",
                     channelId=2,
                     data={"channel_number": 5},
-                    acknowledgedDuplicateNumber=5.0,
+                    acknowledgedDuplicate=Ack(5.0, [1]),
                 )
             ],
         )
@@ -200,7 +208,7 @@ class TestEvaluateFinalNumbering:
                     "updateChannel",
                     channelId=2,
                     data={"channel_number": 5},
-                    acknowledgedDuplicateNumber=6,
+                    acknowledgedDuplicate=Ack(6, [1]),
                 )
             ],
         )
@@ -214,7 +222,7 @@ class TestEvaluateFinalNumbering:
                     "updateChannel",
                     channelId=2,
                     data={"channel_number": 5},
-                    acknowledgedDuplicateNumber=5,
+                    acknowledgedDuplicate=Ack(5, [1]),
                 ),
                 Op("updateChannel", channelId=3, data={"channel_number": 5}),
             ],
@@ -232,8 +240,85 @@ class TestEvaluateFinalNumbering:
                     tempId=-1,
                     name="Second ESPN",
                     channelNumber=5,
-                    acknowledgedDuplicateNumber=5,
+                    acknowledgedDuplicate=Ack(5, [1]),
                 )
+            ],
+        )
+        assert issues == []
+
+    # ------------------------------------------------------------- binding
+    #
+    # Fix round 2 of bead enhancedchannelmanager-vdxbx. An acknowledgement
+    # authorises exactly one collision: this channel, this number, this set of
+    # occupants. It is not accumulated over a channel's history and it does not
+    # outlive the occupants it named. The frontend planner holds the identical
+    # four properties (``channelNumberPlan.test.ts``); the two must agree.
+
+    def test_an_earlier_acknowledgement_does_not_authorise_a_later_placement(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicate=Ack(5, [1]),
+                ),
+                Op("updateChannel", channelId=2, data={"channel_number": 6}),
+                Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            ],
+        )
+        assert len(issues) == 1
+        assert issues[0].type == "duplicate_channel_number"
+
+    def test_an_acknowledgement_survives_a_later_edit_that_does_not_replace_it(self):
+        # The control: only a re-PLACEMENT withdraws consent.
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicate=Ack(5, [1]),
+                ),
+                Op("updateChannel", channelId=2, data={"name": "TNT HD"}),
+            ],
+        )
+        assert issues == []
+
+    def test_an_acknowledgement_does_not_cover_occupants_it_never_named(self):
+        lineup = [channel(3, "AMC", 5), channel(2, "TNT", 6)]
+        issues = evaluate_final_numbering(
+            lineup,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicate=Ack(5, [1]),
+                )
+            ],
+        )
+        assert len(issues) == 1
+        assert sorted(issues[0].channel_ids) == [2, 3]
+
+    def test_a_pile_up_everybody_consented_to_is_accepted(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicate=Ack(5, [1]),
+                ),
+                Op(
+                    "updateChannel",
+                    channelId=3,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicate=Ack(5, [1, 2]),
+                ),
             ],
         )
         assert issues == []

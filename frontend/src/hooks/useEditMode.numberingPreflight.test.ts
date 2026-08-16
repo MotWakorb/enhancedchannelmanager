@@ -143,7 +143,7 @@ describe('final-state numbering preflight', () => {
     const { view } = setup();
     act(() => {
       view.result.current.stageUpdateChannel(2, { channel_number: 5 }, 'TNT to 5', {
-        acknowledgedDuplicateNumber: 5,
+        acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
       });
     });
     let outcome: Awaited<ReturnType<typeof view.result.current.commit>> | undefined;
@@ -158,7 +158,7 @@ describe('final-state numbering preflight', () => {
     const { view } = setup();
     act(() => {
       view.result.current.stageUpdateChannel(2, { channel_number: 5 }, 'TNT to 5', {
-        acknowledgedDuplicateNumber: 5,
+        acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
       });
       view.result.current.stageUpdateChannel(3, { channel_number: 5 }, 'AMC to 5');
     });
@@ -242,6 +242,43 @@ describe('automatic renames in the change preview', () => {
     expect(view.result.current.summary.automaticRenames).toEqual([]);
   });
 
+  // Fix round 2 of bead enhancedchannelmanager-ic884.5. The preview reported
+  // every matching historical operation while Apply merges later `data` over
+  // earlier, so the dialog promised renames the commit would never perform.
+  // The preview has to describe the MATERIALISED FINAL STATE — the same state
+  // consolidation will send.
+
+  it('does not promise a rename a later edit superseded', () => {
+    const channels = [makeChannel(1, '5 | ESPN', 5)];
+    const view = renderHook(() =>
+      useEditMode({ channels, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
+    );
+    act(() => view.result.current.enterEditMode());
+    act(() => {
+      // Auto-numbering stages the rename...
+      view.result.current.stageUpdateChannel(1, { channel_number: 6, name: '6 | ESPN' }, 'renumber');
+      // ...and the operator then types a name of their own. Apply sends
+      // `{ channel_number: 6, name: 'ESPN HD' }`; no automatic rename survives.
+      view.result.current.stageUpdateChannel(1, { name: 'ESPN HD' }, 'rename');
+    });
+    expect(view.result.current.summary.automaticRenames).toEqual([]);
+  });
+
+  it('reports only the rename that survives, when one supersedes another', () => {
+    const channels = [makeChannel(1, '5 | ESPN', 5)];
+    const view = renderHook(() =>
+      useEditMode({ channels, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
+    );
+    act(() => view.result.current.enterEditMode());
+    act(() => {
+      view.result.current.stageUpdateChannel(1, { channel_number: 6, name: '6 | ESPN' }, 'renumber');
+      view.result.current.stageUpdateChannel(1, { channel_number: 7, name: '7 | ESPN' }, 'renumber');
+    });
+    expect(view.result.current.summary.automaticRenames).toEqual([
+      { channelId: 1, from: '5 | ESPN', to: '7 | ESPN', fromNumber: 5, toNumber: 7 },
+    ]);
+  });
+
   it('drops the rename again when the numbering change is undone', () => {
     const channels = [makeChannel(1, '5 | ESPN', 5)];
     const view = renderHook(() =>
@@ -263,11 +300,11 @@ describe('automatic renames in the change preview', () => {
  * because a restored session IS the same session, and re-litigating a decision
  * the operator already made is the thing invariant 4 forbids.
  *
- * Nothing in `planLedgerRestore` needed teaching about it: an acknowledgement
- * is a NUMBER, not a reference to a channel, a group or a profile, so there is
- * no entity behind it that can go missing while the session is dead. The
- * staleness plan drops operations whose referenced entities have vanished; the
- * number on a surviving operation is as valid as the operation is.
+ * But it survives only while it still DESCRIBES something. An acknowledgement
+ * names a number and the channels holding it, and either can have moved while
+ * the session was dead — `planLedgerRestore` withdraws one whose occupants
+ * changed and says so, and the arms below are the case where nothing did
+ * (fix round 2; `stagedLedgerStorage.test.ts` holds the withdrawal itself).
  */
 describe('an acknowledgement survives a dead session', () => {
   it('is still honoured after the ledger is restored', async () => {
@@ -283,7 +320,7 @@ describe('an acknowledgement survives a dead session', () => {
           type: 'updateChannel' as const,
           channelId: 2,
           data: { channel_number: 5 },
-          acknowledgedDuplicateNumber: 5,
+          acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
         },
         beforeSnapshot: [],
         afterSnapshot: [],
@@ -355,7 +392,7 @@ describe('the acknowledgement reaches the server', () => {
     const { view } = setup();
     act(() => {
       view.result.current.stageUpdateChannel(2, { channel_number: 5 }, 'TNT to 5', {
-        acknowledgedDuplicateNumber: 5,
+        acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
       });
     });
     await act(async () => {
@@ -364,8 +401,8 @@ describe('the acknowledgement reaches the server', () => {
 
     const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
     const op = body.operations.find((o) => o.type === 'updateChannel')!;
-    expect(op.acknowledgedDuplicateNumber).toBe(5);
-    expect(op.data).not.toHaveProperty('acknowledgedDuplicateNumber');
+    expect(op.acknowledgedDuplicate).toEqual({ number: 5, occupantChannelIds: [1] });
+    expect(op.data).not.toHaveProperty('acknowledgedDuplicate');
   });
 
   it('is absent from an ordinary edit rather than sent as null', async () => {
@@ -379,7 +416,7 @@ describe('the acknowledgement reaches the server', () => {
 
     const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
     const op = body.operations.find((o) => o.type === 'updateChannel')!;
-    expect(op.acknowledgedDuplicateNumber).toBeUndefined();
+    expect(op.acknowledgedDuplicate).toBeUndefined();
   });
 
   it('leaves a created channel unmarked when nothing was acknowledged', async () => {
@@ -396,6 +433,6 @@ describe('the acknowledgement reaches the server', () => {
     const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
     const op = body.operations.find((o) => o.type === 'createChannel')!;
     expect(op).toBeDefined();
-    expect(op.acknowledgedDuplicateNumber).toBeUndefined();
+    expect(op.acknowledgedDuplicate).toBeUndefined();
   });
 });

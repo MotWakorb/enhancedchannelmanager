@@ -271,6 +271,13 @@ const RENDERERS = {
             detail: 'The streams on channel "ITV1 HD" (id 88) changed, so this reordering would drop or invent one.',
           },
         ]}
+        withdrawnAcknowledgements={[
+          {
+            id: 'op-5',
+            description: 'Changed channel number from 106 to 105',
+            detail: 'The channels using number 105 changed while you were away, so your confirmation of that duplicate no longer applies. The number will be checked again before anything is applied.',
+          },
+        ]}
         onRestore={stub.noop}
         onDiscard={stub.noop}
       />

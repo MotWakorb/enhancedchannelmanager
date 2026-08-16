@@ -295,3 +295,103 @@ def test_mixed_operations_all_types():
     ]
     result = _consolidate_operations(ops)
     assert len(result) > 0
+
+
+# -- Consolidation must not LOSE anything the caller sent ------------------
+#
+# Fix round 2 of bead enhancedchannelmanager-vdxbx. The merged updateChannel
+# used to be rebuilt from parts -- ``BulkUpdateChannelOp(channelId=cid,
+# data=data)`` -- so every field that was not ``channelId`` or ``data`` was
+# dropped on the floor. That is the SECOND field this function has lost: an
+# earlier round found it silently discarding whole operation types it had not
+# enumerated. A rebuild-from-parts has to remember every field, and forgetting
+# is silent, so these tests hold the shape rather than any one field.
+
+def test_a_merged_update_keeps_the_acknowledgement_the_caller_sent():
+    """The frontend always sends ``consolidate: true``.
+
+    So an acknowledgement dropped here is an acknowledgement the preflight
+    never sees, and an operator who explicitly confirmed a duplicate has their
+    legitimate commit refused on the default path.
+    """
+    ops = [
+        BulkUpdateChannelOp(
+            channelId=1,
+            data={"channel_number": 5},
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [2]},
+        ),
+    ]
+    result = _consolidate_operations(ops)
+    updates = [o for o in result if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].acknowledgedDuplicate is not None
+    assert updates[0].acknowledgedDuplicate.number == 5
+    assert updates[0].acknowledgedDuplicate.occupantChannelIds == [2]
+
+
+def test_the_acknowledgement_follows_the_operation_that_set_the_final_number():
+    """Consolidation merges later ``data`` over earlier, so the number that
+    survives came from ONE operation. The acknowledgement that survives has to
+    be that operation's, or the merged op says the operator consented to a
+    placement they were never asked about."""
+    ops = [
+        BulkUpdateChannelOp(
+            channelId=1,
+            data={"channel_number": 5},
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [2]},
+        ),
+        BulkUpdateChannelOp(
+            channelId=1,
+            data={"channel_number": 9},
+            acknowledgedDuplicate={"number": 9, "occupantChannelIds": [3]},
+        ),
+    ]
+    updates = [o for o in _consolidate_operations(ops) if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].data == {"channel_number": 9}
+    assert updates[0].acknowledgedDuplicate.number == 9
+
+
+def test_a_later_name_only_edit_does_not_withdraw_the_acknowledgement():
+    ops = [
+        BulkUpdateChannelOp(
+            channelId=1,
+            data={"channel_number": 5},
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [2]},
+        ),
+        BulkUpdateChannelOp(channelId=1, data={"name": "Renamed"}),
+    ]
+    updates = [o for o in _consolidate_operations(ops) if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].data == {"channel_number": 5, "name": "Renamed"}
+    assert updates[0].acknowledgedDuplicate is not None
+
+
+def test_consolidating_an_update_preserves_every_field_except_data():
+    """The structural guard, not another named field.
+
+    Any field added to ``BulkUpdateChannelOp`` in future rides through
+    consolidation unless somebody deliberately decides otherwise, and this
+    fails the moment one does not.
+    """
+    op = BulkUpdateChannelOp(
+        channelId=7,
+        data={"channel_number": 5},
+        acknowledgedDuplicate={"number": 5, "occupantChannelIds": [2]},
+    )
+    updates = [o for o in _consolidate_operations([op]) if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].model_dump(exclude={"data"}) == op.model_dump(exclude={"data"})
+
+
+def test_the_range_op_consolidation_rebuilds_carry_no_per_operation_bookkeeping():
+    """``bulkAssignChannelNumbers`` is the one arm that genuinely CANNOT
+    template off a single input op -- it regroups several into consecutive
+    ranges -- so its output is still built from parts. That is only safe while
+    the model has nothing else on it. Adding a field to
+    ``BulkAssignNumbersOp`` has to be a decision, so it breaks this."""
+    assert set(BulkAssignNumbersOp.model_fields) == {
+        "type",
+        "channelIds",
+        "startingNumber",
+    }

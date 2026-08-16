@@ -433,17 +433,39 @@ class NormalizePreviewBatchRequest(BaseModel):
 NORMALIZE_PREVIEW_BATCH_MAX = 100
 
 
+class AcknowledgedDuplicate(BaseModel):
+    """The caller's recorded consent to ONE specific channel-number collision.
+
+    Bead ``enhancedchannelmanager-vdxbx``. ECM's own bookkeeping, never
+    forwarded to Dispatcharr: it rides beside an operation's ``data`` rather
+    than in it precisely because ``data`` is the PATCH body. The final-state
+    preflight reads it to tell a deliberate duplicate from an accidental one.
+
+    THE OCCUPANTS ARE PART OF THE CONSENT, not decoration. An operator shown
+    "102 is used by Bravo — use it anyway?" agreed to share 102 WITH BRAVO. If
+    Bravo moves off 102 and Delta moves on, the collision the commit would
+    create is one nobody was shown, and an acknowledgement carrying only the
+    number would authorise it regardless. Both halves in one object makes a
+    half-recorded acknowledgement unrepresentable rather than merely
+    discouraged, and it is why ``occupantChannelIds`` has no default: a caller
+    that means "nobody was there" has to say so.
+
+    ``occupantChannelIds`` excludes the channel being placed — a channel never
+    collides with itself — and may name a negative temp id for a channel
+    created earlier in the same request.
+    """
+
+    number: ChannelNumber
+    occupantChannelIds: list[int]
+
+
 # Bulk commit operation types
 class BulkUpdateChannelOp(BaseModel):
     type: Literal["updateChannel"] = "updateChannel"
     channelId: int
     data: dict
-    #: The channel number the operator was warned about and chose to use
-    #: anyway (bead enhancedchannelmanager-vdxbx). ECM's own bookkeeping, never
-    #: forwarded to Dispatcharr: it lives beside ``data`` rather than in it
-    #: precisely because ``data`` is the PATCH body. The final-state preflight
-    #: reads it to tell a deliberate duplicate from an accidental one.
-    acknowledgedDuplicateNumber: Optional[ChannelNumber] = None
+    #: See :class:`AcknowledgedDuplicate`.
+    acknowledgedDuplicate: Optional[AcknowledgedDuplicate] = None
 
     @field_validator("data")
     @classmethod
@@ -497,9 +519,9 @@ class BulkCreateChannelOp(BaseModel):
     tvgId: Optional[str] = None
     tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
     normalize: Optional[bool] = False  # Apply normalization rules to channel name
-    #: See BulkUpdateChannelOp.acknowledgedDuplicateNumber. A created channel
-    #: can land on an occupied number just as an edited one can.
-    acknowledgedDuplicateNumber: Optional[ChannelNumber] = None
+    #: See :class:`AcknowledgedDuplicate`. A created channel can land on an
+    #: occupied number just as an edited one can.
+    acknowledgedDuplicate: Optional[AcknowledgedDuplicate] = None
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -1615,6 +1637,25 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
 
     # Track final state for each operation type
     channel_final_updates: dict[int, dict] = {}  # channelId -> merged data
+    # The op each merged update is REBUILT FROM, so that everything on it other
+    # than ``data`` rides through untouched.
+    #
+    # This function has now lost two different things by rebuilding from parts:
+    # whole operation types it had not enumerated, and then
+    # ``acknowledgedDuplicate``, which meant every duplicate an operator
+    # explicitly confirmed reached the preflight looking accidental — on the
+    # default path, because the frontend always sends ``consolidate: true``. A
+    # constructor call has to remember every field and forgets in silence, so
+    # the merged op is a COPY of a real one with ``data`` replaced.
+    #
+    # Which one to copy is a semantic choice, not an arbitrary one. Merging
+    # takes ``channel_number`` from the last operation that set it, so the
+    # acknowledgement that belongs beside it is that operation's: consent is to
+    # one placement, and a later name-only edit neither grants nor withdraws
+    # it. Hence the number-setting op wins, and the last op is only the
+    # fallback for a channel whose number nothing touched.
+    channel_update_last: dict[int, BulkUpdateChannelOp] = {}
+    channel_update_number_source: dict[int, BulkUpdateChannelOp] = {}
     channel_final_numbers: dict[int, float] = {}  # channelId -> final number
     channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
     stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
@@ -1632,6 +1673,9 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 existing = channel_final_updates.get(op.channelId, {})
                 existing.update(op.data)
                 channel_final_updates[op.channelId] = existing
+                channel_update_last[op.channelId] = op
+                if "channel_number" in op.data:
+                    channel_update_number_source[op.channelId] = op
 
         elif op.type == "reorderChannelStreams":
             if op.channelId not in channels_to_delete:
@@ -1678,11 +1722,17 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     # Build consolidated list
     consolidated: list[BulkOperation] = list(ordered_ops)
 
-    # Merged updateChannel ops
+    # Merged updateChannel ops. Copied from a real operation, never rebuilt —
+    # see the note beside `channel_update_last`.
     for cid, data in channel_final_updates.items():
-        consolidated.append(BulkUpdateChannelOp(channelId=cid, data=data))
+        template = channel_update_number_source.get(cid) or channel_update_last[cid]
+        consolidated.append(template.model_copy(update={"data": data}))
 
-    # Consolidated bulkAssign: group into consecutive ranges
+    # Consolidated bulkAssign: group into consecutive ranges. This is the one
+    # arm that genuinely cannot copy a single input op — it regroups several
+    # into consecutive ranges — and it stays safe only while
+    # `BulkAssignNumbersOp` carries no per-operation bookkeeping. A test pins
+    # that model's field list so adding one has to be a decision.
     if channel_final_numbers:
         entries = sorted(channel_final_numbers.items(), key=lambda e: e[1])
         i = 0
@@ -2204,6 +2254,12 @@ async def _run_bulk_commit(
         # A create with no number does not: Dispatcharr picks that number, so
         # there is nothing here to check.
         numbering_needs_lineup = False
+        # Whether the final-state numbering check has anything to check. It is
+        # what decides whether a lineup that would not load is REPORTED (fix
+        # round 2 -- see the check itself, below). Broader than
+        # ``numbering_needs_lineup``, which only asks whether this batch would
+        # otherwise fetch no lineup at all.
+        numbering_places_a_channel = False
 
         for idx, op in enumerate(request.operations):
             if op.type == "createChannel":
@@ -2211,9 +2267,12 @@ async def _run_bulk_commit(
                 channels_to_create.add(op.tempId)
                 if op.channelNumber is not None:
                     numbering_needs_lineup = True
+                    numbering_places_a_channel = True
             elif op.type in ("updateChannel", "deleteChannel"):
                 if op.channelId >= 0:  # Only real IDs need validation
                     referenced_channel_ids.add(op.channelId)
+                if op.type == "updateChannel" and "channel_number" in (op.data or {}):
+                    numbering_places_a_channel = True
             elif op.type == "addStreamToChannel":
                 if op.channelId >= 0:
                     referenced_channel_ids.add(op.channelId)
@@ -2228,6 +2287,7 @@ async def _run_bulk_commit(
                 for sid in op.streamIds:
                     referenced_stream_ids.add(sid)
             elif op.type == "bulkAssignChannelNumbers":
+                numbering_places_a_channel = True
                 for cid in op.channelIds:
                     if cid >= 0:
                         referenced_channel_ids.add(cid)
@@ -2506,13 +2566,48 @@ async def _run_bulk_commit(
         # check here whose answer can change when an unrelated operation is
         # added or removed.
         #
-        # It runs against whatever `existing_channels` holds rather than being
-        # gated on `channels_resolved`. That is safe in the direction that
-        # matters: an incomplete lineup can only make this MISS a conflict,
-        # never invent one, because every channel it reports as occupying a
-        # number came from a page that really was read. Reporting a conflict it
-        # cannot see would be the lookup's failure wearing the operation's
-        # name, which is exactly what fix round 3 removed above.
+        # A CHECK WHOSE INPUT DID NOT LOAD REPORTS THAT, AND NEVER "NO PROBLEM"
+        # (fix round 2). This used to run against whatever `existing_channels`
+        # happened to hold, on the reasoning that an incomplete lineup "can only
+        # make this MISS a conflict, never invent one". True, and beside the
+        # point: for a caller that never touches the UI this preflight IS the
+        # safety check, so a miss is the entire failure rather than a mild one.
+        # The paginated fetch above swallows its exception, so an upstream
+        # outage produced an empty lineup, an empty lineup produced no
+        # occupants, and the commit went ahead reporting a clean bill of health
+        # it had no evidence for.
+        #
+        # REPORTED AS AN ERROR, NOT AS A REFUSAL OF ITS OWN, so it obeys the
+        # `continueOnError` contract every other validation issue on this
+        # endpoint already obeys rather than inventing a second one. That lands
+        # in the right place on both sides: the default (`continueOnError`
+        # false) is what a non-UI caller gets, and it refuses the commit,
+        # because an unverifiable safety check is not a passed one. Edit Mode's
+        # Apply sends `continueOnError: true` and proceeds, which is correct
+        # there for the reason recorded on `TestPreflightAndContinueOnError` —
+        # the BROWSER holds the whole plan and has already validated it against
+        # the lineup it loaded, so refusing an Apply over a transient upstream
+        # hiccup would cost the operator their work and buy no safety.
+        #
+        # Gated on the check having something to check: a batch that puts no
+        # channel on any number is not made unverifiable by a failed lookup it
+        # never needed.
+        if numbering_places_a_channel and not channels_resolved:
+            result["validationIssues"].append({
+                "type": "numbering_preflight_unavailable",
+                "severity": "error",
+                "message": (
+                    "The channel lineup could not be read, so the check for duplicate and "
+                    "out-of-contract channel numbers could not run. No channel numbering was "
+                    "verified. Try again once Dispatcharr is reachable."
+                ),
+            })
+            result["validationPassed"] = False
+
+        # The COMBINED final state still runs: the collisions it can see
+        # BETWEEN the request's own operations need no lineup at all, and
+        # reporting them alongside the notice above is strictly more
+        # information than reporting neither.
         for numbering_issue in evaluate_final_numbering(
             existing_channels.values(), request.operations
         ):

@@ -171,7 +171,8 @@ test('staging a number another channel holds warns, and confirming records the c
     window.sessionStorage.getItem('ecm.channelManager.stagedLedger'));
   expect(stored, 'the staged operation must be persisted').not.toBeNull();
   const operations = JSON.parse(stored!).operations as { apiCall: Record<string, unknown> }[];
-  expect(operations.map((op) => op.apiCall.acknowledgedDuplicateNumber)).toContain(102);
+  expect(operations.map((op) => (op.apiCall.acknowledgedDuplicate as { number?: number } | undefined)?.number))
+    .toContain(102);
 });
 
 // ============ ARM 2: Apply refuses a bad final state before it mutates anything

@@ -723,7 +723,7 @@ export function useEditMode({
           type: 'updateChannel',
           channelId,
           data,
-          acknowledgedDuplicateNumber: options?.acknowledgedDuplicateNumber,
+          acknowledgedDuplicate: options?.acknowledgedDuplicate,
         },
         description,
       );
@@ -1070,10 +1070,14 @@ export function useEditMode({
       profileVisibilityChanges: 0,
       restoredGroups: 0,
       clearedStreamStats: 0,
-      // Derived from the staged operations by reproducing the producer's own
-      // computation, so a rename nobody typed is visible before Apply (bead
-      // enhancedchannelmanager-ic884.5).
-      automaticRenames: deriveAutomaticRenames(state.stagedOperations),
+      // Read off the SAME materialised final state the Apply preflight
+      // validates and consolidation will send, so a rename nobody typed is
+      // visible before Apply and every rename shown is one that will happen
+      // (beads enhancedchannelmanager-ic884.5, …-ic884.2). One materialiser
+      // feeding both is what stops the preview and the submission drifting.
+      automaticRenames: deriveAutomaticRenames(
+        buildFinalNumberingPlan(channels, state.stagedOperations),
+      ),
       operationDetails: [],
     };
 
@@ -1217,7 +1221,10 @@ export function useEditMode({
       summary.clearedStreamStats;
 
     return summary;
-  }, [state.stagedOperations, state.modifiedChannelIds]);
+    // `channels` is a dependency because the automatic-rename preview is
+    // materialised against it: the same staged operation describes a different
+    // final state once the server list underneath it moves.
+  }, [state.stagedOperations, state.modifiedChannelIds, channels]);
 
   // Memoized summary - computed once per state change, not on every render call
   const summary = useMemo(() => getSummary(), [getSummary]);
@@ -1353,7 +1360,7 @@ export function useEditMode({
             // different question than the browser's did, and reports an error
             // against a decision the operator has already made (bead
             // enhancedchannelmanager-vdxbx).
-            acknowledgedDuplicateNumber: apiCall.acknowledgedDuplicateNumber,
+            acknowledgedDuplicate: apiCall.acknowledgedDuplicate,
           });
           break;
 
@@ -1407,7 +1414,7 @@ export function useEditMode({
             tvcGuideStationId: apiCall.tvcGuideStationId,
             // See the updateChannel arm: a created channel can land on an
             // occupied number just as an edited one can.
-            acknowledgedDuplicateNumber: apiCall.acknowledgedDuplicateNumber,
+            acknowledgedDuplicate: apiCall.acknowledgedDuplicate,
           });
           break;
         }

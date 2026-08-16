@@ -23,11 +23,17 @@ Two things it deliberately does NOT do, both settled on bead
   dead end rather than a safeguard.
 
 An operator who was warned about a duplicate and chose it anyway sends
-``acknowledgedDuplicateNumber`` on the operation that creates it. A duplicate
-is deliberate when every operation that put a channel on the number carries an
-acknowledgement OF THAT NUMBER; one unacknowledged newcomer is enough to make
-the whole pile-up an error again, and only that newcomer's operation is named,
-because the rest is a decision the operator already made.
+``acknowledgedDuplicate`` on the operation that creates it, carrying the NUMBER
+and the OCCUPANTS they were shown. A pile-up is deliberate when every channel
+this request put on the number arrived carrying consent naming everyone already
+standing there; one unacknowledged newcomer is enough to make the whole thing
+an error again, and only that newcomer's operation is named, because the rest is
+a decision the operator already made.
+
+The occupants are load-bearing, not decoration. Consent to join ESPN on 5 is not
+consent to join AMC on 5, so an acknowledgement cannot be inherited by a later
+placement, accumulated over a channel's history, or survive the occupant it
+named moving away — which is exactly what a bare number did.
 
 Comparison is canonical, on the tenths grid ``channel_number.py`` defines, so
 ``7``, ``7.0`` and ``07`` are one number and ``0.7 + 0.1`` is the channel
@@ -103,6 +109,16 @@ def _same_number(a: Any, b: Any) -> bool:
     return _slot_key(a) == _slot_key(b)
 
 
+@dataclass(frozen=True)
+class _Acknowledgement:
+    """Consent carried by the operation that produced a channel's placement."""
+
+    #: The slot the caller agreed to share.
+    slot: str
+    #: The channels the caller was told were already holding it.
+    occupant_ids: frozenset[int]
+
+
 @dataclass
 class _Placement:
     channel_id: int
@@ -114,8 +130,17 @@ class _Placement:
     is_new: bool
     #: Indexes of the operations that set this channel's number, in order.
     touched_by: list[int] = field(default_factory=list)
-    #: Slots the request explicitly accepted a duplicate on for this channel.
-    acknowledged_slots: set[str] = field(default_factory=set)
+    #: The acknowledgement carried by the operation that made the FINAL
+    #: placement, or ``None``.
+    #:
+    #: Bound to one placement, never accumulated. A channel moved onto an
+    #: occupied 5 with consent, then to 6, then back onto 5 with nobody asked,
+    #: ends up with no acknowledgement at all: consent belonged to the
+    #: operation that was superseded. Unioning them over the channel's history
+    #: is what let an old confirmation authorise a placement nobody saw.
+    #: Mirrors ``NumberPlacement.acknowledgement`` in
+    #: ``frontend/src/utils/channelNumberPlan.ts``.
+    acknowledgement: Optional[_Acknowledgement] = None
 
     @property
     def moved(self) -> bool:
@@ -187,9 +212,17 @@ class NumberingIssue:
         return issue
 
 
-def _acknowledged_number(op: Any) -> Any:
-    """The number this operation says the operator accepted a duplicate on."""
-    return getattr(op, "acknowledgedDuplicateNumber", None)
+def _acknowledgement(op: Any) -> Any:
+    """The collision this operation says the caller accepted, or ``None``."""
+    acknowledged = getattr(op, "acknowledgedDuplicate", None)
+    if acknowledged is None:
+        return None
+    number = getattr(acknowledged, "number", None)
+    if not isinstance(number, (int, float)) or isinstance(number, bool):
+        return None
+    if not math.isfinite(float(number)):
+        return None
+    return acknowledged
 
 
 def build_final_numbering_state(
@@ -229,10 +262,18 @@ def build_final_numbering_state(
     def set_number(placement: _Placement, value, index: int, op: Any) -> None:
         placement.number = value
         placement.touched_by.append(index)
-        acknowledged = _acknowledged_number(op)
-        if isinstance(acknowledged, (int, float)) and not isinstance(acknowledged, bool):
-            if math.isfinite(float(acknowledged)):
-                placement.acknowledged_slots.add(_slot_key(acknowledged))
+        # REPLACES, never accumulates -- see ``_Placement.acknowledgement``.
+        acknowledged = _acknowledgement(op)
+        if acknowledged is None:
+            placement.acknowledgement = None
+            return
+        occupants = getattr(acknowledged, "occupantChannelIds", None) or []
+        placement.acknowledgement = _Acknowledgement(
+            slot=_slot_key(acknowledged.number),
+            occupant_ids=frozenset(
+                cid for cid in occupants if isinstance(cid, int) and not isinstance(cid, bool)
+            ),
+        )
 
     for index, op in enumerate(operations):
         op_type = getattr(op, "type", None)
@@ -328,7 +369,28 @@ def evaluate_final_numbering(
         # not this request's. ic884.1 declined to enforce uniqueness.
         if not contributors:
             continue
-        accidental = [p for p in contributors if slot not in p.acknowledged_slots]
+
+        # WHO WAS ALREADY THERE WHEN EACH NEWCOMER ARRIVED. An acknowledgement
+        # is consent to one collision -- this channel, this number, THESE
+        # occupants -- so it authorises a newcomer only if it named everyone
+        # the newcomer landed on top of. Walked in request order, adding each
+        # newcomer as it goes, because that reproduces what the caller was
+        # shown: the second channel to join a pile-up was warned about the
+        # first. A confirmation carrying only a NUMBER kept authorising after
+        # its occupant moved away and a stranger took the slot, which is a
+        # collision nobody ever saw.
+        standing = {p.channel_id for p in occupants if not (p.moved and p.touched_by)}
+        accidental = []
+        for placement in sorted(contributors, key=lambda p: p.touched_by[-1]):
+            acknowledgement = placement.acknowledgement
+            consented = (
+                acknowledgement is not None
+                and acknowledgement.slot == slot
+                and standing <= acknowledgement.occupant_ids
+            )
+            if not consented:
+                accidental.append(placement)
+            standing.add(placement.channel_id)
         if not accidental:
             continue
 

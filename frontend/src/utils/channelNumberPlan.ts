@@ -12,8 +12,17 @@
  * operation withdraws the acknowledgement automatically and deleting an
  * unrelated earlier action cannot empty it.
  *
+ * AN ACKNOWLEDGEMENT AUTHORISES EXACTLY ONE COLLISION: this channel, this
+ * number, this set of occupants, this session's staged state. It cannot be
+ * inherited by a later placement, accumulated over a channel's history,
+ * transferred, or survive the occupants it named moving away. Both halves of
+ * that — {@link NumberPlacement.acknowledgement} replacing rather than
+ * accumulating, and the occupant walk in {@link validateFinalNumberingPlan} —
+ * exist because a confirmation carrying only a NUMBER kept authorising
+ * placements nobody had ever been shown.
+ *
  * The three questions this module answers, all against the same materialised
- * final state:
+ * final state, and the third is why that matters:
  *
  *   1. "Is this number already taken?" — {@link channelsHoldingNumber}, asked
  *      before a single edit is staged, against effective local state rather
@@ -23,7 +32,9 @@
  *      asked before Apply mutates anything.
  *   3. "What will change that the operator did not type?" —
  *      {@link deriveAutomaticRenames}, so a numbering-driven rename is visible
- *      in the change preview.
+ *      in the change preview. It reads the SAME materialisation question 2
+ *      validates, because a preview computed any other way is free to promise
+ *      a change the commit will not make.
  *
  * What this module does NOT do is enforce uniqueness. Bead
  * `enhancedchannelmanager-ic884.1` decided that deliberately: Dispatcharr
@@ -42,7 +53,11 @@
 
 import { isValidChannelNumber } from './channelNumber';
 import { computeAutoRename } from './channelRename';
-import type { StagedOperation, ApiCallSpec } from '../types/editMode';
+import type {
+  StagedOperation,
+  ApiCallSpec,
+  DuplicateNumberAcknowledgement,
+} from '../types/editMode';
 
 /** The minimum shape this module needs of a channel. `Channel` satisfies it. */
 export interface NumberedChannel {
@@ -120,10 +135,23 @@ export function channelsHoldingNumber<T extends NumberedChannel>(
   );
 }
 
+/**
+ * The consent attached to the operation that produced a channel's final
+ * placement — never to the channel, and never to its history.
+ */
+export interface PlacementAcknowledgement {
+  /** The slot the operator agreed to share. */
+  slot: string;
+  /** The channels the warning named as already holding it. */
+  occupantIds: Set<number>;
+}
+
 /** Where one channel ends up once every staged operation has been applied. */
 export interface NumberPlacement {
   channelId: number;
   name: string;
+  /** The name it had before this session staged anything; `undefined` for a channel created here. */
+  baseName: string | undefined;
   /** The number this channel holds in the proposed final state. */
   number: number | null;
   /** The number it held before this session staged anything; `undefined` for a channel created here. */
@@ -135,8 +163,23 @@ export interface NumberPlacement {
    * never turned into this session's problem by an unrelated edit.
    */
   placedByOperationIds: string[];
-  /** Slots the operator explicitly accepted a duplicate on for this channel. */
-  acknowledgedSlots: Set<string>;
+  /**
+   * Where in the staging order the FINAL placement happened, so contributors
+   * to one slot can be walked in the order the operator created them. `-1`
+   * when the session never placed this channel.
+   */
+  placedAtIndex: number;
+  /**
+   * The acknowledgement carried by the operation that made that final
+   * placement, or `null`.
+   *
+   * BOUND TO ONE PLACEMENT, NOT ACCUMULATED. A channel moved onto an occupied
+   * 5 with consent, then to 6, then back onto 5 with nobody asked, ends up
+   * with no acknowledgement at all — the consent belonged to the operation
+   * that was superseded. Unioning them over the channel's history is what let
+   * an old confirmation authorise a placement the operator never saw.
+   */
+  acknowledgement: PlacementAcknowledgement | null;
 }
 
 export interface FinalNumberingPlan {
@@ -145,20 +188,59 @@ export interface FinalNumberingPlan {
 }
 
 /** An acknowledgement travels on the operation, so it survives serialisation. */
-function acknowledgedNumberOf(apiCall: ApiCallSpec): number | undefined {
-  if (apiCall.type === 'updateChannel' || apiCall.type === 'createChannel') {
-    return apiCall.acknowledgedDuplicateNumber;
+export function acknowledgementOf(
+  apiCall: ApiCallSpec,
+): DuplicateNumberAcknowledgement | undefined {
+  if (apiCall.type !== 'updateChannel' && apiCall.type !== 'createChannel') return undefined;
+  const acknowledged = apiCall.acknowledgedDuplicate;
+  if (!acknowledged) return undefined;
+  if (typeof acknowledged.number !== 'number' || !Number.isFinite(acknowledged.number)) {
+    return undefined;
   }
-  return undefined;
+  return acknowledged;
+}
+
+/** The acknowledgement of `apiCall`, reduced to what the plan compares against. */
+function placementAcknowledgementOf(apiCall: ApiCallSpec): PlacementAcknowledgement | null {
+  const acknowledged = acknowledgementOf(apiCall);
+  if (!acknowledged) return null;
+  return {
+    slot: slotKey(acknowledged.number),
+    occupantIds: new Set(acknowledged.occupantChannelIds ?? []),
+  };
+}
+
+/**
+ * Did this session put the channel where it now is?
+ *
+ * Judged against the number it STARTED on, not against each intermediate step:
+ * a channel moved and moved back has not been placed anywhere, whatever route
+ * it took. `null` is unassigned, which is where an unassigned channel already
+ * was — so re-asserting `null` on a channel that had none is not a placement,
+ * even though {@link sameChannelNumber} deliberately calls two unassigned
+ * values different (two unnumbered channels do not collide with each other,
+ * which is a different question). Mirrors `_Placement.moved` in
+ * `backend/channel_number_plan.py`.
+ */
+function placementMoved(
+  baseNumber: number | null | undefined,
+  number: number | null,
+): boolean {
+  if (baseNumber === undefined) return true;
+  if (baseNumber === null && number === null) return false;
+  if (baseNumber === null || number === null) return true;
+  return !sameChannelNumber(baseNumber, number);
 }
 
 interface MutablePlacement {
   channelId: number;
   name: string;
+  baseName: string | undefined;
   number: number | null;
   baseNumber: number | null | undefined;
   touchedBy: string[];
-  acknowledgedSlots: Set<string>;
+  placedAtIndex: number;
+  acknowledgement: PlacementAcknowledgement | null;
 }
 
 /**
@@ -184,10 +266,12 @@ export function buildFinalNumberingPlan(
     register({
       channelId: channel.id,
       name: channel.name,
+      baseName: channel.name,
       number: channel.channel_number,
       baseNumber: channel.channel_number,
       touchedBy: [],
-      acknowledgedSlots: new Set(),
+      placedAtIndex: -1,
+      acknowledgement: null,
     });
   }
 
@@ -199,20 +283,23 @@ export function buildFinalNumberingPlan(
   let nextSyntheticId = -1;
   for (const id of byId.keys()) nextSyntheticId = Math.min(nextSyntheticId, id - 1);
 
+  // REPLACES the acknowledgement rather than adding to it. Consent belongs to
+  // the operation that produced the placement; the moment a later operation
+  // moves the channel again, the earlier operation's answer is about a
+  // question that is no longer being asked.
   const setNumber = (
     placement: MutablePlacement,
     value: number | null,
     operation: StagedOperation,
+    index: number,
   ) => {
     placement.number = value;
     placement.touchedBy.push(operation.id);
-    const acknowledged = acknowledgedNumberOf(operation.apiCall);
-    if (typeof acknowledged === 'number' && Number.isFinite(acknowledged)) {
-      placement.acknowledgedSlots.add(slotKey(acknowledged));
-    }
+    placement.placedAtIndex = index;
+    placement.acknowledgement = placementAcknowledgementOf(operation.apiCall);
   };
 
-  for (const operation of operations) {
+  for (const [index, operation] of operations.entries()) {
     const { apiCall } = operation;
     switch (apiCall.type) {
       case 'updateChannel': {
@@ -220,7 +307,7 @@ export function buildFinalNumberingPlan(
         if (!placement) break;
         if (apiCall.data.name !== undefined) placement.name = apiCall.data.name;
         if (apiCall.data.channel_number !== undefined) {
-          setNumber(placement, apiCall.data.channel_number ?? null, operation);
+          setNumber(placement, apiCall.data.channel_number ?? null, operation, index);
         }
         break;
       }
@@ -232,13 +319,15 @@ export function buildFinalNumberingPlan(
         const placement: MutablePlacement = {
           channelId,
           name: apiCall.name,
+          baseName: undefined,
           number: null,
           baseNumber: undefined,
           touchedBy: [],
-          acknowledgedSlots: new Set(),
+          placedAtIndex: -1,
+          acknowledgement: null,
         };
         register(placement);
-        setNumber(placement, apiCall.channelNumber ?? null, operation);
+        setNumber(placement, apiCall.channelNumber ?? null, operation, index);
         break;
       }
       case 'deleteChannel': {
@@ -247,10 +336,10 @@ export function buildFinalNumberingPlan(
       }
       case 'bulkAssignChannelNumbers': {
         const start = apiCall.startingNumber ?? 1;
-        apiCall.channelIds.forEach((channelId, index) => {
+        apiCall.channelIds.forEach((channelId, offset) => {
           const placement = byId.get(channelId);
           if (!placement) return;
-          setNumber(placement, start + index, operation);
+          setNumber(placement, start + offset, operation, index);
         });
         break;
       }
@@ -263,20 +352,16 @@ export function buildFinalNumberingPlan(
   for (const channelId of order) {
     const placement = byId.get(channelId);
     if (!placement) continue;
-    // Judged against the BASE number, not the running one: a channel that was
-    // moved and moved back has not been placed anywhere, whatever route it
-    // took to get there.
-    const moved =
-      placement.baseNumber === undefined ||
-      !sameChannelNumber(placement.baseNumber, placement.number) ||
-      (placement.baseNumber === null) !== (placement.number === null);
+    const moved = placementMoved(placement.baseNumber, placement.number);
     placements.push({
       channelId: placement.channelId,
       name: placement.name,
+      baseName: placement.baseName,
       number: placement.number,
       baseNumber: placement.baseNumber,
       placedByOperationIds: moved ? [...placement.touchedBy] : [],
-      acknowledgedSlots: placement.acknowledgedSlots,
+      placedAtIndex: moved ? placement.placedAtIndex : -1,
+      acknowledgement: moved ? placement.acknowledgement : null,
     });
   }
 
@@ -360,7 +445,33 @@ export function validateFinalNumberingPlan(plan: FinalNumberingPlan): NumberingP
     // Nobody moved onto this number in this session, so the duplicate is the
     // lineup's, not the operator's. ic884.1 declined to enforce uniqueness.
     if (contributors.length === 0) continue;
-    const accidental = contributors.filter((placement) => !placement.acknowledgedSlots.has(key));
+
+    // WHO WAS ALREADY THERE WHEN EACH NEWCOMER ARRIVED. An acknowledgement is
+    // consent to one collision — this channel, this number, THESE occupants —
+    // so it authorises a newcomer only if it named everyone the newcomer
+    // landed on top of. Walked in staging order, adding each newcomer as it
+    // goes, because that reproduces what the operator was shown: the second
+    // channel to join a pile-up was warned about the first.
+    //
+    // The consequence that matters is the one this replaces: a confirmation
+    // carrying only a NUMBER kept authorising after its occupant moved away
+    // and a stranger took the slot, which is a collision nobody ever saw.
+    const standing = new Set(
+      occupants
+        .filter((placement) => placement.placedByOperationIds.length === 0)
+        .map((placement) => placement.channelId),
+    );
+    const accidental: NumberPlacement[] = [];
+    const arrivals = [...contributors].sort((a, b) => a.placedAtIndex - b.placedAtIndex);
+    for (const placement of arrivals) {
+      const acknowledgement = placement.acknowledgement;
+      const consented =
+        acknowledgement !== null &&
+        acknowledgement.slot === key &&
+        [...standing].every((id) => acknowledgement.occupantIds.has(id));
+      if (!consented) accidental.push(placement);
+      standing.add(placement.channelId);
+    }
     if (accidental.length === 0) continue;
 
     const operationIds = Array.from(
@@ -445,14 +556,25 @@ export interface AutomaticRename {
 }
 
 /**
- * Every rename the numbering caused, read back off the staged operations.
+ * Every rename the numbering caused, read off the MATERIALISED FINAL STATE.
+ *
+ * FROM THE PLAN, NOT FROM THE OPERATION LIST, and that is the fix rather than
+ * a refactor. Reading operations reported every matching one, while Apply
+ * merges later `data` over earlier and sends a single update per channel. So a
+ * numbering op staging `{channel_number: 6, name: "6 | ESPN"}` followed by an
+ * edit staging `{name: "ESPN HD"}` promised the operator `5 | ESPN → 6 | ESPN`
+ * — a rename the commit would never perform — and two successive automatic
+ * renames were both listed when only the last survives. The preview and the
+ * submission now read one materialisation, exactly as bead
+ * enhancedchannelmanager-e9e5o resolved the same divergence class on the
+ * Create Channels dialog by giving preview and submit one resolver.
  *
  * Derived rather than recorded, and derived by REPRODUCING the producer's own
- * computation: a staged `updateChannel` carrying both a number and a name is
- * an automatic rename exactly when `computeAutoRename` on its before-snapshot
- * yields that name. An operator who changed the number and typed a name in the
- * same save is therefore not reported as an automatic rename, and no producer
- * has to remember to flag itself.
+ * computation: a channel is automatically renamed exactly when the name it
+ * ENDS UP with is the name `computeAutoRename` yields from where it started to
+ * where it ends up. An operator who changed the number and typed a name of
+ * their own is therefore not reported, and no producer has to remember to flag
+ * itself.
  *
  * The `auto_rename_channel_number` setting is not an input here, and does not
  * need to be. It gates the PRODUCERS: when it is off, no handler computes a
@@ -461,25 +583,24 @@ export interface AutomaticRename {
  * preview honest across a setting changed mid-session, and across a ledger
  * restored into a session whose setting differs from the one that staged it.
  */
-export function deriveAutomaticRenames(
-  operations: readonly StagedOperation[],
-): AutomaticRename[] {
+export function deriveAutomaticRenames(plan: FinalNumberingPlan): AutomaticRename[] {
   const renames: AutomaticRename[] = [];
-  for (const operation of operations) {
-    const { apiCall } = operation;
-    if (apiCall.type !== 'updateChannel') continue;
-    const { channel_number: toNumber, name: to } = apiCall.data;
-    if (toNumber === undefined || to === undefined) continue;
-    const before = operation.beforeSnapshot.find((snapshot) => snapshot.id === apiCall.channelId);
-    if (!before) continue;
-    const expected = computeAutoRename(before.name, before.channel_number, toNumber ?? null);
-    if (expected !== to) continue;
+  for (const placement of plan.placements) {
+    // A channel created in this session has no before-name to rewrite.
+    if (placement.baseName === undefined || placement.baseNumber === undefined) continue;
+    if (placement.name === placement.baseName) continue;
+    const expected = computeAutoRename(
+      placement.baseName,
+      placement.baseNumber,
+      placement.number,
+    );
+    if (expected !== placement.name) continue;
     renames.push({
-      channelId: apiCall.channelId,
-      from: before.name,
-      to,
-      fromNumber: before.channel_number,
-      toNumber: toNumber ?? null,
+      channelId: placement.channelId,
+      from: placement.baseName,
+      to: placement.name,
+      fromNumber: placement.baseNumber,
+      toNumber: placement.number,
     });
   }
   return renames;

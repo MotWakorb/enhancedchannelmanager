@@ -429,3 +429,86 @@ describe('planLedgerRestore keeps this session\'s own temp references consistent
     expect(plan.dropped[0].description).toBe('Rename "Lost"');
   });
 });
+
+// --------------------------------------- an acknowledgement cannot outlive
+// the collision it consented to (bead enhancedchannelmanager-vdxbx, round 2)
+
+describe('planLedgerRestore withdraws an acknowledgement the lineup outgrew', () => {
+  const lineup = (...channels: Channel[]) => ({
+    channels,
+    channelGroups: GROUPS,
+  });
+
+  /** Stage channel 6 onto channel 5's number, having confirmed that collision. */
+  const stagedOntoFive = () =>
+    op(
+      {
+        type: 'updateChannel',
+        channelId: 6,
+        data: { channel_number: 105 },
+        acknowledgedDuplicate: { number: 105, occupantChannelIds: [5] },
+      },
+      'Changed channel number from 106 to 105',
+    );
+
+  it('keeps it when the channels on that number are the ones the operator was shown', () => {
+    // The anti-vacuity control. An ordinary restore must not lose consent.
+    const staged = stagedOntoFive();
+    const plan = planLedgerRestore([staged], lineup(channel(5), channel(6)));
+    expect(plan.withdrawnAcknowledgements).toEqual([]);
+    expect(plan.restorable).toEqual([staged]);
+  });
+
+  it('withdraws it when a different channel now holds the number', () => {
+    // 5 moved off 105 and 7 moved on while the session was dead. The operator
+    // consented to joining channel 5, and was never shown channel 7.
+    const staged = stagedOntoFive();
+    const plan = planLedgerRestore(
+      [staged],
+      lineup(channel(5, { channel_number: 500 }), channel(6), channel(7, { channel_number: 105 })),
+    );
+    expect(plan.withdrawnAcknowledgements).toHaveLength(1);
+    expect(plan.withdrawnAcknowledgements[0].id).toBe(staged.id);
+    // The operation itself survives: the operator's EDIT is not the problem,
+    // only the consent attached to it. It comes back for re-confirmation
+    // rather than being thrown away.
+    expect(plan.restorable).toHaveLength(1);
+    expect(plan.dropped).toEqual([]);
+    const restored = plan.restorable[0].apiCall as { acknowledgedDuplicate?: unknown };
+    expect(restored.acknowledgedDuplicate).toBeUndefined();
+  });
+
+  it('does not mutate the persisted operation it withdraws from', () => {
+    const staged = stagedOntoFive();
+    planLedgerRestore([staged], lineup(channel(5, { channel_number: 500 }), channel(6)));
+    const original = staged.apiCall as { acknowledgedDuplicate?: unknown };
+    expect(original.acknowledgedDuplicate).toEqual({ number: 105, occupantChannelIds: [5] });
+  });
+
+  it('withdraws it when nobody holds the number any more', () => {
+    // There is no longer a collision to consent to, so the consent is spent.
+    // Nothing downstream refuses this restore; the operator is simply told.
+    const staged = stagedOntoFive();
+    const plan = planLedgerRestore([staged], lineup(channel(5, { channel_number: 500 }), channel(6)));
+    expect(plan.withdrawnAcknowledgements).toHaveLength(1);
+    expect(plan.restorable).toHaveLength(1);
+  });
+
+  it('measures the occupants against this ledger\'s own earlier operations, not only the server', () => {
+    // Channel 5 is moved off 105 EARLIER IN THE SAME LEDGER. The staging-time
+    // warning would not have named it, so a plan that only consulted the
+    // server list would withdraw a consent that is still exactly right.
+    const vacate = op({ type: 'updateChannel', channelId: 5, data: { channel_number: 500 } });
+    const staged = op(
+      {
+        type: 'updateChannel',
+        channelId: 6,
+        data: { channel_number: 105 },
+        acknowledgedDuplicate: { number: 105, occupantChannelIds: [] },
+      },
+      'Changed channel number from 106 to 105',
+    );
+    const plan = planLedgerRestore([vacate, staged], lineup(channel(5), channel(6)));
+    expect(plan.withdrawnAcknowledgements).toEqual([]);
+  });
+});

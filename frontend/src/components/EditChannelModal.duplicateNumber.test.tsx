@@ -101,7 +101,7 @@ describe('EditChannelModal duplicate channel number', () => {
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ channel_number: 2 }),
-      { acknowledgedDuplicateNumber: 2 },
+      { acknowledgedDuplicate: { number: 2, occupantChannelIds: [2] } },
     );
   });
 

@@ -47,7 +47,7 @@ if (process.env.E2E_EXACT_BUILD !== 'true' || process.env.E2E_START_SERVER !== '
 /** Must match `STAGED_LEDGER_STORAGE_KEY` in `src/utils/stagedLedgerStorage.ts`. */
 const LEDGER_KEY = 'ecm.channelManager.stagedLedger';
 /** Must match `STAGED_LEDGER_FORMAT_VERSION`. */
-const LEDGER_VERSION = 1;
+const LEDGER_VERSION = 2;
 /**
  * `operatorLedgerKey(null)`. The preview build answers /api/auth/me with 401
  * and reports `require_auth: false`, so the app renders with no identity —

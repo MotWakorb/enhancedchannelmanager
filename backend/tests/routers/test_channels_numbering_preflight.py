@@ -146,7 +146,7 @@ class TestFinalNumberingPreflight:
                 "type": "updateChannel",
                 "channelId": 2,
                 "data": {"channel_number": 5},
-                "acknowledgedDuplicateNumber": 5,
+                "acknowledgedDuplicate": {"number": 5, "occupantChannelIds": [1]},
             },
         ])
         assert _numbering_issues(data) == []
@@ -159,7 +159,7 @@ class TestFinalNumberingPreflight:
                 "type": "updateChannel",
                 "channelId": 2,
                 "data": {"channel_number": 5},
-                "acknowledgedDuplicateNumber": 5,
+                "acknowledgedDuplicate": {"number": 5, "occupantChannelIds": [1]},
             },
             {"type": "updateChannel", "channelId": 3, "data": {"channel_number": 5}},
         ])
@@ -167,6 +167,53 @@ class TestFinalNumberingPreflight:
         assert len(issues) == 1
         # Only the operation nobody agreed to is named.
         assert issues[0]["operationIndexes"] == [1]
+
+    @pytest.mark.asyncio
+    async def test_an_acknowledgement_survives_consolidation(self, async_client):
+        """The DEFAULT path, because the frontend always sends
+        ``consolidate: true`` and consolidation runs before this preflight.
+
+        ``_consolidate_operations`` used to rebuild the merged updateChannel
+        from ``channelId`` and ``data`` alone, so the acknowledgement was gone
+        by the time the check read it and an operator who explicitly confirmed
+        a duplicate had their legitimate commit refused.
+        """
+        with patch("routers.channels.get_client", return_value=_client()), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {
+                        "type": "updateChannel",
+                        "channelId": 2,
+                        "data": {"channel_number": 5},
+                        "acknowledgedDuplicate": {"number": 5, "occupantChannelIds": [1]},
+                    },
+                    {"type": "updateChannel", "channelId": 2, "data": {"name": "TNT HD"}},
+                ],
+                "validateOnly": True,
+                "consolidate": True,
+            })
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert _numbering_issues(data) == [], data["validationIssues"]
+        assert data["validationPassed"] is True
+
+    @pytest.mark.asyncio
+    async def test_consolidation_does_not_invent_an_acknowledgement(self, async_client):
+        """The anti-vacuity control for the arm above: consolidation carries
+        consent through, it does not manufacture it."""
+        with patch("routers.channels.get_client", return_value=_client()), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 5}},
+                    {"type": "updateChannel", "channelId": 2, "data": {"name": "TNT HD"}},
+                ],
+                "validateOnly": True,
+                "consolidate": True,
+            })
+        data = response.json()
+        assert len(_numbering_issues(data)) == 1
 
     @pytest.mark.asyncio
     async def test_an_acknowledgement_never_reaches_dispatcharr(self, async_client):
@@ -180,9 +227,9 @@ class TestFinalNumberingPreflight:
         op = BulkUpdateChannelOp(
             channelId=2,
             data={"channel_number": 5},
-            acknowledgedDuplicateNumber=5,
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [1]},
         )
-        assert "acknowledgedDuplicateNumber" not in op.data
+        assert "acknowledgedDuplicate" not in op.data
 
     @pytest.mark.asyncio
     async def test_a_plan_touching_no_numbers_passes(self, async_client):
@@ -190,6 +237,87 @@ class TestFinalNumberingPreflight:
             {"type": "updateChannel", "channelId": 1, "data": {"name": "ESPN Renamed"}},
         ])
         assert _numbering_issues(data) == []
+
+
+class TestTheLineupCouldNotBeLoaded:
+    """A safety check whose input did not load must not report "no problem".
+
+    Fix round 2. The final-state preflight ran against whatever
+    ``existing_channels`` happened to hold, and the paginated fetch that fills
+    it swallows its exception. So an upstream failure produced an EMPTY lineup,
+    an empty lineup produced no occupants, no occupants produced no conflict,
+    and the commit proceeded — with the in-code comment conceding the check
+    "can only MISS a conflict". For a non-UI caller this preflight IS the
+    safety check, so a miss is the whole failure rather than a mild one.
+    """
+
+    @staticmethod
+    def _broken_client():
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = RuntimeError("upstream unreachable")
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        return mock_client
+
+    @staticmethod
+    async def _validate_with(async_client, client, operations):
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": operations,
+                "validateOnly": True,
+            })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @pytest.mark.asyncio
+    async def test_a_numbering_plan_is_reported_unverifiable_rather_than_clean(self, async_client):
+        data = await self._validate_with(async_client, self._broken_client(), [
+            {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 5}},
+        ])
+        issues = data["validationIssues"]
+        assert any(i["type"] == "numbering_preflight_unavailable" for i in issues), issues
+        assert data["validationPassed"] is False
+        assert data["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_partially_loaded_lineup_is_not_treated_as_the_whole_lineup(self, async_client):
+        """Page 1 arrives, page 2 fails. Half a lineup is not a lineup."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.side_effect = [
+            {"results": [LINEUP[0]], "count": 3, "next": "page2"},
+            RuntimeError("upstream unreachable"),
+        ]
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        data = await self._validate_with(async_client, mock_client, [
+            {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 9}},
+        ])
+        assert any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_plan_that_places_no_channel_on_a_number_is_unaffected(self, async_client):
+        """The anti-vacuity control. The report is about a check that had
+        something to check and could not run it, not about every failed
+        lookup."""
+        data = await self._validate_with(async_client, self._broken_client(), [
+            {"type": "updateChannel", "channelId": 2, "data": {"name": "TNT HD"}},
+        ])
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+
+    @pytest.mark.asyncio
+    async def test_a_loaded_lineup_reports_nothing_unavailable(self, async_client):
+        """The other anti-vacuity control: the healthy path stays silent."""
+        data = await _validate(async_client, [
+            {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 9}},
+        ])
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        )
+        assert data["validationPassed"] is True
 
 
 class TestPreflightAndContinueOnError:

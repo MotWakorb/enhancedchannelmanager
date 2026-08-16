@@ -3004,6 +3004,7 @@ function App() {
         savedAt={pendingRestore?.savedAt ?? 0}
         restorable={restorePlan?.restorable ?? []}
         dropped={restorePlan?.dropped ?? []}
+        withdrawnAcknowledgements={restorePlan?.withdrawnAcknowledgements ?? []}
         onRestore={() => {
           if (pendingRestore === null || restorePlan === null) return;
           restoreStagedLedger({

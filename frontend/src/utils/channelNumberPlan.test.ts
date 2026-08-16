@@ -123,6 +123,32 @@ describe('buildFinalNumberingPlan', () => {
     expect(plan.placements.find((p) => p.channelId === 1)?.placedByOperationIds).toEqual([]);
   });
 
+  it('does not call an unassigned channel re-asserted as unassigned a placement', () => {
+    // The `moved` clause's stated property is "the session put this channel
+    // where it now is". `null` is unassigned, and unassigned is where this
+    // channel already was — `sameChannelNumber(null, null)` is deliberately
+    // false because two unnumbered channels do not collide, which is a
+    // different question from whether this one moved.
+    const plan = buildFinalNumberingPlan(
+      [channel(1, null)],
+      [op({ type: 'updateChannel', channelId: 1, data: { channel_number: null } }, [snapshot(1, null)])],
+    );
+    expect(plan.placements.find((p) => p.channelId === 1)?.placedByOperationIds).toEqual([]);
+  });
+
+  it('calls clearing an assigned number a placement, and assigning a cleared one too', () => {
+    const cleared = buildFinalNumberingPlan(
+      [channel(1, 5)],
+      [op({ type: 'updateChannel', channelId: 1, data: { channel_number: null } }, [snapshot(1, 5)])],
+    );
+    expect(cleared.placements[0].placedByOperationIds).toHaveLength(1);
+    const assigned = buildFinalNumberingPlan(
+      [channel(1, null)],
+      [op({ type: 'updateChannel', channelId: 1, data: { channel_number: 5 } }, [snapshot(1, null)])],
+    );
+    expect(assigned.placements[0].placedByOperationIds).toHaveLength(1);
+  });
+
   it('records which operation placed a channel on its final number', () => {
     const move = op(
       { type: 'updateChannel', channelId: 2, data: { channel_number: 5 } },
@@ -188,7 +214,7 @@ describe('validateFinalNumberingPlan', () => {
             type: 'updateChannel',
             channelId: 2,
             data: { channel_number: 5 },
-            acknowledgedDuplicateNumber: 5,
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
           },
           [snapshot(2, 6)],
         ),
@@ -206,7 +232,7 @@ describe('validateFinalNumberingPlan', () => {
             type: 'updateChannel',
             channelId: 2,
             data: { channel_number: 5 },
-            acknowledgedDuplicateNumber: 5.0,
+            acknowledgedDuplicate: { number: 5.0, occupantChannelIds: [1] },
           },
           [snapshot(2, 6)],
         ),
@@ -217,7 +243,7 @@ describe('validateFinalNumberingPlan', () => {
 
   it('still blocks when a LATER unacknowledged operation joins an acknowledged duplicate', () => {
     const acked = op(
-      { type: 'updateChannel', channelId: 2, data: { channel_number: 5 }, acknowledgedDuplicateNumber: 5 },
+      { type: 'updateChannel', channelId: 2, data: { channel_number: 5 }, acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] } },
       [snapshot(2, 6)],
     );
     const accidental = op(
@@ -234,6 +260,109 @@ describe('validateFinalNumberingPlan', () => {
     // Only the unacknowledged operation is named — the acknowledged one is
     // a decision the operator already made.
     expect(issues[0].operationIds).toEqual([accidental.id]);
+  });
+
+  // ---------------------------------------------------------------- binding
+  //
+  // Fix round 2 of bead enhancedchannelmanager-vdxbx. An acknowledgement
+  // authorises exactly one collision: this channel, this number, this set of
+  // occupants. These four hold the ways it must NOT be reusable.
+
+  it('does not let an earlier acknowledgement authorise a later unacknowledged placement', () => {
+    // A is moved onto occupied 5 WITH consent, then to 6, then back onto 5
+    // with nobody asked. The final placement is the unacknowledged one.
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 5, 'ESPN'), channel(2, 6, 'TNT')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
+          },
+          [snapshot(2, 6)],
+        ),
+        op({ type: 'updateChannel', channelId: 2, data: { channel_number: 6 } }, [snapshot(2, 5)]),
+        op({ type: 'updateChannel', channelId: 2, data: { channel_number: 5 } }, [snapshot(2, 6)]),
+      ],
+    );
+    const issues = validateFinalNumberingPlan(plan);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].type).toBe('duplicate_channel_number');
+  });
+
+  it('keeps an acknowledgement across a later edit that does not move the channel', () => {
+    // The control for the arm above: only a re-PLACEMENT withdraws consent.
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 5, 'ESPN'), channel(2, 6, 'TNT')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
+          },
+          [snapshot(2, 6)],
+        ),
+        op({ type: 'updateChannel', channelId: 2, data: { name: 'TNT HD' } }, [snapshot(2, 5)]),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toEqual([]);
+  });
+
+  it('refuses an acknowledgement whose occupants are not the ones now on the number', () => {
+    // The restore case, reached the way restore reaches it: the ledger was
+    // staged against a lineup where 5 belonged to ESPN, and by the time it is
+    // planned again 5 belongs to somebody else entirely. Consent to join ESPN
+    // is not consent to join AMC.
+    const plan = buildFinalNumberingPlan(
+      [channel(3, 5, 'AMC'), channel(2, 6, 'TNT')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
+          },
+          [snapshot(2, 6)],
+        ),
+      ],
+    );
+    const issues = validateFinalNumberingPlan(plan);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].channelIds.sort()).toEqual([2, 3]);
+  });
+
+  it('accepts a pile-up in which each newcomer consented to everyone already there', () => {
+    // Not every multi-way duplicate is accidental. B joins A on 5 having been
+    // shown A; C then joins having been shown A and B. Nobody is surprised.
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 5, 'ESPN'), channel(2, 6, 'TNT'), channel(3, 7, 'AMC')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1] },
+          },
+          [snapshot(2, 6)],
+        ),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 3,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [1, 2] },
+          },
+          [snapshot(3, 7)],
+        ),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toEqual([]);
   });
 
   it('names the conflicting channels well enough to act on', () => {
@@ -339,46 +468,107 @@ describe('channelNumberRangeError', () => {
 
 describe('deriveAutomaticRenames', () => {
   it('reports a rename the numbering change caused', () => {
-    const renames = deriveAutomaticRenames([
-      op(
-        { type: 'updateChannel', channelId: 1, data: { channel_number: 9, name: '9 | ESPN' } },
-        [snapshot(1, 5, '5 | ESPN')],
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [op(
+          { type: 'updateChannel', channelId: 1, data: { channel_number: 9, name: '9 | ESPN' } },
+          [snapshot(1, 5, '5 | ESPN')],
+        )],
       ),
-    ]);
+    );
     expect(renames).toEqual([
       { channelId: 1, from: '5 | ESPN', to: '9 | ESPN', fromNumber: 5, toNumber: 9 },
     ]);
   });
 
   it('ignores a rename the operator typed themselves', () => {
-    const renames = deriveAutomaticRenames([
-      op(
-        { type: 'updateChannel', channelId: 1, data: { channel_number: 9, name: 'Something Else' } },
-        [snapshot(1, 5, '5 | ESPN')],
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [op(
+          { type: 'updateChannel', channelId: 1, data: { channel_number: 9, name: 'Something Else' } },
+          [snapshot(1, 5, '5 | ESPN')],
+        )],
       ),
-    ]);
+    );
     expect(renames).toEqual([]);
   });
 
   it('ignores a plain rename with no numbering change', () => {
-    const renames = deriveAutomaticRenames([
-      op({ type: 'updateChannel', channelId: 1, data: { name: 'New Name' } }, [snapshot(1, 5, '5 | ESPN')]),
-    ]);
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [op({ type: 'updateChannel', channelId: 1, data: { name: 'New Name' } }, [snapshot(1, 5, '5 | ESPN')])],
+      ),
+    );
     expect(renames).toEqual([]);
   });
 
   it('reports every automatic rename in a bulk renumber', () => {
-    const renames = deriveAutomaticRenames([
-      op({ type: 'updateChannel', channelId: 1, data: { channel_number: 10, name: '10 | A' } }, [snapshot(1, 1, '1 | A')]),
-      op({ type: 'updateChannel', channelId: 2, data: { channel_number: 11, name: '11 | B' } }, [snapshot(2, 2, '2 | B')]),
-    ]);
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 1, '1 | A'), channel(2, 2, '2 | B')],
+        [
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 10, name: '10 | A' } }, [snapshot(1, 1, '1 | A')]),
+          op({ type: 'updateChannel', channelId: 2, data: { channel_number: 11, name: '11 | B' } }, [snapshot(2, 2, '2 | B')]),
+        ],
+      ),
+    );
     expect(renames.map((r) => r.channelId)).toEqual([1, 2]);
   });
 
   it('is empty when auto-rename is off, because nothing stages a name', () => {
-    const renames = deriveAutomaticRenames([
-      op({ type: 'updateChannel', channelId: 1, data: { channel_number: 9 } }, [snapshot(1, 5, '5 | ESPN')]),
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [op({ type: 'updateChannel', channelId: 1, data: { channel_number: 9 } }, [snapshot(1, 5, '5 | ESPN')])],
+      ),
+    );
+    expect(renames).toEqual([]);
+  });
+
+  // Fix round 2 of bead enhancedchannelmanager-ic884.5: the preview has to
+  // describe the state Apply will produce, not an intermediate one.
+
+  it('drops a rename a later edit superseded', () => {
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 6, name: '6 | ESPN' } }, [snapshot(1, 5, '5 | ESPN')]),
+          op({ type: 'updateChannel', channelId: 1, data: { name: 'ESPN HD' } }, [snapshot(1, 6, '6 | ESPN')]),
+        ],
+      ),
+    );
+    expect(renames).toEqual([]);
+  });
+
+  it('reports only the last of a chain of automatic renames', () => {
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 6, name: '6 | ESPN' } }, [snapshot(1, 5, '5 | ESPN')]),
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 7, name: '7 | ESPN' } }, [snapshot(1, 6, '6 | ESPN')]),
+        ],
+      ),
+    );
+    expect(renames).toEqual([
+      { channelId: 1, from: '5 | ESPN', to: '7 | ESPN', fromNumber: 5, toNumber: 7 },
     ]);
+  });
+
+  it('reports nothing for a channel returned to the name and number it started on', () => {
+    const renames = deriveAutomaticRenames(
+      buildFinalNumberingPlan(
+        [channel(1, 5, '5 | ESPN')],
+        [
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 6, name: '6 | ESPN' } }, [snapshot(1, 5, '5 | ESPN')]),
+          op({ type: 'updateChannel', channelId: 1, data: { channel_number: 5, name: '5 | ESPN' } }, [snapshot(1, 6, '6 | ESPN')]),
+        ],
+      ),
+    );
     expect(renames).toEqual([]);
   });
 });

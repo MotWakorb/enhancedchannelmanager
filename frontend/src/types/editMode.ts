@@ -12,17 +12,44 @@ import type { AutomaticRename } from '../utils/channelNumberPlan';
 export type { AutomaticRename };
 
 /**
+ * The operator's recorded consent to ONE specific channel-number collision
+ * (bead enhancedchannelmanager-vdxbx).
+ *
+ * ONE RECORD, NOT TWO FIELDS, because the number alone does not describe what
+ * was consented to. An operator shown "102 is used by Bravo — use it anyway?"
+ * agreed to share 102 WITH BRAVO. If Bravo later moves off 102 and Delta moves
+ * on, the collision the Apply would create is one the operator was never shown,
+ * and an acknowledgement carrying only the number would authorise it anyway.
+ * Keeping the number and the occupants in one object makes a half-recorded
+ * acknowledgement — a number with nobody attached — unrepresentable rather
+ * than merely discouraged.
+ *
+ * Both halves are plain JSON, so the record survives the sessionStorage ledger
+ * and the wire with no extra plumbing.
+ */
+export interface DuplicateNumberAcknowledgement {
+  /** The channel number the operator was warned about and chose anyway. */
+  number: number;
+  /**
+   * The ids of the channels the warning named as already holding `number`,
+   * exactly as the operator saw them. Excludes the channel being staged: a
+   * channel never collides with itself.
+   */
+  occupantChannelIds: number[];
+}
+
+/**
  * Bookkeeping a caller can attach to a staged channel update that is not part
  * of the Dispatcharr payload.
  */
 export interface StageUpdateChannelOptions {
   /**
-   * The channel number the operator was warned about and chose to use anyway
-   * (bead enhancedchannelmanager-vdxbx). Recorded so the final-state preflight
-   * can tell a deliberate duplicate from an accidental one and does not
+   * The collision the operator was warned about and chose to accept (bead
+   * enhancedchannelmanager-vdxbx). Recorded so the final-state preflight can
+   * tell a deliberate duplicate from an accidental one and does not
    * re-litigate a decision the operator already made.
    */
-  acknowledgedDuplicateNumber?: number;
+  acknowledgedDuplicate?: DuplicateNumberAcknowledgement;
 }
 
 /**
@@ -31,8 +58,8 @@ export interface StageUpdateChannelOptions {
  */
 export type ApiCallSpec =
   /**
-   * `acknowledgedDuplicateNumber` is the operator's recorded answer to "that
-   * number is already used by another channel — use it anyway?" (bead
+   * `acknowledgedDuplicate` is the operator's recorded answer to "that number
+   * is already used by another channel — use it anyway?" (bead
    * enhancedchannelmanager-vdxbx). It rides on the OPERATION rather than in a
    * registry beside it for three reasons: it survives the sessionStorage
    * ledger with no extra plumbing, undoing the operation withdraws the
@@ -40,16 +67,17 @@ export type ApiCallSpec =
    * cannot silently empty it. It is not part of `data`, because `data` is the
    * body sent to Dispatcharr and this is ECM's own bookkeeping.
    *
-   * The value is the NUMBER that was acknowledged, not a boolean: an operator
-   * who accepted a duplicate on 5 has said nothing about 6, so re-staging the
-   * same channel onto a different occupied number asks again.
+   * It carries the NUMBER, not a boolean — an operator who accepted a
+   * duplicate on 5 has said nothing about 6 — and the OCCUPANTS alongside it,
+   * so it cannot outlive the collision it consented to. See
+   * {@link DuplicateNumberAcknowledgement}.
    */
-  | { type: 'updateChannel'; channelId: number; data: Partial<Channel>; acknowledgedDuplicateNumber?: number }
+  | { type: 'updateChannel'; channelId: number; data: Partial<Channel>; acknowledgedDuplicate?: DuplicateNumberAcknowledgement }
   | { type: 'addStreamToChannel'; channelId: number; streamId: number }
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicateNumber?: number }
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
