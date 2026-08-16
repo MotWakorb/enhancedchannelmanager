@@ -385,3 +385,42 @@ describe('invariant 6 — a restored session re-establishes its baseline', () =>
     });
   });
 });
+
+describe('invariant 3 — the operator is given the exact remaining step', () => {
+  it('renders a recovery step from the envelope as a readable error', async () => {
+    // A numbering plan stopped part way AND the compensating write failed too,
+    // so neither the previous numbering nor the proposed one is what the
+    // operator is left with. The step travels in the envelope, the journal and
+    // the container log; none of those is where the operator is standing.
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageUpdateChannel(1, { channel_number: 100 }, 'ESPN to 100');
+    });
+    bulkCommit.mockResolvedValue({
+      success: false,
+      partial: true,
+      operationsApplied: 1,
+      operationsFailed: 1,
+      errors: [{
+        operationId: 'bulk-commit-numbering-recovery',
+        error: '1 channel(s) could not be put back on the channel number they had.',
+      }],
+      tempIdMap: {},
+      groupIdMap: {},
+      numberingRecovery: [{
+        channelId: 1,
+        channelName: 'ESPN',
+        currentNumber: 100,
+        targetNumber: 5,
+        step: 'Set "ESPN" (channel 1) back to channel number 5; this run left it on 100.',
+        error: 'upstream refused',
+      }],
+    } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>);
+
+    const outcome = await commit(view);
+    const steps = outcome.errors.filter((error) => error.operationId.startsWith('numbering-recovery-'));
+    expect(steps).toHaveLength(1);
+    expect(steps[0].channelName).toBe('ESPN');
+    expect(steps[0].error).toContain('back to channel number 5');
+  });
+});

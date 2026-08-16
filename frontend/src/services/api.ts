@@ -468,6 +468,25 @@ export interface BulkCommitResponse {
    * duplicates. False for full success and for total failure (nothing applied).
    */
   partial?: boolean;
+  /**
+   * Channels a failed numbering plan left on the wrong number, which the
+   * compensating write could not put back either (bead
+   * `enhancedchannelmanager-ic884.3`). Each entry names the channel, where it
+   * is, where it should be, and the one action that closes the gap.
+   *
+   * Non-empty is the ONLY case where neither the previous numbering nor the
+   * proposed one is what the operator is left with, so it must reach them
+   * rather than sitting in the envelope: an unexplained middle is the outcome
+   * the whole compensation pass exists to prevent.
+   */
+  numberingRecovery?: {
+    channelId: number;
+    channelName: string;
+    currentNumber: number | null;
+    targetNumber: number | null;
+    step: string;
+    error: string;
+  }[];
 }
 
 // 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly

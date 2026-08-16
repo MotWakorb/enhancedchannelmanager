@@ -1931,6 +1931,32 @@ export function useEditMode({
        */
       let sawUncleanResponse = false;
 
+      /**
+       * Turn a response's `numberingRecovery` into errors the operator READS.
+       *
+       * The steps travel in the envelope and the journal and the container log
+       * already; none of those is a place an operator is standing when Apply
+       * comes back. This is the one outcome where neither the previous
+       * numbering nor the proposed one is what they are left with, so the
+       * exact remaining step per channel has to reach the dialog (bead
+       * enhancedchannelmanager-ic884.3).
+       *
+       * Pushed as errors rather than as a new field so the existing "some
+       * changes were not applied" surface renders them with no second code
+       * path to keep in step.
+       */
+      const collectRecoverySteps = (response: api.BulkCommitResponse) => {
+        for (const entry of response.numberingRecovery ?? []) {
+          result.errors.push({
+            operationId: `numbering-recovery-${entry.channelId}`,
+            operationType: 'updateChannel',
+            error: entry.step,
+            channelId: entry.channelId,
+            channelName: entry.channelName,
+          });
+        }
+      };
+
       // Report initial progress
       reportProgress(0, totalSteps, `Preparing ${totalOps} operations...`);
 
@@ -1964,6 +1990,7 @@ export function useEditMode({
         totalFailed += createResponse.operationsFailed;
         if (!createResponse.success) sawUncleanResponse = true;
         result.errors.push(...createResponse.errors);
+        collectRecoverySteps(createResponse);
       }
 
       completedSteps = 1;
@@ -2045,6 +2072,7 @@ export function useEditMode({
         totalFailed += batchResponse.operationsFailed;
         if (!batchResponse.success) sawUncleanResponse = true;
         result.errors.push(...batchResponse.errors);
+        collectRecoverySteps(batchResponse);
 
         // If a batch completely fails and we're not continuing on error, stop
         if (!batchResponse.success && !options?.continueOnError) {
