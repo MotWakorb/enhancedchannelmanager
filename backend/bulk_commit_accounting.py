@@ -13,7 +13,9 @@ The property, stated as an invariant rather than as a reproduction:
 
     1. ``operationsApplied + operationsFailed`` equals the number of operations
        the executor ATTEMPTED, and the executor attempts every submitted
-       operation unless it aborted early (``continueOnError=false``).
+       operation unless it aborted early (``continueOnError=false``) or the run
+       never reached Phase 2 at all (a setup failure — see
+       :meth:`OperationLedger.record_setup_failure`).
     2. Every operation resolves to exactly one outcome. Not zero — an operation
        type nothing handles used to be silently counted as neither. Not two —
        a branch that incremented ``operationsApplied`` mid-way and then raised
@@ -28,6 +30,14 @@ The property, stated as an invariant rather than as a reproduction:
        applied — the list is rendered by the MCP tool as channels "which were
        created", so an entry for an operation that failed is a claim about a
        channel that does not exist.
+    6. Every entry in ``errors`` is accounted for. An entry that names a
+       submitted operation is counted in ``operationsFailed`` (or carries
+       ``applied: True``); an entry that names something OUTSIDE the operation
+       list — group creation in Phase 1, the journal flush in Phase 3 — is
+       counted as a setup/bookkeeping failure. Neither may be silently
+       uncounted, which is how a run that created a group and then bailed
+       reported ``success: false`` with ``operationsFailed: 0`` and no entry
+       anywhere saying what had failed.
 
 Enforcement, not convention: :class:`OperationLedger` is the ONLY thing that
 writes the counters, and :func:`finalize_bulk_commit_result` derives ``success``
@@ -98,6 +108,7 @@ class OperationLedger:
         "applied",
         "failed",
         "incomplete",
+        "setup_failures",
         "aborted",
         "applied_create_temp_ids",
         "_open",
@@ -109,6 +120,13 @@ class OperationLedger:
         self.total_operations = total_operations
         self.applied = 0
         self.failed = 0
+        #: Failures that are NOT one of the submitted operations: Phase 1 group
+        #: creation, which runs before any operation, and the Phase 3 journal
+        #: flush, which runs after all of them. Counting these in ``failed``
+        #: would break rule 1 (``applied + failed`` counts operations); leaving
+        #: them uncounted is what let a run report ``success: false`` with
+        #: ``operationsFailed: 0``.
+        self.setup_failures = 0
         #: Operations that APPLIED upstream but whose bookkeeping did not
         #: complete — e.g. a create Dispatcharr accepted but answered without a
         #: usable id, so the temp id cannot be mapped. Counted in ``applied``
@@ -185,6 +203,27 @@ class OperationLedger:
         """Note that the executor stopped before reaching every operation."""
         self.aborted = True
 
+    def record_setup_failure(self, *, aborted_run: bool = True) -> None:
+        """Record a failure that is not one of the submitted operations.
+
+        Two callers, at the two ends of the run:
+
+        * Phase 1 group creation, which happens before any operation is
+          attempted and aborts the run when it fails. ``aborted_run`` is true:
+          no operation was reached, so ``applied + failed`` is legitimately
+          less than the number submitted.
+        * The Phase 3 journal flush, which happens after every operation has
+          already resolved. ``aborted_run`` is false there — the operations
+          were all attempted, and their counts stay exactly as they were.
+
+        Either way ``success`` becomes false and the audit expects one more
+        ``errors`` entry, so the envelope names what went wrong instead of
+        contradicting itself.
+        """
+        self.setup_failures += 1
+        if aborted_run:
+            self.aborted = True
+
     def _close(self) -> None:
         if not self._open:
             raise BulkCommitAccountingError(
@@ -200,6 +239,7 @@ def bulk_commit_accounting_violations(
     total_operations: int,
     aborted: bool,
     applied_create_temp_ids: frozenset[int] | set[int],
+    setup_failures: int = 0,
 ) -> list[str]:
     """Return every way ``result`` contradicts itself, as readable sentences.
 
@@ -242,18 +282,23 @@ def bulk_commit_accounting_violations(
             "the run did not abort early"
         )
 
-    if failed != len(unapplied_errors):
+    # Setup failures (Phase 1 group creation, the Phase 3 journal flush) are
+    # not operations, so they are not in ``operationsFailed`` — but each still
+    # contributes an ``errors`` entry, and every entry has to be accounted for
+    # by exactly one counter.
+    if failed + setup_failures != len(unapplied_errors):
         violations.append(
-            f"operationsFailed is {failed} but {len(unapplied_errors)} error "
-            "entries describe an operation that did not apply"
+            f"operationsFailed is {failed} and {setup_failures} setup "
+            f"failure(s) were recorded, but {len(unapplied_errors)} error "
+            "entries describe something that did not apply"
         )
 
-    expected_success = failed == 0 and not applied_errors
+    expected_success = failed == 0 and not applied_errors and setup_failures == 0
     if result.get("success") is not expected_success:
         violations.append(
             f"success is {result.get('success')!r} but "
-            f"{failed} operation(s) failed and {len(applied_errors)} applied "
-            "incompletely"
+            f"{failed} operation(s) failed, {len(applied_errors)} applied "
+            f"incompletely and {setup_failures} setup step(s) failed"
         )
 
     expected_partial = applied > 0 and (failed > 0 or bool(applied_errors))
@@ -290,7 +335,11 @@ def finalize_bulk_commit_result(result: dict, ledger: OperationLedger) -> None:
     # …-ayfn9). ``incomplete`` joins it: an operation that landed upstream but
     # left ECM unable to record the result is not a clean commit either, and
     # the caller has to reconcile rather than assume.
-    result["success"] = ledger.failed == 0 and ledger.incomplete == 0
+    result["success"] = (
+        ledger.failed == 0
+        and ledger.incomplete == 0
+        and ledger.setup_failures == 0
+    )
 
     # ``partial`` is the flag that tells the frontend to render "X applied, Y
     # failed" and the operator to reconcile via ``tempIdMap`` instead of
@@ -305,6 +354,7 @@ def finalize_bulk_commit_result(result: dict, ledger: OperationLedger) -> None:
         total_operations=ledger.total_operations,
         aborted=ledger.aborted,
         applied_create_temp_ids=ledger.applied_create_temp_ids,
+        setup_failures=ledger.setup_failures,
     )
     if violations:
         message = "; ".join(violations)

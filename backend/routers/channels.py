@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
@@ -369,23 +369,51 @@ class BulkRenameGroupOp(BaseModel):
 # --------------------------------------------------------------------------
 
 class BulkSetProfileMembershipOp(BaseModel):
-    """Enable or disable one channel in one channel profile."""
+    """Enable or disable one channel in one channel profile.
+
+    ``profileId`` is a real Dispatcharr id: Edit Mode has no staged-profile
+    concept (creating a profile stays immediate, per the PO's 2026-08-15
+    decision), so unlike a group id there is never a negative placeholder here.
+    ``channelId`` MAY be negative — that is the frontend's temp id for a channel
+    created earlier in the same batch, resolved through ``tempIdMap`` — and the
+    executor rejects one that never resolves rather than sending it upstream.
+    """
     type: Literal["setProfileMembership"] = "setProfileMembership"
-    profileId: int
+    profileId: PositiveInt
     channelId: int
     enabled: bool
 
 
 class BulkRestoreGroupOp(BaseModel):
-    """Un-hide a channel group ECM previously hid (ECM-local state)."""
+    """Un-hide a channel group ECM previously hid (ECM-local state).
+
+    The group is a real Dispatcharr group ECM keeps a local hidden-marker row
+    for, so the id is always positive; a staged group has never been hidden.
+    """
     type: Literal["restoreChannelGroup"] = "restoreChannelGroup"
-    groupId: int
+    groupId: PositiveInt
 
 
 class BulkClearStreamStatsOp(BaseModel):
-    """Delete probe stats for streams, returning them to 'never probed'."""
+    """Delete probe stats for streams, returning them to 'never probed'.
+
+    The ids go straight into a ``DELETE ... WHERE stream_id IN (...)``, so they
+    are held to the same shape the oldest operations are: real positive ids, at
+    least one of them, and no duplicates. An empty list used to be accepted and
+    counted as an applied operation that did nothing.
+    """
     type: Literal["clearStreamStats"] = "clearStreamStats"
-    streamIds: list[int]
+    streamIds: list[PositiveInt] = Field(min_length=1)
+
+    @field_validator("streamIds")
+    @classmethod
+    def _reject_duplicates(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value):
+            raise PydanticCustomError(
+                "duplicate_stream_ids",
+                "streamIds must not contain duplicates",
+            )
+        return value
 
 
 # Union type for all bulk operations
@@ -1717,6 +1745,15 @@ async def _run_bulk_commit(
     # read the same whichever surface made the change.
     journal_rows: list[dict] = []
 
+    # Phase 1 onwards. Until this flips, nothing has been written anywhere, so
+    # the two pre-execution early returns (validateOnly, validation failed with
+    # continueOnError=false) must leave no journal trace at all — a dry run and
+    # a refused run are not commits.
+    execution_started = False
+    # `flush_journal` is called from the single exit helper AND from the outer
+    # exception handler, so it has to be idempotent.
+    journal_flushed = False
+
     def add_journal_row(
         action_type: str,
         entity_id: Optional[int],
@@ -1771,6 +1808,12 @@ async def _run_bulk_commit(
         # why the envelope has to say so, since the result is otherwise
         # indistinguishable from `normalize=false`.
         "normalizationFailures": [],
+        # Per-entity journal rows this run could not write. Always present so a
+        # caller checks the number rather than probing for a key. Non-zero means
+        # the mutations LANDED and their audit trail did not — the operations
+        # must not be retried, and the container log carries the lost rows
+        # (bead enhancedchannelmanager-kz089, fix round 2).
+        "journalRowsUnwritten": 0,
     }
 
     # Counters the summary row reports. Kept as locals rather than derived from
@@ -1829,6 +1872,164 @@ async def _run_bulk_commit(
             )
         return group_id
 
+    class UnresolvedChannelError(Exception):
+        """A channel id that is still a frontend staging placeholder.
+
+        ``resolve_id`` maps a negative temp id onto the real id its
+        ``createChannel`` produced. A negative id that survives that lookup
+        names a channel this batch never created, and sending it upstream as a
+        path segment is how a caller-supplied id reaches Dispatcharr unchecked.
+        """
+
+    def reject_unresolved_channel(channel_id: int, label: str) -> int:
+        """Return ``channel_id``, or raise if it is still a staging placeholder."""
+        if channel_id < 0:
+            raise UnresolvedChannelError(
+                f"Channel {channel_id} does not exist. A temp channel id must be "
+                f"created by a createChannel operation in the same batch ({label})."
+            )
+        return channel_id
+
+    def write_journal_rows(rows: list[dict]) -> int:
+        """Write ``rows``; return how many could NOT be written.
+
+        ``journal.log_entries`` writes N rows in ONE transaction, which is what
+        keeps a several-hundred-channel Apply All from becoming several hundred
+        transactions — and it reports failure by RETURNING ``False``, not by
+        raising, so ignoring its return value loses the whole batch's audit
+        trail in silence. That return value is checked here.
+
+        When the batch write fails, the rows are retried one at a time: the
+        realistic failure is a single unwritable row, and a batch write lets
+        that one row take every other row's audit trail with it. Anything still
+        unwritable after that is logged at ERROR with its full content, because
+        an upstream mutation with no journal row is exactly what an operator
+        later has to reconstruct by hand.
+        """
+        if not rows:
+            return 0
+        try:
+            if journal.log_entries(rows) is not False:
+                return 0
+            logger.error(
+                "[CHANNELS-BULK] Batch journal write failed for %s row(s) "
+                "(batch=%s); retrying one at a time", len(rows), batch_id,
+            )
+        except Exception as batch_err:
+            logger.exception(
+                "[CHANNELS-BULK] Batch journal write raised for %s row(s) "
+                "(batch=%s); retrying one at a time: %s",
+                len(rows), batch_id, batch_err,
+            )
+
+        unwritten = 0
+        for row in rows:
+            try:
+                if journal.log_entry(**row) is not None:
+                    continue
+            except Exception as row_err:
+                logger.exception(
+                    "[CHANNELS-BULK] Journal row raised (batch=%s): %s",
+                    batch_id, row_err,
+                )
+            unwritten += 1
+            logger.error(
+                "[CHANNELS-BULK] UNJOURNALLED MUTATION (batch=%s): %s",
+                batch_id, row,
+            )
+        return unwritten
+
+    def flush_journal() -> None:
+        """Write this run's journal rows and its summary row. Never raises.
+
+        Called from :func:`finish`, which is the ONLY way out of this function
+        once execution has started — every early return, every partial batch
+        failure and the outer exception handler all go through it. Before bead
+        …-kz089 fix round 2 the journal writes were the last statements of the
+        happy path, so a Phase 1 group-create failure returned with group A
+        already created upstream and no row saying so, and an exception
+        anywhere after Phase 1 did the same for every operation that had
+        landed.
+
+        A journal failure is recorded on the ledger as a setup failure rather
+        than swallowed: the mutations DID land, so nothing may be reported as
+        failed, but the envelope has to say the audit trail is incomplete
+        instead of looking like a clean commit.
+        """
+        nonlocal journal_flushed
+        if journal_flushed or not execution_started:
+            return
+        journal_flushed = True
+
+        rows = list(journal_rows)
+        journal_rows.clear()
+        unwritten = write_journal_rows(rows)
+
+        # The summary reads last so it closes the batch. Counters come from the
+        # ledger rather than from `result`, because this runs on paths where
+        # `finalize_bulk_commit_result` has not written them yet.
+        try:
+            summary = journal.log_entry(
+                category="channel",
+                action_type="bulk_commit",
+                entity_id=None,
+                entity_name="Bulk Commit",
+                description=f"Applied {ledger.applied} operations in bulk commit" +
+                            (f" ({ledger.failed} failed)" if ledger.failed > 0 else ""),
+                after_value={
+                    "operations_applied": ledger.applied,
+                    "operations_failed": ledger.failed,
+                    "channels_created": channels_created,
+                    "groups_created": groups_created,
+                    "entity_rows_written": len(rows) - unwritten,
+                    "validation_issues": len(result["validationIssues"]),
+                    "continue_on_error": request.continueOnError,
+                },
+                batch_id=batch_id,
+            )
+        except Exception as summary_err:
+            logger.exception(
+                "[CHANNELS-BULK] Summary journal row raised (batch=%s): %s",
+                batch_id, summary_err,
+            )
+            summary = None
+        if summary is None:
+            unwritten += 1
+            logger.error(
+                "[CHANNELS-BULK] UNJOURNALLED bulk-commit summary (batch=%s)", batch_id
+            )
+
+        if unwritten:
+            result["journalRowsUnwritten"] = unwritten
+            result["errors"].append({
+                "operationId": "bulk-commit-journal",
+                "error": (
+                    f"{unwritten} journal row(s) could not be written. The "
+                    "operations themselves applied — do NOT retry them; the "
+                    "container log carries the unwritten rows."
+                ),
+            })
+            # Not an operation failure: every operation resolved exactly as the
+            # ledger already recorded. This is the bookkeeping after them.
+            ledger.record_setup_failure(aborted_run=False)
+
+    def finish() -> dict:
+        """The single exit once execution has started.
+
+        Journal first, then the accounting, so the envelope's own audit sees
+        every error entry — including one the journal flush just added.
+        """
+        flush_journal()
+        finalize_bulk_commit_result(result, ledger)
+        logger.info(
+            "[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
+            batch_id, result["success"], result["operationsApplied"],
+            result["operationsFailed"],
+            (", validation_issues=%s" % len(result["validationIssues"]))
+            if result["validationIssues"] else "",
+        )
+        return result
+
     try:
         # Phase 0: Pre-validation - check that referenced entities exist
         logger.debug("[CHANNELS-BULK] Phase 0: Starting pre-validation")
@@ -1837,6 +2038,15 @@ async def _run_bulk_commit(
         referenced_channel_ids = set()
         referenced_stream_ids = set()
         channels_to_create = set()  # Temp IDs that will be created
+        # The three operations Edit Mode added in bead …-kz089 were enumerated
+        # by neither of the two loops below, so they reached their mutation with
+        # nothing resolved: the profile and channel ids went straight upstream,
+        # the group id straight into a local DELETE, the stream ids straight
+        # into another. They resolve like every other operation now (fix round
+        # 2). Profiles and hidden groups need their own lookups because neither
+        # is a channel or a stream.
+        referenced_profile_ids = set()
+        referenced_hidden_group_ids = set()
 
         for idx, op in enumerate(request.operations):
             if op.type == "createChannel":
@@ -1862,10 +2072,26 @@ async def _run_bulk_commit(
                 for cid in op.channelIds:
                     if cid >= 0:
                         referenced_channel_ids.add(cid)
+            elif op.type == "setProfileMembership":
+                if op.channelId >= 0:
+                    referenced_channel_ids.add(op.channelId)
+                referenced_profile_ids.add(op.profileId)
+            elif op.type == "clearStreamStats":
+                referenced_stream_ids.update(op.streamIds)
+            elif op.type == "restoreChannelGroup":
+                referenced_hidden_group_ids.add(op.groupId)
 
         # Fetch existing channels and streams to validate
         existing_channels = {}  # id -> channel dict
         existing_streams = {}   # id -> stream dict
+        existing_profile_ids: set[int] = set()
+        hidden_group_ids: set[int] = set()
+        # Only validate against a lookup that actually SUCCEEDED. An upstream
+        # failure here must not turn every referenced profile into a reported
+        # "does not exist" — that would be the lookup's failure wearing the
+        # operation's name.
+        profiles_resolved = False
+        hidden_groups_resolved = False
 
         logger.debug("[CHANNELS-BULK] Referenced entities: %s channels, %s streams", len(referenced_channel_ids), len(referenced_stream_ids))
         logger.debug("[CHANNELS-BULK] Channels to create: %s (temp IDs: %s)", len(channels_to_create), sorted(channels_to_create))
@@ -1906,6 +2132,31 @@ async def _run_bulk_commit(
                 logger.debug("[CHANNELS-BULK] Loaded %s of %s referenced streams", len(existing_streams), len(referenced_stream_ids))
             except Exception as e:
                 logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", e)
+
+        if referenced_profile_ids:
+            try:
+                logger.debug("[CHANNELS-BULK] Fetching channel profiles for validation...")
+                profiles = await client.get_channel_profiles()
+                existing_profile_ids = {p["id"] for p in profiles if "id" in p}
+                profiles_resolved = True
+                logger.debug("[CHANNELS-BULK] Loaded %s channel profiles", len(existing_profile_ids))
+            except Exception as e:
+                logger.warning("[CHANNELS-BULK] Failed to fetch channel profiles for validation: %s", e)
+
+        if referenced_hidden_group_ids:
+            try:
+                from models import HiddenChannelGroup
+                with get_session() as db:
+                    hidden_group_ids = {
+                        row.group_id
+                        for row in db.query(HiddenChannelGroup.group_id).filter(
+                            HiddenChannelGroup.group_id.in_(referenced_hidden_group_ids)
+                        )
+                    }
+                hidden_groups_resolved = True
+                logger.debug("[CHANNELS-BULK] %s of %s referenced groups are hidden", len(hidden_group_ids), len(referenced_hidden_group_ids))
+            except Exception as e:
+                logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", e)
 
         # Validate each operation
         for idx, op in enumerate(request.operations):
@@ -1989,6 +2240,69 @@ async def _run_bulk_commit(
                         })
                         result["validationPassed"] = False
 
+            elif op.type == "setProfileMembership":
+                # Both ids are sent upstream as path segments, so both are
+                # resolved here exactly as updateChannel's channel id is. An
+                # error, not a warning: writing a membership for a channel or
+                # profile that does not exist cannot do what was asked.
+                if op.channelId >= 0 and op.channelId not in existing_channels:
+                    result["validationIssues"].append({
+                        "type": "missing_channel",
+                        "severity": "error",
+                        "message": (
+                            f"Cannot set profile membership for channel {op.channelId}: "
+                            "channel does not exist"
+                        ),
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": f"Channel {op.channelId}",
+                    })
+                    result["validationPassed"] = False
+                if profiles_resolved and op.profileId not in existing_profile_ids:
+                    result["validationIssues"].append({
+                        "type": "invalid_operation",
+                        "severity": "error",
+                        "message": f"Channel profile {op.profileId} does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                    })
+                    result["validationPassed"] = False
+
+            elif op.type == "restoreChannelGroup":
+                # A warning, not an error: the executor already treats a group
+                # that is no longer hidden as a no-op rather than a failure,
+                # because another session restoring it first is a race, not a
+                # mistake. The issue exists so an unresolvable id is visible
+                # instead of silently deleting nothing.
+                if hidden_groups_resolved and op.groupId not in hidden_group_ids:
+                    result["validationIssues"].append({
+                        "type": "invalid_operation",
+                        "severity": "warning",
+                        "message": (
+                            f"Channel group {op.groupId} is not hidden; the restore "
+                            "will do nothing"
+                        ),
+                        "operationIndex": idx,
+                    })
+
+            elif op.type == "clearStreamStats":
+                # A warning, not an error: probe stats outlive the stream row
+                # upstream, and clearing orphaned stats is a thing an operator
+                # legitimately wants to do. Erroring here would make the only
+                # way to remove them impossible.
+                for sid in op.streamIds:
+                    if sid not in existing_streams:
+                        result["validationIssues"].append({
+                            "type": "missing_stream",
+                            "severity": "warning",
+                            "message": (
+                                f"Stream {sid} does not exist; clearing its probe "
+                                "stats will do nothing"
+                            ),
+                            "operationIndex": idx,
+                            "streamId": sid,
+                        })
+
         # Log validation summary
         logger.debug("[CHANNELS-BULK] Validation complete: passed=%s, issues=%s", result['validationPassed'], len(result['validationIssues']))
         if result['validationIssues']:
@@ -2001,7 +2315,11 @@ async def _run_bulk_commit(
                 if op_idx != '?' and op_idx < len(request.operations):
                     op = request.operations[op_idx]
                     logger.warning("[CHANNELS-BULK]   Issue %s: %s - %s", i+1, issue['type'], issue['message'])
-                    logger.warning("[CHANNELS-BULK]     Operation[%s]: type=%s, channelId=%s, streamId=%s", op_idx, op.type, op.channelId, getattr(op, 'streamId', None))
+                    # Every attribute read through getattr: not every operation
+                    # type carries a channelId, and this line raised
+                    # AttributeError for the ones that do not the moment a
+                    # validation issue was raised against them.
+                    logger.warning("[CHANNELS-BULK]     Operation[%s]: type=%s, channelId=%s, streamId=%s", op_idx, op.type, getattr(op, 'channelId', None), getattr(op, 'streamId', None))
                     if op.type == "updateChannel" and op.data:
                         logger.warning("[CHANNELS-BULK]     Update data: name=%s, number=%s", op.data.get('name'), op.data.get('channel_number'))
                 else:
@@ -2032,6 +2350,10 @@ async def _run_bulk_commit(
         # Log if continuing despite validation issues
         if not result["validationPassed"] and request.continueOnError:
             logger.warning("[CHANNELS-BULK] Continuing despite %s validation issues (continueOnError=true)", len(result['validationIssues']))
+
+        # Everything from here on can write upstream, so every exit from here
+        # on goes through `finish()` and leaves a journal trace.
+        execution_started = True
 
         # Phase 1: Create groups first (if any)
         if request.groupsToCreate:
@@ -2070,14 +2392,24 @@ async def _run_bulk_commit(
                         except Exception as find_err:
                             logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", find_err)
                     else:
-                        # Non-duplicate error - fail the whole operation
+                        # Non-duplicate error - abort the run.
+                        #
+                        # This return used to skip the journal writes and the
+                        # accounting entirely: with groupsToCreate=[A, B], A was
+                        # created upstream, B failed, and the response carried
+                        # `success: false, operationsFailed: 0` with group A
+                        # existing and no row anywhere saying it had been made.
+                        # `finish()` writes A's row; `record_setup_failure`
+                        # makes the envelope say a step failed without claiming
+                        # an operation did — none was attempted
+                        # (bead enhancedchannelmanager-kz089, fix round 2).
                         logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, e)
-                        result["success"] = False
                         result["errors"].append({
                             "operationId": f"create-group-{group_name}",
                             "error": str(e)
                         })
-                        return result
+                        ledger.record_setup_failure()
+                        return finish()
             logger.debug("[CHANNELS-BULK] Group creation complete: %s groups mapped", len(result['groupIdMap']))
 
         # Per-run logo index (bd-raehx). Previously every createChannel op with
@@ -2498,7 +2830,10 @@ async def _run_bulk_commit(
                     logger.debug("[CHANNELS-BULK] Deleted group %s (moved %s channel(s) to '%s')", op.groupId, moved, UNGROUPED_TARGET_GROUP_NAME)
 
                 elif op.type == "setProfileMembership":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        f"setProfileMembership on profile {op.profileId}",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] setProfileMembership: profile=%s channel=%s enabled=%s", idx+1, len(request.operations), op.profileId, channel_id, op.enabled)
                     await client.update_profile_channel(
                         op.profileId, channel_id, {"enabled": op.enabled}
@@ -2658,92 +2993,57 @@ async def _run_bulk_commit(
                 # success, and `partial` below is what records that some of it
                 # still landed.
 
-        # Write the counters and DERIVE `success` / `partial` from the ledger,
-        # then audit the finished envelope against the accounting invariant.
-        #
-        # A failed operation is a failure whatever `continueOnError` says (bead
-        # …-ayfn9). That flag answers "keep going after one fails?", NOT "call the
-        # batch a win if anything landed" — and the old
-        # `failed == 0 or applied > 0` reading meant a single successful op could
-        # launder every failure beside it into `success=True`. Drill run
-        # 2026-08-08-run17: Delete Group raised 400 server-side, the operator was
-        # told it worked, and the only trace was an ERROR in the container log.
-        #
-        # `partial` still distinguishes "some of it landed" from "none of it
-        # did", and the frontend renders that case as "X succeeded, Y failed"
-        # rather than as a flat failure.
-        #
-        # These two used to be assigned here from the counters the branches had
-        # been incrementing, which made every rule about them a convention.
-        # `finalize_bulk_commit_result` is the enforcement:
-        # `backend/bulk_commit_accounting.py` states the invariant, derives both
-        # flags from the ledger so they cannot drift, and RAISES rather than
-        # returning an envelope that contradicts itself
-        # (bead enhancedchannelmanager-e9e5o, fix round 4).
-        finalize_bulk_commit_result(result, ledger)
-
-        # Log summary
-        logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", result['operationsApplied'], result['operationsFailed'])
+        logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", ledger.applied, ledger.failed)
         logger.debug("[CHANNELS-BULK] ID mappings: %s channels, %s groups", len(result['tempIdMap']), len(result['groupIdMap']))
 
-        # A dry run must leave no trace. `validateOnly` already returns above,
-        # before Phase 1 and Phase 2, so this branch is unreachable today and is
-        # a guard rather than a fix: the journal writes below are now the LAST
-        # thing this function does, and a future early-exit moved past the
-        # validate-only return would otherwise start recording a commit that
-        # never happened. Pinned by
-        # tests/routers/test_r9py9_bulk_commit_journal.py.
-        if request.validateOnly:
-            logger.debug("[CHANNELS-BULK] validateOnly: skipping journal writes")
-            return result
-
-        # Per-entity rows first, in ONE transaction, then the summary. The
-        # article this bead came from describes both ("one Bulk Commit row plus
-        # the individual rows"), and the summary reads last so it closes the
-        # batch. `log_entries` is a single commit for N rows, which is what
-        # keeps a several-hundred-channel Apply All from becoming several
-        # hundred transactions.
-        if journal_rows:
-            journal.log_entries(journal_rows)
-
-        # Log summary to journal
-        journal.log_entry(
-            category="channel",
-            action_type="bulk_commit",
-            entity_id=None,
-            entity_name="Bulk Commit",
-            description=f"Applied {result['operationsApplied']} operations in bulk commit" +
-                        (f" ({result['operationsFailed']} failed)" if result["operationsFailed"] > 0 else ""),
-            after_value={
-                "operations_applied": result["operationsApplied"],
-                "operations_failed": result["operationsFailed"],
-                "channels_created": channels_created,
-                "groups_created": groups_created,
-                "entity_rows_written": len(journal_rows),
-                "validation_issues": len(result["validationIssues"]),
-                "continue_on_error": request.continueOnError,
-            },
-            batch_id=batch_id,
-        )
-
-        logger.info("[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
-                   batch_id, result['success'], result['operationsApplied'], result['operationsFailed'],
-                   (", validation_issues=%s" % len(result['validationIssues'])) if result["validationIssues"] else "")
-        return result
+        # `finish()` writes the journal and THEN the accounting. Both used to be
+        # inline here, at the very end of the happy path, which is precisely why
+        # neither happened on any other exit.
+        #
+        # The accounting half derives `success` / `partial` from the ledger
+        # rather than letting a branch assign them. A failed operation is a
+        # failure whatever `continueOnError` says (bead …-ayfn9): that flag
+        # answers "keep going after one fails?", NOT "call the batch a win if
+        # anything landed" — and the old `failed == 0 or applied > 0` reading
+        # meant a single successful op could launder every failure beside it
+        # into `success=True`. Drill run 2026-08-08-run17: Delete Group raised
+        # 400 server-side, the operator was told it worked, and the only trace
+        # was an ERROR in the container log. `partial` still distinguishes
+        # "some of it landed" from "none of it did", which the frontend renders
+        # as "X succeeded, Y failed" rather than as a flat failure.
+        # `backend/bulk_commit_accounting.py` states the whole invariant and
+        # RAISES rather than returning an envelope that contradicts itself
+        # (bead enhancedchannelmanager-e9e5o, fix round 4).
+        return finish()
 
     except Exception as e:
         logger.exception("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, e)
-        # Report what the run actually managed before it fell over. The counters
-        # live on the ledger now, so without this they would read 0/0 for a
-        # crash in Phase 3 that happened after every operation had applied.
-        result["operationsApplied"] = ledger.applied
-        result["operationsFailed"] = ledger.failed
-        result["success"] = False
         result["errors"].append({
             "operationId": "bulk-commit",
             "error": str(e)
         })
-        return result
+        # Not an operation failure — the run itself fell over, possibly with
+        # every operation already applied. `aborted_run` relaxes the
+        # applied+failed == submitted check, because whatever was left in the
+        # loop was never attempted.
+        ledger.record_setup_failure(aborted_run=True)
+        try:
+            # Still the single exit: anything that landed upstream before the
+            # crash gets its journal row here, which is the whole point of the
+            # invariant. `finish` can itself raise if the envelope contradicts
+            # the ledger, and an operator with a crashed batch needs the
+            # envelope more than the audit, so that raise falls back to the raw
+            # counts rather than propagating.
+            return finish()
+        except Exception as finish_err:
+            logger.exception(
+                "[CHANNELS-BULK] Could not finalize a crashed batch (batch=%s): %s",
+                batch_id, finish_err,
+            )
+            result["operationsApplied"] = ledger.applied
+            result["operationsFailed"] = ledger.failed
+            result["success"] = False
+            return result
 
 
 @router.post("/normalize-preview-batch")
