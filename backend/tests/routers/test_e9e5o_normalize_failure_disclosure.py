@@ -162,6 +162,79 @@ class TestBulkCommitNormalizationDisclosure:
         assert "engine offline" in failure["error"]
 
     @pytest.mark.asyncio
+    async def test_a_create_that_never_persisted_is_not_listed_as_normalized_raw(
+        self, async_client
+    ):
+        """Normalization broke AND the create was rejected, so no channel exists.
+
+        The envelope used to contradict itself here: the op was appended to
+        `normalizationFailures` BEFORE `create_channel` was attempted, so a
+        rejected create appeared in `errors`/`operationsFailed` *and* stayed in
+        `normalizationFailures` carrying a `nameApplied`. The MCP renderer
+        reports that list as channels "which were created with the name as
+        given", which named a channel that was never persisted.
+
+        The invariant: every entry in `normalizationFailures` corresponds to a
+        channel that exists.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.create_channel.side_effect = RuntimeError("Dispatcharr rejected the create")
+
+        ops = [{"type": "createChannel", "tempId": -1, "name": "US: CNN", "normalize": True}]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.get_normalization_engine",
+                   side_effect=RuntimeError("engine offline")), \
+             patch("routers.channels.journal"):
+            data = await _commit_and_wait(async_client, {"operations": ops})
+
+        # The op failed, and it says so in the one place a failure belongs.
+        assert data["success"] is False
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 1
+        assert len(data["errors"]) == 1
+        # ...and it is NOT also reported as a channel created with a raw name.
+        assert data["normalizationFailures"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_persisted_neighbour_is_still_listed_when_another_op_fails(
+        self, async_client
+    ):
+        """Ordering the append after the create must not lose a real failure.
+
+        Two createChannel ops, both with a broken engine: the first persists,
+        the second is rejected. The one that exists is disclosed; the one that
+        does not is not.
+        """
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.create_channel.side_effect = [
+            {"id": 21, "name": "US: CNN"},
+            RuntimeError("Dispatcharr rejected the create"),
+        ]
+
+        ops = [
+            {"type": "createChannel", "tempId": -1, "name": "US: CNN", "normalize": True},
+            {"type": "createChannel", "tempId": -2, "name": "US: MSNBC", "normalize": True},
+        ]
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.get_normalization_engine",
+                   side_effect=RuntimeError("engine offline")), \
+             patch("routers.channels.journal"):
+            data = await _commit_and_wait(
+                async_client, {"operations": ops, "continueOnError": True}
+            )
+
+        assert data["operationsApplied"] == 1
+        assert data["operationsFailed"] == 1
+        assert [f["tempId"] for f in data["normalizationFailures"]] == [-1]
+        assert data["normalizationFailures"][0]["nameApplied"] == "US: CNN"
+
+    @pytest.mark.asyncio
     async def test_clean_batch_reports_an_empty_failure_list(self, async_client):
         """`normalizationFailures` is always present, so a caller checks its
         length rather than probing for a key that may or may not exist."""

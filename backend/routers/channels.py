@@ -2029,7 +2029,20 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     # swallowed failure would leave the caller unable to tell
                     # this apart from `normalize=false`, so it is recorded in
                     # `normalizationFailures` (bead enhancedchannelmanager-e9e5o).
+                    #
+                    # The record is HELD until the create has actually
+                    # persisted. It used to be appended here, before the create
+                    # was attempted, so a create Dispatcharr then rejected
+                    # appeared in `errors`/`operationsFailed` AND stayed in
+                    # `normalizationFailures` with a `nameApplied` — and the
+                    # MCP tool renders that list as channels "which were
+                    # created with the name as given". The envelope contradicted
+                    # itself about a channel that does not exist. Every entry in
+                    # `normalizationFailures` names a channel that exists;
+                    # `create_channel` raising below discards this local and the
+                    # op is reported as a failure and nothing else.
                     channel_name = op.name
+                    pending_normalization_failure: Optional[dict] = None
                     if op.normalize:
                         try:
                             with get_session() as db:
@@ -2041,13 +2054,14 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
                         except Exception as norm_err:
                             logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
-                            # Continue with the original name, and disclose it.
-                            result["normalizationFailures"].append({
+                            # Continue with the original name, and disclose it
+                            # once the channel exists.
+                            pending_normalization_failure = {
                                 "tempId": op.tempId,
                                 "name": op.name,
                                 "nameApplied": op.name,
                                 "error": str(norm_err),
-                            })
+                            }
 
                     # Handle logo - if logoUrl provided but no logoId, resolve
                     # via the per-run logo index (bd-raehx) instead of
@@ -2078,6 +2092,11 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     logger.debug("[CHANNELS-BULK] op.tvgId=%s, op.tvcGuideStationId=%s", op.tvgId, op.tvcGuideStationId)
                     logger.debug("[CHANNELS-BULK] Creating channel with data: %s", channel_data)
                     new_channel = await client.create_channel(channel_data)
+
+                    # The channel exists, so the raw name it carries is now a
+                    # fact a caller can act on (bead enhancedchannelmanager-e9e5o).
+                    if pending_normalization_failure is not None:
+                        result["normalizationFailures"].append(pending_normalization_failure)
 
                     # Track temp ID -> real ID mapping
                     if op.tempId < 0:

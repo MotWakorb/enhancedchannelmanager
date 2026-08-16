@@ -1359,6 +1359,15 @@ def register(mcp: FastMCP):
             # (bead enhancedchannelmanager-e9e5o). These ops APPLIED, so they
             # appear nowhere in `errors` and nothing else here would mention
             # them — the channel simply carries the raw name.
+            #
+            # "which were created" below is a claim about a channel EXISTING,
+            # and the backend is what makes it true: `routers/channels.py` only
+            # appends to `normalizationFailures` after `create_channel` has
+            # returned. Enforced by
+            # backend/tests/routers/test_e9e5o_normalize_failure_disclosure.py
+            # ::test_a_create_that_never_persisted_is_not_listed_as_normalized_raw.
+            # Before that ordering, a create Dispatcharr rejected was reported
+            # here as a created channel.
             norm_failures = result.get("normalizationFailures") or []
             if norm_failures:
                 lines.append(
