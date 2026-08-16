@@ -103,6 +103,56 @@ export function deriveStagedSideEffects(
   return { profileMembership, restoredGroupIds, clearedStreamIds };
 }
 
+/**
+ * The groups this Edit Mode session will create, keyed by their temp id
+ * (bead enhancedchannelmanager-kz089, fix round 3).
+ *
+ * Derived from `stagedOperations` for the same reason
+ * {@link deriveStagedSideEffects} is: the operation queue is the one collection
+ * `stageOperation`, `localUndo`, `localRedo` and `discard` all maintain, so a
+ * view derived from it cannot disagree with it. This used to be an accumulated
+ * `Map` on the state, and `localUndo` returned `...prev` without recomputing
+ * it — so undoing "Create group Sports" dropped the operation and left the
+ * group in the filters, in "Create in...", and in `App.tsx`'s
+ * `displayChannelGroups`.
+ *
+ * A group reaches this list two ways, and the second is why an accumulator was
+ * hard to keep honest: a `createGroup` NAMES it, and a `createChannel` carrying
+ * a `newGroupName` merely IMPLIES it. Both carry the temp id their caller
+ * allocated (`ensureStagedGroupId`, which is idempotent by name), so both are
+ * derivable and both resolve to the same id.
+ *
+ * First occurrence of a NAME wins, matching the allocator: `channel_count` is 0
+ * on every entry because these groups do not exist yet and nothing downstream
+ * reads the field for a staged group.
+ */
+export function deriveStagedGroups(
+  stagedOperations: StagedOperation[]
+): Map<number, ChannelGroup> {
+  const groups = new Map<number, ChannelGroup>();
+  const idByName = new Map<string, number>();
+
+  const register = (name: string, tempGroupId: number) => {
+    if (idByName.has(name)) return;
+    idByName.set(name, tempGroupId);
+    groups.set(tempGroupId, { id: tempGroupId, name, channel_count: 0 });
+  };
+
+  for (const { apiCall } of stagedOperations) {
+    if (apiCall.type === 'createGroup') {
+      register(apiCall.name, apiCall.tempGroupId);
+    } else if (
+      apiCall.type === 'createChannel' &&
+      apiCall.newGroupName !== undefined &&
+      apiCall.stagedGroupId !== undefined
+    ) {
+      register(apiCall.newGroupName, apiCall.stagedGroupId);
+    }
+  }
+
+  return groups;
+}
+
 // Initial state for edit mode
 function createInitialState(): EditModeState {
   return {
@@ -117,9 +167,6 @@ function createInitialState(): EditModeState {
     nextTempId: -1,
     tempIdMap: new Map(),
     currentBatch: null,
-    stagedGroups: new Map(),
-    newGroupNameToTempId: new Map(),
-    nextTempGroupId: -1000, // Start at -1000 to distinguish from channel temp IDs
   };
 }
 
@@ -165,6 +212,19 @@ export function useEditMode({
     return tempGroupId;
   }, []);
 
+  /**
+   * The groups this session will create, keyed by temp id — derived, never
+   * accumulated (see {@link deriveStagedGroups}).
+   *
+   * Declared here rather than beside the other derived views at the bottom
+   * because `validate` and `commit` close over it and their dependency arrays
+   * are evaluated during render.
+   */
+  const stagedGroupsMap = useMemo(
+    () => deriveStagedGroups(state.stagedOperations),
+    [state.stagedOperations],
+  );
+
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
@@ -187,9 +247,6 @@ export function useEditMode({
       nextTempId: -1,
       tempIdMap: new Map(),
       currentBatch: null,
-      stagedGroups: new Map(),
-      newGroupNameToTempId: new Map(),
-      nextTempGroupId: -1000,
     });
   }, [channels]);
 
@@ -334,55 +391,26 @@ export function useEditMode({
         // Apply to working copy
         let newWorkingCopy = applyOperationToWorkingCopy(prev.workingCopy, operation);
 
-        // Track new staged groups and their temp IDs
-        let newStagedGroups = prev.stagedGroups;
-        let newGroupNameToTempId = prev.newGroupNameToTempId;
-        let newNextTempGroupId = prev.nextTempGroupId;
-
-        /**
-         * Record a staged group under the temp id its caller already
-         * allocated (see `ensureStagedGroupId`). Idempotent — restaging the
-         * same name reuses the same id.
-         */
-        const registerStagedGroup = (name: string, tempGroupId: number) => {
-          if (prev.newGroupNameToTempId.has(name)) return;
-          newStagedGroups = new Map(newStagedGroups);
-          newStagedGroups.set(tempGroupId, {
-            id: tempGroupId,
-            name,
-            channel_count: 0, // Will be updated as channels are added
-          });
-          newGroupNameToTempId = new Map(newGroupNameToTempId);
-          newGroupNameToTempId.set(name, tempGroupId);
-          newNextTempGroupId = tempGroupId - 1;
-        };
-
-        // A group staged on its own (Channels pane -> "Create new channel
-        // group" while Edit Mode is active) has to appear in `stagedGroups`
-        // like one implied by a createChannel does, or it is invisible to the
-        // group filter, to "Create in...", and to the commit's group creation
-        // phase (bead enhancedchannelmanager-vtapf).
-        if (apiCall.type === 'createGroup') {
-          registerStagedGroup(apiCall.name, apiCall.tempGroupId);
-        }
+        // Nothing registers a staged group here any more: a group staged on
+        // its own (Channels pane -> "Create new channel group") and one
+        // implied by a createChannel are both DERIVED from this operation
+        // list by `deriveStagedGroups` (bead …-kz089, fix round 3). Both
+        // still have to appear as a staged group, or the group is invisible
+        // to the group filter, to "Create in...", and to the commit's group
+        // creation phase (bead enhancedchannelmanager-vtapf) — the derivation
+        // is what keeps that true through Undo and Redo as well.
 
         // Handle create channel specially
         if (apiCall.type === 'createChannel') {
           const tempId = prev.nextTempId;
 
-          // Determine channel_group_id: use existing groupId, or create/reuse a temp group for newGroupName
-          let channelGroupId: number | null = apiCall.groupId ?? null;
-
-          if (apiCall.newGroupName) {
-            const existing = prev.newGroupNameToTempId.get(apiCall.newGroupName);
-            if (existing !== undefined) {
-              channelGroupId = existing;
-            } else {
-              const tempGroupId = apiCall.stagedGroupId ?? nextTempGroupIdRef.current;
-              registerStagedGroup(apiCall.newGroupName, tempGroupId);
-              channelGroupId = tempGroupId;
-            }
-          }
+          // Determine channel_group_id: an existing group's id, or the temp id
+          // `stageCreateChannel` allocated for `newGroupName`. That allocation
+          // is idempotent by name (`ensureStagedGroupId`), so restaging the
+          // same name lands on the same group with no map to consult.
+          const channelGroupId: number | null =
+            (apiCall.newGroupName ? apiCall.stagedGroupId : undefined)
+            ?? apiCall.groupId ?? null;
 
           const newChannel: Channel = {
             id: tempId,
@@ -448,9 +476,6 @@ export function useEditMode({
           modifiedChannelIds: newModifiedIds,
           nextTempId: apiCall.type === 'createChannel' ? prev.nextTempId - 1 : prev.nextTempId,
           currentBatch: newCurrentBatch,
-          stagedGroups: newStagedGroups,
-          newGroupNameToTempId: newGroupNameToTempId,
-          nextTempGroupId: newNextTempGroupId,
         };
         return newState;
       });
@@ -1233,7 +1258,7 @@ export function useEditMode({
     }
 
     const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
-      buildBulkOperations(state.stagedOperations, state.stagedGroups);
+      buildBulkOperations(state.stagedOperations, stagedGroupsMap);
 
     if (unresolvedGroupRefs.length > 0) {
       return {
@@ -1269,7 +1294,7 @@ export function useEditMode({
         }],
       };
     }
-  }, [state.isActive, state.stagedOperations, state.stagedGroups, buildBulkOperations]);
+  }, [state.isActive, state.stagedOperations, stagedGroupsMap, buildBulkOperations]);
 
   // Commit all staged operations to server
   const commit = useCallback(async (
@@ -1398,7 +1423,7 @@ export function useEditMode({
     try {
       // Build bulk operations using helper
       const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
-        buildBulkOperations(consolidatedOps, state.stagedGroups);
+        buildBulkOperations(consolidatedOps, stagedGroupsMap);
 
       // Refuse to start rather than post a temp group id Dispatcharr will
       // reject one operation at a time (bead enhancedchannelmanager-udq1j).
@@ -1515,7 +1540,7 @@ export function useEditMode({
           const data = resolved.data as Partial<Channel> | undefined;
           const stagedGroupId = data?.channel_group_id;
           if (typeof stagedGroupId === 'number' && stagedGroupId < 0) {
-            const groupName = state.stagedGroups.get(stagedGroupId)?.name;
+            const groupName = stagedGroupsMap.get(stagedGroupId)?.name;
             const realGroupId = groupName !== undefined ? newGroupIdMap.get(groupName) : undefined;
             if (realGroupId === undefined) {
               // The group creation phase did not produce this group. Drop the
@@ -1688,7 +1713,7 @@ export function useEditMode({
   }, [
     state.isActive,
     state.stagedOperations,
-    state.stagedGroups,
+    stagedGroupsMap,
     channels,
     onChannelsChange,
     onCommitComplete,
@@ -1743,8 +1768,8 @@ export function useEditMode({
   // Determine which channels to display
   const displayChannels = state.isActive ? state.workingCopy : channels;
 
-  // Convert stagedGroups Map to array for consumers
-  const stagedGroupsArray = state.isActive ? Array.from(state.stagedGroups.values()) : [];
+  // Convert the derived staged-group map to the array consumers take.
+  const stagedGroupsArray = state.isActive ? Array.from(stagedGroupsMap.values()) : [];
 
   // Compute set of group IDs that are staged for deletion (soft-deleted)
   const deletedGroupIds = useMemo(() => {

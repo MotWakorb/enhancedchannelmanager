@@ -199,14 +199,17 @@ export interface EditModeState {
     operations: StagedOperation[];
   } | null;
 
-  // Staged groups (new groups being created, keyed by temp ID)
-  stagedGroups: Map<number, ChannelGroup>;
-
-  // Map of new group names to temp group IDs
-  newGroupNameToTempId: Map<string, number>;
-
-  // Next temp ID for groups (negative numbers, separate from channel temp IDs)
-  nextTempGroupId: number;
+  // NOTE: the groups this session will create are NOT held here. They are
+  // derived from `stagedOperations` by `deriveStagedGroups`, alongside
+  // `deriveStagedSideEffects`, `deletedGroupIds` and `renamedGroupNames`
+  // (bead enhancedchannelmanager-kz089, fix round 3). They used to be an
+  // accumulated `Map` maintained beside the operation list, which `localUndo`
+  // never recomputed: undoing "Create group Sports" dropped the operation and
+  // the change count and left "Sports" in the group filters and the
+  // group-selection views, because `App.tsx` renders the map straight into
+  // `displayChannelGroups`. A field that cannot be reached by undo is a field
+  // that will disagree with the operations sooner or later, so the field is
+  // gone rather than patched.
 }
 
 /**
