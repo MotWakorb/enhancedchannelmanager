@@ -465,10 +465,24 @@ export function validateFinalNumberingPlan(plan: FinalNumberingPlan): NumberingP
     const arrivals = [...contributors].sort((a, b) => a.placedAtIndex - b.placedAtIndex);
     for (const placement of arrivals) {
       const acknowledgement = placement.acknowledgement;
+      // SUBSET, NOT EQUALITY, and deliberately so. The acknowledgement names
+      // what the operator was SHOWN; `standing` is what actually materialised.
+      // `standing ⊆ shown` refuses the dangerous direction — consent to {X}
+      // while {X, A} stand — and accepts the harmless one, where a collision
+      // the operator agreed to got smaller before Apply. Equality would
+      // re-interrogate an operator whose situation strictly improved.
+      //
+      // A placement that landed on an EMPTY slot consents to nothing because
+      // there was nothing to consent to. Without that, an operator who moved B
+      // onto a free number and then moved A on top of it — confirming the only
+      // collision that ever existed — was refused, and told to confirm a
+      // duplicate at a place where no dialog had ever fired. The second
+      // arrival still has to have named B, so nothing is weakened.
       const consented =
-        acknowledgement !== null &&
-        acknowledgement.slot === key &&
-        [...standing].every((id) => acknowledgement.occupantIds.has(id));
+        standing.size === 0 ||
+        (acknowledgement !== null &&
+          acknowledgement.slot === key &&
+          [...standing].every((id) => acknowledgement.occupantIds.has(id)));
       if (!consented) accidental.push(placement);
       standing.add(placement.channelId);
     }

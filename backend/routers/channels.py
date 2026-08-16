@@ -1649,6 +1649,21 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+#: The fields of :class:`BulkUpdateChannelOp` that describe the
+#: ``channel_number`` write and NOTHING else, so they must be dropped along
+#: with it when consolidation finds that a later operation of another kind owns
+#: the channel's final number.
+#:
+#: Named, and pinned against the model's own field list by
+#: ``test_consolidate_operations``, because the alternative is a literal pair of
+#: attribute names inside a branch — and this function has already lost a field
+#: twice by having to remember one. A field added to the model now has to be
+#: classified as number-scoped or not, rather than silently defaulting to
+#: "rides through", which for a number-scoped field would mean carrying consent
+#: for a placement that no longer happens.
+_NUMBER_SCOPED_UPDATE_FIELDS = ("acknowledgedDuplicate", "expectedNumber")
+
+
 def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperation]:
     """Consolidate redundant operations to minimize API calls.
 
@@ -1659,6 +1674,23 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     - Multiple reorderChannelStreams for same channel -> only final order kept
     - Operations targeting channels to be deleted are removed
     - Create + delete of same temp channel cancel out
+
+    LAST WRITE WINS, AND "LAST" IS BY SUBMITTED POSITION RATHER THAN BY KIND.
+    The output groups operations by kind — merged updates, then range
+    assignments — so the order they are EMITTED in says nothing about the order
+    they were SENT in. That destroyed the caller's ordering between kinds:
+    ``bulkAssignChannelNumbers([1], 10)`` followed by
+    ``updateChannel(1, {"channel_number": 20})`` emitted the update first and
+    the range last, so a plan whose final state is 20 — which is what both
+    materialisers in ``channel_number_plan.py`` and ``channelNumberPlan.ts``
+    preview, and therefore what the operator was shown — was validated and
+    applied as 10.
+
+    So the channel's final number is resolved ONCE here, by submitted index,
+    across every kind that sets one, and the losing operation has the number
+    taken off it. Exactly one operation in the output writes any given
+    channel's number, which is what makes the emission order unable to change
+    the answer.
     """
     start = time.time()
     original_count = len(operations)
@@ -1696,16 +1728,35 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_update_last: dict[int, BulkUpdateChannelOp] = {}
     channel_update_number_source: dict[int, BulkUpdateChannelOp] = {}
     channel_final_numbers: dict[int, float] = {}  # channelId -> final number
+    # WHICH KIND OF OPERATION OWNS EACH CHANNEL'S FINAL NUMBER: channelId ->
+    # the operation type of the LAST submitted operation that set it. Written
+    # by every kind that places a channel on a number, so the winner is decided
+    # by position in the caller's list rather than by the order this function
+    # happens to emit its groups in. See the note in the docstring.
+    #
+    # ``createChannel`` records itself even when it carries no number, because
+    # both materialisers treat an operation naming a channel that does not
+    # exist YET as a no-op: a range assignment sent before the create it names
+    # places nothing, and consolidation must not turn it into a placement.
+    channel_number_owner: dict[int, str] = {}
     channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
     stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
 
     for op in operations:
         if op.type == "bulkAssignChannelNumbers":
-            start_num = op.startingNumber or 0
+            # An omitted start is 1, which is what the frontend materialiser,
+            # the backend materialiser and the executor all already say. It was
+            # 0 here — via ``or``, which also collapsed an explicit 0 into the
+            # same branch — so an omitted start previewed as 1 in the browser
+            # and validated and applied as 0. An EXPLICIT 0 is a real request
+            # and is honoured: ic884.1 settled channel numbers as non-negative,
+            # so zero is in contract.
+            start_num = 1 if op.startingNumber is None else op.startingNumber
             for i, cid in enumerate(op.channelIds):
                 if cid not in channels_to_delete:
                     channel_final_numbers[cid] = start_num + i
+                    channel_number_owner[cid] = "bulkAssignChannelNumbers"
 
         elif op.type == "updateChannel":
             if op.channelId not in channels_to_delete:
@@ -1715,6 +1766,7 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 channel_update_last[op.channelId] = op
                 if "channel_number" in op.data:
                     channel_update_number_source[op.channelId] = op
+                    channel_number_owner[op.channelId] = "updateChannel"
 
         elif op.type == "reorderChannelStreams":
             if op.channelId not in channels_to_delete:
@@ -1736,6 +1788,7 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             # Create + delete of the same temp channel cancel out.
             if op.tempId not in channels_to_delete:
                 ordered_ops.append(op)
+                channel_number_owner[op.tempId] = "createChannel"
 
         elif op.type == "deleteChannel":
             if op.channelId < 0 and op.channelId in channels_to_create:
@@ -1764,14 +1817,38 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     # Merged updateChannel ops. Copied from a real operation, never rebuilt —
     # see the note beside `channel_update_last`.
     for cid, data in channel_final_updates.items():
+        merged = dict(data)
+        overrides: dict = {}
+        if "channel_number" in merged and channel_number_owner.get(cid) != "updateChannel":
+            # A LATER operation of a different kind places this channel, so
+            # this update's number is superseded and must not be written. The
+            # bookkeeping that describes that write goes with it: an
+            # acknowledgement is consent to one placement, and the placement it
+            # consented to is not the one that happens.
+            merged.pop("channel_number")
+            overrides = dict.fromkeys(_NUMBER_SCOPED_UPDATE_FIELDS)
+        if not merged:
+            # Nothing left to PATCH. The number this operation existed to write
+            # is written by another operation in this same list.
+            continue
         template = channel_update_number_source.get(cid) or channel_update_last[cid]
-        consolidated.append(template.model_copy(update={"data": data}))
+        consolidated.append(template.model_copy(update={"data": merged, **overrides}))
 
     # Consolidated bulkAssign: group into consecutive ranges. This is the one
     # arm that genuinely cannot copy a single input op — it regroups several
     # into consecutive ranges — and it stays safe only while
     # `BulkAssignNumbersOp` carries no per-operation bookkeeping. A test pins
     # that model's field list so adding one has to be a decision.
+    #
+    # A channel a later operation of another kind places is left out entirely,
+    # rather than assigned here and overwritten afterwards: two writes to one
+    # channel's number is what "consolidate" exists to avoid, and only one of
+    # them is the number the caller asked for.
+    channel_final_numbers = {
+        cid: number
+        for cid, number in channel_final_numbers.items()
+        if channel_number_owner.get(cid) == "bulkAssignChannelNumbers"
+    }
     if channel_final_numbers:
         entries = sorted(channel_final_numbers.items(), key=lambda e: e[1])
         i = 0
@@ -2464,7 +2541,13 @@ async def _run_bulk_commit(
                 for sid in op.streamIds:
                     referenced_stream_ids.add(sid)
             elif op.type == "bulkAssignChannelNumbers":
-                numbering_places_a_channel = True
+                # ONLY IF IT NAMES A CHANNEL. The model permits an empty
+                # ``channelIds``, and a range over no channels puts nobody on
+                # any number — so it must not make the preflight report itself
+                # unverifiable, which under the default ``continueOnError``
+                # REFUSES a request that would have mutated nothing.
+                if op.channelIds:
+                    numbering_places_a_channel = True
                 for cid in op.channelIds:
                     if cid >= 0:
                         referenced_channel_ids.add(cid)

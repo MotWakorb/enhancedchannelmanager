@@ -379,11 +379,27 @@ def evaluate_final_numbering(
         # first. A confirmation carrying only a NUMBER kept authorising after
         # its occupant moved away and a stranger took the slot, which is a
         # collision nobody ever saw.
+        #
+        # SUBSET, NOT EQUALITY, and deliberately so. The acknowledgement names
+        # what the operator was SHOWN; ``standing`` is what actually
+        # materialised. ``standing <= shown`` refuses the dangerous direction —
+        # consent to {X} while {X, A} stand — and accepts the harmless one,
+        # where a collision the operator agreed to got smaller before Apply.
+        # Requiring equality would re-interrogate an operator whose situation
+        # strictly improved, and would refuse a placement whose own dialog
+        # named a channel that a later staging order puts AFTER it.
+        #
+        # A placement that landed on an EMPTY slot consents to nothing because
+        # there was nothing to consent to. Without that, an operator who moved
+        # B onto a free number and then moved A on top of it — confirming the
+        # only collision that ever existed — was refused, and told to confirm a
+        # duplicate at a place where no dialog had ever fired. There is no
+        # weakening here: the second arrival still has to have named B.
         standing = {p.channel_id for p in occupants if not (p.moved and p.touched_by)}
         accidental = []
         for placement in sorted(contributors, key=lambda p: p.touched_by[-1]):
             acknowledgement = placement.acknowledgement
-            consented = (
+            consented = not standing or (
                 acknowledgement is not None
                 and acknowledgement.slot == slot
                 and standing <= acknowledgement.occupant_ids

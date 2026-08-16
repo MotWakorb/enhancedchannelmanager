@@ -81,7 +81,13 @@ class TestFinalNumberingPreflight:
         issue = _numbering_issues(data)[0]
         assert "TNT" in issue["message"]
         assert "AMC" in issue["message"]
-        assert sorted(issue["operationIndexes"]) == [1, 2]
+        # Only operation 2 is named. Operation 1 put TNT on 5 while ESPN was
+        # already vacating it, so TNT collided with nobody and no dialog could
+        # have fired for it; operation 2 is the arrival that created the
+        # duplicate and the one to change. Naming both also produced a
+        # degenerate sentence -- '"TNT", "AMC" would join .' -- with nothing on
+        # the right-hand side.
+        assert sorted(issue["operationIndexes"]) == [2]
         assert sorted(issue["channelIds"]) == [2, 3]
 
     @pytest.mark.asyncio
@@ -307,6 +313,36 @@ class TestTheLineupCouldNotBeLoaded:
         assert not any(
             i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
         ), data["validationIssues"]
+
+    @pytest.mark.asyncio
+    async def test_a_range_that_names_no_channel_places_nobody(self, async_client):
+        """The anti-vacuity control above proves the flag stays down when the
+        batch contains NO numbering operation. It could not catch a numbering
+        operation that places nothing: ``channelIds`` is permitted to be empty
+        (see ``BulkAssignNumbersOp``), and the flag was raised before the list
+        was looked at. So a request that would have mutated nothing was refused
+        under the default ``continueOnError`` by a check that had nothing to
+        check.
+        """
+        data = await self._validate_with(async_client, self._broken_client(), [
+            {"type": "bulkAssignChannelNumbers", "channelIds": [], "startingNumber": 10},
+        ])
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_range_that_names_a_channel_still_reports_unverifiable(self, async_client):
+        """The control on the control: emptiness is what excuses the check, not
+        the operation type."""
+        data = await self._validate_with(async_client, self._broken_client(), [
+            {"type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 10},
+        ])
+        assert any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is False
 
     @pytest.mark.asyncio
     async def test_a_loaded_lineup_reports_nothing_unavailable(self, async_client):

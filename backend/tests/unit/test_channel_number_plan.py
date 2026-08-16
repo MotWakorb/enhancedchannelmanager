@@ -421,3 +421,111 @@ class TestEvaluateFinalNumbering:
             lineup, [Op("updateChannel", channelId=2, data={"channel_number": 8})]
         )
         assert issues == []
+
+
+class TestConsentIsASubsetTestOnPurpose:
+    """Fix round 3 adjudication: ``standing <= acknowledged``, not equality.
+
+    An external reviewer read the subset test as a hole and asked for
+    equality. It is not a hole, and equality would be a defect of its own. The
+    acknowledgement names what the operator was SHOWN — recorded from the
+    occupants the dialog rendered, not from a fresh lookup — while ``standing``
+    is what actually materialised. So:
+
+    * ``standing`` NOT a subset is the dangerous direction: occupants stand on
+      the number that the operator was never told about. Still refused.
+    * ``standing`` a strict subset is the harmless one: the collision the
+      operator agreed to got SMALLER before Apply. Accepting it is the point.
+
+    These are pins, and the reasoning is in the names so the next reviewer does
+    not re-litigate it.
+    """
+
+    def test_a_shrunk_collision_the_operator_already_accepted_stays_accepted(self):
+        """X on 5; A joins acknowledging [X]; B joins acknowledging [X, A]; A
+        then leaves for 6. B is left sharing 5 with X, and X is exactly who B
+        was shown. Equality would refuse an operator whose situation strictly
+        improved."""
+        lineup = [channel(9, "X", 5), channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=1, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9])),
+            Op("updateChannel", channelId=2, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9, 1])),
+            Op("updateChannel", channelId=1, data={"channel_number": 6}),
+        ])
+        assert issues == [], messages(issues)
+
+    def test_an_occupant_the_operator_was_never_shown_is_still_refused(self):
+        """The direction that matters. Consent to {X} while {X, A} stand makes
+        ``standing`` not a subset, so it is refused — which is what makes the
+        subset test a check rather than a rubber stamp."""
+        lineup = [channel(9, "X", 5), channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=1, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9])),
+            Op("updateChannel", channelId=2, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9])),
+        ])
+        assert len(issues) == 1, messages(issues)
+        assert issues[0].type == "duplicate_channel_number"
+
+    def test_a_dialog_that_named_a_later_arrival_still_authorises(self):
+        """Why equality would refuse a fully informed operator, in the case the
+        reviewer's own scenario does not reach. A's dialog named B because B
+        was already on 5 when A was staged; a later re-staging of B makes B the
+        LAST arrival, so ``standing`` for A is {X} while its acknowledgement
+        names {X, B}. Under equality that mismatch refuses a plan every step of
+        which the operator was shown."""
+        lineup = [channel(9, "X", 5), channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=2, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9])),
+            Op("updateChannel", channelId=1, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9, 2])),
+            Op("updateChannel", channelId=2, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [9, 1])),
+        ])
+        assert issues == [], messages(issues)
+
+
+class TestLandingOnAnEmptyNumberConsentsToNothing:
+    """The defect the adjudication turned up, in the same expression.
+
+    The consent walk asked every contributor for an acknowledgement, including
+    the FIRST one to arrive on a number nobody was on. No dialog fires when a
+    number is free, so no acknowledgement can exist, so the operator was told
+    to "confirm the duplicate where you staged it" at a place where there had
+    never been a duplicate to confirm. A dead end, reachable by moving one
+    channel onto a free number and a second one on top of it.
+    """
+
+    def test_two_channels_onto_a_free_number_with_the_second_confirmed(self):
+        lineup = [channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            Op("updateChannel", channelId=1, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(5, [2])),
+        ])
+        assert issues == [], messages(issues)
+
+    def test_the_second_arrival_still_has_to_have_named_the_first(self):
+        """The anti-vacuity control. Nothing above weakens the check: only the
+        arrival that landed on an empty number is excused."""
+        lineup = [channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            Op("updateChannel", channelId=1, data={"channel_number": 5}),
+        ])
+        assert len(issues) == 1, messages(issues)
+        assert issues[0].type == "duplicate_channel_number"
+
+    def test_an_acknowledgement_naming_the_wrong_number_is_not_consent(self):
+        """The other anti-vacuity control: the slot still has to match."""
+        lineup = [channel(1, "A", 1), channel(2, "B", 2)]
+        issues = evaluate_final_numbering(lineup, [
+            Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            Op("updateChannel", channelId=1, data={"channel_number": 5},
+               acknowledgedDuplicate=Ack(9, [2])),
+        ])
+        assert len(issues) == 1, messages(issues)

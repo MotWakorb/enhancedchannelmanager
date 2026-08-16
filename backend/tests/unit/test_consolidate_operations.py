@@ -1,5 +1,6 @@
 """Tests for _consolidate_operations in routers.channels."""
 
+from channel_number_plan import build_final_numbering_state
 from routers.channels import (
     _consolidate_operations,
     BulkUpdateChannelOp,
@@ -395,3 +396,168 @@ def test_the_range_op_consolidation_rebuilds_carry_no_per_operation_bookkeeping(
         "channelIds",
         "startingNumber",
     }
+
+
+# -- Consolidation must not REORDER what the caller sent -------------------
+#
+# Fix round 3. The output is grouped by KIND — merged updates, then range
+# assignments — so the order operations are emitted in says nothing about the
+# order they were sent in. Between kinds that both place a channel on a number,
+# that inverted last-write-wins: the browser previews the number the SUBMITTED
+# order produces, and the server validated and applied the other one.
+
+_LINEUP = [
+    {"id": 1, "name": "ESPN", "channel_number": 5},
+    {"id": 2, "name": "TNT", "channel_number": 6},
+]
+
+
+def _final_numbers(operations, lineup=None):
+    """The final number per channel, read through the shared materialiser.
+
+    The same function the preflight validates and — via its TypeScript twin —
+    the same one the browser previews, so this is what "what the operator was
+    shown" means rather than a second opinion about it.
+    """
+    state = build_final_numbering_state(_LINEUP if lineup is None else lineup, operations)
+    return {p.channel_id: p.number for p in state.placements}
+
+
+def test_a_range_followed_by_an_edit_applies_the_edit():
+    """The confirmed reproduction. Submitted order puts 20 last, so 20 wins."""
+    ops = [
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
+    ]
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops) == {1: 20, 2: 6}
+
+
+def test_an_edit_followed_by_a_range_applies_the_range():
+    """The other direction, which the grouped output got right by accident.
+    Pinned so a fix for the first cannot break it."""
+    ops = [
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+    ]
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops) == {1: 10, 2: 6}
+
+
+def test_only_one_operation_writes_a_channels_number():
+    """The property that makes emission order unable to change the answer.
+
+    Two writes to one channel's number is also the thing "consolidate" exists
+    to avoid, so a superseded update is dropped rather than left to be
+    overwritten.
+    """
+    ops = [
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+    ]
+    result = _consolidate_operations(ops)
+    writers = [
+        o for o in result
+        if (o.type == "updateChannel" and "channel_number" in o.data)
+        or (o.type == "bulkAssignChannelNumbers" and 1 in o.channelIds)
+    ]
+    assert len(writers) == 1, result
+
+
+def test_a_superseded_edit_keeps_the_rest_of_its_data():
+    ops = [
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20, "name": "ESPN HD"}),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+    ]
+    updates = [o for o in _consolidate_operations(ops) if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].data == {"name": "ESPN HD"}
+
+
+def test_a_superseded_edit_does_not_carry_its_consent_forward():
+    """An acknowledgement is consent to ONE placement. If a later range
+    assignment is what actually places the channel, the placement the operator
+    confirmed is not the one that happens, and forwarding the confirmation
+    would manufacture consent for a collision nobody was shown."""
+    ops = [
+        BulkUpdateChannelOp(
+            channelId=1,
+            data={"channel_number": 20, "name": "ESPN HD"},
+            acknowledgedDuplicate={"number": 20, "occupantChannelIds": [2]},
+        ),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+    ]
+    updates = [o for o in _consolidate_operations(ops) if o.type == "updateChannel"]
+    assert len(updates) == 1
+    assert updates[0].acknowledgedDuplicate is None
+    assert updates[0].expectedNumber is None
+
+
+def test_a_superseded_edit_with_nothing_else_to_write_is_dropped():
+    ops = [
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
+    ]
+    assert [o for o in _consolidate_operations(ops) if o.type == "updateChannel"] == []
+
+
+def test_the_number_scoped_fields_are_pinned_against_the_model():
+    """Dropping a superseded ``channel_number`` has to drop the bookkeeping
+    that describes that write and nothing else. This function has already lost
+    a field twice by having to remember one, so a field added to
+    ``BulkUpdateChannelOp`` breaks this until somebody classifies it.
+
+    Imported inside the test rather than at module scope so that the
+    behavioural tests around it fail on BEHAVIOUR rather than all failing
+    together on a missing name.
+    """
+    from routers.channels import _NUMBER_SCOPED_UPDATE_FIELDS
+
+    assert set(BulkUpdateChannelOp.model_fields) == {
+        "type",
+        "channelId",
+        "data",
+    } | set(_NUMBER_SCOPED_UPDATE_FIELDS)
+
+
+def test_a_range_sent_before_the_create_it_names_places_nothing():
+    """Both materialisers treat an operation naming a channel that does not
+    exist yet as a no-op, so consolidation must not turn one into a placement
+    by emitting the create first."""
+    ops = [
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+        BulkCreateChannelOp(tempId=-1, name="New", channelNumber=3),
+    ]
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops)
+    assert _final_numbers(ops)[-1] == 3
+
+
+def test_a_range_after_the_create_it_names_still_places_it():
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="New", channelNumber=3),
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+    ]
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops)
+    assert _final_numbers(ops)[-1] == 10
+
+
+# -- An omitted range start is 1 everywhere, and 0 means 0 -----------------
+
+def test_an_omitted_range_start_consolidates_to_one():
+    """``or 0`` turned an omission into an explicit 0. The frontend
+    materialiser, the backend materialiser and the executor all default to 1,
+    so the browser previewed channel 7 on 1 and the server applied 0."""
+    ops = [BulkAssignNumbersOp(channelIds=[1])]
+    ranges = [o for o in _consolidate_operations(ops) if o.type == "bulkAssignChannelNumbers"]
+    assert len(ranges) == 1
+    assert ranges[0].startingNumber == 1
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops) == {1: 1, 2: 6}
+
+
+def test_an_explicit_zero_range_start_is_honoured():
+    """0 is a valid channel number (ic884.1 settled non-negative), so an
+    explicit 0 is a real request rather than a stand-in for "unset". ``or``
+    could not tell the two apart; ``is None`` can."""
+    ops = [BulkAssignNumbersOp(channelIds=[1, 2], startingNumber=0)]
+    ranges = [o for o in _consolidate_operations(ops) if o.type == "bulkAssignChannelNumbers"]
+    assert len(ranges) == 1
+    assert ranges[0].startingNumber == 0
+    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops) == {1: 0, 2: 1}

@@ -184,7 +184,13 @@ describe('validateFinalNumberingPlan', () => {
     expect(issues[0].type).toBe('duplicate_channel_number');
     expect(issues[0].channelNumber).toBe(5);
     expect(issues[0].channelIds.sort()).toEqual([2, 3]);
-    expect(issues[0].operationIds.sort()).toEqual([a.id, b.id].sort());
+    // Only `b` is named. `a` landed on 5 while 1 was already vacating it, so
+    // `a` collided with nobody and no dialog could have fired for it; `b` is
+    // the arrival that created the duplicate and the one to change. Naming
+    // both also produced a degenerate sentence — "\"2\", \"3\" would join ."
+    // with nothing on the right-hand side.
+    expect(issues[0].operationIds).toEqual([b.id]);
+    expect(issues[0].message).toContain('would join');
   });
 
   it('leaves a duplicate that existed on the server alone', () => {
@@ -570,5 +576,174 @@ describe('deriveAutomaticRenames', () => {
       ),
     );
     expect(renames).toEqual([]);
+  });
+});
+
+describe('validateFinalNumberingPlan consent direction', () => {
+  // Fix round 3 adjudication. An external reviewer read
+  // `standing ⊆ acknowledged` as a hole and asked for equality. It is not a
+  // hole, and equality would be a defect of its own: the acknowledgement names
+  // what the operator was SHOWN (recorded from the occupants the dialog
+  // rendered, not from a fresh lookup) while `standing` is what actually
+  // materialised. These are pins, and the reasoning is in the names so the
+  // next reviewer does not re-litigate it.
+
+  it('accepts a collision that shrank between the confirmation and Apply, because the operator was shown worse', () => {
+    // X on 5; A joins acknowledging [X]; B joins acknowledging [X, A]; A then
+    // leaves for 6. B is left sharing 5 with X — exactly who B was shown.
+    const plan = buildFinalNumberingPlan(
+      [channel(9, 5, 'X'), channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 1,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9] },
+          },
+          [snapshot(1, 1)],
+        ),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9, 1] },
+          },
+          [snapshot(2, 2)],
+        ),
+        op({ type: 'updateChannel', channelId: 1, data: { channel_number: 6 } }, [snapshot(1, 5)]),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toEqual([]);
+  });
+
+  it('still refuses an occupant the operator was never shown, which is what makes the subset test a check', () => {
+    const plan = buildFinalNumberingPlan(
+      [channel(9, 5, 'X'), channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 1,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9] },
+          },
+          [snapshot(1, 1)],
+        ),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9] },
+          },
+          [snapshot(2, 2)],
+        ),
+      ],
+    );
+    const issues = validateFinalNumberingPlan(plan);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].type).toBe('duplicate_channel_number');
+  });
+
+  it('authorises a placement whose dialog named a channel that a later re-staging puts after it', () => {
+    // Why equality would refuse a fully informed operator. A's dialog named X
+    // and B because both were on 5 when A was staged; re-staging B makes B the
+    // LAST arrival, so `standing` for A is {X} while its acknowledgement names
+    // {X, B}.
+    const plan = buildFinalNumberingPlan(
+      [channel(9, 5, 'X'), channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9] },
+          },
+          [snapshot(2, 2)],
+        ),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 1,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9, 2] },
+          },
+          [snapshot(1, 1)],
+        ),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 2,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [9, 1] },
+          },
+          [snapshot(2, 5)],
+        ),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toEqual([]);
+  });
+});
+
+describe('validateFinalNumberingPlan on a number nobody was on', () => {
+  // The defect the adjudication turned up, in the same expression. The consent
+  // walk asked every newcomer for an acknowledgement including the FIRST one
+  // to arrive on a free number. No dialog fires when a number is free, so no
+  // acknowledgement can exist, and the operator was told to confirm the
+  // duplicate where they staged it — at a place where there had never been a
+  // duplicate to confirm.
+
+  it('accepts a second channel confirmed onto a number the first moved onto while it was free', () => {
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op({ type: 'updateChannel', channelId: 2, data: { channel_number: 5 } }, [snapshot(2, 2)]),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 1,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 5, occupantChannelIds: [2] },
+          },
+          [snapshot(1, 1)],
+        ),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toEqual([]);
+  });
+
+  it('still refuses the second arrival when it named nobody', () => {
+    // The anti-vacuity control: only the arrival that landed on an empty
+    // number is excused.
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op({ type: 'updateChannel', channelId: 2, data: { channel_number: 5 } }, [snapshot(2, 2)]),
+        op({ type: 'updateChannel', channelId: 1, data: { channel_number: 5 } }, [snapshot(1, 1)]),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toHaveLength(1);
+  });
+
+  it('still refuses an acknowledgement that names the wrong number', () => {
+    const plan = buildFinalNumberingPlan(
+      [channel(1, 1, 'A'), channel(2, 2, 'B')],
+      [
+        op({ type: 'updateChannel', channelId: 2, data: { channel_number: 5 } }, [snapshot(2, 2)]),
+        op(
+          {
+            type: 'updateChannel',
+            channelId: 1,
+            data: { channel_number: 5 },
+            acknowledgedDuplicate: { number: 9, occupantChannelIds: [2] },
+          },
+          [snapshot(1, 1)],
+        ),
+      ],
+    );
+    expect(validateFinalNumberingPlan(plan)).toHaveLength(1);
   });
 });
