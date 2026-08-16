@@ -357,9 +357,19 @@ class TestDescribeChannelUpdate:
         assert changes == []
 
     def test_unknown_before_treats_every_supplied_field_as_new(self):
+        """CORRECTED in bead …-kz089 fix round 5, alongside its twin in
+        ``test_kz089_journal_at_the_moment_of_the_write.py``.
+
+        ``before == {"name": None}`` was this test asserting the defect: the
+        row could not distinguish "the before-state held null" from "ECM never
+        saw the before-state", and here the before-state is ``{}`` — the second
+        one. The unknown field is named as unknown now.
+        """
+        from routers.channels import BEFORE_STATE_UNKNOWN_KEY
+
         changes, before, after = describe_channel_update({}, {"name": "A"})
         assert changes == ["name to 'A'"]
-        assert before == {"name": None}
+        assert before == {BEFORE_STATE_UNKNOWN_KEY: ["name"]}
         assert after == {"name": "A"}
 
     def test_clearing_a_field_uses_the_cleared_phrase(self):

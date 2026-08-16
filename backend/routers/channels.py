@@ -76,6 +76,16 @@ _CHANNEL_DESCRIBED_FIELDS: frozenset[str] = frozenset(
     field for field, _label, _cleared in _CHANNEL_CHANGE_DESCRIBERS
 )
 
+#: Reserved key in a journal row's ``before_value``, listing the fields whose
+#: before-state ECM could not read at all — a channel created earlier in the
+#: same batch, a catalog read that failed, a payload field Dispatcharr does not
+#: return. Named rather than defaulted, because ``before_channel.get(field)``
+#: answered ``None`` for both "it held null" and "I never saw it", and those are
+#: different facts (bead ``enhancedchannelmanager-kz089``, fix round 5). The
+#: double-underscore form is reserved: no Dispatcharr channel field uses it, so
+#: it cannot collide with a real key in the same dict.
+BEFORE_STATE_UNKNOWN_KEY = "__before_state_unknown__"
+
 
 def describe_channel_update(
     before_channel: dict, data: dict
@@ -111,6 +121,19 @@ def describe_channel_update(
     earlier in the same batch, a catalog read that failed. "I cannot see what
     it was" is not "it did not change", so an unknown before-state reads as a
     change on both arms rather than as silence.
+
+    AN UNKNOWN BEFORE-STATE IS NAMED, not defaulted (fix round 5). Round 4
+    established that it counts as a change and then recorded it with
+    ``before_channel.get(field)``, which is ``None`` — the same serialisation
+    an explicitly-null before-state produces. ``before_channel = {}`` with
+    ``data = {"custom_prop": None}`` therefore wrote
+    ``{"before": {"custom_prop": null}, "after": {"custom_prop": null}}``:
+    evidence that something changed, and no evidence of what. A field whose
+    before-state ``before_channel`` does not carry is listed under
+    :data:`BEFORE_STATE_UNKNOWN_KEY` instead of being given a value ECM never
+    read, so a row always distinguishes "it held null" from "I could not see
+    it" — which is the difference between an operator being able to reconcile
+    the edit and merely being told one happened.
     """
     changes: list[str] = []
     before_value: dict = {}
@@ -121,7 +144,10 @@ def describe_channel_update(
 
     def note(field: str, phrase: str) -> None:
         changes.append(phrase)
-        before_value[field] = before_channel.get(field)
+        if field in before_channel:
+            before_value[field] = before_channel[field]
+        else:
+            before_value.setdefault(BEFORE_STATE_UNKNOWN_KEY, []).append(field)
         after_value[field] = data[field]
 
     for field, label, cleared_label in _CHANNEL_CHANGE_DESCRIBERS:
@@ -147,6 +173,97 @@ def describe_channel_update(
         note(field, f"set {field}" if new_value else f"cleared {field}")
 
     return changes, before_value, after_value
+
+
+def write_journal_rows(
+    rows: list[dict],
+    *,
+    batch_id: Optional[str] = None,
+    log_tag: str = "CHANNELS",
+) -> int:
+    """Write ``rows``; return how many could NOT be written.
+
+    ``journal.log_entries`` writes N rows in ONE transaction, which is what
+    keeps a several-hundred-channel Apply All from becoming several hundred
+    transactions — and it reports failure by RETURNING ``False``, not by
+    raising, so ignoring its return value loses the whole batch's audit trail
+    in silence. ``journal.log_entry`` reports the same failure by returning
+    ``None``. Both return values are checked here.
+
+    When the batch write fails, the rows are retried one at a time: the
+    realistic failure is a single unwritable row, and a batch write lets that
+    one row take every other row's audit trail with it. Anything still
+    unwritable after that is logged at ERROR with its full content, because an
+    upstream mutation with no journal row is exactly what an operator later has
+    to reconstruct by hand.
+
+    THE ONE MECHANISM, shared by both surfaces (fix round 5). This lived inside
+    the bulk-commit executor's closure, so ``PATCH /api/channels/{id}`` — the
+    path an MCP agent takes — still called ``journal.log_entry`` for its effect
+    and discarded the result. That is the round-2 defect verbatim, one endpoint
+    over: a read-only or unavailable journal database produced a landed
+    Dispatcharr change, no row, and a ``200`` that mentioned neither. A second
+    implementation would have been a second thing to keep in step, so there is
+    one, at module scope, taking the batch correlation id and the log tag its
+    caller writes under.
+
+    NOTHING IS LOST TO A ``BaseException``. Neither retry above catches one —
+    ``SystemExit``, ``KeyboardInterrupt``, or a ``CancelledError`` raised by a
+    synchronous dependency are not ``Exception`` — and the bulk caller has
+    already DRAINED these rows off the ledger by the time this runs, so there
+    is no queue left to retry them from and no second flush to do it. Every row
+    this call has not yet resolved is therefore logged before the
+    ``BaseException`` is allowed to continue, which is the same promise the
+    per-row failure path already makes for an unwritable row.
+    """
+    if not rows:
+        return 0
+
+    # Rows this call has neither written nor already reported. Kept as a
+    # separate list purely so the BaseException guard below knows what is
+    # still owed without re-reporting anything.
+    pending = list(rows)
+    try:
+        try:
+            if journal.log_entries(rows) is not False:
+                return 0
+            logger.error(
+                "[%s] Batch journal write failed for %s row(s) "
+                "(batch=%s); retrying one at a time", log_tag, len(rows), batch_id,
+            )
+        except Exception as batch_err:
+            logger.exception(
+                "[%s] Batch journal write raised for %s row(s) "
+                "(batch=%s); retrying one at a time: %s",
+                log_tag, len(rows), batch_id, batch_err,
+            )
+
+        unwritten = 0
+        while pending:
+            row = pending[0]
+            try:
+                written = journal.log_entry(**row) is not None
+            except Exception as row_err:
+                logger.exception(
+                    "[%s] Journal row raised (batch=%s): %s",
+                    log_tag, batch_id, row_err,
+                )
+                written = False
+            # Resolved either way: written, or about to be reported below.
+            pending.pop(0)
+            if written:
+                continue
+            unwritten += 1
+            logger.error(
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+            )
+        return unwritten
+    except BaseException:
+        for row in pending:
+            logger.error(
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+            )
+        raise
 
 
 def validate_stream_permutation(
@@ -1792,6 +1909,12 @@ async def _run_bulk_commit(
     # `flush_journal` is called from the single exit helper AND from the outer
     # exception handler, so it has to be idempotent.
     journal_flushed = False
+    # Whether a BaseException — a CancelledError from application shutdown,
+    # SystemExit, KeyboardInterrupt — is already on its way out of this
+    # function. Set by the `except BaseException` clause at the bottom, read by
+    # the `finally` beside it, which must not let the flush replace it (fix
+    # round 5).
+    unwinding_base_exception = False
 
     def journal_row(
         action_type: str,
@@ -1946,55 +2069,6 @@ async def _run_bulk_commit(
             )
         return channel_id
 
-    def write_journal_rows(rows: list[dict]) -> int:
-        """Write ``rows``; return how many could NOT be written.
-
-        ``journal.log_entries`` writes N rows in ONE transaction, which is what
-        keeps a several-hundred-channel Apply All from becoming several hundred
-        transactions — and it reports failure by RETURNING ``False``, not by
-        raising, so ignoring its return value loses the whole batch's audit
-        trail in silence. That return value is checked here.
-
-        When the batch write fails, the rows are retried one at a time: the
-        realistic failure is a single unwritable row, and a batch write lets
-        that one row take every other row's audit trail with it. Anything still
-        unwritable after that is logged at ERROR with its full content, because
-        an upstream mutation with no journal row is exactly what an operator
-        later has to reconstruct by hand.
-        """
-        if not rows:
-            return 0
-        try:
-            if journal.log_entries(rows) is not False:
-                return 0
-            logger.error(
-                "[CHANNELS-BULK] Batch journal write failed for %s row(s) "
-                "(batch=%s); retrying one at a time", len(rows), batch_id,
-            )
-        except Exception as batch_err:
-            logger.exception(
-                "[CHANNELS-BULK] Batch journal write raised for %s row(s) "
-                "(batch=%s); retrying one at a time: %s",
-                len(rows), batch_id, batch_err,
-            )
-
-        unwritten = 0
-        for row in rows:
-            try:
-                if journal.log_entry(**row) is not None:
-                    continue
-            except Exception as row_err:
-                logger.exception(
-                    "[CHANNELS-BULK] Journal row raised (batch=%s): %s",
-                    batch_id, row_err,
-                )
-            unwritten += 1
-            logger.error(
-                "[CHANNELS-BULK] UNJOURNALLED MUTATION (batch=%s): %s",
-                batch_id, row,
-            )
-        return unwritten
-
     def flush_journal() -> None:
         """Write this run's journal rows and its summary row. Never raises.
 
@@ -2003,7 +2077,10 @@ async def _run_bulk_commit(
         awaited anything there would simply be cancelled again at the first
         await — reopening the hole this call is closing. Nothing it touches is
         async: :func:`write_journal_rows` and ``journal.log_entry`` are both
-        blocking calls.
+        blocking calls. It does not follow that it never raises a
+        ``BaseException``: a synchronous dependency can, and the outer
+        ``finally`` is written so that one cannot replace the cancellation it
+        is unwinding (fix round 5).
 
         Called from :func:`finish`, which is the only way out of this function
         by RETURN once execution has started — every early return, every
@@ -2032,7 +2109,9 @@ async def _run_bulk_commit(
         journal_flushed = True
 
         rows = ledger.drain_journal_rows()
-        unwritten = write_journal_rows(rows)
+        unwritten = write_journal_rows(
+            rows, batch_id=batch_id, log_tag="CHANNELS-BULK"
+        )
 
         # The summary reads last so it closes the batch. Counters come from the
         # ledger rather than from `result`, because this runs on paths where
@@ -3261,6 +3340,17 @@ async def _run_bulk_commit(
             result["success"] = False
             return result
 
+    except BaseException:
+        # NOT an Exception, so the handler above never sees it: a
+        # `CancelledError` from application shutdown, `SystemExit`,
+        # `KeyboardInterrupt`. Nothing to record and no envelope to return —
+        # this clause exists only to tell the `finally` below that something is
+        # already unwinding, so that whatever the flush hits there cannot take
+        # its place (fix round 5). The `raise` is what keeps a cancelled task
+        # cancelled.
+        unwinding_base_exception = True
+        raise
+
     finally:
         # The ways out that are NOT returns. `asyncio.CancelledError` inherits
         # from BaseException, so the handler above never saw it: a run that
@@ -3281,6 +3371,19 @@ async def _run_bulk_commit(
         # The accounting half of `finish()` is deliberately NOT run here: there
         # is no envelope to return on this path, and `finalize_bulk_commit_result`
         # raising inside a `finally` would replace the CancelledError.
+        #
+        # The recovery below caught `Exception` and nothing else, which reopened
+        # the same hole from the other side (fix round 5): a synchronous
+        # dependency raising a BaseException AFTER `drain_journal_rows()` had
+        # emptied the queue escaped the `finally`, replaced the CancelledError —
+        # so `task.cancelled()` was no longer true — and carried the drained rows
+        # with it. `write_journal_rows` now logs every row it has not resolved
+        # before letting a BaseException past, and this clause refuses to raise
+        # while one is already unwinding. That is the whole reason
+        # `unwinding_base_exception` exists rather than a bare `except
+        # BaseException: pass`: swallowing unconditionally would mean a flush
+        # that raised a CancelledError on the ORDINARY return path silently
+        # uncancelled the task, which is the same bug pointing the other way.
         try:
             flush_journal()
         except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
@@ -3288,6 +3391,13 @@ async def _run_bulk_commit(
                 "[CHANNELS-BULK] Journal flush failed while unwinding "
                 "(batch=%s): %s", batch_id, flush_err,
             )
+        except BaseException as flush_base:
+            logger.exception(
+                "[CHANNELS-BULK] Journal flush raised a BaseException "
+                "(batch=%s): %s", batch_id, flush_base,
+            )
+            if not unwinding_base_exception:
+                raise
 
 
 @router.post("/normalize-preview-batch")
@@ -3597,7 +3707,16 @@ async def get_channel_streams(channel_id: int):
 
 @router.patch("/{channel_id}")
 async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabled):
-    """Update a channel. Admin only (operator-only write, bd-v7n9f)."""
+    """Update a channel. Admin only (operator-only write, bd-v7n9f).
+
+    Answers with Dispatcharr's updated channel plus ``journalRowsUnwritten``:
+    the number of this request's journal rows that could NOT be written, always
+    present so a caller checks the number rather than probing for a key. It is
+    the same advisory the bulk-commit envelope carries, and it is an advisory on
+    a ``200`` rather than a ``5xx`` for the same reason — the PATCH LANDED, and
+    reporting a failure to a caller whose change already applied is what makes
+    an integrator retry it (bead ``enhancedchannelmanager-kz089``, fix round 5).
+    """
     logger.debug("[CHANNELS] PATCH /channels/%s - data=%s", channel_id, data)
     # The body is an untyped field bag, so the canonical channel-number contract
     # is applied by key rather than by field type (bead
@@ -3622,19 +3741,40 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         # enhancedchannelmanager-r9py9).
         changes, before_value, after_value = describe_channel_update(before_channel, data)
 
+        unwritten = 0
         if changes:
             logger.info("[CHANNELS] Updated channel id=%s: %s", channel_id, ', '.join(changes))
-            journal.log_entry(
-                category="channel",
-                action_type="update",
-                entity_id=channel_id,
-                entity_name=result.get("name", before_channel.get("name", "Unknown")),
-                description=f"Updated channel: {', '.join(changes)}",
-                before_value=before_value,
-                after_value=after_value,
-            )
+            # Through the shared writer, which CHECKS the return value. Round 2
+            # gave the bulk path this treatment because `journal.log_entries`
+            # reports failure by returning `False`; `journal.log_entry` reports
+            # it by returning `None`, and this call site discarded that, so a
+            # journal database that was read-only, unavailable or full produced
+            # a landed Dispatcharr change with no row and a 200 that said
+            # nothing (fix round 5).
+            unwritten = write_journal_rows([{
+                "category": "channel",
+                "action_type": "update",
+                "entity_id": channel_id,
+                "entity_name": result.get("name", before_channel.get("name", "Unknown")),
+                "description": f"Updated channel: {', '.join(changes)}",
+                "before_value": before_value,
+                "after_value": after_value,
+            }])
         else:
             logger.debug("[CHANNELS] No changes detected for channel %s", channel_id)
+
+        if isinstance(result, dict):
+            result["journalRowsUnwritten"] = unwritten
+        elif unwritten:
+            # Dispatcharr answered with something that is not an object, so
+            # there is nowhere to hang the advisory. `write_journal_rows` has
+            # already logged the row itself; this names why the caller will not
+            # be told, rather than leaving the omission to be inferred.
+            logger.error(
+                "[CHANNELS] %s journal row(s) unwritten for channel %s and the "
+                "upstream response is not an object, so the caller cannot be "
+                "told: %r", unwritten, channel_id, type(result).__name__,
+            )
 
         return result
     except HTTPException:

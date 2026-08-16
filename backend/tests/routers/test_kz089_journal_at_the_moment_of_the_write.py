@@ -679,12 +679,25 @@ class TestAnUnrecognisedFieldIsStillAMutation:
         not carry the field at all cannot support that claim, so the write is
         journalled — on both arms, because the rule is the property and not the
         describer's coverage.
+
+        CORRECTED IN FIX ROUND 5. This test used to assert
+        ``before == {"custom_prop": None}``, which is what
+        ``before_channel.get(field)`` produced for a before-state that carried
+        no such key — the same serialisation an explicit null produces. That
+        pinned the defect rather than catching it: the row proved something had
+        changed and gave no evidence of what. The unknown before-state is now
+        named as unknown, and
+        ``TestAnUnknownBeforeStateIsDistinguishableFromAnExplicitNull`` asserts
+        the discrimination itself.
         """
-        from routers.channels import describe_channel_update
+        from routers.channels import (
+            BEFORE_STATE_UNKNOWN_KEY,
+            describe_channel_update,
+        )
 
         changes, before, after = describe_channel_update({}, {"custom_prop": None})
         assert changes == ["cleared custom_prop"]
-        assert before == {"custom_prop": None}
+        assert before == {BEFORE_STATE_UNKNOWN_KEY: ["custom_prop"]}
         assert after == {"custom_prop": None}
 
         changes, _b, _a = describe_channel_update({}, {"tvg_id": None})
@@ -830,3 +843,286 @@ class TestTheFlushSurvivesCancellation:
 
         assert journal_double.log_entry.call_args_list == []
         assert journal_double.log_entries.call_args_list == []
+
+
+# --------------------------------------------------------------------------
+# Fix round 5 — three confirmed review findings against round 4
+# --------------------------------------------------------------------------
+
+class TestTheDirectPatchReportsAFailedJournalWrite:
+    """Invariant 1, on the path that is not the bulk executor.
+
+    ``PATCH /api/channels/{id}`` mutated upstream and then called
+    ``journal.log_entry(...)`` for its effect, discarding the return value.
+    ``log_entry`` converts a write failure into ``None`` — it does not raise —
+    so a read-only, unavailable or full journal database produced a landed
+    Dispatcharr change, no journal row, and a ``200`` that said nothing about
+    either. The bulk path had exactly this defect fixed in round 2 by checking
+    ``journal.log_entries``' ``False`` return; this path never received the
+    same treatment, so the two surfaces disagreed about whether an
+    unjournalled mutation is worth mentioning.
+
+    A journal failure is NOT reported as a request failure: the PATCH landed,
+    and telling the caller it failed is what makes an integrator retry a change
+    that already applied. It rides on the ``200`` as ``journalRowsUnwritten``,
+    the same advisory the bulk envelope carries.
+    """
+
+    def _patch_client(self):
+        client = _base_client()
+        client.get_channel.return_value = {
+            "id": 42, "name": "Forty Two", "channel_number": 42,
+        }
+        client.update_channel.return_value = {
+            "id": 42, "name": "Renamed", "channel_number": 42,
+        }
+        return client
+
+    @pytest.mark.asyncio
+    async def test_a_patch_whose_journal_write_fails_says_so_on_the_response(
+        self, async_client
+    ):
+        """The red proof: the mutation LANDS and the caller is told nothing."""
+        client = self._patch_client()
+        journal_double = _journal_double()
+        # Both arms of the write fail the way `journal` actually fails: by
+        # returning, not by raising.
+        journal_double.log_entries.return_value = False
+        journal_double.log_entry.return_value = None
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            response = await async_client.patch(
+                "/api/channels/42", json={"name": "Renamed"}
+            )
+
+        # The upstream mutation LANDED — this is what makes the finding
+        # "a landed write nobody was told about" rather than "a failed request".
+        client.update_channel.assert_awaited_once_with(42, {"name": "Renamed"})
+        assert response.status_code == 200, response.text
+        assert response.json()["journalRowsUnwritten"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_patch_whose_journal_write_lands_reports_nothing_unwritten(
+        self, async_client
+    ):
+        """Always present, so a caller checks the number rather than probing.
+
+        The bulk envelope states this contract for the same key; a second
+        surface that only sets it on failure would put the burden back on the
+        caller to know which shape it is looking at.
+        """
+        client = self._patch_client()
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            response = await async_client.patch(
+                "/api/channels/42", json={"name": "Renamed"}
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["journalRowsUnwritten"] == 0
+        rows = _entity_rows(journal_double)
+        assert len(rows) == 1, rows
+        assert rows[0]["entity_id"] == 42
+
+    @pytest.mark.asyncio
+    async def test_a_batch_failure_is_retried_row_by_row_on_the_patch_path_too(
+        self, async_client
+    ):
+        """The direct PATCH reuses the bulk path's mechanism, not a second one.
+
+        A batch write that fails must not take the row's audit trail with it
+        when the row itself is writable — the retry is why the bulk path
+        survives one unwritable row, and a separate implementation here would
+        be a second thing to keep in step.
+        """
+        client = self._patch_client()
+        journal_double = _journal_double()
+        journal_double.log_entries.return_value = False
+        journal_double.log_entry.return_value = MagicMock()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            response = await async_client.patch(
+                "/api/channels/42", json={"name": "Renamed"}
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["journalRowsUnwritten"] == 0
+        assert journal_double.log_entries.call_count == 1
+        assert journal_double.log_entry.call_count == 1
+
+
+class _SyntheticShutdown(BaseException):
+    """Stands in for ``SystemExit`` / ``KeyboardInterrupt`` in a test.
+
+    A plain ``BaseException`` subclass rather than ``SystemExit`` itself,
+    because asyncio special-cases ``SystemExit`` and ``KeyboardInterrupt`` out
+    of a task and into the event loop, which would take the test runner with
+    it. The defect is BaseException propagation, not those two classes.
+    """
+
+
+class TestTheFlushSurvivesABaseExceptionToo:
+    """Invariant 2. The flush recovery must not replace what is unwinding.
+
+    Round 4 gave the executor a ``finally`` so a ``CancelledError`` could not
+    carry the queued rows away. The recovery around that flush still caught
+    ``Exception``, and so do ``write_journal_rows`` and
+    ``journal.log_entries`` — so a synchronous dependency raising a
+    ``BaseException`` AFTER ``drain_journal_rows()`` had emptied the queue lost
+    the drained rows AND replaced the ``CancelledError``, leaving a task that
+    had been cancelled reporting something else entirely.
+
+    The flush chain is synchronous end to end (``flush_journal`` ->
+    ``write_journal_rows`` -> ``journal.log_entries`` -> a blocking SQLAlchemy
+    commit), so a nested cancellation cannot be injected mid-flush; this is
+    specifically about a synchronous ``BaseException``.
+    """
+
+    def _request_creating_two_groups(self):
+        from routers.channels import BulkCommitRequest
+
+        return BulkCommitRequest(
+            operations=[],
+            groupsToCreate=[{"name": "A"}, {"name": "B"}],
+            continueOnError=True,
+        )
+
+    async def _cancel_mid_run(self, journal_double):
+        from routers.channels import _run_bulk_commit
+
+        reached_b = _asyncio.Event()
+
+        async def _create_group(name):
+            if name == "A":
+                return {"id": 71, "name": "A"}
+            reached_b.set()
+            await _asyncio.Event().wait()  # never returns; cancelled here
+
+        client = _base_client()
+        client.create_channel_group.side_effect = _create_group
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            task = _asyncio.create_task(
+                _run_bulk_commit(self._request_creating_two_groups(), batch_id="c5")
+            )
+            await reached_b.wait()
+            task.cancel()
+            with pytest.raises(_asyncio.CancelledError):
+                await task
+        return task
+
+    @pytest.mark.asyncio
+    async def test_a_base_exception_in_the_flush_does_not_uncancel_the_task(self):
+        """A cancelled task is still cancelled, whatever the flush hits."""
+        journal_double = _journal_double()
+        journal_double.log_entries.side_effect = _SyntheticShutdown("shutdown")
+        journal_double.log_entry.side_effect = _SyntheticShutdown("shutdown")
+
+        task = await self._cancel_mid_run(journal_double)
+
+        assert task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_rows_drained_before_a_base_exception_are_not_lost_in_silence(
+        self, caplog
+    ):
+        """`drain_journal_rows` has already emptied the queue by then.
+
+        There is no second flush to retry them, so the only remaining place the
+        landed mutation can be recovered from is the container log — which is
+        what the per-row failure path already promises for an unwritable row.
+        A ``BaseException`` must not be the one way out that skips it.
+        """
+        import logging
+
+        journal_double = _journal_double()
+        journal_double.log_entries.side_effect = _SyntheticShutdown("shutdown")
+        journal_double.log_entry.side_effect = _SyntheticShutdown("shutdown")
+
+        with caplog.at_level(logging.ERROR, logger="routers.channels"):
+            await self._cancel_mid_run(journal_double)
+
+        unjournalled = [
+            record.getMessage() for record in caplog.records
+            if "UNJOURNALLED MUTATION" in record.getMessage()
+        ]
+        assert len(unjournalled) == 1, caplog.text
+        # Group A's create LANDED before the cancellation reached B, so the row
+        # named in the log is a real mutation an operator has to reconcile.
+        assert "group_create" in unjournalled[0]
+        assert "'A'" in unjournalled[0]
+
+
+class TestAnUnknownBeforeStateIsDistinguishableFromAnExplicitNull:
+    """Invariant 3. A row has to say WHAT changed, not only THAT it did.
+
+    ``before_value[field] = before_channel.get(field)`` collapsed "the
+    before-state did not carry this key" into ``null``. With
+    ``before_channel = {}`` and ``data = {"custom_prop": None}`` the
+    presence-aware comparison correctly calls it a change — and then the row
+    reads ``{"before": {"custom_prop": null}, "after": {"custom_prop": null}}``,
+    which is evidence that something changed and no evidence of what.
+
+    The two states are different facts and the row now says which one it is.
+    """
+
+    def test_an_absent_before_state_does_not_serialise_as_an_explicit_null(self):
+        from routers.channels import (
+            BEFORE_STATE_UNKNOWN_KEY,
+            describe_channel_update,
+        )
+
+        absent_changes, absent_before, absent_after = describe_channel_update(
+            {}, {"custom_prop": None}
+        )
+        explicit_changes, explicit_before, explicit_after = describe_channel_update(
+            {"custom_prop": "was"}, {"custom_prop": None}
+        )
+
+        # Both are changes, and both say so.
+        assert absent_changes == ["cleared custom_prop"]
+        assert explicit_changes == ["cleared custom_prop"]
+        assert absent_after == explicit_after == {"custom_prop": None}
+
+        # The before-states are different facts, so the rows differ.
+        assert absent_before != explicit_before
+        assert absent_before == {BEFORE_STATE_UNKNOWN_KEY: ["custom_prop"]}
+        assert explicit_before == {"custom_prop": "was"}
+
+    def test_a_before_state_holding_null_is_recorded_as_null(self):
+        """The other half of the discrimination: null means null.
+
+        A before-state that DOES carry the field holding ``None`` is a fact
+        ECM read, and must not be laundered into "I could not see it".
+        """
+        from routers.channels import (
+            BEFORE_STATE_UNKNOWN_KEY,
+            describe_channel_update,
+        )
+
+        changes, before, after = describe_channel_update(
+            {"tvg_id": None}, {"tvg_id": "abc"}
+        )
+        assert changes == ["EPG mapping to 'abc'"]
+        assert before == {"tvg_id": None}
+        assert BEFORE_STATE_UNKNOWN_KEY not in before
+        assert after == {"tvg_id": "abc"}
+
+    def test_the_unknown_marker_covers_the_described_fields_too(self):
+        """The rule is the property, not the describers' vocabulary."""
+        from routers.channels import (
+            BEFORE_STATE_UNKNOWN_KEY,
+            describe_channel_update,
+        )
+
+        changes, before, after = describe_channel_update(
+            {}, {"tvg_id": None, "custom_prop": None}
+        )
+        assert changes == ["cleared EPG mapping", "cleared custom_prop"]
+        assert before == {BEFORE_STATE_UNKNOWN_KEY: ["tvg_id", "custom_prop"]}
+        assert after == {"tvg_id": None, "custom_prop": None}
