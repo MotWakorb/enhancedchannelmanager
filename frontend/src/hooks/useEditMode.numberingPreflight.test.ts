@@ -255,3 +255,83 @@ describe('automatic renames in the change preview', () => {
     expect(view.result.current.summary.automaticRenames).toEqual([]);
   });
 });
+
+/**
+ * Bead enhancedchannelmanager-vdxbx puts the operator's answer ON the
+ * operation, and the staged ledger persists operations verbatim. So the
+ * acknowledgement has to survive a dead session for free — and it has to,
+ * because a restored session IS the same session, and re-litigating a decision
+ * the operator already made is the thing invariant 4 forbids.
+ *
+ * Nothing in `planLedgerRestore` needed teaching about it: an acknowledgement
+ * is a NUMBER, not a reference to a channel, a group or a profile, so there is
+ * no entity behind it that can go missing while the session is dead. The
+ * staleness plan drops operations whose referenced entities have vanished; the
+ * number on a surviving operation is as valid as the operation is.
+ */
+describe('an acknowledgement survives a dead session', () => {
+  it('is still honoured after the ledger is restored', async () => {
+    const view = renderHook(() =>
+      useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
+    );
+    const operations = [
+      {
+        id: 'op-1',
+        timestamp: 1,
+        description: 'TNT to 5',
+        apiCall: {
+          type: 'updateChannel' as const,
+          channelId: 2,
+          data: { channel_number: 5 },
+          acknowledgedDuplicateNumber: 5,
+        },
+        beforeSnapshot: [],
+        afterSnapshot: [],
+      },
+    ];
+    act(() => {
+      view.result.current.restoreStagedLedger({
+        operations,
+        undoGroups: [['op-1']],
+        savedAt: 1_700_000_000_000,
+      });
+    });
+
+    let outcome: Awaited<ReturnType<typeof view.result.current.commit>> | undefined;
+    await act(async () => {
+      outcome = await view.result.current.commit();
+    });
+    expect(outcome!.success).toBe(true);
+    expect(bulkCommit).toHaveBeenCalled();
+  });
+
+  it('and a restored operation with no acknowledgement is still refused', async () => {
+    // The control: the arm above must pass BECAUSE of the acknowledgement, not
+    // because a restored session skips the preflight.
+    const view = renderHook(() =>
+      useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
+    );
+    const operations = [
+      {
+        id: 'op-1',
+        timestamp: 1,
+        description: 'TNT to 5',
+        apiCall: { type: 'updateChannel' as const, channelId: 2, data: { channel_number: 5 } },
+        beforeSnapshot: [],
+        afterSnapshot: [],
+      },
+    ];
+    act(() => {
+      view.result.current.restoreStagedLedger({
+        operations,
+        undoGroups: [['op-1']],
+        savedAt: 1_700_000_000_000,
+      });
+    });
+
+    await act(async () => {
+      await view.result.current.commit();
+    });
+    expect(bulkCommit).not.toHaveBeenCalled();
+  });
+});
