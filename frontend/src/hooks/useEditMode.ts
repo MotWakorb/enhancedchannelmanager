@@ -23,6 +23,13 @@ import {
   validateFinalNumberingPlan,
   type NumberingPlanIssue,
 } from '../utils/channelNumberPlan';
+import {
+  applyReconcileDecisions,
+  detectNumberingConflicts,
+  expectedServerNumber,
+  type ReconcileDecision,
+  type ReconcileResult,
+} from '../utils/channelNumberConcurrency';
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
@@ -504,10 +511,24 @@ export function useEditMode({
    * Reallocating from -1 would hand a second staged channel an id the restored
    * ledger is already using, and both would go up in the same commit.
    */
-  const restoreStagedLedger = useCallback(({ operations, undoGroups, savedAt }: RestoreStagedLedgerInput) => {
-    const baselineSnapshot = channels.map(createSnapshot);
-    let workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
-
+  /**
+   * Replay a list of staged operations over a channel list, rebuilding the
+   * working copy and each operation's before/after snapshots as it goes.
+   *
+   * Shared by {@link restoreStagedLedger} and
+   * {@link reconcileNumberingConflicts} (bead
+   * enhancedchannelmanager-ic884.4), which need exactly the same thing for the
+   * same reason: both hand the session a DIFFERENT operation list from the one
+   * the working copy was built from, and a working copy that is not replayed
+   * from the operations is a working copy that will disagree with them. Undo
+   * has to land on the value the server holds now, not on a value some earlier
+   * state happened to see.
+   */
+  const replayStagedOperations = useCallback((
+    base: Channel[],
+    operations: StagedOperation[],
+  ) => {
+    let workingCopy = base.map((ch) => ({ ...ch, streams: [...ch.streams] }));
     const rebuilt: StagedOperation[] = [];
     let lowestTempChannelId = 0;
     let lowestTempGroupId = -999;
@@ -556,6 +577,19 @@ export function useEditMode({
 
       rebuilt.push(operation);
     }
+
+    return { workingCopy, operations: rebuilt, lowestTempChannelId, lowestTempGroupId, groupIdByName };
+  }, [applyOperationToWorkingCopy]);
+
+  const restoreStagedLedger = useCallback(({ operations, undoGroups, savedAt }: RestoreStagedLedgerInput) => {
+    const baselineSnapshot = channels.map(createSnapshot);
+    const {
+      workingCopy,
+      operations: rebuilt,
+      lowestTempChannelId,
+      lowestTempGroupId,
+      groupIdByName,
+    } = replayStagedOperations(channels, operations);
 
     // Rebuild the undo stack from the persisted grouping, in the operations'
     // own order. A group naming only operations the staleness plan dropped
@@ -609,7 +643,71 @@ export function useEditMode({
       tempIdMap: new Map(),
       currentBatch: null,
     });
-  }, [channels, applyOperationToWorkingCopy]);
+  }, [channels, replayStagedOperations]);
+
+  /**
+   * Rewrite the staged plan to carry the operator's per-conflict decisions, and
+   * re-baseline the session on the lineup those decisions were made against
+   * (bead enhancedchannelmanager-ic884.4).
+   *
+   * Three things move together, and they have to:
+   *
+   * * `stagedOperations` gains the acknowledgements and loses the numbers the
+   *   operator surrendered — the operation queue stays the single source of
+   *   truth, so the staged groups, the side effects, the change summary and
+   *   the final-state preflight all follow with nothing else to update;
+   * * the working copy is REPLAYED over `serverChannels`, so what the operator
+   *   is looking at is the lineup Apply will actually produce rather than the
+   *   one this session started from — which is the "what you were shown is
+   *   what Apply produces" property, and it cannot be true if the screen still
+   *   shows numbers somebody else has already changed;
+   * * `baselineSnapshot` becomes `serverChannels`, because that is the state
+   *   the operator has now seen and answered for. Leaving the old baseline in
+   *   place would re-raise every conflict they just resolved; and a change
+   *   made AFTER this fetch still differs from the new baseline, so it is
+   *   still caught.
+   *
+   * An undo entry whose operations were all dropped contributes no step, for
+   * the same reason it does not in a restore: a step that undoes nothing is a
+   * step the operator can press to no effect.
+   */
+  const reconcileNumberingConflicts = useCallback((
+    decisions: ReconcileDecision[],
+    serverChannels: Channel[],
+  ): ReconcileResult => {
+    // Computed OUTSIDE the updater: a `setState` updater runs twice under
+    // StrictMode, so anything it writes to an enclosing binding is written
+    // twice, and the caller needs this value once.
+    const outcome = applyReconcileDecisions(state.stagedOperations, decisions);
+    setState((prev) => {
+      if (!prev.isActive) return prev;
+      const { workingCopy, operations: rebuilt } = replayStagedOperations(
+        serverChannels,
+        outcome.operations,
+      );
+      const survivingIds = new Set(rebuilt.map((operation) => operation.id));
+      const rebuiltById = new Map(rebuilt.map((operation) => [operation.id, operation]));
+      const pruneStack = (stack: UndoEntry[]): UndoEntry[] => stack
+        .map((entry) => ({
+          ...entry,
+          operations: entry.operations
+            .filter((operation) => survivingIds.has(operation.id))
+            .map((operation) => rebuiltById.get(operation.id) ?? operation),
+        }))
+        .filter((entry) => entry.operations.length > 0);
+      const baselineSnapshot = serverChannels.map(createSnapshot);
+      return {
+        ...prev,
+        baselineSnapshot,
+        workingCopy,
+        stagedOperations: rebuilt,
+        localUndoStack: pruneStack(prev.localUndoStack),
+        localRedoStack: pruneStack(prev.localRedoStack),
+        modifiedChannelIds: computeModifiedChannelIds(workingCopy, baselineSnapshot),
+      };
+    });
+    return outcome;
+  }, [state.stagedOperations, replayStagedOperations]);
 
   /** Refuse the offer, and destroy the ledger rather than leave it findable. */
   const dismissPendingRestore = useCallback(() => {
@@ -1229,53 +1327,29 @@ export function useEditMode({
   // Memoized summary - computed once per state change, not on every render call
   const summary = useMemo(() => getSummary(), [getSummary]);
 
-  // Check for conflicts with server
-  const checkForConflicts = useCallback(async (): Promise<boolean> => {
-    // Compare baseline snapshot with current server state
-    // For now, we just check if any modified channels have changed on server
-    try {
-      // Fetch fresh channels
-      const allChannels: Channel[] = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        const response = await api.getChannels({ page, pageSize: 500 });
-        allChannels.push(...response.results);
-        hasMore = response.next !== null;
-        page++;
-      }
-
-      // Check if any modified channels differ from baseline
-      for (const modifiedId of state.modifiedChannelIds) {
-        if (modifiedId < 0) continue; // Skip temp channels
-
-        const baselineSnapshot = state.baselineSnapshot.find((s) => s.id === modifiedId);
-        const currentChannel = allChannels.find((ch) => ch.id === modifiedId);
-
-        if (!currentChannel && baselineSnapshot) {
-          // Channel was deleted on server
-          return true;
-        }
-
-        if (currentChannel && baselineSnapshot) {
-          // Check if server state differs from baseline
-          if (
-            currentChannel.channel_number !== baselineSnapshot.channel_number ||
-            currentChannel.name !== baselineSnapshot.name ||
-            JSON.stringify(currentChannel.streams) !== JSON.stringify(baselineSnapshot.streams)
-          ) {
-            return true;
-          }
-        }
-      }
-
-      return false;
-    } catch {
-      logger.error('Failed to check for conflicts');
-      return false; // Assume no conflict on error
+  /**
+   * The channel list as the server holds it RIGHT NOW.
+   *
+   * Every page, because a partial read would look exactly like a lineup in
+   * which the missing channels no longer exist — and this list is what the
+   * concurrency check and the final-state preflight both answer against, so an
+   * incomplete one produces a confident wrong answer rather than an error.
+   * A failure propagates: the caller has to decide what an unanswerable
+   * question means, and this function must not decide it for them by returning
+   * something that looks like an answer (bead enhancedchannelmanager-ic884.4).
+   */
+  const fetchServerChannels = useCallback(async (): Promise<Channel[]> => {
+    const allChannels: Channel[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await api.getChannels({ page, pageSize: 500 });
+      allChannels.push(...response.results);
+      hasMore = response.next !== null;
+      page++;
     }
-  }, [state.baselineSnapshot, state.modifiedChannelIds]);
+    return allChannels;
+  }, []);
 
   /**
    * Translate staged operations into the bulk-commit wire format.
@@ -1309,6 +1383,28 @@ export function useEditMode({
   const buildBulkOperations = useCallback((
     consolidatedOps: StagedOperation[],
     stagedGroups: Map<number, ChannelGroup>,
+    /**
+     * The number this session believes each channel is on right now, from
+     * {@link EditModeState.baselineSnapshot} or from the operator's reconcile
+     * decision (bead enhancedchannelmanager-ic884.4). Travels beside `data`
+     * rather than in it, because `data` is the body PATCHed to Dispatcharr and
+     * this is ECM's own bookkeeping — the same arrangement, for the same
+     * reason, as `acknowledgedDuplicate`.
+     *
+     * It closes the window between the browser READING the lineup and the
+     * executor WRITING to it, which the browser's own check cannot reach. It
+     * does not close it completely and nothing claims it does: there is no
+     * conditional update in Dispatcharr 0.28.x to hang a real guarantee on, so
+     * a change landing between the executor's own read and its PATCH is still
+     * lost.
+     *
+     * DELIBERATELY NOT SENT FOR A RANGE ASSIGNMENT. One
+     * `bulkAssignChannelNumbers` places many channels through a single upstream
+     * call, so there is no per-channel write for a per-channel expectation to
+     * guard. A range is covered by the browser's check only, and that gap is a
+     * decision rather than an oversight.
+     */
+    baselineNumbers: Map<number, number | null> = new Map(),
   ) => {
     const bulkOperations: api.BulkOperation[] = [];
     const newGroupNames = new Set<string>();
@@ -1354,6 +1450,21 @@ export function useEditMode({
             type: 'updateChannel',
             channelId: apiCall.channelId,
             data: apiCall.data,
+            // See `baselineNumbers` above. Only where this operation actually
+            // writes a number, and only for a real channel id: a temp id names
+            // a channel this batch is creating, which nobody else can have
+            // moved.
+            ...(apiCall.data.channel_number !== undefined && apiCall.channelId >= 0
+              ? {
+                expectedNumber: {
+                  number: expectedServerNumber(
+                    operation,
+                    apiCall.channelId,
+                    baselineNumbers.get(apiCall.channelId) ?? null,
+                  ),
+                },
+              }
+              : {}),
             // ECM's own bookkeeping, beside `data` rather than in it because
             // `data` is the body PATCHed to Dispatcharr. It has to reach the
             // server or the server's copy of the final-state check answers a
@@ -1565,13 +1676,70 @@ export function useEditMode({
      * operations to fix, which the server cannot name because it never saw them
      * as operations the operator recognises.
      */
+    /**
+     * The lineup as the server holds it at this instant, read BEFORE anything
+     * is written (bead enhancedchannelmanager-ic884.4).
+     *
+     * Two questions depend on it and neither can be answered from the browser's
+     * own copy:
+     *
+     * 1. Has anyone moved a channel this session is about to renumber, since
+     *    this session's baseline was captured? Only the server knows.
+     * 2. Has a channel APPEARED on a number this session proposes? The
+     *    final-state preflight below is run against this list rather than
+     *    against the `channels` prop for exactly that reason — a channel
+     *    created by another operator after this session loaded is invisible in
+     *    the prop and would sail through the duplicate check.
+     *
+     * A READ THAT FAILED IS NOT A CLEAN BILL OF HEALTH. Nothing is applied,
+     * and the operator is told the check could not run. That is the opposite
+     * of what the backend's own preflight does for this caller — it reports and
+     * proceeds, because the browser holds the whole plan and has already
+     * validated it — and the difference is the point: the browser can
+     * re-validate its own plan without the server, and it cannot answer "did
+     * somebody else change this?" without it at all.
+     */
+    let serverChannels: Channel[];
+    try {
+      serverChannels = await fetchServerChannels();
+    } catch (err) {
+      logger.error('[EditMode] Could not read the channel list before Apply:', err);
+      result.success = false;
+      result.validationPassed = false;
+      result.validationIssues = [{
+        type: 'invalid_operation',
+        severity: 'error',
+        message:
+          'The channel list could not be read, so ECM could not check whether anyone else ' +
+          'changed these channel numbers. Nothing was applied. Try again once Dispatcharr ' +
+          'is reachable.',
+      }];
+      result.updatedChannels = channels;
+      onError?.(result.validationIssues[0].message + ' Your changes are still pending.');
+      return result;
+    }
+
+    const conflicts = detectNumberingConflicts({
+      baseline: state.baselineSnapshot,
+      server: serverChannels,
+      operations: state.stagedOperations,
+    });
+    if (conflicts.length > 0) {
+      logger.warn('[EditMode] Apply held for concurrent numbering changes:', conflicts);
+      result.success = false;
+      result.numberingConflicts = conflicts;
+      result.serverChannels = serverChannels;
+      result.updatedChannels = channels;
+      return result;
+    }
+
     const numberingIssues: NumberingPlanIssue[] = validateFinalNumberingPlan(
       // The LATEST server list plus the staged plan, not the working copy. The
       // working copy is already the answer, but it carries no record of which
       // number a channel started on, and "did this session put a channel
       // here?" is the whole difference between a duplicate the operator made
       // and one the lineup already had.
-      buildFinalNumberingPlan(channels, state.stagedOperations),
+      buildFinalNumberingPlan(serverChannels, state.stagedOperations),
     );
     if (numberingIssues.length > 0) {
       logger.error('[EditMode] Final-state numbering preflight refused Apply:', numberingIssues);
@@ -1699,7 +1867,11 @@ export function useEditMode({
     try {
       // Build bulk operations using helper
       const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
-        buildBulkOperations(consolidatedOps, stagedGroupsMap);
+        buildBulkOperations(
+          consolidatedOps,
+          stagedGroupsMap,
+          new Map(state.baselineSnapshot.map((entry) => [entry.id, entry.channel_number ?? null])),
+        );
 
       // Refuse to start rather than post a temp group id Dispatcharr will
       // reject one operation at a time (bead enhancedchannelmanager-udq1j).
@@ -1989,8 +2161,10 @@ export function useEditMode({
   }, [
     state.isActive,
     state.stagedOperations,
+    state.baselineSnapshot,
     stagedGroupsMap,
     channels,
+    fetchServerChannels,
     onChannelsChange,
     onCommitComplete,
     onError,
@@ -2179,6 +2353,6 @@ export function useEditMode({
     validate,
     commit,
     discard,
-    checkForConflicts,
+    reconcileNumberingConflicts,
   };
 }

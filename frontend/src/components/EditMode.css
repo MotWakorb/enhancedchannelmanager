@@ -538,3 +538,65 @@
 .edit-mode-restored-badge .material-icons {
   font-size: 14px;
 }
+
+/* ---------------------------------------------------------------------------
+ * Concurrent-numbering reconcile dialog (bead enhancedchannelmanager-ic884.4)
+ *
+ * One row per channel somebody else moved, each with its own keep-mine /
+ * take-theirs choice. The list scrolls rather than the dialog growing, so a
+ * session that collided on thirty channels still shows its actions.
+ * ------------------------------------------------------------------------- */
+
+.numbering-conflict-dialog {
+  max-width: 44rem;
+}
+
+.numbering-conflict-list {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.numbering-conflict-row {
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.numbering-conflict-row:last-child {
+  border-bottom: none;
+}
+
+.numbering-conflict-summary {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.numbering-conflict-detail,
+.numbering-conflict-origin {
+  color: var(--text-secondary);
+}
+
+.numbering-conflict-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  border: none;
+}
+
+.numbering-conflict-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.numbering-conflict-choices input:disabled + label,
+.numbering-conflict-choices input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}

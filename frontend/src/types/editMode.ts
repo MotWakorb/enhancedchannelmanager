@@ -8,8 +8,13 @@
 import type { Channel, ChannelSnapshot, ChannelGroup } from './index';
 import type { PersistedStagedLedger, RestoreStagedLedgerInput } from '../utils/stagedLedgerStorage';
 import type { AutomaticRename } from '../utils/channelNumberPlan';
+import type {
+  NumberingConflict,
+  ReconcileDecision,
+  ReconcileResult,
+} from '../utils/channelNumberConcurrency';
 
-export type { AutomaticRename };
+export type { AutomaticRename, NumberingConflict, ReconcileDecision, ReconcileResult };
 
 /**
  * The operator's recorded consent to ONE specific channel-number collision
@@ -36,6 +41,30 @@ export interface DuplicateNumberAcknowledgement {
    * channel never collides with itself.
    */
   occupantChannelIds: number[];
+}
+
+/**
+ * The operator's recorded answer to "somebody else changed this channel's
+ * number since you started — write over it anyway?" (bead
+ * `enhancedchannelmanager-ic884.4`).
+ *
+ * The same shape of consent as {@link DuplicateNumberAcknowledgement} and for
+ * the same reason: it names the SPECIFIC change it agreed to overwrite, so it
+ * cannot outlive it. If the server value moves again between the decision and
+ * Apply, the acknowledgement stops matching and the operator is asked about
+ * the change that is really there rather than silently overwriting it on the
+ * strength of an answer to a different question.
+ *
+ * Rides on the staged operation, never in a registry beside it, so undoing the
+ * operation withdraws the decision, the sessionStorage ledger carries it with
+ * no extra plumbing, and deleting an unrelated earlier action cannot empty it.
+ */
+export interface ConcurrentNumberAcknowledgement {
+  channelId: number;
+  /** The number the edit session was staged against. */
+  baselineNumber: number | null;
+  /** The number the server held when the operator was shown the conflict. */
+  serverNumber: number | null;
 }
 
 /**
@@ -72,11 +101,17 @@ export type ApiCallSpec =
    * so it cannot outlive the collision it consented to. See
    * {@link DuplicateNumberAcknowledgement}.
    */
-  | { type: 'updateChannel'; channelId: number; data: Partial<Channel>; acknowledgedDuplicate?: DuplicateNumberAcknowledgement }
+  | { type: 'updateChannel'; channelId: number; data: Partial<Channel>; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; acknowledgedConcurrentChanges?: ConcurrentNumberAcknowledgement[] }
   | { type: 'addStreamToChannel'; channelId: number; streamId: number }
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
-  | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
+  /**
+   * `acknowledgedConcurrentChanges` is a LIST because one range assignment
+   * places many channels, and consent is per channel — agreeing to overwrite
+   * somebody else's change to channel 12 says nothing about channel 13. See
+   * {@link ConcurrentNumberAcknowledgement}.
+   */
+  | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number; acknowledgedConcurrentChanges?: ConcurrentNumberAcknowledgement[] }
   | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
@@ -365,6 +400,20 @@ export interface CommitResult {
   validationPassed?: boolean;
   // Updated channels after commit
   updatedChannels: Channel[];
+  /**
+   * Channels whose number somebody else changed after this session's baseline
+   * was captured (bead `enhancedchannelmanager-ic884.4`). Non-empty means
+   * NOTHING was applied: the operator has to answer keep-mine / take-theirs per
+   * channel, through {@link UseEditModeReturn.reconcileNumberingConflicts},
+   * before Apply will write anything.
+   */
+  numberingConflicts?: NumberingConflict[];
+  /**
+   * The server lineup the conflicts above were read from. Carried so the
+   * operator's decisions are applied against the very list they describe,
+   * rather than against a second read that may already have moved again.
+   */
+  serverChannels?: Channel[];
 }
 
 /**
@@ -463,8 +512,25 @@ export interface UseEditModeReturn {
   commit: (onProgress?: (progress: CommitProgress) => void, options?: CommitOptions) => Promise<CommitResult>;
   discard: () => void;
 
-  // Check for conflicts with server
-  checkForConflicts: () => Promise<boolean>;
+  /**
+   * Record the operator's keep-mine / take-theirs answer to every concurrent
+   * numbering change {@link commit} reported, and re-baseline the session on
+   * the lineup those answers were given against (bead
+   * `enhancedchannelmanager-ic884.4`).
+   *
+   * `serverChannels` is the list {@link CommitResult.serverChannels} carried
+   * back with the conflicts — the same read the operator's decisions describe,
+   * so nothing is re-fetched in between and no decision is applied against a
+   * lineup it was not made about.
+   *
+   * Returns what changed, including any operation that had to be dropped
+   * whole, so the caller can tell the operator rather than leaving them to
+   * notice.
+   */
+  reconcileNumberingConflicts: (
+    decisions: ReconcileDecision[],
+    serverChannels: Channel[],
+  ) => ReconcileResult;
 }
 
 /**

@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from datetime import date
-from typing import Optional, Literal, Union
+from typing import Any, Optional, Literal, Sequence, Union
 from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
@@ -33,6 +33,12 @@ from channel_number import (
     format_channel_number,
     parse_channel_number_text,
     validate_channel_number_in_payload,
+)
+from channel_number_apply import (
+    NumberingCompensator,
+    NumberingWrite,
+    order_numbering_writes,
+    same_channel_number,
 )
 from channel_number_plan import evaluate_final_numbering
 from channel_group_reparent import (
@@ -459,6 +465,35 @@ class AcknowledgedDuplicate(BaseModel):
     occupantChannelIds: list[int]
 
 
+class ExpectedChannelNumber(BaseModel):
+    """The channel number the caller believes this channel is on RIGHT NOW.
+
+    Bead ``enhancedchannelmanager-ic884.4``. ECM's own bookkeeping, never
+    forwarded to Dispatcharr, and beside ``data`` rather than in it for the same
+    reason :class:`AcknowledgedDuplicate` is: ``data`` is the PATCH body.
+
+    A WRAPPER RATHER THAN A BARE ``Optional[float]``, because ``null`` is a
+    legitimate expectation — "I believe this channel has no number" — and a bare
+    optional cannot tell that apart from "I am not making a claim". The object's
+    presence is the claim; its ``number`` is the value.
+
+    IT IS A CHECK AND NOT A GUARANTEE, and the difference is measured rather
+    than assumed. The live Dispatcharr 0.28.x schema
+    (``GET /api/schema/?format=json``, HTTP 200, ~717KB, fetched 2026-08-15)
+    contains ZERO occurrences of ``If-Match``, ``If-None-Match``,
+    ``If-Unmodified-Since``, ``ETag`` or ``412``, and neither ``Channel`` nor
+    ``PatchedChannel`` carries a version or modified-at field. There is no
+    conditional update to send, so the executor compares against the lineup IT
+    read at the start of the run and a change landing between that read and the
+    PATCH is still lost. What this closes is the much wider window between a
+    browser reading the lineup and this executor writing to it, and it is the
+    only half of the check that exists at all for a caller that never touches
+    the UI.
+    """
+
+    number: Optional[ChannelNumber] = None
+
+
 # Bulk commit operation types
 class BulkUpdateChannelOp(BaseModel):
     type: Literal["updateChannel"] = "updateChannel"
@@ -466,6 +501,10 @@ class BulkUpdateChannelOp(BaseModel):
     data: dict
     #: See :class:`AcknowledgedDuplicate`.
     acknowledgedDuplicate: Optional[AcknowledgedDuplicate] = None
+    #: See :class:`ExpectedChannelNumber`. Only meaningful when ``data``
+    #: carries ``channel_number``; ignored otherwise, because an operation that
+    #: does not write the number cannot overwrite anybody's change to it.
+    expectedNumber: Optional[ExpectedChannelNumber] = None
 
     @field_validator("data")
     @classmethod
@@ -1766,6 +1805,107 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     return consolidated
 
 
+def _same_channel_number_or_both_unset(a, b) -> bool:
+    """Is ``a`` the same recorded VALUE as ``b``, unassigned included?
+
+    Deliberately not :func:`same_channel_number`, which calls ``None``
+    different from everything including itself — correct when asking "do these
+    two channels collide?", wrong when asking "is this the value I recorded?".
+    Mirrors ``numbersAgree`` in ``frontend/src/utils/channelNumberConcurrency.ts``.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    return same_channel_number(a, b)
+
+
+def _numbering_execution_order(
+    operations: Sequence[BulkOperation],
+    existing_channels: dict,
+) -> list[tuple[int, BulkOperation]]:
+    """Pair every operation with its SUBMITTED index, resequencing renumbers.
+
+    Bead ``enhancedchannelmanager-ic884.3``. A run of channel-number edits is
+    sent in whatever order the operator happened to make them, so a plan that
+    is perfectly legal as a final state can move a channel onto a number that
+    another channel in the same run has not left yet. ``order_numbering_writes``
+    picks an order where that does not happen, and names the cycles — the
+    two-channel swap being the smallest — where no such order exists.
+
+    THE RESEQUENCING IS DELIBERATELY NARROW, because reordering operations is
+    the kind of change that breaks things nobody was looking at:
+
+    * only a maximal run of CONSECUTIVE ``updateChannel`` operations that carry
+      ``channel_number`` is considered, so no numbering write can be moved
+      across a create, a delete, a stream edit or a group operation;
+    * every channel in the run must be distinct and its id already real, so the
+      final state is identical whatever order the run is written in — an
+      absolute number assigned to distinct channels does not depend on order —
+      and no operation can overtake the ``createChannel`` that gives it its id;
+    * the SUBMITTED index rides along, so error ids, journal rows and
+      validation issues keep naming the operation the caller sent.
+
+    A caller who sends nothing but ordinary edits gets its list back with the
+    indexes it sent, which is what keeps the existing behaviour of every other
+    operation type untouched.
+    """
+    plan: list[tuple[int, BulkOperation]] = []
+    run: list[tuple[int, BulkOperation]] = []
+
+    def flush_run() -> None:
+        if not run:
+            return
+        if len(run) < 2:
+            plan.extend(run)
+            run.clear()
+            return
+        by_channel = {op.channelId: index for index, op in run}
+        writes = [
+            NumberingWrite(
+                channel_id=op.channelId,
+                name=(existing_channels.get(op.channelId) or {}).get("name")
+                or f"Channel {op.channelId}",
+                before=(existing_channels.get(op.channelId) or {}).get("channel_number"),
+                after=op.data.get("channel_number"),
+            )
+            for _index, op in run
+        ]
+        order = order_numbering_writes(writes)
+        if order.cycles:
+            logger.info(
+                "[CHANNELS-BULK] Numbering run contains %s cycle(s) no order can "
+                "avoid; each shares a channel number for one write: %s",
+                len(order.cycles), order.cycles,
+            )
+        op_by_index = {index: op for index, op in run}
+        plan.extend(
+            (by_channel[write.channel_id], op_by_index[by_channel[write.channel_id]])
+            for write in order.writes
+        )
+        run.clear()
+
+    seen_in_run: set[int] = set()
+    for index, op in enumerate(operations):
+        is_numbering_edit = (
+            op.type == "updateChannel"
+            and isinstance(op.data, dict)
+            and "channel_number" in op.data
+            # A negative id is a staging placeholder resolved from this same
+            # batch's creates; it has no lineup entry to order against and its
+            # create is outside the run.
+            and op.channelId >= 0
+            and op.channelId not in seen_in_run
+        )
+        if is_numbering_edit:
+            run.append((index, op))
+            seen_in_run.add(op.channelId)
+            continue
+        flush_run()
+        seen_in_run.clear()
+        plan.append((index, op))
+    flush_run()
+    return plan
+
+
 # -----------------------------------------------------------------------------
 # Bulk-commit background jobs (bd-ggxks)
 # -----------------------------------------------------------------------------
@@ -2043,6 +2183,15 @@ async def _run_bulk_commit(
         # must not be retried, and the container log carries the lost rows
         # (bead enhancedchannelmanager-kz089, fix round 2).
         "journalRowsUnwritten": 0,
+        # Channels this run left on a number they should not be on, with the
+        # exact step that puts each one right (bead
+        # enhancedchannelmanager-ic884.3). Always present, so a caller checks
+        # its length rather than probing for a key. Non-empty means a numbering
+        # plan stopped part way AND the compensating write that would have put
+        # the channel back failed too — the one case where neither the previous
+        # state nor the proposed one is what the operator is left with, and the
+        # only honest answer is to say precisely what is where.
+        "numberingRecovery": [],
     }
 
     # Counters the summary row reports. Kept as locals rather than derived from
@@ -2068,6 +2217,13 @@ async def _run_bulk_commit(
     # Constructed before the try so the outer handler can still report what the
     # run managed to do (bead enhancedchannelmanager-e9e5o, fix round 4).
     ledger = OperationLedger(len(request.operations))
+
+    # What this run has actually done to channel numbers, so a plan that stops
+    # part way can be written back (bead enhancedchannelmanager-ic884.3). It is
+    # a record of writes that landed, not a transaction: there is no conditional
+    # update in Dispatcharr 0.28.x to build one on. See
+    # ``backend/channel_number_apply.py``.
+    compensator = NumberingCompensator()
 
     class MalformedCreateResponseError(Exception):
         """Dispatcharr accepted a create but answered without a usable id.
@@ -2108,6 +2264,27 @@ async def _run_bulk_commit(
         ``createChannel`` produced. A negative id that survives that lookup
         names a channel this batch never created, and sending it upstream as a
         path segment is how a caller-supplied id reaches Dispatcharr unchecked.
+        """
+
+    class ConcurrentChannelNumberChangeError(Exception):
+        """The channel is not on the number the caller said it was on.
+
+        Bead ``enhancedchannelmanager-ic884.4``. Raised INSTEAD of the PATCH, so
+        the operation fails without writing — which is what makes the staged
+        change unable to overwrite work the caller has not seen. The rest of the
+        run's numbering is then put back by the compensation pass, because a
+        numbering plan that stopped part way is exactly what this is.
+        """
+
+    class UnverifiableChannelNumberError(Exception):
+        """The caller asked for a check the executor could not run.
+
+        The lineup read failed, so there is nothing to compare the caller's
+        expectation against. Refusing is the only honest answer: a caller that
+        sent an expectation asked NOT to overwrite blindly, and proceeding
+        anyway would do the one thing they asked for protection from. This is
+        not the "a failed lookup never accuses" rule — nothing is being accused
+        of not existing; the check itself is being reported as unavailable.
         """
 
     def reject_unresolved_channel(channel_id: int, label: str) -> int:
@@ -2818,8 +2995,52 @@ async def _run_bulk_commit(
             """
             return existing_channels.get(cid, {}).get("name") or f"Channel {cid}"
 
-        for idx, op in enumerate(request.operations):
+        # The lineup as it stood when THIS run started, frozen before Phase 2
+        # begins to move `existing_channels` around (bead
+        # enhancedchannelmanager-ic884.4).
+        #
+        # This, and not the running copy, is what an `expectedNumber` is checked
+        # against. The question the caller is asking is "has anybody else moved
+        # this channel since I looked?", and an earlier operation in this same
+        # request moving it is not somebody else — comparing against the running
+        # copy would report the caller's own plan back to them as a conflict.
+        numbers_at_run_start: dict[int, Any] = {
+            channel_id: channel.get("channel_number")
+            for channel_id, channel in existing_channels.items()
+        }
+
+        def check_expected_number(op, channel_id: int) -> None:
+            """Refuse to write a number over a change the caller has not seen."""
+            expected = getattr(op, "expectedNumber", None)
+            if expected is None or "channel_number" not in (op.data or {}):
+                return
+            if not channels_resolved:
+                raise UnverifiableChannelNumberError(
+                    f"Channel {channel_id} was not renumbered: the channel lineup "
+                    "could not be read, so ECM could not check whether anybody else "
+                    "changed its number first. Nothing about this channel was changed."
+                )
+            current = numbers_at_run_start.get(channel_id)
+            if _same_channel_number_or_both_unset(current, expected.number):
+                return
+            raise ConcurrentChannelNumberChangeError(
+                f"Channel {channel_id} was not renumbered: it is on channel number "
+                f"{format_channel_number(current)}, and this request expected "
+                f"{format_channel_number(expected.number)}. Somebody else changed it. "
+                "Re-read the channel and decide before sending this again."
+            )
+
+        # Renumbers run in an order where a channel is moved onto a number only
+        # once its previous holder has left it; everything else keeps the order
+        # it was sent in, and every operation keeps the INDEX it was sent under
+        # (bead enhancedchannelmanager-ic884.3).
+        for idx, op in _numbering_execution_order(request.operations, existing_channels):
             op_id = f"op-{idx}-{op.type}"
+            # Whether THIS operation's channel-number write has already landed.
+            # Read by the failure handler below, which must not report a
+            # numbering change as un-made when the PATCH went through and only
+            # ECM's bookkeeping after it did not.
+            numbering_landed = False
             # Exactly one outcome per operation, recorded by this loop rather
             # than by the branches. See bulk_commit_accounting.OperationLedger:
             # branches used to increment `operationsApplied` themselves, at
@@ -2836,11 +3057,27 @@ async def _run_bulk_commit(
                             op.data["channel_group_id"],
                             f"updateChannel on channel {channel_id}",
                         )
+                    # Before the PATCH, and before anything else that could
+                    # make this look like a partial write: a refused expectation
+                    # must leave the channel exactly as it was.
+                    check_expected_number(op, channel_id)
                     before_channel = existing_channels.get(channel_id, {})
                     changes, before_value, after_value = describe_channel_update(
                         before_channel, op.data
                     )
                     await client.update_channel(channel_id, op.data)
+                    # The channel number moved, and it moved HERE. Recorded
+                    # before anything else that could raise, for the same
+                    # reason the journal row is: a write that landed and was
+                    # not recorded is a write nothing can put back.
+                    if "channel_number" in op.data:
+                        compensator.record_landed(
+                            channel_id=channel_id,
+                            name=channel_name_of(channel_id),
+                            before=before_channel.get("channel_number"),
+                            after=op.data["channel_number"],
+                        )
+                        numbering_landed = True
                     ledger.record_persisted(journal_row=journal_row(
                         action_type="update",
                         entity_id=channel_id,
@@ -2967,6 +3204,17 @@ async def _run_bulk_commit(
                             after_value={"channel_number": new_number, "name": assigned_name},
                         ))
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
+                    # One upstream call, N channel numbers changed. Each is a
+                    # separate fact to put back, exactly as each is a separate
+                    # journal row.
+                    for assigned_id, new_number in renumbered.items():
+                        compensator.record_landed(
+                            channel_id=assigned_id,
+                            name=channel_name_of(assigned_id),
+                            before=existing_channels.get(assigned_id, {}).get("channel_number"),
+                            after=new_number,
+                        )
+                    numbering_landed = True
                     ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
                         "every channel in the range already carried its target number"
                     ))
@@ -3344,6 +3592,32 @@ async def _run_bulk_commit(
                 if hasattr(op, 'name'):
                     error_details["entityName"] = op.name
 
+                # A channel number this run meant to change and did not. Paired
+                # with the ones that DID change, this is what tells the
+                # compensation pass below that the plan stopped part way rather
+                # than finishing or never starting (bead
+                # enhancedchannelmanager-ic884.3).
+                if not numbering_landed:
+                    if op.type == "updateChannel" and "channel_number" in (op.data or {}):
+                        failed_channel_id = resolve_id(op.channelId)
+                        compensator.record_failed(
+                            channel_id=failed_channel_id,
+                            name=channel_name_of(failed_channel_id),
+                            intended=op.data["channel_number"],
+                        )
+                    elif op.type == "bulkAssignChannelNumbers":
+                        failed_start = (
+                            op.startingNumber if op.startingNumber is not None else 1
+                        )
+                        for offset, failed_id in enumerate(
+                            resolve_id(cid) for cid in op.channelIds
+                        ):
+                            compensator.record_failed(
+                                channel_id=failed_id,
+                                name=channel_name_of(failed_id),
+                                intended=failed_start + offset,
+                            )
+
                 # Log with detailed context
                 channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
@@ -3385,6 +3659,83 @@ async def _run_bulk_commit(
 
         logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", ledger.applied, ledger.failed)
         logger.debug("[CHANNELS-BULK] ID mappings: %s channels, %s groups", len(result['tempIdMap']), len(result['groupIdMap']))
+
+        # Phase 2b: the numbering plan stopped part way, so write back what it
+        # managed to change (bead enhancedchannelmanager-ic884.3).
+        #
+        # WHAT THIS IS AND IS NOT. It is a compensating write per landed change,
+        # newest first, made with the same unguarded PATCH as the write it
+        # undoes. There is no conditional update in Dispatcharr 0.28.x to build
+        # anything stronger on (measured — see channel_number_apply.py), so a
+        # change another client makes between the failure and this pass is
+        # neither seen nor preserved. What it buys is that the operator is left
+        # with the numbering they had rather than half of the numbering they
+        # asked for, which is a state they can act on.
+        #
+        # A compensating write that fails ends up in `numberingRecovery`, which
+        # names the channel, where it is, where it should be, and the single
+        # step that closes the gap. That is the substitute for a guarantee, and
+        # it is deliberately prescriptive: an unexplained middle is the one
+        # outcome this whole pass exists to prevent.
+        if compensator.half_applied:
+            steps = compensator.compensation_steps()
+            logger.warning(
+                "[CHANNELS-BULK] Numbering stopped part way (batch=%s): %s landed, "
+                "%s did not; writing %s channel(s) back",
+                batch_id, len(compensator.landed), len(compensator.failed), len(steps),
+            )
+            unrepaired: list[tuple[NumberingWrite, Exception]] = []
+            for step in steps:
+                try:
+                    await client.update_channel(
+                        step.channel_id, {"channel_number": step.after}
+                    )
+                except Exception as comp_err:  # noqa: BLE001 — every failure is reportable
+                    logger.exception(
+                        "[CHANNELS-BULK] Could not put channel %s back on %s: %s",
+                        step.channel_id, format_channel_number(step.after), comp_err,
+                    )
+                    unrepaired.append((step, comp_err))
+                    continue
+                # The write LANDED, so its row is queued now, exactly as every
+                # other landed write's is. `record_write` and not
+                # `record_persisted`: this is not any operation's outcome — the
+                # operation it belongs to has already been counted as failed,
+                # and counting it again would break the ledger's one-outcome
+                # rule.
+                ledger.record_write(journal_row=journal_row(
+                    action_type="reorder",
+                    entity_id=step.channel_id,
+                    entity_name=step.name,
+                    description=(
+                        "Put channel number back to "
+                        f"{format_channel_number(step.after)} after this batch's "
+                        "numbering changes stopped part way"
+                    ),
+                    before_value={"channel_number": step.before, "name": step.name},
+                    after_value={"channel_number": step.after, "name": step.name},
+                ))
+                if step.channel_id in existing_channels:
+                    existing_channels[step.channel_id] = {
+                        **existing_channels[step.channel_id],
+                        "channel_number": step.after,
+                    }
+            if unrepaired:
+                result["numberingRecovery"] = compensator.recovery_steps(unrepaired)
+                result["errors"].append({
+                    "operationId": "bulk-commit-numbering-recovery",
+                    "error": (
+                        f"{len(unrepaired)} channel(s) could not be put back on the "
+                        "channel number they had before this batch. Each one is named "
+                        "in numberingRecovery with the exact step that fixes it. Do "
+                        "not retry the batch until they are fixed."
+                    ),
+                })
+                # Not an operation failure: every operation already resolved.
+                # This is the repair after them, and it has to be counted
+                # somewhere or the envelope's own audit rejects the extra error
+                # entry.
+                ledger.record_setup_failure(aborted_run=False)
 
         # `finish()` writes the journal and THEN the accounting. Both used to be
         # inline here, at the very end of the happy path, which is precisely why

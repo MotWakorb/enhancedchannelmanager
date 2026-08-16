@@ -86,10 +86,20 @@ const STUBS: ReadonlyArray<readonly [RegExp, unknown]> = [
 /** Every bulk-commit POST the page made, in order, with its body. */
 interface CommitRecorder {
   posts: unknown[];
+  /**
+   * What `GET /api/channels` answers with, RIGHT NOW.
+   *
+   * Mutable on purpose (bead `enhancedchannelmanager-ic884.4`): arm 4 changes
+   * it after Edit Mode has captured its baseline, which is the only way to
+   * reproduce another operator moving a channel under a live session — and the
+   * only way to prove that Apply reads the server rather than trusting the list
+   * it loaded at the start.
+   */
+  lineup: Record<string, unknown>[];
 }
 
 async function stubBackend(page: Page): Promise<CommitRecorder> {
-  const recorder: CommitRecorder = { posts: [] };
+  const recorder: CommitRecorder = { posts: [], lineup: channels.map((channel) => ({ ...channel })) };
   await page.route(/\/api\//, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -109,6 +119,12 @@ async function stubBackend(page: Page): Promise<CommitRecorder> {
         tempIdMap: {},
         groupIdMap: {},
       });
+    }
+
+    // Served from the mutable copy rather than from STUBS, so a test can move a
+    // channel mid-session.
+    if (/\/api\/channels(?:\/|\?|$)/.test(path) && !/\/api\/channels\//.test(path)) {
+      return json(paginated(recorder.lineup));
     }
 
     for (const [pattern, body] of STUBS) if (pattern.test(path)) return json(body);
@@ -244,4 +260,67 @@ test('a clean plan still reaches the server from the same page', async ({ page }
   await expect
     .poll(() => recorder.posts.length, { timeout: 20_000, message: 'a clean plan must reach the server' })
     .toBeGreaterThan(0);
+});
+
+// ===== ARM 4: Apply reads the server first, and will not write over a change
+//              the operator has not been shown (bead …-ic884.4)
+
+test('a number changed under the session holds Apply until the operator chooses', async ({ page }) => {
+  // WHY THIS HAS TO BE A BROWSER TOO. The unit suites prove the detector
+  // (`src/utils/channelNumberConcurrency.test.ts`) and the hook's refusal with
+  // `api.bulkCommit` spied (`src/hooks/useEditMode.concurrentNumbering.test.ts`).
+  // Neither crosses the seam: a real Apply, a real dialog rendered over the real
+  // workspace, a real per-channel choice, and a real second Apply that carries
+  // the operator's answer onto the wire. The server-side lineup MOVES between
+  // Edit Mode being entered and Apply being pressed, which is the whole
+  // scenario and cannot be staged from inside the page.
+  test.setTimeout(3 * 60 * 1000);
+  const recorder = await openChannelManagerInEditMode(page);
+
+  await editNumber(page, 'Alpha', '150');
+  await expect(page.locator('.edit-mode-changes')).toHaveText('1 change');
+
+  // Somebody else moves Alpha while this session is staging.
+  recorder.lineup = recorder.lineup.map((channel) =>
+    channel.id === 1 ? { ...channel, channel_number: 199 } : channel);
+
+  await page.locator('.edit-mode-done-btn').click();
+  await page.getByRole('button', { name: /apply all/i }).click();
+
+  const conflict = page.locator('.numbering-conflict-dialog');
+  await expect(conflict, 'the operator must be shown the change before it is overwritten')
+    .toBeVisible({ timeout: 20_000 });
+  await expect(conflict, 'named, with the number it started on').toContainText('Alpha');
+  await expect(conflict, 'the number somebody else put it on').toContainText('199');
+  await expect(conflict, 'and the number this session would write').toContainText('150');
+
+  expect(
+    recorder.posts.length,
+    'nothing may be written while the question is unanswered',
+  ).toBe(0);
+
+  // No option is pre-selected: a default "keep mine" is a silent overwrite
+  // wearing a checkbox.
+  const apply = conflict.getByRole('button', { name: /apply with these choices/i });
+  await expect(apply).toBeDisabled();
+
+  await conflict.getByRole('radio', { name: /use my number/i }).check();
+  await expect(apply).toBeEnabled();
+  await apply.click();
+
+  await expect
+    .poll(() => recorder.posts.length, {
+      timeout: 20_000,
+      message: 'answering the question must let the Apply through',
+    })
+    .toBeGreaterThan(0);
+
+  // The choice reached the wire as an expectation of the value the operator
+  // agreed to overwrite — not of the stale one this session started with.
+  const sent = recorder.posts.flatMap((post) =>
+    ((post as { operations?: Record<string, unknown>[] }).operations ?? []));
+  const alpha = sent.find((operation) => operation.channelId === 1);
+  expect(alpha, 'the reconciled edit must be the one that was sent').toBeTruthy();
+  expect((alpha as { data: Record<string, unknown> }).data.channel_number).toBe(150);
+  expect((alpha as { expectedNumber?: { number?: number } }).expectedNumber?.number).toBe(199);
 });

@@ -31,6 +31,8 @@ import { setDateFormatLocale } from './utils/formatting';
 import { OPEN_TASK_EDITOR_EVENT, OPEN_TASK_EDITOR_STORAGE_KEY } from './utils/openTaskEditor';
 import { computeAutoRename } from './utils/channelRename';
 import { planChannelNumberShift, type PlannedChannelShift } from './utils/channelNumberShift';
+import { NumberingConflictDialog } from './components/NumberingConflictDialog';
+import type { NumberingConflict, ReconcileDecision } from './utils/channelNumberConcurrency';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -328,6 +330,25 @@ function App() {
   // Set when a commit does not fully apply, so the exit dialog can say so
   // instead of closing silently (bead enhancedchannelmanager-udq1j).
   const [commitFailure, setCommitFailure] = useState<CommitFailure | null>(null);
+  /**
+   * Channel numbers somebody else changed while this session was staging, plus
+   * the server read they were found in (bead
+   * enhancedchannelmanager-ic884.4). Set when Apply refuses to write over them;
+   * cleared the moment the operator has answered for every one.
+   */
+  const [numberingConflicts, setNumberingConflicts] =
+    useState<{ conflicts: NumberingConflict[]; serverChannels: Channel[] } | null>(null);
+  /**
+   * Set when the operator has answered every conflict, so Apply can run again
+   * on the NEXT render rather than inside the handler that reconciled.
+   *
+   * Not a nicety. `commit` closes over `stagedOperations`, so calling it from
+   * the same tick as the reconcile would run the OLD plan — find the same
+   * conflict, reopen the dialog, and lose the operator's answers to the
+   * dialog's own "new conflicts are new questions" reset. The browser guard
+   * caught exactly that loop.
+   */
+  const [applyAfterReconcile, setApplyAfterReconcile] = useState(false);
 
   // Tab navigation state (hash-based routing)
   const {
@@ -467,6 +488,7 @@ function App() {
     summary,
     commit,
     discard,
+    reconcileNumberingConflicts,
     localUndo,
     localRedo,
     startBatch,
@@ -663,6 +685,22 @@ function App() {
     }, { continueOnError: true });
     setCommitProgress(null);
 
+    // NOTHING WAS APPLIED, and this is a question rather than a failure: a
+    // channel number this session was about to write has moved on the server
+    // since the session's baseline was captured (bead
+    // enhancedchannelmanager-ic884.4). The operator answers keep-mine /
+    // take-theirs per channel and Apply runs again with those answers folded
+    // into the staged plan; the changes that do not overlap are untouched
+    // throughout. Handled BEFORE the failure branch so a conflict is never
+    // reported as "some changes were not applied", which would be false.
+    if (result.numberingConflicts && result.numberingConflicts.length > 0) {
+      setNumberingConflicts({
+        conflicts: result.numberingConflicts,
+        serverChannels: result.serverChannels ?? [],
+      });
+      return;
+    }
+
     // A commit the server reported as partially applied used to close the
     // dialog exactly like a clean one, leaving the operator to discover the
     // missing channel themselves (bead enhancedchannelmanager-udq1j). Hold the
@@ -701,6 +739,49 @@ function App() {
     completeDeferredExit();
   }, [commit, clearHistory, completeDeferredExit]);
 
+  /**
+   * Fold the operator's per-channel answers into the staged plan, then Apply
+   * again (bead enhancedchannelmanager-ic884.4).
+   *
+   * The re-Apply is deliberate rather than a shortcut past the check: the
+   * reconcile re-baselines the session on the lineup the answers were given
+   * against, so the second pass runs the SAME check over the SAME staged queue
+   * and finds nothing left to ask about — unless something moved again in the
+   * meantime, in which case asking again is exactly right.
+   *
+   * An operation dropped whole by a take-theirs answer is named to the
+   * operator rather than left for them to notice, because a range renumbering
+   * disappearing from the change count with no explanation is indistinguishable
+   * from a bug.
+   */
+  const handleReconcileNumbering = useCallback((decisions: ReconcileDecision[]) => {
+    const pending = numberingConflicts;
+    if (!pending) return;
+    const outcome = reconcileNumberingConflicts(decisions, pending.serverChannels);
+    setNumberingConflicts(null);
+    if (outcome.removed.length > 0) {
+      // `setError` is the same channel Apply's own refusals use — `App`
+      // renders `NotificationProvider`, so it is outside its own provider and
+      // cannot raise a toast. A dropped renumbering has to be SAID: a change
+      // disappearing from the count with no explanation is indistinguishable
+      // from a bug.
+      setError(
+        `${outcome.removed.length} staged change${outcome.removed.length !== 1 ? 's were' : ' was'} ` +
+        `dropped so the server's channel numbers could be kept: ` +
+        `${outcome.removed.map((entry) => entry.description).join('; ')}`,
+      );
+    }
+    setApplyAfterReconcile(true);
+  }, [numberingConflicts, reconcileNumberingConflicts]);
+
+  // The re-Apply itself, one render later, when `commit` has been rebuilt from
+  // the reconciled operation queue. See `applyAfterReconcile`.
+  useEffect(() => {
+    if (!applyAfterReconcile) return;
+    setApplyAfterReconcile(false);
+    void handleApplyChanges();
+  }, [applyAfterReconcile]);
+
   const handleAcknowledgeCommitFailure = useCallback(() => {
     setCommitFailure(null);
     setShowExitDialog(false);
@@ -731,6 +812,21 @@ function App() {
     pendingSignOutRef.current = null;
     focusHeadingOnRouteChangeRef.current = false;
   }, [replacePendingRouteChange]);
+
+  /**
+   * Abandon this Apply and go back to editing, with every staged change intact.
+   *
+   * Routed through {@link handleKeepEditing} rather than just closing the
+   * dialog: the operator asked to Apply, which may have deferred a navigation
+   * or a sign-out behind it, and answering "not now" to the conflict question
+   * abandons that intent exactly as pressing Keep Editing does. Closing only
+   * the dialogs would leave the deferred intent armed with nothing left to
+   * complete it.
+   */
+  const handleKeepNumberingConflicts = useCallback(() => {
+    setNumberingConflicts(null);
+    handleKeepEditing();
+  }, [handleKeepEditing]);
 
   // Handle tab change - check for edit mode with pending changes
   const handleRouteChange = useCallback((
@@ -3026,6 +3122,19 @@ function App() {
         commitProgress={commitProgress}
         commitFailure={commitFailure}
         onAcknowledgeFailure={handleAcknowledgeCommitFailure}
+      />
+
+      {/* AFTER the exit dialog, deliberately: both render an
+          `.edit-mode-dialog-overlay`, so the later sibling is the one that
+          receives the operator's clicks. Nothing has been applied at this
+          point — this is a question, not a result — so it has to sit on top of
+          the Apply dialog that asked it (bead enhancedchannelmanager-ic884.4). */}
+      <NumberingConflictDialog
+        isOpen={numberingConflicts !== null}
+        conflicts={numberingConflicts?.conflicts ?? []}
+        isCommitting={isCommitting}
+        onKeepEditing={handleKeepNumberingConflicts}
+        onReconcile={handleReconcileNumbering}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
