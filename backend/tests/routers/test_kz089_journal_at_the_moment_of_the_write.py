@@ -497,3 +497,336 @@ class TestAFailedLookupNeverAccusesAnOperation:
 
         assert data["validationPassed"] is False
         assert [i["type"] for i in data["validationIssues"]] == ["missing_stream"]
+
+
+# ==========================================================================
+# Fix round 4
+#
+# Two findings, both of which defeat an invariant round 3 was written to
+# establish rather than adding a new one.
+#
+# 5. `nothing_to_journal` is reachable ONLY when nothing was written, or when
+#    what was written genuinely has no journalable content. Round 3 made the
+#    row a required ARGUMENT of saying a write landed, so a row cannot be
+#    forgotten — but whether a row is OWED was still decided by
+#    `describe_channel_update`, which recognised eight fields while the
+#    operation carries a free-form `data` bag that is PATCHed upstream whole.
+#    An unrecognised field changed the channel and the executor said there was
+#    nothing to journal.
+# 6. The flush survives cancellation. `asyncio.CancelledError` is a
+#    BaseException, so the executor's `except Exception` never saw it and
+#    `finish()` never ran: a landed write's queued row died with the task.
+#    Application shutdown is the ordinary case, not an exotic one.
+# ==========================================================================
+
+
+class TestAnUnrecognisedFieldIsStillAMutation:
+    """Invariant 5, at the describer — which is what decides if a row is owed.
+
+    The fix is that the describer is TOTAL over the payload: a field it has no
+    prose for is still a change, described generically, with its values in
+    `before_value` / `after_value`. That makes coverage total by construction,
+    so a field nobody has invented yet cannot reopen this.
+    """
+
+    def _channel_42(self):
+        client = _base_client()
+        client.get_channels.return_value = {
+            "results": [{"id": 42, "name": "Forty Two", "streams": [1]}],
+            "count": 1,
+            "next": None,
+        }
+        client.get_channel.return_value = {
+            "id": 42, "name": "Forty Two", "streams": [1],
+        }
+        return client
+
+    @pytest.mark.asyncio
+    async def test_a_patch_that_only_changes_streams_is_journalled(
+        self, async_client
+    ):
+        """The reviewer's reproduction, as an example of invariant 5.
+
+        `streams` is not one of the eight described fields, the PATCH goes
+        upstream whole and genuinely changes the channel, and before this fix
+        the operation succeeded with no entity row at all.
+        """
+        client = self._channel_42()
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            data = await _commit_and_wait(async_client, {
+                "operations": [{
+                    "type": "updateChannel",
+                    "channelId": 42,
+                    "data": {"streams": [7]},
+                }],
+            })
+
+        assert data["operationsApplied"] == 1
+        # The mutation LANDED — this is what makes the missing row a defect
+        # rather than a missing code path.
+        client.update_channel.assert_awaited_once_with(42, {"streams": [7]})
+        rows = [r for r in _entity_rows(journal_double) if r["entity_id"] == 42]
+        assert len(rows) == 1, _entity_rows(journal_double)
+        assert rows[0]["before_value"] == {"streams": [1]}
+        assert rows[0]["after_value"] == {"streams": [7]}
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognised_field_beside_a_recognised_one_is_journalled(
+        self, async_client
+    ):
+        """A row that already existed must not lose the unrecognised half."""
+        client = self._channel_42()
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            await _commit_and_wait(async_client, {
+                "operations": [{
+                    "type": "updateChannel",
+                    "channelId": 42,
+                    "data": {"name": "Answer", "streams": [7]},
+                }],
+            })
+
+        rows = [r for r in _entity_rows(journal_double) if r["entity_id"] == 42]
+        assert len(rows) == 1, _entity_rows(journal_double)
+        assert rows[0]["after_value"] == {"name": "Answer", "streams": [7]}
+
+    @pytest.mark.asyncio
+    async def test_the_single_channel_patch_handler_journals_it_too(
+        self, async_client
+    ):
+        """The same describer serves `PATCH /api/channels/{id}` — the MCP path.
+
+        The review named only the bulk executor. The gap is in the shared
+        describer, so it was live on both surfaces, and a fix scoped to the
+        reported one would have left an AI-sourced edit unjournalled.
+        """
+        client = _base_client()
+        client.get_channel.return_value = {
+            "id": 42, "name": "Forty Two", "streams": [1],
+        }
+        client.update_channel.return_value = {
+            "id": 42, "name": "Forty Two", "streams": [7],
+        }
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            response = await async_client.patch(
+                "/api/channels/42", json={"streams": [7]}
+            )
+
+        assert response.status_code == 200, response.text
+        rows = _entity_rows(journal_double)
+        assert len(rows) == 1, rows
+        assert rows[0]["entity_id"] == 42
+        assert rows[0]["after_value"] == {"streams": [7]}
+
+    @pytest.mark.asyncio
+    async def test_a_patch_that_changes_nothing_still_journals_nothing(
+        self, async_client
+    ):
+        """PIN. The sentinel stays reachable for the case it is FOR.
+
+        Invariant 5 is "never merely because a field was unrecognised", not
+        "always write a row". A payload that matches what the channel already
+        has changed nothing, and a row claiming otherwise would be a lie in the
+        opposite direction.
+        """
+        client = self._channel_42()
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            data = await _commit_and_wait(async_client, {
+                "operations": [{
+                    "type": "updateChannel",
+                    "channelId": 42,
+                    "data": {"name": "Forty Two", "streams": [1]},
+                }],
+            })
+
+        assert data["operationsApplied"] == 1
+        assert [r for r in _entity_rows(journal_double) if r["entity_id"] == 42] == []
+
+    def test_the_describer_is_total_over_the_payload(self):
+        """The property itself, without the executor around it."""
+        from routers.channels import describe_channel_update
+
+        changes, before, after = describe_channel_update(
+            {"streams": [1]}, {"streams": [7]}
+        )
+        assert changes == ["set streams"]
+        assert before == {"streams": [1]}
+        assert after == {"streams": [7]}
+
+        changes, _b, _a = describe_channel_update({"streams": [1]}, {"streams": []})
+        assert changes == ["cleared streams"]
+
+        # Equal to what is already there — no change, on the unrecognised arm
+        # exactly as on the recognised one.
+        changes, _b, _a = describe_channel_update({"streams": [1]}, {"streams": [1]})
+        assert changes == []
+
+    def test_an_unknown_before_state_is_not_evidence_of_no_change(self):
+        """"I cannot see what it was" is not "it did not change".
+
+        The sentinel's meaning is "nothing changed". A before-state that does
+        not carry the field at all cannot support that claim, so the write is
+        journalled — on both arms, because the rule is the property and not the
+        describer's coverage.
+        """
+        from routers.channels import describe_channel_update
+
+        changes, before, after = describe_channel_update({}, {"custom_prop": None})
+        assert changes == ["cleared custom_prop"]
+        assert before == {"custom_prop": None}
+        assert after == {"custom_prop": None}
+
+        changes, _b, _a = describe_channel_update({}, {"tvg_id": None})
+        assert changes == ["cleared EPG mapping"]
+
+        # A before-state that DOES carry the field, holding the same value, is
+        # still evidence of no change.
+        changes, _b, _a = describe_channel_update(
+            {"tvg_id": None}, {"tvg_id": None}
+        )
+        assert changes == []
+
+
+class TestTheFlushSurvivesCancellation:
+    """Invariant 6. Cancellation is not an exception the executor can catch.
+
+    `asyncio.CancelledError` inherits from `BaseException`, so the outer
+    `except Exception` never ran `finish()` and every row queued by a write
+    that had already landed went with the task. The ordinary trigger is
+    application shutdown, not an operator pressing something.
+    """
+
+    def _request_creating_two_groups(self):
+        from routers.channels import BulkCommitRequest
+
+        return BulkCommitRequest(
+            operations=[],
+            groupsToCreate=[{"name": "A"}, {"name": "B"}],
+            continueOnError=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_landed_group_create_is_journalled_when_the_run_is_cancelled(
+        self,
+    ):
+        """The reviewer's reproduction: A lands, the task is cancelled on B.
+
+        Group A exists upstream from the moment its POST returns. Its row was
+        queued at that moment (round 3) and then died unflushed (round 4).
+        """
+        from routers.channels import _run_bulk_commit
+
+        reached_b = _asyncio.Event()
+
+        async def _create_group(name):
+            if name == "A":
+                return {"id": 71, "name": "A"}
+            reached_b.set()
+            await _asyncio.Event().wait()  # never returns; cancelled here
+
+        client = _base_client()
+        client.create_channel_group.side_effect = _create_group
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            task = _asyncio.create_task(
+                _run_bulk_commit(self._request_creating_two_groups(), batch_id="c4")
+            )
+            await reached_b.wait()
+            task.cancel()
+            # Invariant: a cancelled task still cancels. Swallowing the
+            # CancelledError to get the flush would be its own bug.
+            with pytest.raises(_asyncio.CancelledError):
+                await task
+            assert task.cancelled()
+
+        # Group A's POST went upstream and RETURNED before the cancellation
+        # reached B. Asserting that here is what makes the red proof "a landed
+        # write whose queued row was lost" rather than "a code path is
+        # missing".
+        assert client.create_channel_group.await_count == 2
+        rows = _entity_rows(journal_double)
+        landed = [r for r in rows if r["entity_id"] == 71]
+        assert len(landed) == 1, rows
+        assert landed[0]["action_type"] == "group_create"
+        assert landed[0]["entity_name"] == "A"
+
+    @pytest.mark.asyncio
+    async def test_the_summary_row_is_written_on_the_cancellation_path_too(self):
+        """The batch closes rather than dangling half-written."""
+        from routers.channels import _run_bulk_commit
+
+        reached_b = _asyncio.Event()
+
+        async def _create_group(name):
+            if name == "A":
+                return {"id": 71, "name": "A"}
+            reached_b.set()
+            await _asyncio.Event().wait()
+
+        client = _base_client()
+        client.create_channel_group.side_effect = _create_group
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            task = _asyncio.create_task(
+                _run_bulk_commit(self._request_creating_two_groups(), batch_id="c4")
+            )
+            await reached_b.wait()
+            task.cancel()
+            with pytest.raises(_asyncio.CancelledError):
+                await task
+
+        summaries = [
+            call.kwargs for call in journal_double.log_entry.call_args_list
+            if call.kwargs.get("action_type") == "bulk_commit"
+        ]
+        assert len(summaries) == 1, journal_double.log_entry.call_args_list
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_run_that_wrote_nothing_journals_nothing(self):
+        """PIN. A dry run and a refused run still leave no trace.
+
+        `execution_started` is what separates "cancelled before any write" from
+        "cancelled after one", and the new unavoidable flush must not blur it.
+        """
+        from routers.channels import BulkCommitRequest, _run_bulk_commit
+
+        reached_lookup = _asyncio.Event()
+
+        async def _get_channels(**_kwargs):
+            reached_lookup.set()
+            await _asyncio.Event().wait()
+
+        client = _base_client()
+        client.get_channels.side_effect = _get_channels
+        journal_double = _journal_double()
+
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal", journal_double):
+            task = _asyncio.create_task(_run_bulk_commit(
+                BulkCommitRequest(operations=[{
+                    "type": "updateChannel", "channelId": 42, "data": {"name": "X"},
+                }]),
+                batch_id="c4",
+            ))
+            await reached_lookup.wait()
+            task.cancel()
+            with pytest.raises(_asyncio.CancelledError):
+                await task
+
+        assert journal_double.log_entry.call_args_list == []
+        assert journal_double.log_entries.call_args_list == []

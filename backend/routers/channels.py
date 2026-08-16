@@ -69,6 +69,12 @@ _CHANNEL_CHANGE_DESCRIBERS: tuple[tuple[str, object, Optional[str]], ...] = (
     ("tvc_guide_stationid", lambda v: f"Gracenote ID to '{v}'", "cleared Gracenote ID"),
 )
 
+#: The describers' coverage, as a set. Everything NOT in here is described
+#: generically rather than skipped — see :func:`describe_channel_update`.
+_CHANNEL_DESCRIBED_FIELDS: frozenset[str] = frozenset(
+    field for field, _label, _cleared in _CHANNEL_CHANGE_DESCRIBERS
+)
+
 
 def describe_channel_update(
     before_channel: dict, data: dict
@@ -77,10 +83,7 @@ def describe_channel_update(
 
     ``changes`` is the human-readable phrase list a journal description joins
     with ", "; the two dicts carry only the fields that actually moved, so an
-    expanded journal row shows the edit rather than the whole record. A field
-    absent from ``data``, or present but equal to what the channel already has,
-    contributes nothing — which is what makes "no changes, no row" decidable
-    without a second fetch.
+    expanded journal row shows the edit rather than the whole record.
 
     Both the ``PATCH /api/channels/{id}`` handler (the path an MCP agent takes,
     and the one that has always written per-channel rows) and the Edit Mode
@@ -88,27 +91,59 @@ def describe_channel_update(
     only the former journaled at all, so a channel's history was traceable by
     name for AI-sourced edits and invisible for UI-sourced ones.
 
-    ``before_channel`` may be ``{}`` when the before-state is genuinely unknown
-    — a channel created earlier in the same batch, for instance. Every supplied
-    field then reads as a change against ``None``, which is accurate: it is new.
+    TOTAL OVER THE PAYLOAD, which is the property fix round 4 of bead
+    ``enhancedchannelmanager-kz089`` had to establish. Both callers PATCH a
+    free-form ``data`` bag upstream WHOLE and then ask this function whether a
+    row is owed; an empty ``changes`` is what lets the bulk executor say
+    ``nothing_to_journal``. While the loop only knew the eight described
+    fields, ``data={"streams": [7]}`` changed channel 42 upstream and was
+    reported as describing no change — a landed mutation with no journal row,
+    which is the exact defect the required-``journal_row`` argument was
+    supposed to have made unreachable. A field the describers have no prose for
+    is therefore still a change, named generically, with its values carried in
+    ``before_value`` / ``after_value``. Coverage is total by construction, so a
+    field nobody has invented yet cannot reopen this.
+
+    Empty ``changes`` now means one thing only: every field in ``data`` was
+    already holding that value. ``before_channel`` may be ``{}``, or may simply
+    not carry a field, when the before-state is unknown — a channel created
+    earlier in the same batch, a catalog read that failed. "I cannot see what
+    it was" is not "it did not change", so an unknown before-state reads as a
+    change on both arms rather than as silence.
     """
     changes: list[str] = []
     before_value: dict = {}
     after_value: dict = {}
 
+    def unchanged(field: str, new_value: object) -> bool:
+        return field in before_channel and new_value == before_channel[field]
+
+    def note(field: str, phrase: str) -> None:
+        changes.append(phrase)
+        before_value[field] = before_channel.get(field)
+        after_value[field] = data[field]
+
     for field, label, cleared_label in _CHANNEL_CHANGE_DESCRIBERS:
         if field not in data:
             continue
         new_value = data[field]
-        old_value = before_channel.get(field)
-        if new_value == old_value:
+        if unchanged(field, new_value):
             continue
         if not new_value and cleared_label is not None:
-            changes.append(cleared_label)
+            note(field, cleared_label)
         else:
-            changes.append(label(new_value))
-        before_value[field] = old_value
-        after_value[field] = new_value
+            note(field, label(new_value))
+
+    # The rest of the bag, in payload order. Generic prose because there is no
+    # per-field vocabulary to draw on — the values are what an operator
+    # reconciles from, and they are in the two dicts.
+    for field in data:
+        if field in _CHANNEL_DESCRIBED_FIELDS:
+            continue
+        new_value = data[field]
+        if unchanged(field, new_value):
+            continue
+        note(field, f"set {field}" if new_value else f"cleared {field}")
 
     return changes, before_value, after_value
 
@@ -1953,14 +1988,22 @@ async def _run_bulk_commit(
     def flush_journal() -> None:
         """Write this run's journal rows and its summary row. Never raises.
 
-        Called from :func:`finish`, which is the ONLY way out of this function
-        once execution has started — every early return, every partial batch
-        failure and the outer exception handler all go through it. Before bead
-        …-kz089 fix round 2 the journal writes were the last statements of the
-        happy path, so a Phase 1 group-create failure returned with group A
-        already created upstream and no row saying so, and an exception
-        anywhere after Phase 1 did the same for every operation that had
-        landed.
+        MUST STAY SYNCHRONOUS. It runs from the outer ``finally`` while a
+        ``CancelledError`` is unwinding (fix round 4), and a coroutine that
+        awaited anything there would simply be cancelled again at the first
+        await — reopening the hole this call is closing. Nothing it touches is
+        async: :func:`write_journal_rows` and ``journal.log_entry`` are both
+        blocking calls.
+
+        Called from :func:`finish`, which is the only way out of this function
+        by RETURN once execution has started — every early return, every
+        partial batch failure and the outer exception handler all go through
+        it — and from the outer ``finally``, which covers the ways out that are
+        not returns. Before bead …-kz089 fix round 2 the journal writes were
+        the last statements of the happy path, so a Phase 1 group-create
+        failure returned with group A already created upstream and no row
+        saying so, and an exception anywhere after Phase 1 did the same for
+        every operation that had landed.
 
         A journal failure is recorded on the ledger as a setup failure rather
         than swallowed: the mutations DID land, so nothing may be reported as
@@ -2588,8 +2631,8 @@ async def _run_bulk_commit(
                         before_value=before_value,
                         after_value=after_value,
                     ) if changes else nothing_to_journal(
-                        f"the PATCH on channel {channel_id} described no change "
-                        "to any field the journal renders"
+                        f"every field the PATCH on channel {channel_id} carried "
+                        "was already holding that value"
                     ))
                     if changes:
                         # Keep the local catalog current so a later op in the
@@ -3173,6 +3216,34 @@ async def _run_bulk_commit(
             result["operationsFailed"] = ledger.failed
             result["success"] = False
             return result
+
+    finally:
+        # The ways out that are NOT returns. `asyncio.CancelledError` inherits
+        # from BaseException, so the handler above never saw it: a run that
+        # created group A and was cancelled while awaiting group B left A
+        # upstream with its row queued and never drained — and application
+        # shutdown, which cancels this task, is the ordinary way that happens
+        # rather than an exotic one (fix round 4). SystemExit and
+        # KeyboardInterrupt take the same route for the same reason.
+        #
+        # `finally` rather than a wider `except`, because the cancellation must
+        # keep propagating: catching it here to reach the flush would leave the
+        # caller believing a cancelled task ran to completion, and `_runner`
+        # re-raises precisely so a cancelled job says so. `flush_journal` is
+        # idempotent, so this is a no-op on every path that already returned
+        # through `finish()`, and it is SYNCHRONOUS, so it cannot be cancelled
+        # a second time part-way through.
+        #
+        # The accounting half of `finish()` is deliberately NOT run here: there
+        # is no envelope to return on this path, and `finalize_bulk_commit_result`
+        # raising inside a `finally` would replace the CancelledError.
+        try:
+            flush_journal()
+        except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
+            logger.exception(
+                "[CHANNELS-BULK] Journal flush failed while unwinding "
+                "(batch=%s): %s", batch_id, flush_err,
+            )
 
 
 @router.post("/normalize-preview-batch")

@@ -63,6 +63,25 @@ has nothing to record says so by name, with a reason, via
 :func:`nothing_to_journal` — an explicit sentence a reviewer can disagree with,
 rather than an omission nobody can see.
 
+Fix round 4 closed the two ways rule 7 could still be defeated with every round-3
+mechanism intact, both of them one step OUTSIDE the ledger:
+
+* Whether a row was OWED was decided by ``describe_channel_update``, which knew
+  eight fields, while ``updateChannel`` carries a free-form ``data`` bag PATCHed
+  upstream whole. ``{"streams": [7]}`` changed the channel and described no
+  change, so the executor supplied :func:`nothing_to_journal` for a mutation
+  that had genuinely landed. The describer is total over the payload now, so the
+  sentinel is reachable only when every field in the payload was already holding
+  its value. The precondition is the property: never merely because a field was
+  unrecognised.
+* The FLUSH did not survive cancellation. ``asyncio.CancelledError`` inherits
+  from ``BaseException``, so the executor's ``except Exception`` never ran its
+  single exit, and a run that created a group and was then cancelled — which is
+  what application shutdown does to it — left the group upstream with its row
+  queued and never drained. The executor's outer ``try`` grew a ``finally``; the
+  flush is synchronous, so it cannot be cancelled a second time, and the
+  ``CancelledError`` keeps propagating.
+
 Enforced by ``backend/tests/routers/test_e9e5o_bulk_commit_accounting.py``,
 which generates the scenario matrix (normalization succeeded/failed x create
 succeeded/threw/returned malformed x first/middle/last in batch) and asserts
