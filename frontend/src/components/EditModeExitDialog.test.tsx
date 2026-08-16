@@ -40,6 +40,9 @@ function summaryOf(over: Partial<EditModeSummary> = {}): EditModeSummary {
     newGroups: 0,
     deletedGroups: 0,
     renamedGroups: 0,
+    profileVisibilityChanges: 0,
+    restoredGroups: 0,
+    clearedStreamStats: 0,
     operationDetails: [],
   };
   return { ...base, ...over };

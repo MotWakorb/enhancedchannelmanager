@@ -196,6 +196,28 @@ export function EditModeExitDialog({
                     {summary.renamedGroups} group{summary.renamedGroups !== 1 ? 's' : ''} renamed
                   </li>
                 )}
+                {/* The actions that used to bypass this dialog entirely, because
+                    they had already been applied by the time it opened
+                    (bead enhancedchannelmanager-kz089). `totalChanges` sums
+                    every bucket, so a line missing here is a headline that
+                    disagrees with its own list. */}
+                {summary.profileVisibilityChanges > 0 && (
+                  <li>
+                    {summary.profileVisibilityChanges} profile visibility change
+                    {summary.profileVisibilityChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
+                {summary.restoredGroups > 0 && (
+                  <li>
+                    {summary.restoredGroups} hidden group{summary.restoredGroups !== 1 ? 's' : ''} restored
+                  </li>
+                )}
+                {summary.clearedStreamStats > 0 && (
+                  <li>
+                    Probe stats cleared for {summary.clearedStreamStats} stream
+                    {summary.clearedStreamStats !== 1 ? 's' : ''}
+                  </li>
+                )}
               </ul>
 
               {/* Toggle for detailed change list */}

@@ -108,7 +108,23 @@ const CLOSED_STATE: AddStreamDedupModalState = {
   candidate: null,
 };
 
-export function useAddStreamDedup(): UseAddStreamDedupReturn {
+export interface UseAddStreamDedupOptions {
+  /**
+   * Stage the stream assignment instead of writing it, when Edit Mode is on
+   * (bead enhancedchannelmanager-kz089).
+   *
+   * The "Create in..." menu this flow hangs off renders ONLY in Edit Mode, so
+   * every merge it performs happens inside the staging area — and it wrote
+   * straight to the server, uncounted by the change count and out of reach of
+   * Discard, Cancel and Undo. Absent, the immediate write is correct: the same
+   * merge outside Edit Mode has no staging promise to keep.
+   */
+  stageAddStream?: (channelId: number, streamId: number, description: string) => void;
+}
+
+export function useAddStreamDedup(
+  { stageAddStream }: UseAddStreamDedupOptions = {},
+): UseAddStreamDedupReturn {
   const [modalState, setModalState] = useState<AddStreamDedupModalState>(CLOSED_STATE);
   // Pending context for the open modal. Held in component state (not a ref)
   // so a re-render after the candidate fetch sees a consistent snapshot.
@@ -178,6 +194,15 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
       // base-10 explicitly; a string like "0x" would otherwise produce NaN
       // and surface as a 422 from the backend, which is at least visible.
       const numericId = parseInt(channelId, 10);
+      if (stageAddStream) {
+        stageAddStream(
+          numericId,
+          pendingStream.id,
+          `Add stream "${pendingStream.name}" to channel ${numericId}`,
+        );
+        close();
+        return;
+      }
       try {
         await addStreamToChannel(numericId, pendingStream.id);
       } finally {
@@ -188,7 +213,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         close();
       }
     },
-    [pendingStream, close],
+    [pendingStream, close, stageAddStream],
   );
 
   const handleCreateNew = useCallback(async (): Promise<void> => {

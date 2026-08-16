@@ -111,6 +111,62 @@ function renumberStartValue(text: string): number | null {
   return parsed.ok ? parsed.value : null;
 }
 
+/**
+ * Sub-label for the Reorder Group dialog's "Keep current numbers" option
+ * (bead `enhancedchannelmanager-zll44`).
+ *
+ * Dragging a group open this dialog, and every option except this one stages
+ * `channel_number` updates — which IS durable through Apply All, because the
+ * group list is re-sorted by lowest channel number on load. "Keep current
+ * numbers" is the exception: it writes nothing at all, only local `groupOrder`
+ * state, so the arrangement is gone on the next page load with no unsaved-
+ * changes indicator and nothing counted as an Edit Mode change.
+ *
+ * The old sub-label read "Don't change channel numbers", which is true and
+ * beside the point: it described the numbers and said nothing about the move
+ * the operator just made. The PO decided against persisting `groupOrder`, so
+ * this text is the whole fix — it has to name the consequence (the position is
+ * not saved), when it is lost (on reload), and what the durable alternative is
+ * (renumbering).
+ */
+/**
+ * What the three delete dialogs say when Edit Mode is on
+ * (bead enhancedchannelmanager-kz089).
+ *
+ * They used to say "Changes can be undone while in edit mode." That sentence
+ * was about the MODE, not about the delete, and as a claim about the mode it
+ * was false: eleven actions staged and ten wrote through immediately, so the
+ * one place ECM made an explicit reversibility promise was also the place it
+ * was least able to keep it. An operator who read it, then merged twenty
+ * channels and hit Discard, had lost the originals.
+ *
+ * The replacement claims only what this dialog's own button does, and says how
+ * to reverse it. That stays true whatever else the mode gains or loses, which
+ * is the property the old sentence lacked.
+ */
+export const EDIT_MODE_DELETE_STAGED_NOTE =
+  'This delete is staged: nothing is removed until you choose Apply All, and ' +
+  'Undo or Discard reverses it.';
+
+/**
+ * Shown at the point of action by the two operations Edit Mode cannot stage
+ * (bead enhancedchannelmanager-kz089).
+ *
+ * The PO accepted Merge and Import CSV as genuine staging exceptions: a merge
+ * reconciles records across providers and would need server-side support to be
+ * represented as a reversible diff, and that work is explicitly out of scope.
+ * What is not acceptable is the mode implying otherwise by silence. These
+ * actions therefore say plainly, before they run, that they apply immediately
+ * and Discard will not reach them.
+ */
+export const IRREVERSIBLE_IN_EDIT_MODE_NOTE =
+  'This applies immediately and is NOT staged. Unlike the rest of Edit Mode, ' +
+  'it cannot be undone by Discard, Cancel or Undo.';
+
+export const KEEP_CURRENT_NUMBERS_SUBLABEL =
+  'Display only: the new group position is not saved, and a page reload puts ' +
+  'it back. Renumber to make the move durable.';
+
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -145,6 +201,15 @@ interface ChannelsPaneProps {
   onStageRenameChannelGroup?: (groupId: number, newName: string, description: string) => void;
   /** Stage a new channel group; returns its negative temp id (bd-vtapf). */
   onStageCreateGroup?: (name: string) => number;
+  /**
+   * Staging hooks for the actions Edit Mode used to write through itself
+   * (bead enhancedchannelmanager-kz089). Optional like their neighbours: when
+   * absent, or when Edit Mode is off, each handler falls back to the immediate
+   * write it has always done outside the mode.
+   */
+  onStageSetProfileMembership?: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  onStageRestoreChannelGroup?: (groupId: number, description: string) => void;
+  onStageClearStreamStats?: (streamIds: number[], description: string) => void;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -1226,6 +1291,9 @@ export function ChannelsPane({
   onStageDeleteChannelGroup,
   onStageRenameChannelGroup,
   onStageCreateGroup,
+  onStageSetProfileMembership,
+  onStageRestoreChannelGroup,
+  onStageClearStreamStats,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -1816,6 +1884,39 @@ export function ChannelsPane({
     }
   }, [selectedChannelIds, channels, notifications]);
 
+  /**
+   * Assign a logo to a channel, staging the assignment in Edit Mode.
+   *
+   * Bead enhancedchannelmanager-kz089 / enhancedchannelmanager-i4yk1: "Set Logo
+   * from M3U" and "Set Logo from EPG" sit in the Edit Mode selection toolbar
+   * beside Move to group, Normalize Names and Sort Streams, all of which stage
+   * — and they PATCHed every selected channel immediately. Applied across a
+   * large selection that was not recoverable through the UI.
+   *
+   * The `logo_id` assignment is what the operator is deciding, and it stages as
+   * an ordinary `updateChannel`. Resolving the URL to a Logo record still
+   * happens now, because the picker and the row preview need a real id: that
+   * call is additive to the shared logo catalog, changes no channel, and is
+   * exactly what the Edit Channel modal's own "add logo by URL" already does
+   * while staging its assignment.
+   */
+  const assignLogoToChannel = useCallback(async (
+    channel: Channel,
+    logoUrl: string,
+    logoCache: Map<string, import('../types').Logo>,
+  ) => {
+    const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+    if (isEditMode && onStageUpdateChannel) {
+      onStageUpdateChannel(
+        channel.id,
+        { logo_id: logo.id },
+        `Set logo for "${channel.name}"`,
+      );
+      return;
+    }
+    await api.updateChannel(channel.id, { logo_id: logo.id });
+  }, [isEditMode, onStageUpdateChannel]);
+
   // Handle bulk set logo from M3U streams
   const handleBulkSetLogoFromM3U = useCallback(async () => {
     setBulkLogoLoading(true);
@@ -1823,6 +1924,8 @@ export function ChannelsPane({
     let assigned = 0, skipped = 0;
 
     logger.info(`[BulkLogoM3U] Starting bulk logo assignment for ${selectedChannelIds.size} channels`);
+    const staging = isEditMode && !!onStageUpdateChannel;
+    if (staging) onStartBatch?.(`Set logos from M3U for ${selectedChannelIds.size} channels`);
 
     try {
       for (const channelId of selectedChannelIds) {
@@ -1840,8 +1943,7 @@ export function ChannelsPane({
           }
 
           logger.debug(`[BulkLogoM3U] Assigning logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
-          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
-          await api.updateChannel(channelId, { logo_id: logo.id });
+          await assignLogoToChannel(channel, logoUrl, logoCache);
           assigned++;
         } catch (err) {
           logger.warn(`[BulkLogoM3U] Failed to assign logo for channel ${channelId}:`, err);
@@ -1850,16 +1952,21 @@ export function ChannelsPane({
       }
 
       logger.info(`[BulkLogoM3U] Complete: ${assigned} assigned, ${skipped} skipped`);
-      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`);
-      onChannelsChange?.();
+      notifications.success(
+        staging
+          ? `Staged logos: ${assigned} to assign, ${skipped} skipped (no M3U logo)`
+          : `Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`
+      );
+      if (!staging) onChannelsChange?.();
       onLogosChange?.();
     } catch (err) {
       logger.error('[BulkLogoM3U] Bulk set logo from M3U failed:', err);
       notifications.error('Failed to set logos from M3U');
     } finally {
+      if (staging) onEndBatch?.();
       setBulkLogoLoading(false);
     }
-  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
+  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange, assignLogoToChannel, isEditMode, onStageUpdateChannel, onStartBatch, onEndBatch]);
 
   // Handle bulk set logo from linked EPG entry's icon_url
   const handleBulkSetLogoFromEPG = useCallback(async () => {
@@ -1869,6 +1976,8 @@ export function ChannelsPane({
     let assigned = 0, skipped = 0;
 
     logger.info(`[BulkLogoEPG] Starting bulk EPG-logo assignment for ${selectedChannelIds.size} channels`);
+    const staging = isEditMode && !!onStageUpdateChannel;
+    if (staging) onStartBatch?.(`Set logos from EPG for ${selectedChannelIds.size} channels`);
 
     try {
       for (const channelId of selectedChannelIds) {
@@ -1892,8 +2001,7 @@ export function ChannelsPane({
           }
 
           logger.debug(`[BulkLogoEPG] Assigning EPG logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
-          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
-          await api.updateChannel(channelId, { logo_id: logo.id });
+          await assignLogoToChannel(channel, logoUrl, logoCache);
           assigned++;
         } catch (err) {
           logger.warn(`[BulkLogoEPG] Failed to assign EPG logo for channel ${channelId}:`, err);
@@ -1902,16 +2010,21 @@ export function ChannelsPane({
       }
 
       logger.info(`[BulkLogoEPG] Complete: ${assigned} assigned, ${skipped} skipped`);
-      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`);
-      onChannelsChange?.();
+      notifications.success(
+        staging
+          ? `Staged logos: ${assigned} to assign, ${skipped} skipped (no EPG logo)`
+          : `Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`
+      );
+      if (!staging) onChannelsChange?.();
       onLogosChange?.();
     } catch (err) {
       logger.error('[BulkLogoEPG] Bulk set logo from EPG failed:', err);
       notifications.error('Failed to set logos from EPG');
     } finally {
+      if (staging) onEndBatch?.();
       setBulkLogoLoading(false);
     }
-  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange]);
+  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange, assignLogoToChannel, isEditMode, onStageUpdateChannel, onStartBatch, onEndBatch]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -2140,6 +2253,21 @@ export function ChannelsPane({
     const profile = channelProfiles.find(p => p.id === profileId);
     if (!profile || channelIds.length === 0) return;
 
+    // In Edit Mode this stages like every other selection action (bead
+    // enhancedchannelmanager-kz089). It used to PATCH each membership straight
+    // through the staging area: the change was not counted, Discard did not
+    // touch it, and Undo could not reach it, in a mode whose whole promise is
+    // that nothing is real until Apply All.
+    if (isEditMode && onStageSetProfileMembership) {
+      const description =
+        `${enable ? 'Enable' : 'Disable'} ${channelIds.length} channel` +
+        `${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"`;
+      onStartBatch?.(description);
+      onStageSetProfileMembership(profileId, channelIds, enable, description);
+      onEndBatch?.();
+      return;
+    }
+
     const verb = enable ? 'Enabling' : 'Disabling';
     notifications.info(
       `${verb} ${channelIds.length} channel${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"...`,
@@ -2175,7 +2303,7 @@ export function ChannelsPane({
     if (onChannelProfilesChange) {
       await onChannelProfilesChange();
     }
-  }, [channelProfiles, notifications, onChannelProfilesChange]);
+  }, [channelProfiles, notifications, onChannelProfilesChange, isEditMode, onStageSetProfileMembership, onStartBatch, onEndBatch]);
 
   // Handle copying channel URL to clipboard
   const handleCopyChannelUrl = async (url: string, channelName: string) => {
@@ -2226,6 +2354,24 @@ export function ChannelsPane({
   // Handle clearing probe stats for a stream
   const handleClearStreamStats = async (streamId: number) => {
     logger.debug('handleClearStreamStats called with streamId:', streamId);
+    // Stage in Edit Mode (bead enhancedchannelmanager-kz089). Clearing probe
+    // stats destroys probe history that only a re-probe can rebuild, and it
+    // used to happen the instant the operator clicked, inside a mode that says
+    // it is staging. The local stats map is updated either way so the row
+    // reads the same as it will after Apply All.
+    if (isEditMode && onStageClearStreamStats) {
+      const stream = channelStreams.find((s) => s.id === streamId);
+      onStageClearStreamStats(
+        [streamId],
+        `Clear probe stats for "${stream?.name || `stream ${streamId}`}"`,
+      );
+      setStreamStatsMap((prev) => {
+        const next = new Map(prev);
+        next.delete(streamId);
+        return next;
+      });
+      return;
+    }
     try {
       const result = await api.clearStreamStats([streamId]);
       logger.debug('clearStreamStats result:', result);
@@ -3030,6 +3176,20 @@ export function ChannelsPane({
 
   // Restore a hidden group
   const handleRestoreGroup = async (groupId: number) => {
+    // Hidden Groups is an Edit-Mode-only menu item, so this restore was an
+    // immediate write with no way out of it short of hiding the group again
+    // (bead enhancedchannelmanager-kz089). Staged, it is discardable like the
+    // delete that hid the group in the first place. The row leaves the modal
+    // list immediately so the list reflects the staged intent.
+    if (isEditMode && onStageRestoreChannelGroup) {
+      const hidden = hiddenGroups.find((g) => g.id === groupId);
+      onStageRestoreChannelGroup(
+        groupId,
+        `Restore hidden group "${hidden?.name || groupId}"`,
+      );
+      setHiddenGroups((prev) => prev.filter((g) => g.id !== groupId));
+      return;
+    }
     try {
       await api.restoreChannelGroup(groupId);
       // Reload hidden groups list
@@ -5957,7 +6117,7 @@ export function ChannelsPane({
               </p>
               <p className={isEditMode ? "delete-info" : "delete-warning"}>
                 {isEditMode
-                  ? 'Changes can be undone while in edit mode.'
+                  ? EDIT_MODE_DELETE_STAGED_NOTE
                   : 'This action cannot be undone. The channel and all its stream assignments will be permanently removed.'}
               </p>
             </div>
@@ -6066,7 +6226,7 @@ export function ChannelsPane({
                 )}
                 <p className="delete-info">
                   {isEditMode
-                    ? 'Changes can be undone while in edit mode.'
+                    ? EDIT_MODE_DELETE_STAGED_NOTE
                     : 'This action cannot be undone.'}
                 </p>
               </div>
@@ -6168,7 +6328,7 @@ export function ChannelsPane({
                 </p>
                 <p className={isEditMode ? "delete-info" : "delete-warning"}>
                   {isEditMode
-                    ? 'Changes can be undone while in edit mode.'
+                    ? EDIT_MODE_DELETE_STAGED_NOTE
                     : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
                 </p>
                 {/* Show checkbox to also delete groups that would be emptied */}
@@ -6262,6 +6422,7 @@ export function ChannelsPane({
       {/* Find Duplicates Modal */}
       {findDuplicatesModal.isOpen && (
         <FindDuplicatesModal
+          isEditMode={isEditMode}
           channelIds={Array.from(selectedChannelIds)}
           onClose={() => findDuplicatesModal.close()}
           onMerged={() => {
@@ -6620,7 +6781,11 @@ export function ChannelsPane({
                   <span className="material-icons">numbers</span>
                   <div className="move-option-text">
                     <strong>Keep current numbers</strong>
-                    <span>Don't change channel numbers</span>
+                    {/* bead enhancedchannelmanager-zll44 — see
+                        KEEP_CURRENT_NUMBERS_SUBLABEL. This is the one option
+                        in this dialog that writes nothing, so it is the one
+                        that has to say so. */}
+                    <span>{KEEP_CURRENT_NUMBERS_SUBLABEL}</span>
                   </div>
                 </label>
 
@@ -7674,6 +7839,7 @@ export function ChannelsPane({
         {/* Merge Channels Modal */}
         {mergeModal.isOpen && mergeChannelIds.length >= 2 && (
           <MergeChannelsModal
+            isEditMode={isEditMode}
             channels={channels.filter((c) => mergeChannelIds.includes(c.id))}
             logos={logos}
             epgData={epgData.map((e) => ({

@@ -50,6 +50,17 @@ export interface UseDedupOnDropOptions {
    * the UI is consistent.
    */
   reloadChannels: () => Promise<void> | void;
+  /**
+   * Stage the stream assignment instead of writing it, when Edit Mode is on
+   * (bead enhancedchannelmanager-kz089).
+   *
+   * The drag handle that starts this flow renders ONLY in Edit Mode, so every
+   * merge this hook performs happens inside the staging area — and it went
+   * straight to the server, uncounted, un-discardable, and followed by a full
+   * channel refetch that fought the working copy. Supplied only when Edit Mode
+   * is active; absent, the immediate write below is the correct behaviour.
+   */
+  stageAddStream?: (channelId: number, streamId: number, description: string) => void;
 }
 
 /**
@@ -139,6 +150,7 @@ function prefersReducedMotion(): boolean {
 
 export function useDedupOnDrop({
   reloadChannels,
+  stageAddStream,
 }: UseDedupOnDropOptions): UseDedupOnDropReturn {
   const [modalState, setModalState] = useState<DedupModalState | null>(null);
   const [returningStreamIds, setReturningStreamIds] = useState<Set<number>>(
@@ -204,11 +216,24 @@ export function useDedupOnDrop({
         throw new Error(`Invalid channel id from dedup candidate: ${channelId}`);
       }
 
+      if (stageAddStream) {
+        // Staged: no write, and deliberately no reloadChannels() — refetching
+        // the server list mid-session would overwrite the working copy that
+        // holds every other staged change.
+        stageAddStream(
+          numericId,
+          current.streamId,
+          `Add stream to channel ${numericId}`,
+        );
+        setModalState(null);
+        return;
+      }
+
       await api.addStreamToChannel(numericId, current.streamId);
       await reloadChannels();
       setModalState(null);
     },
-    [modalState, reloadChannels],
+    [modalState, reloadChannels, stageAddStream],
   );
 
   const handleCreateNew = useCallback(async () => {

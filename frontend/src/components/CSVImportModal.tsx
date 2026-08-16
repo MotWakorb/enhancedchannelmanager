@@ -1,6 +1,7 @@
 import { useState, useCallback, memo } from 'react';
 import { importChannelsFromCSV, parseCSVPreview, CSVImportResult, CSVPreviewResult } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { IrreversibleActionNotice } from './IrreversibleActionNotice';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './CSVImportModal.css';
@@ -24,6 +25,15 @@ export const CSVImportModal = memo(function CSVImportModal({
   const [preview, setPreview] = useState<CSVPreviewResult | null>(null);
   const [importResult, setImportResult] = useState<CSVImportResult | null>(null);
   const [importState, setImportState] = useState<ImportState>('idle');
+  /**
+   * Ticked before Import will run (bead enhancedchannelmanager-kz089).
+   *
+   * "Import CSV" is an Edit-Mode-only menu item, and an operator testing an
+   * import inside Edit Mode expecting to review before committing had already
+   * committed. Like Merge, the PO accepted this as a genuine staging exception,
+   * so the fix is to say so at the point of action rather than to pretend.
+   */
+  const [irreversibleAcknowledged, setIrreversibleAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -111,7 +121,8 @@ export const CSVImportModal = memo(function CSVImportModal({
   if (!isOpen) return null;
 
   const hasValidationErrors = preview && preview.errors.length > 0;
-  const canImport = file && preview && preview.rows.length > 0 && importState !== 'importing';
+  const canImport = file && preview && preview.rows.length > 0 && importState !== 'importing'
+    && irreversibleAcknowledged;
 
   return (
     <ModalOverlay onClose={handleClose} className="modal-overlay csv-import-modal" data-testid="csv-import-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
@@ -272,6 +283,14 @@ export const CSVImportModal = memo(function CSVImportModal({
         </div>
 
         <div className="modal-footer">
+          {importState !== 'success' && (
+            <IrreversibleActionNotice
+              what="This import"
+              consequence="Channels and groups it creates are written straight to Dispatcharr."
+              acknowledged={irreversibleAcknowledged}
+              onAcknowledgedChange={setIrreversibleAcknowledged}
+            />
+          )}
           <button
             type="button"
             className="modal-btn modal-btn-secondary"

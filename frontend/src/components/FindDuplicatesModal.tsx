@@ -3,10 +3,18 @@ import * as api from '../services/api';
 import type { DuplicateGroup, BulkMergeItem } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { IrreversibleActionNotice } from './IrreversibleActionNotice';
 import './ModalBase.css';
 import './FindDuplicatesModal.css';
 
 interface FindDuplicatesModalProps {
+  /**
+   * True when opened from Edit Mode's selection toolbar. The merge this modal
+   * runs is the same immediate, unstageable operation as the toolbar Merge
+   * button's, and needs the same point-of-action notice (bead
+   * enhancedchannelmanager-kz089).
+   */
+  isEditMode?: boolean;
   onClose: () => void;
   onMerged: () => void;
   /** Checkbox-selected channel ids to scope the scan to (enhancedchannelmanager-uahp6).
@@ -14,7 +22,7 @@ interface FindDuplicatesModalProps {
   channelIds?: number[];
 }
 
-export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
+export function FindDuplicatesModal({ isEditMode = false, onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
   const { titleId, containerRef } = useOwnedDialog();
   // A selection of zero channels isn't a meaningful scope — treat it the
   // same as "no selection passed" (global scan) rather than sending an
@@ -39,6 +47,8 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   const [includedGroups, setIncludedGroups] = useState<Record<string, boolean>>({});
 
   const [merging, setMerging] = useState(false);
+  // Ticked before Merge will run inside Edit Mode (bead …-kz089).
+  const [irreversibleAcknowledged, setIrreversibleAcknowledged] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ merged: number; failed: number } | null>(null);
 
   // Merge-blind safety net (enhancedchannelmanager-uahp6): a large result set
@@ -297,6 +307,14 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
         </div>
 
         <div className="modal-footer">
+          {isEditMode && groups.length > 0 && !mergeResult && (
+            <IrreversibleActionNotice
+              what="This merge"
+              consequence="Each group's source channels are deleted once their streams have moved."
+              acknowledged={irreversibleAcknowledged}
+              onAcknowledgedChange={setIrreversibleAcknowledged}
+            />
+          )}
           <button className="modal-btn modal-btn-secondary" onClick={onClose}>
             Cancel
           </button>
@@ -304,7 +322,7 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
             <button
               className="modal-btn modal-btn-primary"
               onClick={handleMerge}
-              disabled={merging || includedCount === 0 || renderGuardTripped}
+              disabled={merging || includedCount === 0 || renderGuardTripped || (isEditMode && !irreversibleAcknowledged)}
               title={renderGuardTripped ? 'Merge disabled — duplicate groups failed to render' : undefined}
             >
               {merging ? 'Merging...' : `Merge ${includedCount} Group${includedCount !== 1 ? 's' : ''}`}

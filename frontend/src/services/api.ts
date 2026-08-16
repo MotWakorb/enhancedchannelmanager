@@ -514,17 +514,30 @@ async function pollBulkCommitJob(jobId: string): Promise<BulkCommitResponse> {
  *   so callers still receive the same BulkCommitResponse on success and a
  *   thrown Error on failure. The hop is invisible to existing callers.
  */
-export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
+export async function bulkCommit(
+  request: BulkCommitRequest,
+  batchId?: string,
+): Promise<BulkCommitResponse> {
+  // One Apply All fans out into a create request plus N batches of 200. Sending
+  // the same correlation id on all of them puts every journal row of that
+  // session under one batch, which is how a channel's history reads as one
+  // event instead of several unrelated ones (bead enhancedchannelmanager-r9py9).
+  // The backend middleware reads this header; omitting it mints a per-request
+  // id exactly as before.
+  const headers = batchId ? { 'X-ECM-Batch-Id': batchId } : undefined;
+
   if (request.validateOnly) {
     return fetchJson(`${API_BASE}/channels/bulk-commit`, {
       method: 'POST',
       body: JSON.stringify(request),
+      headers,
     });
   }
 
   const accepted = await fetchJson<BulkCommitJobAccepted>(`${API_BASE}/channels/bulk-commit`, {
     method: 'POST',
     body: JSON.stringify(request),
+    headers,
   });
   return pollBulkCommitJob(accepted.job_id);
 }

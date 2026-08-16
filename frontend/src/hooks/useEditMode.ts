@@ -241,6 +241,16 @@ export function useEditMode({
           return workingCopy;
         }
 
+        case 'setProfileMembership':
+        case 'restoreChannelGroup':
+        case 'clearStreamStats': {
+          // Profile membership, hidden-group state and probe stats live
+          // outside the Channel record, so the channel working copy is
+          // unchanged. They are still staged operations: counted, undoable,
+          // and discarded with everything else (bead …-kz089).
+          return workingCopy;
+        }
+
         default:
           return workingCopy;
       }
@@ -512,6 +522,44 @@ export function useEditMode({
     [stageOperation]
   );
 
+  /**
+   * Stage a channel-profile visibility change per channel (bead
+   * enhancedchannelmanager-kz089).
+   *
+   * One operation per channel rather than one for the selection: the wire op
+   * is per channel (Dispatcharr's endpoint is per membership), and a per-
+   * channel operation is what lets the change count, the exit dialog and
+   * server-side consolidation treat it like every other staged channel edit.
+   * The caller wraps the loop in startBatch/endBatch so Undo still reverses
+   * the whole selection in one step.
+   */
+  const stageSetProfileMembership = useCallback(
+    (profileId: number, channelIds: number[], enabled: boolean, description: string) => {
+      for (const channelId of channelIds) {
+        stageOperation(
+          { type: 'setProfileMembership', profileId, channelId, enabled },
+          description,
+          [channelId]
+        );
+      }
+    },
+    [stageOperation]
+  );
+
+  const stageRestoreChannelGroup = useCallback(
+    (groupId: number, description: string) => {
+      stageOperation({ type: 'restoreChannelGroup', groupId }, description, []);
+    },
+    [stageOperation]
+  );
+
+  const stageClearStreamStats = useCallback(
+    (streamIds: number[], description: string) => {
+      stageOperation({ type: 'clearStreamStats', streamIds }, description, []);
+    },
+    [stageOperation]
+  );
+
   // Add a newly created channel to the working copy
   // This is used when a channel is created via API during edit mode
   const addChannelToWorkingCopy = useCallback(
@@ -738,6 +786,9 @@ export function useEditMode({
       newGroups: 0,
       deletedGroups: 0,
       renamedGroups: 0,
+      profileVisibilityChanges: 0,
+      restoredGroups: 0,
+      clearedStreamStats: 0,
       operationDetails: [],
     };
 
@@ -828,6 +879,19 @@ export function useEditMode({
         case 'renameChannelGroup':
           summary.renamedGroups++;
           break;
+        // The formerly-immediate actions (bead …-kz089). They have to appear
+        // in the exit dialog for the same reason they had to be staged: an
+        // operator deciding whether to Apply or Discard is entitled to see
+        // everything the Apply will do.
+        case 'setProfileMembership':
+          summary.profileVisibilityChanges++;
+          break;
+        case 'restoreChannelGroup':
+          summary.restoredGroups++;
+          break;
+        case 'clearStreamStats':
+          summary.clearedStreamStats += op.apiCall.streamIds.length;
+          break;
       }
     }
 
@@ -862,7 +926,10 @@ export function useEditMode({
       summary.deletedChannels +
       summary.newGroups +
       summary.deletedGroups +
-      summary.renamedGroups;
+      summary.renamedGroups +
+      summary.profileVisibilityChanges +
+      summary.restoredGroups +
+      summary.clearedStreamStats;
 
     return summary;
   }, [state.stagedOperations, state.modifiedChannelIds]);
@@ -1077,6 +1144,31 @@ export function useEditMode({
             newName: apiCall.newName,
           });
           break;
+
+        // Formerly-immediate actions, now staged (bead …-kz089). They carry no
+        // group or temp-id references, so they need no rewriting here.
+        case 'setProfileMembership':
+          bulkOperations.push({
+            type: 'setProfileMembership',
+            profileId: apiCall.profileId,
+            channelId: apiCall.channelId,
+            enabled: apiCall.enabled,
+          });
+          break;
+
+        case 'restoreChannelGroup':
+          bulkOperations.push({
+            type: 'restoreChannelGroup',
+            groupId: apiCall.groupId,
+          });
+          break;
+
+        case 'clearStreamStats':
+          bulkOperations.push({
+            type: 'clearStreamStats',
+            streamIds: apiCall.streamIds,
+          });
+          break;
       }
     }
 
@@ -1156,6 +1248,21 @@ export function useEditMode({
 
     // Server-side consolidation: operations are sent raw, backend deduplicates
     const consolidatedOps = state.stagedOperations;
+
+    /**
+     * Correlation id for every bulk-commit request this Apply All makes
+     * (bead enhancedchannelmanager-r9py9).
+     *
+     * The commit below is not one request: creates go first in their own call,
+     * then the remaining operations in batches of 200. Each call used to mint
+     * its own journal batch, so one Edit Mode session scattered across several
+     * unrelated batches and the operator guide's "one Bulk Commit row plus the
+     * individual rows" could not be true. Sent as `X-ECM-Batch-Id`; the backend
+     * stamps it on the summary AND on the per-channel rows.
+     *
+     * Capped to the 50 characters the backend stores.
+     */
+    const commitBatchId = `ui-${generateId()}`.slice(0, 50);
 
     // Copy the temp ID map for tracking new channel IDs
     const tempIdMap = new Map<number, number>();
@@ -1300,7 +1407,7 @@ export function useEditMode({
           groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
           continueOnError: options?.continueOnError,
           consolidate: true,
-        });
+        }, commitBatchId);
 
         // Check for validation failures
         if (!createResponse.success && createResponse.validationIssues?.length) {
@@ -1385,7 +1492,7 @@ export function useEditMode({
           operations: batch,
           continueOnError: options?.continueOnError,
           consolidate: true,
-        });
+        }, commitBatchId);
 
         // Check for validation failures
         if (!batchResponse.success && batchResponse.validationIssues?.length) {
@@ -1638,6 +1745,9 @@ export function useEditMode({
     stageCreateGroup,
     stageDeleteChannelGroup,
     stageRenameChannelGroup,
+    stageSetProfileMembership,
+    stageRestoreChannelGroup,
+    stageClearStreamStats,
     addChannelToWorkingCopy,
 
     // Local undo/redo

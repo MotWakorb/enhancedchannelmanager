@@ -1,0 +1,62 @@
+/* Point-of-action notice for operations Edit Mode cannot stage
+   (bead enhancedchannelmanager-kz089). See IrreversibleActionNotice.tsx. */
+
+/* The notice is rendered inside `.modal-footer`, a single flex row of buttons,
+   so it has to claim a line of its own. Scoped with :has() rather than adding
+   flex-wrap to the shared modal chassis, which every modal in the app uses. */
+.modal-footer:has(.irreversible-action-notice) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.irreversible-action-notice {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--warning);
+  border-left-width: 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.irreversible-action-notice-icon {
+  color: var(--warning-text);
+  font-size: 20px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.irreversible-action-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.irreversible-action-notice-body strong {
+  color: var(--warning-text);
+}
+
+.irreversible-action-notice-body p {
+  margin: 0;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.irreversible-action-notice-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.irreversible-action-notice-ack input {
+  cursor: pointer;
+  margin: 0;
+}

@@ -135,6 +135,12 @@ interface StreamsPaneProps {
   // External trigger to open bulk create modal for manual entry (no streams pre-selected)
   externalTriggerManualEntry?: boolean;
   onExternalTriggerHandled?: () => void;
+  /**
+   * Stage a stream assignment while Edit Mode is on (bead
+   * enhancedchannelmanager-kz089). Used by the "Create in..." dedup merge,
+   * which wrote to the server immediately from inside the staging area.
+   */
+  onStageAddStream?: (channelId: number, streamId: number, description: string) => void;
   onBulkCreateFromGroup?: (
     streams: Stream[],
     startingNumber: number,
@@ -245,6 +251,7 @@ export function StreamsPane({
   externalTriggerStartingNumber = null,
   externalTriggerManualEntry = false,
   onExternalTriggerHandled,
+  onStageAddStream,
   onBulkCreateFromGroup,
   onCreateChannel,
   onCheckConflicts,
@@ -342,7 +349,12 @@ export function StreamsPane({
   // either opens StreamDedupModal or falls through to the original
   // openBulkCreateModalForStreamIds path. Multi-stream selections proceed
   // unchanged — bulk dedup is BD-J's surface.
-  const addStreamDedup = useAddStreamDedup();
+  // In Edit Mode the "Create in..." merge stages instead of writing
+  // (bead enhancedchannelmanager-kz089). The menu that reaches it renders only
+  // in Edit Mode, so this was an immediate write inside the staging area.
+  const addStreamDedup = useAddStreamDedup({
+    stageAddStream: isEditMode ? onStageAddStream : undefined,
+  });
   // Expand/collapse groups with useExpandCollapse hook
   const {
     expandedIds: expandedGroups,

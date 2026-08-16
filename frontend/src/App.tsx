@@ -429,6 +429,9 @@ function App() {
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
     stageAddStream,
+    stageSetProfileMembership,
+    stageRestoreChannelGroup,
+    stageClearStreamStats,
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
@@ -2563,7 +2566,14 @@ function App() {
   // Wraps the single-stream drop-into-group flow with the BD-D candidates
   // lookup. Multi-stream drops bypass dedup entirely — bulk dedup is a
   // separate epic surface (bd-a5lb2 / bulk M3U dedup hook).
-  const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
+  // In Edit Mode the merge this hook offers stages like every other stream
+  // assignment (bead enhancedchannelmanager-kz089); outside it, it writes as
+  // before. Passing `undefined` rather than a no-op keeps the hook's own
+  // "am I staging?" test a simple presence check.
+  const dedupOnDrop = useDedupOnDrop({
+    reloadChannels: loadChannels,
+    stageAddStream: isEditMode ? stageAddStream : undefined,
+  });
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
   //
@@ -3058,6 +3068,9 @@ function App() {
               modifiedChannelIds={modifiedChannelIds}
               onStageUpdateChannel={stageUpdateChannel}
               onStageAddStream={stageAddStream}
+              onStageSetProfileMembership={stageSetProfileMembership}
+              onStageRestoreChannelGroup={stageRestoreChannelGroup}
+              onStageClearStreamStats={stageClearStreamStats}
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}

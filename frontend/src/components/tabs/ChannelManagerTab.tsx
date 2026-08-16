@@ -83,6 +83,13 @@ export interface ChannelManagerTabProps {
   modifiedChannelIds: Set<number>;
   onStageUpdateChannel: (channelId: number, updates: Partial<Channel>, description: string) => void;
   onStageAddStream: (channelId: number, streamId: number, description: string) => void;
+  /**
+   * Staging hooks for the actions Edit Mode used to write through itself
+   * (bead enhancedchannelmanager-kz089).
+   */
+  onStageSetProfileMembership: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  onStageRestoreChannelGroup: (groupId: number, description: string) => void;
+  onStageClearStreamStats: (streamIds: number[], description: string) => void;
   onStageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   onStageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
@@ -302,6 +309,9 @@ export function ChannelManagerTab({
   modifiedChannelIds,
   onStageUpdateChannel,
   onStageAddStream,
+  onStageSetProfileMembership,
+  onStageRestoreChannelGroup,
+  onStageClearStreamStats,
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers,
@@ -608,6 +618,9 @@ export function ChannelManagerTab({
           modifiedChannelIds={modifiedChannelIds}
           onStageUpdateChannel={onStageUpdateChannel}
           onStageAddStream={onStageAddStream}
+          onStageSetProfileMembership={onStageSetProfileMembership}
+          onStageRestoreChannelGroup={onStageRestoreChannelGroup}
+          onStageClearStreamStats={onStageClearStreamStats}
           onStageRemoveStream={onStageRemoveStream}
           onStageReorderStreams={onStageReorderStreams}
           onStageBulkAssignNumbers={onStageBulkAssignNumbers}
@@ -719,6 +732,7 @@ export function ChannelManagerTab({
           externalTriggerStartingNumber={externalTriggerStartingNumber}
           externalTriggerManualEntry={externalTriggerManualEntry}
           onExternalTriggerHandled={onExternalTriggerHandled}
+          onStageAddStream={onStageAddStream}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCreateChannel={onCreateChannelManual}
           onCheckConflicts={onCheckConflicts}

@@ -21,7 +21,16 @@ export type ApiCallSpec =
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
-  | { type: 'renameChannelGroup'; groupId: number; newName: string };
+  | { type: 'renameChannelGroup'; groupId: number; newName: string }
+  /**
+   * The three actions Edit Mode used to write straight through its own staging
+   * area (bead enhancedchannelmanager-kz089). Each sat in an Edit Mode toolbar
+   * next to actions that stage, was not counted in the change count, and was
+   * not reverted by Cancel, Discard or Undo.
+   */
+  | { type: 'setProfileMembership'; profileId: number; channelId: number; enabled: boolean }
+  | { type: 'restoreChannelGroup'; groupId: number }
+  | { type: 'clearStreamStats'; streamIds: number[] };
 
 /**
  * A staged operation in the edit mode queue
@@ -101,6 +110,12 @@ export interface EditModeSummary {
   newGroups: number;
   deletedGroups: number;
   renamedGroups: number;
+  /** Channels enabled/disabled in a channel profile (bead …-kz089). */
+  profileVisibilityChanges: number;
+  /** Hidden channel groups staged for restore (bead …-kz089). */
+  restoredGroups: number;
+  /** Streams whose probe stats are staged to be cleared (bead …-kz089). */
+  clearedStreamStats: number;
   // Detailed list of all operations with descriptions
   operationDetails: OperationDetail[];
 }
@@ -255,6 +270,12 @@ export interface UseEditModeReturn {
   stageCreateGroup: (name: string) => number;
   stageDeleteChannelGroup: (groupId: number, description: string) => void;
   stageRenameChannelGroup: (groupId: number, newName: string, description: string) => void;
+  /** Stage enabling/disabling channels in a channel profile (bead …-kz089). */
+  stageSetProfileMembership: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  /** Stage un-hiding a channel group (bead …-kz089). */
+  stageRestoreChannelGroup: (groupId: number, description: string) => void;
+  /** Stage clearing probe stats for streams (bead …-kz089). */
+  stageClearStreamStats: (streamIds: number[], description: string) => void;
   addChannelToWorkingCopy: (channel: Channel) => void; // Add a newly created channel to working copy
 
   // Local undo/redo (within edit session)
