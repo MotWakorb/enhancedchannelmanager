@@ -22,11 +22,14 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode, StagedSideEffects, StageUpdateChannelOptions, DuplicateNumberAcknowledgement } from '../types';
+import { EMPTY_STAGED_SIDE_EFFECTS } from '../types/editMode';
+import { ImmediateActionNote } from './ImmediateActionNote';
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
-import { computeAutoRename } from '../utils/channelRename';
+import { computeAutoRename, nameCarriesChannelNumber } from '../utils/channelRename';
 import { planChannelNumberShift, channelNumberSlot } from '../utils/channelNumberShift';
+import { channelsHoldingNumber, channelNumberRangeError } from '../utils/channelNumberPlan';
 import {
   parseChannelNumberInput,
   parseWholeChannelNumberInput,
@@ -40,7 +43,11 @@ import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
 import { BulkLCNFetchModal, type LCNAssignment } from './BulkLCNFetchModal';
 import { GracenoteConflictModal, type GracenoteConflict } from './GracenoteConflictModal';
-import { EditChannelModal, type ChannelMetadataChanges } from './EditChannelModal';
+import {
+  EditChannelModal,
+  type ChannelMetadataChanges,
+  type ChannelMetadataSaveOptions,
+} from './EditChannelModal';
 import { NormalizeNamesModal } from './NormalizeNamesModal';
 import { FindDuplicatesModal } from './FindDuplicatesModal';
 import { naturalCompare } from '../utils/naturalSort';
@@ -48,6 +55,8 @@ import { compareChannelNames, type ChannelSortOrder } from '../utils/channelSort
 import { getDateLocale } from '../utils/formatting';
 import { useCopyFeedback } from '../hooks/useCopyFeedback';
 import { useNotifications } from '../contexts/NotificationContext';
+import { describeDedupDropReport } from './dedupDropMessages';
+import type { DedupDropReport } from '../hooks/useDedupOnDrop';
 import { useDropdown } from '../hooks/useDropdown';
 import { useModal } from '../hooks/useModal';
 import { useNormalizePreview } from '../hooks/useNormalizePreview';
@@ -109,6 +118,62 @@ function renumberStartValue(text: string): number | null {
   return parsed.ok ? parsed.value : null;
 }
 
+/**
+ * Sub-label for the Reorder Group dialog's "Keep current numbers" option
+ * (bead `enhancedchannelmanager-zll44`).
+ *
+ * Dragging a group open this dialog, and every option except this one stages
+ * `channel_number` updates — which IS durable through Apply All, because the
+ * group list is re-sorted by lowest channel number on load. "Keep current
+ * numbers" is the exception: it writes nothing at all, only local `groupOrder`
+ * state, so the arrangement is gone on the next page load with no unsaved-
+ * changes indicator and nothing counted as an Edit Mode change.
+ *
+ * The old sub-label read "Don't change channel numbers", which is true and
+ * beside the point: it described the numbers and said nothing about the move
+ * the operator just made. The PO decided against persisting `groupOrder`, so
+ * this text is the whole fix — it has to name the consequence (the position is
+ * not saved), when it is lost (on reload), and what the durable alternative is
+ * (renumbering).
+ */
+/**
+ * What the three delete dialogs say when Edit Mode is on
+ * (bead enhancedchannelmanager-kz089).
+ *
+ * They used to say "Changes can be undone while in edit mode." That sentence
+ * was about the MODE, not about the delete, and as a claim about the mode it
+ * was false: eleven actions staged and ten wrote through immediately, so the
+ * one place ECM made an explicit reversibility promise was also the place it
+ * was least able to keep it. An operator who read it, then merged twenty
+ * channels and hit Discard, had lost the originals.
+ *
+ * The replacement claims only what this dialog's own button does, and says how
+ * to reverse it. That stays true whatever else the mode gains or loses, which
+ * is the property the old sentence lacked.
+ */
+export const EDIT_MODE_DELETE_STAGED_NOTE =
+  'This delete is staged: nothing is removed until you choose Apply All, and ' +
+  'Undo or Discard reverses it.';
+
+/**
+ * Shown at the point of action by the two operations Edit Mode cannot stage
+ * (bead enhancedchannelmanager-kz089).
+ *
+ * The PO accepted Merge and Import CSV as genuine staging exceptions: a merge
+ * reconciles records across providers and would need server-side support to be
+ * represented as a reversible diff, and that work is explicitly out of scope.
+ * What is not acceptable is the mode implying otherwise by silence. These
+ * actions therefore say plainly, before they run, that they apply immediately
+ * and Discard will not reach them.
+ */
+export const IRREVERSIBLE_IN_EDIT_MODE_NOTE =
+  'This applies immediately and is NOT staged. Unlike the rest of Edit Mode, ' +
+  'it cannot be undone by Discard, Cancel or Undo.';
+
+export const KEEP_CURRENT_NUMBERS_SUBLABEL =
+  'Display only: the new group position is not saved, and a page reload puts ' +
+  'it back. Renumber to make the move durable.';
+
 
 interface ChannelsPaneProps {
   channelGroups: ChannelGroup[];
@@ -133,7 +198,12 @@ interface ChannelsPaneProps {
   // Edit mode props
   isEditMode?: boolean;
   modifiedChannelIds?: Set<number>;
-  onStageUpdateChannel?: (channelId: number, data: Partial<Channel>, description: string) => void;
+  onStageUpdateChannel?: (
+    channelId: number,
+    data: Partial<Channel>,
+    description: string,
+    options?: StageUpdateChannelOptions,
+  ) => void;
   onStageAddStream?: (channelId: number, streamId: number, description: string) => void;
   onStageRemoveStream?: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams?: (channelId: number, streamIds: number[], description: string) => void;
@@ -143,6 +213,23 @@ interface ChannelsPaneProps {
   onStageRenameChannelGroup?: (groupId: number, newName: string, description: string) => void;
   /** Stage a new channel group; returns its negative temp id (bd-vtapf). */
   onStageCreateGroup?: (name: string) => number;
+  /**
+   * Staging hooks for the actions Edit Mode used to write through itself
+   * (bead enhancedchannelmanager-kz089). Optional like their neighbours: when
+   * absent, or when Edit Mode is off, each handler falls back to the immediate
+   * write it has always done outside the mode.
+   */
+  onStageSetProfileMembership?: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  onStageRestoreChannelGroup?: (groupId: number, description: string) => void;
+  onStageClearStreamStats?: (streamIds: number[], description: string) => void;
+  /**
+   * Working-copy view of those staged operations. Profile membership,
+   * hidden-group state and probe stats do not live on a Channel record, so this
+   * is what the pane renders instead of the server value while they are pending
+   * (bead …-kz089, fix round 2). Defaults to empty, which is exactly how it
+   * reads outside Edit Mode.
+   */
+  stagedSideEffects?: StagedSideEffects;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -198,8 +285,16 @@ interface ChannelsPaneProps {
   // Now includes optional target group ID and suggested starting number for positional drops
   onStreamGroupDrop?: (groupNames: string[], streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => void;
   // Bulk streams drop callback (for opening bulk create modal when dropping multiple streams)
-  // Includes target group ID and starting channel number for pre-filling the modal
-  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Includes target group ID and starting channel number for pre-filling the modal.
+  // May resolve with what the duplicate check did, which this pane turns into an
+  // operator-visible message (bead enhancedchannelmanager-ok8tj). Callers that do
+  // not run a dedup check — the dev harness and the pane's own tests — return void
+  // and simply say nothing, exactly as before.
+  onBulkStreamsDrop?: (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ) => void | Promise<DedupDropReport | void>;
   // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
   onOpenCreateChannelModal?: () => void;
   // Appearance settings
@@ -216,6 +311,30 @@ interface ChannelsPaneProps {
 
 interface GroupState {
   [groupId: number]: boolean;
+}
+
+/**
+ * A channel-number change the operator has been warned about and has not yet
+ * answered (beads enhancedchannelmanager-vdxbx and …-ic884.5).
+ *
+ * Carries the whole decided change, not the inputs to it. The warning is about
+ * a state of the lineup at a moment in time; recomputing the update from the
+ * raw text on confirmation would answer a different question than the one the
+ * operator was asked.
+ */
+interface PendingNumberChange {
+  channelId: number;
+  channelName: string;
+  /** The proposed number; `null` when the operator is clearing it. */
+  newNumber: number | null;
+  updateData: { channel_number: number | null; name?: string };
+  description: string;
+  /** Channels already on `newNumber`, excluding the one being edited. */
+  conflicts: { id: number; name: string }[];
+  /** Clearing would leave a number stranded inside the channel's own name. */
+  strandsNumberInName: boolean;
+  /** Exactly what was typed, so backing out reopens the editor on it. */
+  rawText: string;
 }
 
 // ChannelListItem component extracted to ChannelListItem.tsx
@@ -1037,6 +1156,19 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                   <span>{isProbing ? 'Probing...' : 'Probe Group'}</span>
                 </button>
               )}
+              {/* Third probe entry point, and the only one that is Edit-Mode
+                  ONLY: this whole menu is. Found by re-enumerating Edit Mode's
+                  actions in fix round 2 rather than by the review, which named
+                  the per-channel and bulk probes. Same PO decision, same
+                  affordance (bead enhancedchannelmanager-kz089). */}
+              {canProbe && (
+                <ImmediateActionNote
+                  what="Probing"
+                  detail="It writes the stream stats it measures."
+                  compact
+                  testId="probe-immediate-note-group"
+                />
+              )}
               {/* Sort Streams sub-menu */}
               {canSortStreams && (
                 <>
@@ -1216,6 +1348,10 @@ export function ChannelsPane({
   onStageDeleteChannelGroup,
   onStageRenameChannelGroup,
   onStageCreateGroup,
+  onStageSetProfileMembership,
+  onStageRestoreChannelGroup,
+  onStageClearStreamStats,
+  stagedSideEffects = EMPTY_STAGED_SIDE_EFFECTS,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -1319,6 +1455,17 @@ export function ChannelsPane({
   const [editingChannelId, setEditingChannelId] = useState<number | null>(null);
   const [editingChannelNumber, setEditingChannelNumber] = useState('');
 
+  /**
+   * A channel-number change the operator has been asked about but has not yet
+   * answered (beads enhancedchannelmanager-vdxbx and …-ic884.5).
+   *
+   * Held whole rather than recomputed on confirmation: the conflict was
+   * decided against the channel list as it stood when the operator hit save,
+   * and re-deriving it in the confirm handler would let a background refresh
+   * change the question between asking it and answering it.
+   */
+  const [pendingNumberChange, setPendingNumberChange] = useState<PendingNumberChange | null>(null);
+
   // Edit channel name state
   const [editingNameChannelId, setEditingNameChannelId] = useState<number | null>(null);
   const [editingChannelName, setEditingChannelName] = useState('');
@@ -1332,8 +1479,27 @@ export function ChannelsPane({
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
   const [previewChannelName, setPreviewChannelName] = useState<string | undefined>(undefined);
 
-  // Stream stats state for displaying probe metadata
-  const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  // Stream stats state for displaying probe metadata. The SERVER's view —
+  // every read below goes through `streamStatsMap`, which subtracts the clears
+  // this Edit Mode session has staged.
+  const [serverStreamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  /**
+   * Probe stats as the operator should see them right now: the server's, minus
+   * the streams whose stats are staged to be cleared.
+   *
+   * This used to be done by deleting from the state map at staging time, which
+   * Discard and Undo could not reach — so Discard dropped the change count
+   * while the stats stayed visually gone, and Redo could not put them back
+   * (bead …-kz089, fix round 2). Derived from the operation queue, all three
+   * work.
+   */
+  const streamStatsMap = useMemo(() => {
+    const cleared = stagedSideEffects.clearedStreamIds;
+    if (cleared.size === 0) return serverStreamStatsMap;
+    const next = new Map(serverStreamStatsMap);
+    for (const streamId of cleared) next.delete(streamId);
+    return next;
+  }, [serverStreamStatsMap, stagedSideEffects.clearedStreamIds]);
   // Dispatcharr-stale stream ids (bead enhancedchannelmanager-po78p / GH
   // #696) — the single source of truth for stale-stream decoration in this
   // pane. Populated best-effort by the mount effect below; an empty set
@@ -1488,9 +1654,14 @@ export function ChannelsPane({
   const [renumberAllUpdateNames, setRenumberAllUpdateNames] = useState<boolean>(true);
   const [renumberAllGroupOverrides, setRenumberAllGroupOverrides] = useState<Record<string, string>>({});
 
-  // Hidden groups state
+  // Hidden groups state. As above: the server's list, minus the restores this
+  // session has staged, so Discard and Undo put a row back.
   const hiddenGroupsModal = useModal();
-  const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+  const [serverHiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+  const hiddenGroups = useMemo(
+    () => serverHiddenGroups.filter((g) => !stagedSideEffects.restoredGroupIds.has(g.id)),
+    [serverHiddenGroups, stagedSideEffects.restoredGroupIds],
+  );
 
   // Group reorder modal state
   const groupReorderModal = useModal();
@@ -1806,6 +1977,39 @@ export function ChannelsPane({
     }
   }, [selectedChannelIds, channels, notifications]);
 
+  /**
+   * Assign a logo to a channel, staging the assignment in Edit Mode.
+   *
+   * Bead enhancedchannelmanager-kz089 / enhancedchannelmanager-i4yk1: "Set Logo
+   * from M3U" and "Set Logo from EPG" sit in the Edit Mode selection toolbar
+   * beside Move to group, Normalize Names and Sort Streams, all of which stage
+   * — and they PATCHed every selected channel immediately. Applied across a
+   * large selection that was not recoverable through the UI.
+   *
+   * The `logo_id` assignment is what the operator is deciding, and it stages as
+   * an ordinary `updateChannel`. Resolving the URL to a Logo record still
+   * happens now, because the picker and the row preview need a real id: that
+   * call is additive to the shared logo catalog, changes no channel, and is
+   * exactly what the Edit Channel modal's own "add logo by URL" already does
+   * while staging its assignment.
+   */
+  const assignLogoToChannel = useCallback(async (
+    channel: Channel,
+    logoUrl: string,
+    logoCache: Map<string, import('../types').Logo>,
+  ) => {
+    const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
+    if (isEditMode && onStageUpdateChannel) {
+      onStageUpdateChannel(
+        channel.id,
+        { logo_id: logo.id },
+        `Set logo for "${channel.name}"`,
+      );
+      return;
+    }
+    await api.updateChannel(channel.id, { logo_id: logo.id });
+  }, [isEditMode, onStageUpdateChannel]);
+
   // Handle bulk set logo from M3U streams
   const handleBulkSetLogoFromM3U = useCallback(async () => {
     setBulkLogoLoading(true);
@@ -1813,6 +2017,8 @@ export function ChannelsPane({
     let assigned = 0, skipped = 0;
 
     logger.info(`[BulkLogoM3U] Starting bulk logo assignment for ${selectedChannelIds.size} channels`);
+    const staging = isEditMode && !!onStageUpdateChannel;
+    if (staging) onStartBatch?.(`Set logos from M3U for ${selectedChannelIds.size} channels`);
 
     try {
       for (const channelId of selectedChannelIds) {
@@ -1830,8 +2036,7 @@ export function ChannelsPane({
           }
 
           logger.debug(`[BulkLogoM3U] Assigning logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
-          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
-          await api.updateChannel(channelId, { logo_id: logo.id });
+          await assignLogoToChannel(channel, logoUrl, logoCache);
           assigned++;
         } catch (err) {
           logger.warn(`[BulkLogoM3U] Failed to assign logo for channel ${channelId}:`, err);
@@ -1840,16 +2045,21 @@ export function ChannelsPane({
       }
 
       logger.info(`[BulkLogoM3U] Complete: ${assigned} assigned, ${skipped} skipped`);
-      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`);
-      onChannelsChange?.();
+      notifications.success(
+        staging
+          ? `Staged logos: ${assigned} to assign, ${skipped} skipped (no M3U logo)`
+          : `Set logos: ${assigned} assigned, ${skipped} skipped (no M3U logo)`
+      );
+      if (!staging) onChannelsChange?.();
       onLogosChange?.();
     } catch (err) {
       logger.error('[BulkLogoM3U] Bulk set logo from M3U failed:', err);
       notifications.error('Failed to set logos from M3U');
     } finally {
+      if (staging) onEndBatch?.();
       setBulkLogoLoading(false);
     }
-  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange]);
+  }, [selectedChannelIds, channels, notifications, onChannelsChange, onLogosChange, assignLogoToChannel, isEditMode, onStageUpdateChannel, onStartBatch, onEndBatch]);
 
   // Handle bulk set logo from linked EPG entry's icon_url
   const handleBulkSetLogoFromEPG = useCallback(async () => {
@@ -1859,6 +2069,8 @@ export function ChannelsPane({
     let assigned = 0, skipped = 0;
 
     logger.info(`[BulkLogoEPG] Starting bulk EPG-logo assignment for ${selectedChannelIds.size} channels`);
+    const staging = isEditMode && !!onStageUpdateChannel;
+    if (staging) onStartBatch?.(`Set logos from EPG for ${selectedChannelIds.size} channels`);
 
     try {
       for (const channelId of selectedChannelIds) {
@@ -1882,8 +2094,7 @@ export function ChannelsPane({
           }
 
           logger.debug(`[BulkLogoEPG] Assigning EPG logo to channel ${channel.name} (${channelId}) from ${logoUrl}`);
-          const logo = await api.getOrCreateLogo(channel.name, logoUrl, logoCache);
-          await api.updateChannel(channelId, { logo_id: logo.id });
+          await assignLogoToChannel(channel, logoUrl, logoCache);
           assigned++;
         } catch (err) {
           logger.warn(`[BulkLogoEPG] Failed to assign EPG logo for channel ${channelId}:`, err);
@@ -1892,16 +2103,21 @@ export function ChannelsPane({
       }
 
       logger.info(`[BulkLogoEPG] Complete: ${assigned} assigned, ${skipped} skipped`);
-      notifications.success(`Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`);
-      onChannelsChange?.();
+      notifications.success(
+        staging
+          ? `Staged logos: ${assigned} to assign, ${skipped} skipped (no EPG logo)`
+          : `Set logos: ${assigned} assigned, ${skipped} skipped (no EPG logo)`
+      );
+      if (!staging) onChannelsChange?.();
       onLogosChange?.();
     } catch (err) {
       logger.error('[BulkLogoEPG] Bulk set logo from EPG failed:', err);
       notifications.error('Failed to set logos from EPG');
     } finally {
+      if (staging) onEndBatch?.();
       setBulkLogoLoading(false);
     }
-  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange]);
+  }, [selectedChannelIds, channels, epgData, notifications, onChannelsChange, onLogosChange, assignLogoToChannel, isEditMode, onStageUpdateChannel, onStartBatch, onEndBatch]);
 
   // Handle probe group request - probes all streams in all channels of a group
   // Uses the same backend probe logic as "Probe All Streams Now" but filtered to a single group
@@ -2130,6 +2346,21 @@ export function ChannelsPane({
     const profile = channelProfiles.find(p => p.id === profileId);
     if (!profile || channelIds.length === 0) return;
 
+    // In Edit Mode this stages like every other selection action (bead
+    // enhancedchannelmanager-kz089). It used to PATCH each membership straight
+    // through the staging area: the change was not counted, Discard did not
+    // touch it, and Undo could not reach it, in a mode whose whole promise is
+    // that nothing is real until Apply All.
+    if (isEditMode && onStageSetProfileMembership) {
+      const description =
+        `${enable ? 'Enable' : 'Disable'} ${channelIds.length} channel` +
+        `${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"`;
+      onStartBatch?.(description);
+      onStageSetProfileMembership(profileId, channelIds, enable, description);
+      onEndBatch?.();
+      return;
+    }
+
     const verb = enable ? 'Enabling' : 'Disabling';
     notifications.info(
       `${verb} ${channelIds.length} channel${channelIds.length !== 1 ? 's' : ''} in profile "${profile.name}"...`,
@@ -2165,7 +2396,7 @@ export function ChannelsPane({
     if (onChannelProfilesChange) {
       await onChannelProfilesChange();
     }
-  }, [channelProfiles, notifications, onChannelProfilesChange]);
+  }, [channelProfiles, notifications, onChannelProfilesChange, isEditMode, onStageSetProfileMembership, onStartBatch, onEndBatch]);
 
   // Handle copying channel URL to clipboard
   const handleCopyChannelUrl = async (url: string, channelName: string) => {
@@ -2216,6 +2447,23 @@ export function ChannelsPane({
   // Handle clearing probe stats for a stream
   const handleClearStreamStats = async (streamId: number) => {
     logger.debug('handleClearStreamStats called with streamId:', streamId);
+    // Stage in Edit Mode (bead enhancedchannelmanager-kz089). Clearing probe
+    // stats destroys probe history that only a re-probe can rebuild, and it
+    // used to happen the instant the operator clicked, inside a mode that says
+    // it is staging. The row reads the same as it will after Apply All either
+    // way — in Edit Mode because `streamStatsMap` subtracts the staged clears.
+    if (isEditMode && onStageClearStreamStats) {
+      const stream = channelStreams.find((s) => s.id === streamId);
+      onStageClearStreamStats(
+        [streamId],
+        `Clear probe stats for "${stream?.name || `stream ${streamId}`}"`,
+      );
+      // Nothing local to update: `streamStatsMap` already subtracts the staged
+      // clears, so the row reads as cleared now AND comes back on Discard or
+      // Undo. Deleting from the state map here is what made Discard leave the
+      // stats gone (bead …-kz089, fix round 2).
+      return;
+    }
     try {
       const result = await api.clearStreamStats([streamId]);
       logger.debug('clearStreamStats result:', result);
@@ -3020,6 +3268,21 @@ export function ChannelsPane({
 
   // Restore a hidden group
   const handleRestoreGroup = async (groupId: number) => {
+    // Hidden Groups is an Edit-Mode-only menu item, so this restore was an
+    // immediate write with no way out of it short of hiding the group again
+    // (bead enhancedchannelmanager-kz089). Staged, it is discardable like the
+    // delete that hid the group in the first place. The row leaves the modal
+    // list immediately so the list reflects the staged intent.
+    if (isEditMode && onStageRestoreChannelGroup) {
+      const hidden = hiddenGroups.find((g) => g.id === groupId);
+      onStageRestoreChannelGroup(
+        groupId,
+        `Restore hidden group "${hidden?.name || groupId}"`,
+      );
+      // As with the stats clear: `hiddenGroups` already subtracts the staged
+      // restores, so the row leaves the list now and returns on Discard or Undo.
+      return;
+    }
     try {
       await api.restoreChannelGroup(groupId);
       // Reload hidden groups list
@@ -3136,6 +3399,27 @@ export function ChannelsPane({
     return maxNumber + 1;
   };
 
+  // Say what the duplicate check did on a drop (bead
+  // enhancedchannelmanager-ok8tj). The drop handler resolves with the outcome;
+  // a `candidate` outcome resolves to no message, because the StreamDedupModal
+  // it just opened IS the message. Callers that return void — the dev harness,
+  // this pane's own tests — say nothing, exactly as before.
+  const reportDedupDropOutcome = (
+    groupId: number | 'ungrouped',
+    result: void | Promise<DedupDropReport | void>,
+  ) => {
+    if (!result) return;
+    const groupLabel = groupId === 'ungrouped'
+      ? 'the ungrouped list'
+      : `"${channelGroups.find((g) => g.id === groupId)?.name ?? 'Unknown Group'}"`;
+    void Promise.resolve(result).then((report) => {
+      if (!report) return;
+      const message = describeDedupDropReport(report, groupLabel);
+      if (!message) return;
+      notifications[message.type](message.message, message.title);
+    });
+  };
+
   // Handle stream dropped on group header - creates new channel(s) with stream name(s)
   // Always routes to bulk create modal for consistent UX (works for 1 or many streams)
   const handleStreamDropOnGroup = (groupId: number | 'ungrouped', streamIds: number[]) => {
@@ -3147,7 +3431,7 @@ export function ChannelsPane({
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
     // Route to bulk create modal (handles single or multiple streams)
-    onBulkStreamsDrop(streamIds, targetGroupId, nextNumber);
+    reportDedupDropOutcome(groupId, onBulkStreamsDrop(streamIds, targetGroupId, nextNumber));
   };
 
   // Handle stream dropped between channels - creates new channel(s) at specific position
@@ -3162,7 +3446,10 @@ export function ChannelsPane({
     const targetGroupId = groupId === 'ungrouped' ? null : groupId;
 
     // Route to bulk create modal (handles single or multiple streams)
-    onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber);
+    reportDedupDropOutcome(
+      groupId,
+      onBulkStreamsDrop(streamIds, targetGroupId, insertAtChannelNumber),
+    );
   };
 
   // getNameForSorting / stripCountryPrefix used to live here as local
@@ -3180,12 +3467,54 @@ export function ChannelsPane({
     setEditingChannelNumber(channel.channel_number?.toString() ?? '');
   };
 
+  /**
+   * Put a decided channel-number change through, staged or written.
+   *
+   * Split out of `handleSaveChannelNumber` so the confirmation dialog lands on
+   * exactly the same path an unconfirmed change takes: the ONLY difference a
+   * confirmation makes is the acknowledgement it carries.
+   *
+   * The acknowledgement is passed as a fourth argument only when there is one.
+   * That is not cosmetic — it keeps a plain edit's call shape identical to what
+   * it has always been, so nothing downstream has to learn a new signature to
+   * keep behaving the way it did.
+   */
+  const applyChannelNumberChange = async (
+    channelId: number,
+    updateData: { channel_number: number | null; name?: string },
+    description: string,
+    acknowledgedDuplicate?: DuplicateNumberAcknowledgement,
+  ) => {
+    const nameChanged = updateData.name !== undefined;
+    if (isEditMode && onStageUpdateChannel) {
+      // In edit mode, stage the operation locally
+      if (acknowledgedDuplicate === undefined) {
+        onStageUpdateChannel(channelId, updateData, description);
+      } else {
+        onStageUpdateChannel(channelId, updateData, description, { acknowledgedDuplicate });
+      }
+    } else {
+      // Normal mode - call API directly
+      try {
+        const updatedChannel = await api.updateChannel(channelId, updateData);
+        const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
+        onChannelUpdate(updatedChannel, { type: changeType, description });
+      } catch (err) {
+        logger.error('Failed to update channel number:', err);
+      }
+    }
+  };
+
   const handleSaveChannelNumber = async (channelId: number) => {
     // The canonical contract gates the inline editor: an out-of-contract entry
     // is refused with the same sentence the API would return, and the editor
     // stays open on the offending value so the operator can correct it rather
     // than having it silently rounded onto a neighbouring tenth.
     // Bead enhancedchannelmanager-ic884.1.
+    //
+    // Note the ORDER. Malformed input is refused before anything else is asked,
+    // so a duplicate warning can never appear for a value that is not a channel
+    // number, and `NaN` has no route to a staged operation.
     const parsed = parseChannelNumberInput(editingChannelNumber);
     if (!parsed.ok) {
       notifications.error(parsed.message, 'Invalid Channel Number');
@@ -3211,25 +3540,109 @@ export function ChannelsPane({
       ? `Changed "${channel?.name}" to "${updateData.name}"`
       : `Changed channel number from ${channel?.channel_number ?? '-'} to ${newNumber ?? '-'}`;
 
-    if (isEditMode && onStageUpdateChannel) {
-      // In edit mode, stage the operation locally
-      onStageUpdateChannel(channelId, updateData, description);
-    } else {
-      // Normal mode - call API directly
-      try {
-        const updatedChannel = await api.updateChannel(channelId, updateData);
-        const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
-        onChannelUpdate(updatedChannel, { type: changeType, description });
-      } catch (err) {
-        logger.error('Failed to update channel number:', err);
-      }
+    // Bead enhancedchannelmanager-vdxbx. `channels` is Edit Mode's working
+    // copy, so this is the EFFECTIVE lineup — it already carries the numbers
+    // staged earlier in this session and the channels created in it, and no
+    // longer carries the ones deleted in it. The edited channel is excluded, so
+    // retaining its own number never warns.
+    const conflicts = channelsHoldingNumber(channels, newNumber, [channelId]);
+    // Bead enhancedchannelmanager-ic884.5. Clearing a number cannot rewrite the
+    // name — there is no new number to write — so a name like "1 | Alpha" keeps
+    // a number the channel no longer has. That is a downstream effect of the
+    // clear, so the operator is asked rather than told afterwards.
+    const strandsNumberInName =
+      newNumber === null &&
+      channel !== undefined &&
+      channel.channel_number !== null &&
+      nameCarriesChannelNumber(channel.name);
+
+    if (conflicts.length > 0 || strandsNumberInName) {
+      setPendingNumberChange({
+        channelId,
+        channelName: channel?.name ?? `Channel ${channelId}`,
+        newNumber,
+        updateData,
+        description,
+        conflicts: conflicts.map((c) => ({ id: c.id, name: c.name })),
+        strandsNumberInName,
+        rawText: editingChannelNumber,
+      });
+      setEditingChannelId(null);
+      return;
     }
+
+    await applyChannelNumberChange(channelId, updateData, description);
     setEditingChannelId(null);
+  };
+
+  /** Proceed with the change the operator was warned about. */
+  const handleConfirmPendingNumberChange = async () => {
+    const pending = pendingNumberChange;
+    if (!pending) return;
+    setPendingNumberChange(null);
+    await applyChannelNumberChange(
+      pending.channelId,
+      pending.updateData,
+      pending.description,
+      // Only a duplicate is acknowledged. Confirming a clear says nothing
+      // about any number, and recording one would tell the preflight the
+      // operator accepted a collision they were never shown.
+      //
+      // The occupants travel with the number, and they are the ones the dialog
+      // NAMED — `pending.conflicts` is what was rendered, not a fresh lookup —
+      // so what is recorded is exactly what the operator was asked about.
+      pending.conflicts.length > 0 && pending.newNumber !== null
+        ? {
+            number: pending.newNumber,
+            occupantChannelIds: pending.conflicts.map((conflict) => conflict.id),
+          }
+        : undefined,
+    );
+  };
+
+  /**
+   * Back out, and put the operator back where they were.
+   *
+   * Reopening the editor on the refused text rather than discarding it: the
+   * warning exists to let them pick a different number, and dropping what they
+   * typed would make them start over to act on the advice.
+   */
+  const handleCancelPendingNumberChange = () => {
+    const pending = pendingNumberChange;
+    setPendingNumberChange(null);
+    if (!pending) return;
+    setEditingChannelId(pending.channelId);
+    setEditingChannelNumber(pending.rawText);
   };
 
   const handleCancelEditNumber = () => {
     setEditingChannelId(null);
     setEditingChannelNumber('');
+  };
+
+  /**
+   * Refuse a renumbering RUN whose numbers cannot all exist, before a single
+   * operation is staged (bead enhancedchannelmanager-ic884.5).
+   *
+   * The start of a run is already held to the whole-number rule field by field.
+   * That is not the same property: a start can be a perfectly valid channel
+   * number and still describe a run that runs out of representable numbers
+   * before it ends, and the tail then piles several channels silently onto one
+   * number. The check is over the run, so it catches the case a per-value check
+   * cannot see.
+   *
+   * A run of nothing is refused by nothing: an empty selection is not an error,
+   * it is a no-op, and the callers below already treat it as one.
+   */
+  const refuseUnnumberableRange = (start: number, count: number, action: string): boolean => {
+    if (count < 1) return false;
+    const error = channelNumberRangeError(start, count);
+    if (!error) return false;
+    notifications.error(
+      `${error} Starting at ${start} would need ${count} consecutive numbers.`,
+      `Cannot ${action}`,
+    );
+    return true;
   };
 
   // Handle editing channel name
@@ -4402,6 +4815,18 @@ export function ChannelsPane({
 
     const { groupId, channels, newPosition } = groupReorderData;
 
+    // Whether the requested run can exist is decided BEFORE the reorder is
+    // applied (bead enhancedchannelmanager-ic884.5). Checking it later would
+    // leave the group moved but not renumbered, which is the partial state the
+    // guard above already exists to prevent for a refused start number.
+    if (groupReorderNumberingOption !== 'keep' && channels.length > 0) {
+      const plannedStart =
+        groupReorderNumberingOption === 'custom'
+          ? (groupReorderCustomStartNumber as number)
+          : groupReorderData.suggestedStartingNumber ?? 1;
+      if (refuseUnnumberableRange(plannedStart, channels.length, 'Reorder Group')) return;
+    }
+
     // First, apply the group reorder
     let currentOrder = groupOrder;
     if (currentOrder.length === 0) {
@@ -4884,6 +5309,9 @@ export function ChannelsPane({
 
     const startingNumber = sortRenumberStartNumber;
     if (startingNumber === null) return;
+    if (refuseUnnumberableRange(startingNumber, sortRenumberData.channels.length, 'Sort and Renumber')) {
+      return;
+    }
 
     // Sort channels alphabetically by name (case-insensitive, natural sort
     // for numbers), applying the same optional transforms + order as the
@@ -5072,6 +5500,19 @@ export function ChannelsPane({
 
     if (groupEntries.length === 0) return;
 
+    // Every group's run is checked BEFORE any of them is staged, so a run that
+    // cannot exist refuses the whole action rather than renumbering the groups
+    // ahead of it and stopping (bead enhancedchannelmanager-ic884.5). The walk
+    // mirrors the staging loop below exactly, overrides included, so the two
+    // cannot disagree about where a group starts.
+    let checkNum = startNum;
+    for (const entry of groupEntries) {
+      const overrideNum = renumberStartValue(renumberAllGroupOverrides[entry.key] ?? '');
+      if (overrideNum !== null) checkNum = overrideNum;
+      if (refuseUnnumberableRange(checkNum, entry.channels.length, 'Renumber All Groups')) return;
+      checkNum += entry.channels.length;
+    }
+
     // Start batch for single undo
     if (onStartBatch) {
       onStartBatch(`Renumber all groups: channels across ${groupEntries.length} groups`);
@@ -5124,6 +5565,19 @@ export function ChannelsPane({
     if (startNum === null) return;
 
     const { conflicts } = getMassRenumberConflicts;
+
+    // The run is the selection plus, when conflicts are shifted, the shifted
+    // channels stacked on its far end — so the last number this operation can
+    // reach is `startNum + selection + shifted - 1`.
+    if (
+      refuseUnnumberableRange(
+        startNum,
+        massRenumberChannels.length + (shiftConflicts ? conflicts.length : 0),
+        'Renumber',
+      )
+    ) {
+      return;
+    }
 
     // Start batch
     if ((massRenumberChannels.length + (shiftConflicts ? conflicts.length : 0)) > 1 && onStartBatch) {
@@ -5911,6 +6365,68 @@ export function ChannelsPane({
         </div>
       )}
 
+      {/* Channel-number confirmation (beads …-vdxbx, …-ic884.5).
+          A WARNING, never a block. `ic884.1` deliberately declined to enforce
+          uniqueness because Dispatcharr permits duplicates and real lineups
+          have them, so refusing outright would contradict a shipped decision.
+          What this prevents is the ACCIDENTAL duplicate: the operator has to
+          say so, and what they say is recorded on the staged operation so the
+          final-state preflight does not ask them again at Apply. */}
+      {pendingNumberChange && (
+        <div className="modal-overlay">
+          <div
+            className="modal-content delete-dialog"
+            data-testid="channel-number-confirm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>{pendingNumberChange.conflicts.length > 0 ? 'Channel Number Already Used' : 'Clear Channel Number'}</h3>
+            <div className="delete-message">
+              {pendingNumberChange.conflicts.length > 0 && (
+                <>
+                  <p>
+                    Channel number <strong>{pendingNumberChange.newNumber}</strong> is already used by{' '}
+                    <strong>
+                      {pendingNumberChange.conflicts.map((c) => c.name).join(', ')}
+                    </strong>
+                    .
+                  </p>
+                  <p className="delete-info">
+                    Dispatcharr allows duplicate channel numbers, so this is not an error — but it is
+                    rarely what you meant. Choose a different number, or use this one deliberately.
+                  </p>
+                </>
+              )}
+              {pendingNumberChange.strandsNumberInName && (
+                <>
+                  <p>
+                    Clearing the number leaves it in the channel&apos;s name:{' '}
+                    <strong>{pendingNumberChange.channelName}</strong>.
+                  </p>
+                  <p className="delete-info">
+                    Automatic renaming only rewrites a name when there is a new number to write, so
+                    the name will keep the old one until you edit it.
+                  </p>
+                </>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="modal-btn modal-btn-secondary"
+                onClick={handleCancelPendingNumberChange}
+              >
+                Go Back
+              </button>
+              <button
+                className="modal-btn modal-btn-primary"
+                onClick={handleConfirmPendingNumberChange}
+              >
+                {pendingNumberChange.conflicts.length > 0 ? 'Use It Anyway' : 'Clear It Anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Channel Confirmation Dialog */}
       {deleteConfirmModal.isOpen && channelToDelete && (
         <div className="modal-overlay">
@@ -5923,7 +6439,7 @@ export function ChannelsPane({
               </p>
               <p className={isEditMode ? "delete-info" : "delete-warning"}>
                 {isEditMode
-                  ? 'Changes can be undone while in edit mode.'
+                  ? EDIT_MODE_DELETE_STAGED_NOTE
                   : 'This action cannot be undone. The channel and all its stream assignments will be permanently removed.'}
               </p>
             </div>
@@ -6032,7 +6548,7 @@ export function ChannelsPane({
                 )}
                 <p className="delete-info">
                   {isEditMode
-                    ? 'Changes can be undone while in edit mode.'
+                    ? EDIT_MODE_DELETE_STAGED_NOTE
                     : 'This action cannot be undone.'}
                 </p>
               </div>
@@ -6134,7 +6650,7 @@ export function ChannelsPane({
                 </p>
                 <p className={isEditMode ? "delete-info" : "delete-warning"}>
                   {isEditMode
-                    ? 'Changes can be undone while in edit mode.'
+                    ? EDIT_MODE_DELETE_STAGED_NOTE
                     : 'This action cannot be undone. All selected channels and their stream assignments will be permanently removed.'}
                 </p>
                 {/* Show checkbox to also delete groups that would be emptied */}
@@ -6228,6 +6744,7 @@ export function ChannelsPane({
       {/* Find Duplicates Modal */}
       {findDuplicatesModal.isOpen && (
         <FindDuplicatesModal
+          isEditMode={isEditMode}
           channelIds={Array.from(selectedChannelIds)}
           onClose={() => findDuplicatesModal.close()}
           onMerged={() => {
@@ -6241,6 +6758,10 @@ export function ChannelsPane({
       {editChannelModal.isOpen && channelToEdit && (
         <EditChannelModal
           channel={channelToEdit}
+          // Edit Mode's working copy, so the duplicate check sees numbers
+          // staged earlier in this session and channels created in it, not
+          // only the last server-loaded list (bd-vdxbx, criterion 4).
+          channelsForNumberCheck={channels}
           logos={logos}
           epgData={epgData}
           epgSources={epgSources}
@@ -6250,7 +6771,7 @@ export function ChannelsPane({
             editChannelModal.close();
             setChannelToEdit(null);
           }}
-          onSave={async (changes: ChannelMetadataChanges) => {
+          onSave={async (changes: ChannelMetadataChanges, saveOptions?: ChannelMetadataSaveOptions) => {
             if (Object.keys(changes).length === 0) {
               editChannelModal.close();
               setChannelToEdit(null);
@@ -6287,7 +6808,16 @@ export function ChannelsPane({
             const description = `Updated ${channelToEdit.name}: ${changeDescriptions.join(', ')}`;
 
             if (isEditMode && onStageUpdateChannel) {
-              onStageUpdateChannel(channelToEdit.id, changes, description);
+              // The acknowledgement travels onto the staged operation, or the
+              // final-state preflight refuses at Apply the very duplicate the
+              // operator just approved in the modal (bd-vdxbx).
+              if (saveOptions?.acknowledgedDuplicate === undefined) {
+                onStageUpdateChannel(channelToEdit.id, changes, description);
+              } else {
+                onStageUpdateChannel(channelToEdit.id, changes, description, {
+                  acknowledgedDuplicate: saveOptions.acknowledgedDuplicate,
+                });
+              }
             } else {
               try {
                 const updated = await api.updateChannel(channelToEdit.id, changes);
@@ -6586,7 +7116,11 @@ export function ChannelsPane({
                   <span className="material-icons">numbers</span>
                   <div className="move-option-text">
                     <strong>Keep current numbers</strong>
-                    <span>Don't change channel numbers</span>
+                    {/* bead enhancedchannelmanager-zll44 — see
+                        KEEP_CURRENT_NUMBERS_SUBLABEL. This is the one option
+                        in this dialog that writes nothing, so it is the one
+                        that has to say so. */}
+                    <span>{KEEP_CURRENT_NUMBERS_SUBLABEL}</span>
                   </div>
                 </label>
 
@@ -7111,6 +7645,11 @@ export function ChannelsPane({
         }}
         channels={channels}
         channelGroups={channelGroups}
+        isEditMode={isEditMode}
+        stagedSideEffects={stagedSideEffects}
+        onStageSetProfileMembership={onStageSetProfileMembership}
+        onStartBatch={onStartBatch}
+        onEndBatch={onEndBatch}
       />
 
       <div className="pane-filters">
@@ -7640,6 +8179,7 @@ export function ChannelsPane({
         {/* Merge Channels Modal */}
         {mergeModal.isOpen && mergeChannelIds.length >= 2 && (
           <MergeChannelsModal
+            isEditMode={isEditMode}
             channels={channels.filter((c) => mergeChannelIds.includes(c.id))}
             logos={logos}
             epgData={epgData.map((e) => ({

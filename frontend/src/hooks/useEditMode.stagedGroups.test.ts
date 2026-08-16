@@ -131,7 +131,7 @@ function makeChannel(id: number, name: string, groupId: number | null = null): C
 
 function renderEditMode(channels: Channel[] = [], onError = vi.fn()) {
   const view = renderHook(() =>
-    useEditMode({ channels, onChannelsChange: vi.fn(), onError })
+    useEditMode({ channels, onChannelsChange: vi.fn(), onError, operatorKey: 'test#1' })
   );
   act(() => {
     view.result.current.enterEditMode();
@@ -399,6 +399,134 @@ describe('useEditMode — stageCreateGroup (bd-vtapf)', () => {
 
     expect(view.result.current.stagedGroups).toHaveLength(1);
     expect(view.result.current.summary.newGroups).toBe(1);
+  });
+});
+
+describe('useEditMode — stagedGroups is DERIVED from stagedOperations (kz089 r3)', () => {
+  /**
+   * Fix round 2 claimed the staged side effects were correct by construction
+   * because they were derived from `stagedOperations`. `stagedGroups` was not:
+   * it was an accumulated Map maintained beside the operation list, and
+   * `localUndo` filtered the operation out and returned `...prev`, so the map
+   * kept the group. `App.tsx` renders it straight into `displayChannelGroups`,
+   * so the operator saw a group in the filters and the group-selection views
+   * that no staged operation would ever create.
+   *
+   * The invariant, not the reproduction: no derived view of staged state may
+   * disagree with `stagedOperations` after Undo, Redo or Discard — including
+   * the implicit case, where the group is introduced by a `createChannel`
+   * rather than named by a `createGroup`.
+   */
+
+  it('drops an explicitly created group when its operation is undone', () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateGroup('Sports');
+    });
+    expect(view.result.current.stagedGroups).toHaveLength(1);
+
+    act(() => {
+      view.result.current.localUndo();
+    });
+
+    expect(view.result.current.stagedOperationCount).toBe(0);
+    expect(view.result.current.stagedGroups).toEqual([]);
+    expect(view.result.current.summary.newGroups).toBe(0);
+  });
+
+  it('drops an IMPLICIT group when the createChannel that introduced it is undone', () => {
+    // The case an accumulator cannot keep honest: nothing named this group,
+    // it exists only because a staged channel points at it.
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannel('First', 1, undefined, 'Drill Locals');
+    });
+    expect(view.result.current.stagedGroups).toHaveLength(1);
+
+    act(() => {
+      view.result.current.localUndo();
+    });
+
+    expect(view.result.current.stagedOperationCount).toBe(0);
+    expect(view.result.current.stagedGroups).toEqual([]);
+  });
+
+  it('puts the group back on Redo, under the same temp id', () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannel('First', 1, undefined, 'Drill Locals');
+    });
+    const before = view.result.current.stagedGroups[0];
+
+    act(() => {
+      view.result.current.localUndo();
+    });
+    act(() => {
+      view.result.current.localRedo();
+    });
+
+    expect(view.result.current.stagedGroups).toEqual([before]);
+  });
+
+  it('keeps a group that another staged operation still references', () => {
+    // Undoing ONE of two operations that name the same new group must not take
+    // the group with it — the surviving channel still needs somewhere to go.
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannel('First', 1, undefined, 'Drill Locals');
+    });
+    act(() => {
+      view.result.current.stageCreateChannel('Second', 2, undefined, 'Drill Locals');
+    });
+    expect(view.result.current.stagedGroups).toHaveLength(1);
+
+    act(() => {
+      view.result.current.localUndo();
+    });
+
+    expect(view.result.current.stagedOperationCount).toBe(1);
+    expect(view.result.current.stagedGroups).toHaveLength(1);
+    expect(view.result.current.stagedGroups[0].name).toBe('Drill Locals');
+  });
+
+  it('still resolves a pending group by name after an unrelated undo', async () => {
+    // The derivation is not just for display: `buildBulkOperations` reads the
+    // same map to rewrite a temp group id into a name. A channel staged via
+    // "Create in... -> <pending group>" must still resolve after an undo
+    // elsewhere, or its temp id goes on the wire and Dispatcharr 400s — which
+    // is bead …-udq1j, and `fakeBulkCommit` refuses it exactly as the live API
+    // does.
+    const { view } = renderEditMode();
+
+    let tempGroupId = 0;
+    act(() => {
+      view.result.current.stageCreateChannel('First', 1, undefined, 'Drill Locals');
+    });
+    tempGroupId = view.result.current.stagedGroups[0].id;
+    act(() => {
+      view.result.current.stageCreateChannel('Second', 2, tempGroupId);
+    });
+    act(() => {
+      view.result.current.stageCreateChannel('Throwaway', 3);
+    });
+    act(() => {
+      view.result.current.localUndo();
+    });
+
+    expect(view.result.current.stagedGroups).toHaveLength(1);
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(requests[0].groupsToCreate).toEqual([{ name: 'Drill Locals' }]);
+    expect(createChannelOps().map((op) => op.name)).toEqual(['First', 'Second']);
+    expect(result.operationsFailed).toBe(0);
   });
 });
 

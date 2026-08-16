@@ -24,6 +24,9 @@
     "test:css-guard:control-typeface": "playwright test e2e/control-typeface.spec.ts --project=chromium",
     "test:css-guard:control-box-size": "playwright test e2e/control-box-size.spec.ts --project=chromium",
     "test:css-guard:filter-select": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/filter-select-ownership.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-immediacy": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-immediacy-surfaces.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-numbering": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-numbering-guards.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-session-restore": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-session-restore.spec.ts --project=chromium --workers=1 --retries=0",
     "test:css-guards": "playwright test e2e/sr-only-hidden.spec.ts e2e/frozen-chrome.spec.ts e2e/route-typography-scale.spec.ts e2e/contrast-aa.spec.ts e2e/cross-route-css-leak.spec.ts e2e/settings-nav-groups.spec.ts e2e/control-typeface.spec.ts e2e/control-box-size.spec.ts --project=chromium --workers=2",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
     "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"

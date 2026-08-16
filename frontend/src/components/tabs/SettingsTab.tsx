@@ -24,6 +24,7 @@ import { logger } from '../../utils/logger';
 import { copyToClipboard } from '../../utils/clipboard';
 import { setDateFormatLocale, formatDateCompact, type DateFormatPref } from '../../utils/formatting';
 import { normalizeSmtpRecipientsPaste, parseSmtpRecipients } from '../../utils/smtpRecipients';
+import { OPEN_TASK_EDITOR_STORAGE_KEY } from '../../utils/openTaskEditor';
 import type { LogLevel as FrontendLogLevel } from '../../utils/logger';
 import { DeleteOrphanedGroupsModal } from '../DeleteOrphanedGroupsModal';
 import { ScheduledTasksSection } from '../ScheduledTasksSection';
@@ -466,8 +467,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   }, [notifications]);
 
   // Mount-only: deps must stay [] — setActivePage triggers a route change, which re-renders, which would re-run this effect into an infinite loop.
+  // This is the effect that makes a stranded intent expensive: it redirects the
+  // operator's chosen settings page on EVERY mount until the entry is removed,
+  // which is why the Edit Mode guard clears it when it cancels the navigation
+  // that stored it (bead enhancedchannelmanager-6fi7p).
   useEffect(() => {
-    const pending = sessionStorage.getItem('ecm:open-task-editor');
+    const pending = sessionStorage.getItem(OPEN_TASK_EDITOR_STORAGE_KEY);
     if (pending) {
       setActivePage('scheduled-tasks');
     }

@@ -1,4 +1,5 @@
 import type { TabId } from './TabNavigation';
+import type { RouteChangeGuardDetail, SettingsPage } from '../hooks/useHashRoute';
 
 type LinkActivation = Pick<MouseEvent, 'button' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>;
 
@@ -17,6 +18,83 @@ export function getGuardedRouteDecision(
 ): 'confirm' | 'exit-and-navigate' | 'navigate' {
   if (!isEditMode || target === 'channel-manager') return 'navigate';
   return stagedOperationCount > 0 ? 'confirm' : 'exit-and-navigate';
+}
+
+/**
+ * What to do about a Back/Forward the router is asking permission for
+ * (bead enhancedchannelmanager-6fi7p).
+ *
+ * `getGuardedRouteDecision` was only ever reachable from `handleRouteChange`,
+ * which Back/Forward does not go through, so browser history navigation left
+ * Edit Mode with staged changes and no confirmation at all. This is the
+ * adapter that puts the same decision on the `ecm:before-route-change` event.
+ *
+ * `ignore` covers two very different things on purpose: a `push`-sourced
+ * event, which `handleRouteChange` has ALREADY decided (guarding it again
+ * would veto the operator's own confirmed exit), and a genuinely unguarded
+ * destination.
+ */
+export function getGuardedPopStateDecision(
+  detail: RouteChangeGuardDetail | undefined,
+  isEditMode: boolean,
+  stagedOperationCount: number,
+): 'confirm' | 'exit-and-navigate' | 'ignore' {
+  if (!detail || detail.source !== 'pop') return 'ignore';
+  const decision = getGuardedRouteDecision(isEditMode, stagedOperationCount, detail.tab);
+  return decision === 'navigate' ? 'ignore' : decision;
+}
+
+/**
+ * Signing out ends the session, and the Edit Mode ledger is in memory, so it
+ * discards staged work exactly as leaving the route does — but it is an SPA
+ * state transition, so neither the route guard nor `beforeunload` can see it
+ * (bead epic enhancedchannelmanager-r93hq).
+ *
+ * There is no destination tab to exempt here: `getGuardedRouteDecision` lets
+ * a navigation to `channel-manager` through because Edit Mode SURVIVES it.
+ * Nothing survives a sign-out. And unlike a route change there is no
+ * `exit-and-navigate` case worth having — with no staged operations there is
+ * nothing to lose and nothing to tidy, because the whole tree unmounts.
+ */
+export function getGuardedSignOutDecision(
+  isEditMode: boolean,
+  stagedOperationCount: number,
+): 'confirm' | 'sign-out' {
+  return isEditMode && stagedOperationCount > 0 ? 'confirm' : 'sign-out';
+}
+
+export interface PendingRouteChange {
+  tab: TabId;
+  settingsPage?: SettingsPage;
+  /**
+   * Set when the deferred navigation was a Back/Forward: the
+   * `window.history.go()` argument that re-runs it. See
+   * {@link resolvePendingRouteResume}.
+   */
+  historyDelta?: number | null;
+  /** Undoes whatever the REQUESTER did before asking to navigate. */
+  onCancel?: () => void;
+}
+
+/**
+ * How to carry the operator to a deferred route once they have chosen to
+ * leave Edit Mode (bead enhancedchannelmanager-6fi7p).
+ *
+ * A vetoed Back has already been rewound to the entry the operator was on, so
+ * `history` replays it as a real Back: they land on the entry they asked for,
+ * with the surrounding forward/back entries intact. `hash` is the fallback for
+ * a deferred navigation that was never a history transition (a tab click, a
+ * task-editor handoff) and for the one case where a Back cannot be replayed —
+ * a target entry with no route index, which the router rewinds with
+ * `replaceState` and therefore cannot address by delta.
+ */
+export function resolvePendingRouteResume(
+  pending: PendingRouteChange,
+): { kind: 'history'; delta: number } | { kind: 'hash'; tab: TabId; settingsPage?: SettingsPage } {
+  if (typeof pending.historyDelta === 'number' && pending.historyDelta !== 0) {
+    return { kind: 'history', delta: pending.historyDelta };
+  }
+  return { kind: 'hash', tab: pending.tab, settingsPage: pending.settingsPage };
 }
 import { ROUTE_TITLES } from './routeTitles';
 

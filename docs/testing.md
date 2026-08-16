@@ -185,16 +185,24 @@ npm run test:e2e:report    # View test report
 > Or skip it entirely with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which
 > builds and serves the checked-out source on its own isolated preview port
 > (`127.0.0.1:4173`) and supplies that base URL itself. This is what the
-> `Screen-Reader-Only Rendering Guard` and `Operator Workspace Release Matrix`
-> CI jobs do, and neither sets `E2E_BASE_URL`.
+> `Screen-Reader-Only Rendering Guard`, `Operator Workspace Release Matrix`,
+> `Edit Mode Immediacy Surfaces Guard`, `Edit Mode Numbering Guards` and `Edit
+> Mode Session Restore Guard` CI jobs do, and none of them sets `E2E_BASE_URL`.
 
 ### Rendered-CSS regression guards
 
-Seven specs in `e2e/` are not feature tests. They are guards over *rendered*
-CSS, the layer where the project has repeatedly regressed while every unit
-test stayed green. They exist because a computed style in a real browser is
-the only thing that can prove these claims; jsdom cannot, and neither can a
-declaration-level audit.
+Ten specs in `e2e/` are not feature tests. They are guards over what a real
+browser *renders*, the layer where the project has repeatedly regressed while
+every unit test stayed green. They exist because a computed style, or a real
+seam crossed in a real page, is the only thing that can prove these claims;
+jsdom cannot, and neither can a declaration-level audit.
+
+The first seven rows below are pure rendered-CSS guards. The last three arrived
+with the Edit Mode staging and numbering epic and are wider than CSS: one
+measures layout, and two cross a UI-to-network seam that no unit suite reaches.
+They are tabled here because they share the property that makes this section
+worth having, which is that every layer beneath them can be green while the
+thing itself is broken.
 
 | Spec | What it pins | Proven red against |
 |-|-|-|
@@ -205,6 +213,9 @@ declaration-level audit.
 | `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA (4.5:1 normal, 3:1 large and non-text glyphs) in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
 | `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds (it scrolls, Back stays pinned and opaque, the last destination stays reachable) at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
 | `control-typeface.spec.ts` | every visible `button`/`input`/`select`/`textarea` on ten routes renders in the SAME resolved face as its nearest text-bearing ancestor (arm 1), and at a size the application chose rather than the user-agent's own control default (arm 2) | arm 1 (bead `-6z299.9`): controls resolving to generic `sans-serif` while surrounding text resolved to `system-ui`, invisible to a `fontFamily` string comparison. Arm 2 (bead `-ul2tp`): 274 of 418 visible controls across the ten routes rendering at Chromium's 13.3333px UA default with arm 1 green throughout |
+| `edit-mode-immediacy-surfaces.spec.ts` | three layouts the staged-vs-immediate work introduced: the selection bar still floats from `.selection-action-bar-shell` rather than landing in document flow; the irreversible-action notice claims its own line in `.modal-footer` through the one `:has()` rule that behaviour depends on; and the immediate-action note fits the two dropdown menus and the modal toolbar it is injected into (beads `-kz089`, `-i4yk1`) | jsdom cannot see any of the three. `SelectionActionBar` renders identical DOM whether or not `position: fixed` survived the move onto the shell wrapper, so every component test stays green while the bar drops off the bottom of a scrolled list |
+| `edit-mode-numbering-guards.spec.ts` | a real double-click in a real channel list, a real duplicate-number dialog, a real acknowledgement reaching the staged ledger, and an Apply over a colliding final state that issues **no** bulk-commit request at all (beads `-vdxbx`, `-ic884.2`) | the seam, not the layers: `channelNumberPlan.test.ts`, `ChannelsPane.duplicateNumber.test.tsx` and `useEditMode.numberingPreflight.test.ts` are each green on their own side of it. Arm 2 carries its own anti-vacuity control, applying a clean plan first and watching that request go, because "sent no request" is equally satisfied by a dead button or a page that never loaded |
+| `edit-mode-session-restore.spec.ts` | a ledger in real `sessionStorage` surviving a real page load, read on the first render of the real `App` inside `ProtectedRoute` and offered back with an account of what no longer applies (arm 1); a ledger stamped with a **different** operator never offered and already gone from the store by first paint (arm 2) (epic `-r93hq`, bead `-jazna`) | arm 2 is the one that matters: two operators sharing a workstation, where handing A's staged edits to B means B applies them under B's credentials and the journal attributes every change to B |
 
 `frozen-chrome.spec.ts` pins **1280×720 as well as 1280×800** because 1280×720
 is the minimum supported viewport, and the height is what the Settings drill-in
@@ -219,7 +230,23 @@ npm run test:css-leak                     # needs a live ECM backend
 npm run test:css-guards                   # all of the above, against a live backend
 npm run test:css-guard:settings-nav       # needs a live ECM backend
 npm run test:css-guard:control-typeface   # needs a live ECM backend
+npm run test:css-guard:edit-mode-immediacy        # builds + serves the source; NO backend
+npm run test:css-guard:edit-mode-numbering        # builds + serves the source; NO backend
+npm run test:css-guard:edit-mode-session-restore  # builds + serves the source; NO backend
 ```
+
+The three Edit Mode guards do not merely *tolerate* the absence of a backend,
+they **refuse** to run with one. Each requires `E2E_EXACT_BUILD=true` and
+`E2E_START_SERVER=true`, which build the checked-out source and serve it on the
+isolated preview port `127.0.0.1:4173` and supply the base URL themselves, so
+none of them can be aimed at an operator's live ECM. That refusal is structural
+rather than advisory because of what they exercise: a merge and a CSV import
+that delete and create channels, and an Apply path that commits.
+
+Two further browser guards, `control-box-size.spec.ts` and
+`filter-select-ownership.spec.ts`, have `npm` scripts (`test:css-guard:control-box-size`,
+`test:css-guard:filter-select`) but no row in the table above. That gap predates
+this section's last revision and is recorded here rather than left invisible.
 
 **CI status: read this before assuming coverage.**
 
@@ -244,6 +271,17 @@ npm run test:css-guard:control-typeface   # needs a live ECM backend
   "One source of truth per required check" below): it currently skips at the
   job level on a documentation-only change, and GitHub counts a skipped job
   as satisfying a required check.
+- `edit-mode-immediacy-surfaces.spec.ts`, `edit-mode-numbering-guards.spec.ts`
+  and `edit-mode-session-restore.spec.ts` **run in CI**, as the `Edit Mode
+  Immediacy Surfaces Guard`, `Edit Mode Numbering Guards` and `Edit Mode
+  Session Restore Guard` jobs in `.github/workflows/test.yml`. They can run
+  there for the same reason `sr-only-hidden.spec.ts` can: the preview build
+  needs no backend. **None of the three is in the required-check set**, and each
+  carries the same caveat as the screen-reader guard above, which is that it
+  gates at the job level on `code_paths_changed` and GitHub counts a skipped job
+  as satisfying a required check. Making any of them required means first
+  converting it to the step-gated shape. Until that happens, a red Edit Mode
+  guard does not block a merge; somebody has to read it.
 - `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
   `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
   `control-typeface.spec.ts` are **manual-only**.
@@ -535,9 +573,10 @@ of trusting the aggregate.
 
 Jobs that are **not** required contexts (`Fake-Test Guard`, `Visual
 Regression`, `Operator Workspace Release Matrix`, `Screen-Reader-Only
-Rendering Guard`, the image builds) do skip at the job level on a
-inert-only change. Promoting any of them to a required check means
-converting it to the step-gated shape first.
+Rendering Guard`, `Edit Mode Immediacy Surfaces Guard`, `Edit Mode Numbering
+Guards`, `Edit Mode Session Restore Guard`, the image builds) do skip at the
+job level on a inert-only change. Promoting any of them to a required check
+means converting it to the step-gated shape first.
 
 `backend/tests/unit/test_classify_changed_paths.py` enforces all of this: it
 pins the classifier's accept/reject boundary and its fail-open behaviour, and

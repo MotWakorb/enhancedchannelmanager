@@ -15,6 +15,9 @@ export { useHashRoute } from './useHashRoute';
 export type { UseHashRouteReturn, SettingsPage } from './useHashRoute';
 export { useDedupOnDrop, DEDUP_RETURNING_HIGHLIGHT_MS } from './useDedupOnDrop';
 export type {
+  DedupDropOutcome,
+  DedupDropReport,
+  DedupDropReportOutcome,
   DedupDropRequest,
   DedupModalState,
   UseDedupOnDropOptions,

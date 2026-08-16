@@ -5,6 +5,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { Channel } from '../types';
 import { openInVLC } from '../utils/vlc';
 import { CatchupBadge } from './CatchupBadge';
+import { ImmediateActionNote } from './ImmediateActionNote';
 
 export interface ChannelListItemProps {
   channel: Channel;
@@ -222,6 +223,20 @@ const ChannelMenu = memo(function ChannelMenu({
               </span>
               <span>{isProbing ? 'Probing...' : 'Probe Channel'}</span>
             </button>
+          )}
+          {/* Probing writes stream stats the instant it finishes, while
+              CLEARING the same stats stages. Per the PO's 2026-08-15 decision
+              probing stays immediate — there is no meaningful staged probe,
+              because the value does not exist until the probe runs — so it
+              satisfies Edit Mode's rule by saying so here
+              (bead enhancedchannelmanager-kz089, fix round 2). */}
+          {onProbeChannel && hasStreams && isEditMode && (
+            <ImmediateActionNote
+              what="Probing"
+              detail="It writes the stream stats it measures."
+              compact
+              testId="probe-immediate-note"
+            />
           )}
           {onPreviewChannel && hasStreams && (
             <button

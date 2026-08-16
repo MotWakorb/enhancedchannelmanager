@@ -1214,6 +1214,16 @@ class ActionExecutor:
                                 len(normalization_group_ids), channel_name)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
+                # The channel is still created, under the un-normalized name.
+                # Say so in the execution log: a warning in the container log
+                # is not a report, and without this line the operator cannot
+                # tell "normalization ran and changed nothing" from
+                # "normalization never ran" (bead enhancedchannelmanager-e9e5o).
+                # Same channel `_last_name_transform_error` uses above.
+                action_details.append(
+                    f"Normalization did not run for '{channel_name}', so the name "
+                    f"was used as given: {e}"
+                )
         elif self._normalization_engine:
             logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 

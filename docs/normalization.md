@@ -4,19 +4,21 @@
 
 ## Overview
 
-Normalization is the step between "raw name from an M3U line" and "channel name on disk." It runs in three places:
+Normalization is the step between "raw name from an M3U line" and "channel name on disk." It runs in four places:
 
 - **Test Rules**: Settings → Channel Normalization → the preview panel where you paste a sample name and see what the current rule set produces. Safe to use freely; no side effects.
 - **Channel Pipeline**: the Channel Pipeline reads the stream's raw name, passes it through the same rule set, and uses the output as the channel name (or as the lookup key for matching an existing channel).
 - **Re-normalize Existing Channels**: a one-time bulk rewrite that reapplies the current rule set to channels already on disk. Manual, gated, undoable.
+- **The Create Channels dialog**: the operator-facing **Normalization Rules** toggle, described in [Create Channels: the "Normalization Rules" toggle is also the merge key](#create-channels-the-normalization-rules-toggle-is-also-the-merge-key) below. It resolves through `POST /api/normalization/normalize`, so it is the same engine and the same rule set.
 
-These three paths **must produce the same output for the same input**. That is the *parity contract*, added in bd-eio04.1 and enforced by a nightly canary ([SLO-5 in `docs/sre/slos.md`](sre/slos.md#slo-5-normalization-correctness)). If a user reports "Test Rules says one thing and my auto-created channel got a different name," that is a canary-level bug. Follow [the divergence runbook](runbooks/normalization-canary-divergence.md) instead of working around it with a rule change.
+The first three paths **must produce the same output for the same input**. That is the *parity contract*, added in bd-eio04.1 and enforced by a nightly canary ([SLO-5 in `docs/sre/slos.md`](sre/slos.md#slo-5-normalization-correctness)). If a user reports "Test Rules says one thing and my auto-created channel got a different name," that is a canary-level bug. Follow [the divergence runbook](runbooks/normalization-canary-divergence.md) instead of working around it with a rule change. The Create Channels path is **not** a canary leg (`backend/scripts/normalization_canary.py` exercises `POST /api/normalization/test-batch` and a direct `engine.normalize` call), but its endpoint `POST /api/normalization/normalize` dispatches to `engine.test_rules_batch`, which is the same call `test-batch` makes.
 
 ### When does normalization run?
 
 - **Test Rules**: on demand, when you click "Test" in the rules UI or call `POST /api/normalization/test` / `test-batch`.
 - **Channel Pipeline**: on every stream name processed by a Channel Pipeline rule that has a normalization group configured. If no group is configured on the rule, normalization is **skipped**. `ecm_auto_creation_channels_created_total{normalized="skipped"}` increments.
 - **Re-normalize Existing Channels**: only when an operator explicitly runs it via the Settings UI or `POST /api/normalization/apply-to-channels`. Never automatic.
+- **Create Channels dialog**: when the dialog's **Normalization Rules** toggle is on, once for the preview (debounced 250 ms) and once more at submit time, both through `resolveCreateChannelNames` in `frontend/src/services/streamNormalization.ts`. With the toggle off it does not run and the raw provider names are used. If the engine cannot be reached, the create proceeds with raw names and reports a **Normalization failed** notification rather than passing them off as a clean result.
 
 ### What normalization is not
 
@@ -45,6 +47,29 @@ Test Rules is the single source of truth for "what will the Channel Pipeline do 
 - `POST /api/normalization/test-batch`: all enabled rules, multiple inputs. Use this to preview a batch (e.g., pasting 50 raw names from a new M3U).
 
 ## Concepts
+
+### Create Channels: the "Normalization Rules" toggle is also the merge key
+
+The **Normalization Rules** toggle in the Create Channels dialog (Channel Manager → Edit Mode → select streams → **Create** or **Create in…**) used to drive only the preview: names were normalized whichever way it was set, and the toggle's value was dropped before it reached the wire. It now decides the question, once, before anything is staged, and the name it produces is final. Nothing downstream normalizes again, which matters because the resolved name already carries the channel-number and country prefixes applied on top of the engine's output; a second pass would normalize an already-normalized name.
+
+The consequence that surprises operators is not about spelling. **The resolved name is the key the bulk create merges streams on**, so the toggle changes how many channels a create produces:
+
+| Toggle | Streams `US: CNN` and `CNN`, with a rule that strips `US:` | Result |
+|-|-|-|
+| On | Both resolve to `CNN` | **One** channel carrying two streams |
+| Off | They stay `US: CNN` and `CNN` | **Two** separate channels |
+
+The toggle's starting position comes from **Settings → Channel Normalization → Default Behavior → "Apply normalization by default when creating channels"** (`normalize_on_channel_create`, default `false`). It is per-operation from there: changing it in the dialog does not change the setting.
+
+Because the count changes, so does everything sized from it: which channel numbers the batch claims, how the push-down conflict plan is sized when those numbers collide, and the number range the dialog shows. Every one of those surfaces now reads the same resolution the create uses, so the preview count and the staged count cannot disagree. Before, the dialog counted from the raw provider names whatever the toggle said, so with normalization on it could promise two channels and stage one. See [Assign Streams to Channels](user_guide/channels-streams/assign-streams-to-channels.md) for the operator-facing walk-through.
+
+Three further behaviours worth knowing:
+
+- **A failure is reported, not swallowed.** An unreachable engine used to return every name mapped to itself, which is byte-for-byte identical to turning the toggle off, so the two were indistinguishable at every layer above. The create now raises a **Normalization failed** notification and the dialog's preview says it could not reach the engine instead of claiming "no names will change". The channels are still created, under the raw names.
+- **Manual entry offers the control too.** Creating a channel by typing a name rather than from a stream renders the same toggle, with a live preview of the typed name (debounced 250 ms). It was briefly removed on the grounds that manual entry has no provider name to normalize; the typed name is a name, and the control is wired to it instead.
+- **Duplicate detection does not depend on it.** The interactive dedup matcher receives the *raw* provider name, before the dialog exists, and applies its own cleaner. Turning the toggle off does not weaken duplicate protection. See [Stream Deduplication](user_guide/channels-streams/stream-dedup.md).
+
+REST and MCP callers get the same disclosure through the `normalization` object on `POST /api/channels` and the `normalizationFailures` list on `POST /api/channels/bulk-commit`. See [`docs/api.md` §Channels](api.md#channels).
 
 ### Rule groups and ordering
 

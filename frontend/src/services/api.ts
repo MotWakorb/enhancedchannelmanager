@@ -123,6 +123,7 @@ import {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 } from './streamNormalization';
 // Re-export stream normalization utilities for backward compatibility
 export type PrefixOrder = 'number-first' | 'country-first';
@@ -148,7 +149,13 @@ export {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 };
+// `ResolvedCreateChannelNames` is a class, not an interface: it is exported as
+// a VALUE so nothing can satisfy it with an object literal carrying a plain
+// `Map`. Reintroducing the map is reintroducing the missing-entry case, which
+// is the defect (bead enhancedchannelmanager-e9e5o).
+export { ResolvedCreateChannelNames, NormalizationIncompleteError } from './streamNormalization';
 
 const API_BASE = '/api';
 
@@ -461,6 +468,25 @@ export interface BulkCommitResponse {
    * duplicates. False for full success and for total failure (nothing applied).
    */
   partial?: boolean;
+  /**
+   * Channels a failed numbering plan left on the wrong number, which the
+   * compensating write could not put back either (bead
+   * `enhancedchannelmanager-ic884.3`). Each entry names the channel, where it
+   * is, where it should be, and the one action that closes the gap.
+   *
+   * Non-empty is the ONLY case where neither the previous numbering nor the
+   * proposed one is what the operator is left with, so it must reach them
+   * rather than sitting in the envelope: an unexplained middle is the outcome
+   * the whole compensation pass exists to prevent.
+   */
+  numberingRecovery?: {
+    channelId: number;
+    channelName: string;
+    currentNumber: number | null;
+    targetNumber: number | null;
+    step: string;
+    error: string;
+  }[];
 }
 
 // 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly
@@ -511,17 +537,30 @@ async function pollBulkCommitJob(jobId: string): Promise<BulkCommitResponse> {
  *   so callers still receive the same BulkCommitResponse on success and a
  *   thrown Error on failure. The hop is invisible to existing callers.
  */
-export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
+export async function bulkCommit(
+  request: BulkCommitRequest,
+  batchId?: string,
+): Promise<BulkCommitResponse> {
+  // One Apply All fans out into a create request plus N batches of 200. Sending
+  // the same correlation id on all of them puts every journal row of that
+  // session under one batch, which is how a channel's history reads as one
+  // event instead of several unrelated ones (bead enhancedchannelmanager-r9py9).
+  // The backend middleware reads this header; omitting it mints a per-request
+  // id exactly as before.
+  const headers = batchId ? { 'X-ECM-Batch-Id': batchId } : undefined;
+
   if (request.validateOnly) {
     return fetchJson(`${API_BASE}/channels/bulk-commit`, {
       method: 'POST',
       body: JSON.stringify(request),
+      headers,
     });
   }
 
   const accepted = await fetchJson<BulkCommitJobAccepted>(`${API_BASE}/channels/bulk-commit`, {
     method: 'POST',
     body: JSON.stringify(request),
+    headers,
   });
   return pollBulkCommitJob(accepted.job_id);
 }

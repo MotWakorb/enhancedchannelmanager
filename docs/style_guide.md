@@ -208,6 +208,19 @@ Conventions:
 - **Icons use Material Icons spans.**
   `<span className="material-icons">icon_name</span>`. The font is loaded
   globally; do not reach for an icon library on a per-component basis.
+- **Never pass `null` as the state argument to `history.replaceState()` on a
+  route entry.** Pass `window.history.state` through. `useHashRoute` stores its
+  bookkeeping (`ecmRouteIndex`, `ecmRouteEpoch`) in history state, so replacing
+  that state with `null` un-numbers the entry the operator is standing on, and
+  an unnumbered entry is one the router can no longer rewind to by delta. The
+  usual offender is code that only wants to rewrite the hash, which is exactly
+  when the state looks irrelevant. It is not: rewriting the hash of an entry is
+  not navigating away from it. `StickySectionNav.activate()` nulled it while
+  adding `?section=` and silently broke Back/Forward for the Edit Mode exit
+  guard (bead `enhancedchannelmanager-6fi7p`). There is **no repo-wide guard for
+  this**: `StickySectionNav.test.tsx` asserts `ecmRouteIndex` survives a section
+  click, which pins that one call site and nothing else. Passing `{}` drops the
+  keys just as effectively as `null`. Check new call sites by hand.
 
 ---
 

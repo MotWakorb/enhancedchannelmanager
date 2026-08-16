@@ -9,6 +9,10 @@ import { TaskHistoryPanel } from './TaskHistoryPanel';
 import { TaskStatusPill } from './TaskStatusPill';
 import { getTaskPillState } from '../utils/taskPillState';
 import { sectionIdForTask } from '../utils/taskSectionId';
+import {
+  OPEN_TASK_EDITOR_STORAGE_KEY,
+  type OpenTaskEditorIntent,
+} from '../utils/openTaskEditor';
 import { useNotifications } from '../contexts/NotificationContext';
 import { formatDateTime } from '../utils/formatting';
 import './ScheduledTasksSection.css';
@@ -447,17 +451,17 @@ export function ScheduledTasksSection({ userTimezone: _userTimezone }: Scheduled
 
   // Check for pending task editor navigation (from NotificationCenter)
   useEffect(() => {
-    const pending = sessionStorage.getItem('ecm:open-task-editor');
+    const pending = sessionStorage.getItem(OPEN_TASK_EDITOR_STORAGE_KEY);
     if (pending && tasks.length > 0) {
       try {
-        const { taskId } = JSON.parse(pending);
+        const { taskId } = JSON.parse(pending) as OpenTaskEditorIntent;
         const task = tasks.find(t => t.task_id === taskId);
         if (task) {
-          sessionStorage.removeItem('ecm:open-task-editor');
+          sessionStorage.removeItem(OPEN_TASK_EDITOR_STORAGE_KEY);
           setEditingTask(task);
         }
       } catch {
-        sessionStorage.removeItem('ecm:open-task-editor');
+        sessionStorage.removeItem(OPEN_TASK_EDITOR_STORAGE_KEY);
       }
     }
   }, [tasks]);

@@ -478,6 +478,21 @@
   overflow-y: auto;
 }
 
+/* "ECM could not read the previous value of X" — the operator-legible form of
+   the reserved `__before_state_unknown__` key the backend writes when it never
+   saw a field's before-state (bead enhancedchannelmanager-kz089). Meta role,
+   --text-secondary, and scoped to this route's root exactly as the `pre` above
+   is: `.detail-section` is also rendered by M3UChangesTab, and a bare rule in
+   a lazy chunk would reach it once Journal had been visited
+   (bead enhancedchannelmanager-lriss). */
+:where(.journal-tab) .detail-unknown-before {
+  margin: 0.5rem 0 0;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
+}
+
 /* The two supporting facts under the expanded drawer's JSON panes — meta
    role, --text-secondary (bead enhancedchannelmanager-6z299.3). */
 .detail-meta {

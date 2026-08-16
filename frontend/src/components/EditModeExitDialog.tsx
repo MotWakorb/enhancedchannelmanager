@@ -196,7 +196,54 @@ export function EditModeExitDialog({
                     {summary.renamedGroups} group{summary.renamedGroups !== 1 ? 's' : ''} renamed
                   </li>
                 )}
+                {/* The actions that used to bypass this dialog entirely, because
+                    they had already been applied by the time it opened
+                    (bead enhancedchannelmanager-kz089). `totalChanges` sums
+                    every bucket, so a line missing here is a headline that
+                    disagrees with its own list. */}
+                {summary.profileVisibilityChanges > 0 && (
+                  <li>
+                    {summary.profileVisibilityChanges} profile visibility change
+                    {summary.profileVisibilityChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
+                {summary.restoredGroups > 0 && (
+                  <li>
+                    {summary.restoredGroups} hidden group{summary.restoredGroups !== 1 ? 's' : ''} restored
+                  </li>
+                )}
+                {summary.clearedStreamStats > 0 && (
+                  <li>
+                    Probe stats cleared for {summary.clearedStreamStats} stream
+                    {summary.clearedStreamStats !== 1 ? 's' : ''}
+                  </li>
+                )}
               </ul>
+
+              {/* Renames nobody typed (bead enhancedchannelmanager-ic884.5).
+                  These are already counted above under channel name changes;
+                  this block does not add to `totalChanges`, it explains part
+                  of it. A count alone is not actionable — an operator asked to
+                  approve a name change they did not make needs the before and
+                  the after, so both are shown rather than summarised. */}
+              {summary.automaticRenames.length > 0 && (
+                <div className="edit-mode-dialog-auto-renames" data-testid="automatic-rename-preview">
+                  <p className="edit-mode-dialog-auto-renames-intro">
+                    {summary.automaticRenames.length} channel name
+                    {summary.automaticRenames.length !== 1 ? 's' : ''} will also be rewritten because
+                    the number changed:
+                  </p>
+                  <ul className="edit-mode-dialog-auto-renames-list">
+                    {summary.automaticRenames.map((rename) => (
+                      <li key={rename.channelId}>
+                        <span className="auto-rename-from">{rename.from}</span>
+                        <span className="material-icons auto-rename-arrow">arrow_forward</span>
+                        <span className="auto-rename-to">{rename.to}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Toggle for detailed change list */}
               <button

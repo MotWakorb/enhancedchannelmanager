@@ -481,34 +481,251 @@ export function filterStreamsByTimezone<T extends { name: string }>(
 import { normalizeTexts } from './api';
 
 /**
+ * A normalization response that did not answer the question it was asked.
+ *
+ * The completeness rule (bead enhancedchannelmanager-e9e5o, fix round 4): a
+ * name resolution either covers every requested name with exactly one result,
+ * or it is a failure. There is no partial success. A 200 carrying results for
+ * two of the three names asked about is a FAILED resolution, not a resolution
+ * that two callers then interpret differently.
+ */
+export class NormalizationIncompleteError extends Error {
+  /** Requested names the response said nothing about. */
+  readonly missing: readonly string[];
+  /** Requested names the response answered more than once. */
+  readonly duplicated: readonly string[];
+  /** Results for names that were never requested. */
+  readonly unexpected: readonly string[];
+
+  constructor(missing: string[], duplicated: string[], unexpected: string[]) {
+    const parts: string[] = [];
+    if (missing.length > 0) parts.push(`${missing.length} name(s) missing`);
+    if (duplicated.length > 0) parts.push(`${duplicated.length} name(s) answered twice`);
+    if (unexpected.length > 0) parts.push(`${unexpected.length} unrequested name(s) returned`);
+    super(`Normalization response did not cover the request: ${parts.join(', ')}`);
+    this.name = 'NormalizationIncompleteError';
+    this.missing = missing;
+    this.duplicated = duplicated;
+    this.unexpected = unexpected;
+  }
+}
+
+/**
  * Normalize stream names using the backend normalization engine.
  * This uses the configurable rules defined in the Settings tab.
  *
+ * REJECTS on a backend failure. It used to swallow the error and return each
+ * original name mapped to itself, which made "normalization is off" and
+ * "normalization broke" the same value to every caller — and, once the
+ * Create Channels toggle became a real control (bead
+ * enhancedchannelmanager-e9e5o), the same thing on screen too. Callers that
+ * want to carry on with the raw names must now say so explicitly; the
+ * bulk-create path does that in {@link resolveCreateChannelNames}.
+ *
+ * REJECTS on an INCOMPLETE response too. A 200 was previously accepted
+ * whatever it contained, so a response covering only some of the requested
+ * names produced a partial map that was stamped as a clean success; every
+ * consumer then fell back to the raw name for the entries that were not there,
+ * which is the same swallowed failure one layer down. Completeness is checked
+ * here, at the boundary, because a caller handed a partial map has no way to
+ * tell "this name normalizes to itself" from "nobody answered about this name".
+ *
+ * Names are de-duplicated before the request, so "exactly one result per
+ * requested name" is a property of the response and not an artefact of the
+ * caller happening to pass a name once.
+ *
  * @param names Array of stream names to normalize
- * @returns Promise resolving to map of original name -> normalized name
+ * @returns Promise resolving to map of original name -> normalized name,
+ *   containing exactly one entry per DISTINCT requested name
+ * @throws whatever the `/api/normalization/normalize` call throws, or
+ *   {@link NormalizationIncompleteError} if the response does not cover the
+ *   request exactly
  */
 export async function normalizeStreamNamesWithBackend(names: string[]): Promise<Map<string, string>> {
-  if (names.length === 0) {
+  const requested = Array.from(new Set(names));
+  if (requested.length === 0) {
     return new Map();
   }
 
+  const response = await normalizeTexts(requested);
+  const requestedSet = new Set(requested);
+  const resultMap = new Map<string, string>();
+  const duplicated: string[] = [];
+  const unexpected: string[] = [];
+
+  for (const result of response.results ?? []) {
+    const original = result?.original;
+    const normalized = result?.normalized;
+    if (typeof original !== 'string' || typeof normalized !== 'string') {
+      // A malformed entry cannot be attributed to a requested name, so it is
+      // counted as unexpected rather than dropped — dropping it would show up
+      // only as a missing name, which reads as a different fault.
+      unexpected.push(String(original));
+      continue;
+    }
+    if (!requestedSet.has(original)) {
+      unexpected.push(original);
+      continue;
+    }
+    if (resultMap.has(original)) {
+      duplicated.push(original);
+      continue;
+    }
+    resultMap.set(original, normalized);
+  }
+
+  const missing = requested.filter((name) => !resultMap.has(name));
+  if (missing.length > 0 || duplicated.length > 0 || unexpected.length > 0) {
+    throw new NormalizationIncompleteError(missing, duplicated, unexpected);
+  }
+
+  return resultMap;
+}
+
+/**
+ * The answer to "what name does each of these streams get?", complete by
+ * construction (bead enhancedchannelmanager-e9e5o).
+ *
+ * This is deliberately NOT a `Map`. A map has a missing case, and every caller
+ * handed one wrote `map.get(stream.name) ?? stream.name` — each of them
+ * independently deciding that "no entry" means "use the raw provider name".
+ * That decision is exactly the swallowed failure this bead has now been through
+ * four rounds of: the dialog enabled Create, the conflict plan was sized off a
+ * raw name, and a raw name was submitted, with nothing on screen saying so.
+ *
+ * The class has no missing case for a requested name. {@link nameFor} answers
+ * for every name the resolution was built from and throws for anything else,
+ * so a caller cannot substitute a plausible default for an answer it does not
+ * have. Callers whose set of names can drift from the resolution's — a React
+ * memo that recomputes before the resolving effect runs — ask
+ * {@link coversAll} first and represent the gap as "not resolved yet", which is
+ * an explicit unknown rather than a silent default.
+ */
+export class ResolvedCreateChannelNames {
+  private readonly resolved: ReadonlyMap<string, string>;
+
+  /**
+   * True only when normalization was REQUESTED and the backend call failed or
+   * came back incomplete, so the names are raw provider names the operator did
+   * not ask for. False when the operator turned normalization off — those raw
+   * names are the requested outcome, not a failure.
+   */
+  readonly normalizationFailed: boolean;
+
+  constructor(resolved: ReadonlyMap<string, string>, normalizationFailed: boolean) {
+    this.resolved = resolved;
+    this.normalizationFailed = normalizationFailed;
+  }
+
+  /** How many distinct names this resolution answers for. */
+  get size(): number {
+    return this.resolved.size;
+  }
+
+  /** Whether this resolution answers for `streamName`. */
+  has(streamName: string): boolean {
+    return this.resolved.has(streamName);
+  }
+
+  /** Whether this resolution answers for every one of `streamNames`. */
+  coversAll(streamNames: readonly string[]): boolean {
+    for (const name of streamNames) {
+      if (!this.resolved.has(name)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The final name the channel created from `streamName` gets.
+   *
+   * Throws when this resolution was not built from `streamName`. There is no
+   * defaulting overload on purpose: the raw-name default is the defect, and a
+   * caller that can be asking about an unresolved name must find that out
+   * through {@link coversAll} and say so, not receive a plausible answer.
+   */
+  nameFor(streamName: string): string {
+    const resolved = this.resolved.get(streamName);
+    if (resolved === undefined) {
+      throw new Error(
+        `No resolved channel name for stream "${streamName}". The name resolution ` +
+        'was built from a different set of streams; nothing may be created from an ' +
+        'unresolved name.'
+      );
+    }
+    return resolved;
+  }
+
+  /** `[original, resolved]` pairs, for rendering the preview. */
+  entries(): [string, string][] {
+    return Array.from(this.resolved.entries());
+  }
+}
+
+/**
+ * Decide, in ONE place, what name a channel created from a stream gets
+ * (bead enhancedchannelmanager-e9e5o).
+ *
+ * The Create Channels dialog's "Normalization Rules" toggle used to drive
+ * only the preview: the caller normalized unconditionally and then passed the
+ * toggle along as a separate flag that was dropped before it reached the
+ * backend. Resolving the name here — before it is staged — is what makes the
+ * toggle real, and it is deliberately the ONLY place the question is asked.
+ * The name this returns is final; nothing downstream may normalize again, or
+ * an already-normalized name would be normalized twice.
+ *
+ * @param streamNames Raw provider names of the streams being created from.
+ * @param normalize The operator's "Normalization Rules" toggle.
+ */
+export async function resolveCreateChannelNames(
+  streamNames: string[],
+  normalize: boolean,
+): Promise<ResolvedCreateChannelNames> {
+  const identity = (): Map<string, string> => {
+    const map = new Map<string, string>();
+    for (const name of streamNames) {
+      map.set(name, name);
+    }
+    return map;
+  };
+
+  /**
+   * The single exit. Every branch leaves through here, and here is where the
+   * completeness rule is enforced rather than assumed: a map that does not
+   * cover every requested name is not returned in a weaker form, it is
+   * replaced by the identity resolution and reported as a failure. A future
+   * branch added below cannot leak a partial map without going around this
+   * function, and there is nowhere else to return from.
+   */
+  const finish = (
+    names: Map<string, string>,
+    normalizationFailed: boolean,
+  ): ResolvedCreateChannelNames => {
+    const missing = streamNames.filter((name) => !names.has(name));
+    if (missing.length > 0) {
+      logger.error(
+        'Name resolution did not cover every requested stream name; falling back to the raw names',
+        missing,
+      );
+      return new ResolvedCreateChannelNames(identity(), true);
+    }
+    return new ResolvedCreateChannelNames(names, normalizationFailed);
+  };
+
+  if (!normalize || streamNames.length === 0) {
+    return finish(identity(), false);
+  }
+
   try {
-    const response = await normalizeTexts(names);
-    const resultMap = new Map<string, string>();
-
-    for (const result of response.results) {
-      resultMap.set(result.original, result.normalized);
-    }
-
-    return resultMap;
+    return finish(await normalizeStreamNamesWithBackend(streamNames), false);
   } catch (error) {
+    // Carry on with the raw names rather than abandoning a create the
+    // operator already confirmed — but say so, so the resulting names are
+    // explainable. An INCOMPLETE response lands here too: a resolution that
+    // covers only some of the names is a failed resolution, not a partial
+    // success the callers get to interpret one by one. The caller surfaces
+    // `normalizationFailed` to the operator.
     logger.error('Backend normalization failed:', error);
-    // Return original names as fallback
-    const resultMap = new Map<string, string>();
-    for (const name of names) {
-      resultMap.set(name, name);
-    }
-    return resultMap;
+    return finish(identity(), true);
   }
 }
 

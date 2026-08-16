@@ -208,6 +208,53 @@ describe('useAddStreamDedup', () => {
     expect(result.current.modalState.isOpen).toBe(false);
   });
 
+  /**
+   * bead enhancedchannelmanager-ok8tj. "No candidate cleared the threshold"
+   * and "the lookup never ran / failed" both ended with the create path
+   * running and nothing on screen, so the operator could not tell a silent
+   * pass from a broken feature. The hook now names which happened; the
+   * caller turns that into an operator-visible message.
+   */
+  describe('reported outcome', () => {
+    it('reports no_candidate when the lookup returns an empty list', async () => {
+      mockedGetCandidates.mockResolvedValue(emptyResponse(STREAM.name));
+      const { result } = renderHook(() => useAddStreamDedup());
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.requestAddStream(STREAM, GROUP_ID, vi.fn());
+      });
+
+      expect(outcome).toBe('no_candidate');
+    });
+
+    it('reports candidate when the modal opens', async () => {
+      mockedGetCandidates.mockResolvedValue(
+        responseWith({ channel_id: '9', channel_name: 'CNN', confidence: 1.0 }),
+      );
+      const { result } = renderHook(() => useAddStreamDedup());
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.requestAddStream(STREAM, GROUP_ID, vi.fn());
+      });
+
+      expect(outcome).toBe('candidate');
+    });
+
+    it('reports lookup_failed when the candidates endpoint errors', async () => {
+      mockedGetCandidates.mockRejectedValue(new Error('boom'));
+      const { result } = renderHook(() => useAddStreamDedup());
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.requestAddStream(STREAM, GROUP_ID, vi.fn());
+      });
+
+      expect(outcome).toBe('lookup_failed');
+    });
+  });
+
   it('passes through group_id=null (search all groups) to the candidates endpoint', async () => {
     mockedGetCandidates.mockResolvedValue(emptyResponse(STREAM.name));
     const onProceed = vi.fn().mockResolvedValue(undefined);

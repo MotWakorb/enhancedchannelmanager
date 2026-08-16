@@ -40,6 +40,10 @@ function summaryOf(over: Partial<EditModeSummary> = {}): EditModeSummary {
     newGroups: 0,
     deletedGroups: 0,
     renamedGroups: 0,
+    profileVisibilityChanges: 0,
+    restoredGroups: 0,
+    clearedStreamStats: 0,
+    automaticRenames: [],
     operationDetails: [],
   };
   return { ...base, ...over };
@@ -182,5 +186,50 @@ describe('EditModeExitDialog — a commit that did not fully apply (bd-udq1j)', 
 
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: /apply all/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Bead enhancedchannelmanager-ic884.5: a channel name the numbering changed is
+ * a change the operator did not type, so it has to be visible — with its
+ * before and after — before Apply, not merely counted among the name changes.
+ */
+describe('automatic renames', () => {
+  it('shows every rename a numbering change caused, with before and after', () => {
+    render(
+      <EditModeExitDialog
+        isOpen
+        summary={summaryOf({
+          totalChanges: 4,
+          channelNumberChanges: 2,
+          channelNameChanges: 2,
+          automaticRenames: [
+            { channelId: 1, from: '5 | ESPN', to: '9 | ESPN', fromNumber: 5, toNumber: 9 },
+            { channelId: 2, from: '6 | TNT', to: '10 | TNT', fromNumber: 6, toNumber: 10 },
+          ],
+        })}
+        commitFailure={null}
+        {...handlers}
+      />
+    );
+
+    const preview = screen.getByTestId('automatic-rename-preview');
+    expect(preview.textContent).toContain('5 | ESPN');
+    expect(preview.textContent).toContain('9 | ESPN');
+    expect(preview.textContent).toContain('6 | TNT');
+    expect(preview.textContent).toContain('10 | TNT');
+  });
+
+  it('says nothing when the numbering changed no names', () => {
+    render(
+      <EditModeExitDialog
+        isOpen
+        summary={summaryOf({ totalChanges: 1, channelNumberChanges: 1 })}
+        commitFailure={null}
+        {...handlers}
+      />
+    );
+
+    expect(screen.queryByTestId('automatic-rename-preview')).toBeNull();
   });
 });

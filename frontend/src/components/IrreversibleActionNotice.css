@@ -1,0 +1,68 @@
+/* Point-of-action notice for operations Edit Mode cannot stage
+   (bead enhancedchannelmanager-kz089). See IrreversibleActionNotice.tsx. */
+
+/* The notice is rendered inside `.modal-footer`, a single flex row of buttons,
+   so it has to claim a line of its own. Scoped with :has() rather than adding
+   flex-wrap to the shared modal chassis, which every modal in the app uses. */
+.modal-footer:has(.irreversible-action-notice) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.irreversible-action-notice {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--warning);
+  border-left-width: 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--text-primary);
+  /* The notice is running text, so it takes the body role rather than the
+     16px document default its `.modal-footer` host leaves it on. Its bare
+     <strong> had no owner at all, which is what
+     e2e/visual/modal-typography-inventory.spec.ts reports as a residual
+     (docs/css_guidelines.md -> Typography). */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+.irreversible-action-notice-icon {
+  color: var(--warning-text);
+  font-size: 20px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.irreversible-action-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.irreversible-action-notice-body strong {
+  color: var(--warning-text);
+  font-weight: var(--type-item-title-weight);
+}
+
+.irreversible-action-notice-body p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.irreversible-action-notice-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.irreversible-action-notice-ack input {
+  cursor: pointer;
+  margin: 0;
+}

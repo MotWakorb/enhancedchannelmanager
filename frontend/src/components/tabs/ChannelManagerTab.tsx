@@ -3,9 +3,10 @@ import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import { PendingMergesPage } from './PendingMergesPage';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
-import type { TimezonePreference, NumberSeparator, PrefixOrder } from '../../services/api';
-import type { ChannelDefaults } from '../StreamsPane';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord, StagedSideEffects, StageUpdateChannelOptions } from '../../types';
+import type { TimezonePreference, NumberSeparator, PrefixOrder, ResolvedCreateChannelNames } from '../../services/api';
+import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
+import type { DedupDropReport } from '../../hooks/useDedupOnDrop';
 import { SourceLoadStatus } from '../SourceLoadStatus';
 import type { SourceLoadState } from '../sourceLoadState';
 import { aggregateWorkspaceSources, retryFailedSources, type WorkspaceSource } from '../workspaceLoadState';
@@ -80,8 +81,26 @@ export interface ChannelManagerTabProps {
   isEditMode: boolean;
   isCommitting: boolean;
   modifiedChannelIds: Set<number>;
-  onStageUpdateChannel: (channelId: number, updates: Partial<Channel>, description: string) => void;
+  onStageUpdateChannel: (
+    channelId: number,
+    updates: Partial<Channel>,
+    description: string,
+    options?: StageUpdateChannelOptions,
+  ) => void;
   onStageAddStream: (channelId: number, streamId: number, description: string) => void;
+  /**
+   * Staging hooks for the actions Edit Mode used to write through itself
+   * (bead enhancedchannelmanager-kz089).
+   */
+  onStageSetProfileMembership: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  /**
+   * Working-copy view of the staged operations that do not touch a Channel
+   * record, so the panes can show what is pending instead of the server value
+   * (bead …-kz089, fix round 2).
+   */
+  stagedSideEffects: StagedSideEffects;
+  onStageRestoreChannelGroup: (groupId: number, description: string) => void;
+  onStageClearStreamStats: (streamIds: number[], description: string) => void;
   onStageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   onStageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   onStageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
@@ -199,30 +218,41 @@ export interface ChannelManagerTabProps {
     suggestedStartingNumber?: number,
   ) => void;
   // Bulk streams drop (for opening bulk create modal when dropping multiple streams)
-  // Includes target group ID and starting channel number for pre-filling the modal
-  onBulkStreamsDrop?: (streamIds: number[], groupId: number | null, startingNumber: number) => void;
+  // Includes target group ID and starting channel number for pre-filling the modal.
+  // Resolves with what the duplicate check did so ChannelsPane can say so
+  // (bead enhancedchannelmanager-ok8tj); pass-through only.
+  onBulkStreamsDrop?: (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ) => void | Promise<DedupDropReport | void>;
   // Callback to open create channel modal (routes to bulk create modal in manual entry mode)
   onOpenCreateChannelModal?: () => void;
   onBulkCreateFromGroup: (
     streams: Stream[],
     startingNumber: number,
     channelGroupId: number | null,
-    newGroupName?: string,
-    timezonePreference?: TimezonePreference,
-    stripCountryPrefix?: boolean,
-    addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator,
-    keepCountryPrefix?: boolean,
-    countrySeparator?: NumberSeparator,
-    prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean,
-    customNetworkPrefixes?: string[],
-    stripNetworkSuffix?: boolean,
-    customNetworkSuffixes?: string[],
-    profileIds?: number[],
-    pushDownOnConflict?: boolean,
-    normalize?: boolean
-  ) => Promise<void>;
+    // `| undefined` rather than `?` so `nameResolution` can be required; see
+    // `StreamsPaneProps.onBulkCreateFromGroup`.
+    newGroupName: string | undefined,
+    timezonePreference: TimezonePreference | undefined,
+    stripCountryPrefix: boolean | undefined,
+    addChannelNumber: boolean | undefined,
+    numberSeparator: NumberSeparator | undefined,
+    keepCountryPrefix: boolean | undefined,
+    countrySeparator: NumberSeparator | undefined,
+    prefixOrder: PrefixOrder | undefined,
+    stripNetworkPrefix: boolean | undefined,
+    customNetworkPrefixes: string[] | undefined,
+    stripNetworkSuffix: boolean | undefined,
+    customNetworkSuffixes: string[] | undefined,
+    profileIds: number[] | undefined,
+    pushDownOnConflict: boolean | undefined,
+    // The names, already resolved by the dialog. REQUIRED pass-through; see
+    // `StreamsPaneProps.onBulkCreateFromGroup`
+    // (bead enhancedchannelmanager-e9e5o).
+    nameResolution: ResolvedCreateChannelNames
+  ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode - supports new group
   // creation). `pushDownOnConflict` moves whatever already occupies
   // `channelNumber` out of the way instead of creating a duplicate
@@ -292,6 +322,10 @@ export function ChannelManagerTab({
   modifiedChannelIds,
   onStageUpdateChannel,
   onStageAddStream,
+  onStageSetProfileMembership,
+  stagedSideEffects,
+  onStageRestoreChannelGroup,
+  onStageClearStreamStats,
   onStageRemoveStream,
   onStageReorderStreams,
   onStageBulkAssignNumbers,
@@ -598,6 +632,10 @@ export function ChannelManagerTab({
           modifiedChannelIds={modifiedChannelIds}
           onStageUpdateChannel={onStageUpdateChannel}
           onStageAddStream={onStageAddStream}
+          onStageSetProfileMembership={onStageSetProfileMembership}
+          stagedSideEffects={stagedSideEffects}
+          onStageRestoreChannelGroup={onStageRestoreChannelGroup}
+          onStageClearStreamStats={onStageClearStreamStats}
           onStageRemoveStream={onStageRemoveStream}
           onStageReorderStreams={onStageReorderStreams}
           onStageBulkAssignNumbers={onStageBulkAssignNumbers}
@@ -709,6 +747,7 @@ export function ChannelManagerTab({
           externalTriggerStartingNumber={externalTriggerStartingNumber}
           externalTriggerManualEntry={externalTriggerManualEntry}
           onExternalTriggerHandled={onExternalTriggerHandled}
+          onStageAddStream={onStageAddStream}
           onBulkCreateFromGroup={onBulkCreateFromGroup}
           onCreateChannel={onCreateChannelManual}
           onCheckConflicts={onCheckConflicts}

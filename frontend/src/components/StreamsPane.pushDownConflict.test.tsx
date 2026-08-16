@@ -15,6 +15,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StreamsPane } from './StreamsPane';
+import { NotificationProvider } from '../contexts/NotificationContext';
 import { planChannelNumberShift } from '../utils/channelNumberShift';
 import type { Stream, StreamGroupInfo, Channel, ChannelGroup } from '../types';
 
@@ -80,6 +81,7 @@ function renderConflictDialog(overrides: Partial<React.ComponentProps<typeof Str
   return {
     channels,
     ...render(
+      <NotificationProvider>
       <StreamsPane
         streams={STREAMS}
         providers={[]}
@@ -114,7 +116,8 @@ function renderConflictDialog(overrides: Partial<React.ComponentProps<typeof Str
         }
         onGetHighestChannelNumber={() => 8000}
         {...overrides}
-      />,
+      />
+      </NotificationProvider>,
     ),
   };
 }

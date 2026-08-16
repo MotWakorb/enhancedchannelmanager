@@ -8,11 +8,25 @@ The feature fires on three trigger paths:
 
 | Trigger | When it fires |
 |-|-|
-| Drag-drop | You drag a stream from the Streams pane onto a channel group |
-| Create in… menu | In Edit Mode, you select a single channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
+| Drag-drop | You drag a **single** stream from the Streams pane onto a channel group |
+| Create in… menu | In Edit Mode, you select a **single** channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
 | Bulk M3U refresh | ECM's Channel Pipeline processes an M3U import and finds candidate matches |
 
 Each trigger path routes to the same dedup decision surface: the **StreamDedupModal** (for interactive triggers) or the **Pending Merges queue** (for the bulk M3U path).
+
+### Where the dedup check does not run
+
+This is the other half of the table, and it is the half that generates support questions. None of these surfaces creates channels through the interactive matcher, so none of them will ever raise a merge prompt, no matter how closely the names match:
+
+| Surface | Why not |
+|-|-|
+| The plain **Create** button in the Streams panel selection strip | It opens the Create Channels dialog directly. It is not a dedup trigger and never has been. Use **Create in…** if you want the check |
+| A multi-stream selection or a multi-stream drop | The check runs on a single stream only. Bulk duplicate handling is the Pending Merges queue, which is fed by M3U refresh, not by the panel |
+| Dropping a stream onto an existing **channel row** | You have already told ECM which channel you mean, so there is nothing to disambiguate |
+| **Run Pipeline** and **Run Rule** (manual Channel Pipeline runs) | The dedup hook is gated to the M3U refresh trigger. A manual run reports itself as an API-triggered run, and the hook is bypassed for it entirely. Channels are created without a duplicate check |
+| CSV import (`POST /api/channels/import-csv`) | The import path never reaches the matcher |
+
+The two interactive surfaces that *do* run the check now say so when the check did not produce a prompt. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
 
 > **Terminology note:** "merge into existing channel" in this guide means routing the stream into an existing Dispatcharr channel. This is distinct from the two-channel merge in the "Merge channels" editing surface, which combines two full channels. The dedup feature only ever touches one incoming stream and one candidate channel.
 
@@ -23,14 +37,20 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 ### Drag-drop
 
 1. Select a stream in the Streams pane.
-2. Drag it onto a channel group header or an existing channel row.
+2. Drag it onto a channel group header. (Dropping onto an existing channel row adds the stream to that channel and runs no dedup check.)
 3. If ECM finds a candidate channel (a channel whose name is at or above the configured dedup threshold), the **StreamDedupModal** appears.
+4. If it does not, ECM tells you which of the three non-prompt outcomes happened. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
+
+Dragging more than one stream at once skips the check. ECM says so rather than dropping the streams in silently.
 
 ### Create in… menu (create channel in a chosen group)
 
 1. Enter **Edit Mode** and select a single channel-less stream in the Streams pane (its row checkbox).
 2. In the selection strip at the top of the pane, open the **Create in…** menu and choose an enabled channel group (type to filter the list).
 3. If ECM finds a candidate channel in the target group, the **StreamDedupModal** appears.
+4. If it does not, ECM tells you which of the three non-prompt outcomes happened. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
+
+The neighbouring plain **Create** button is not this button. It opens the Create Channels dialog with no dedup check at all. If you want the check, use **Create in…**.
 
 > Before build 0161 this trigger lived on a right-click context menu
 > ("Create channel(s) in group"). The menu was replaced by the keyboard-
@@ -47,7 +67,20 @@ The modal opens titled **"Stream matches an existing channel"** and presents:
   - **Create New**: bypasses the dedup check and creates a new channel as usual.
   - **Cancel**: leaves the stream unassigned and closes the modal.
 
-ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%). If no candidate meets the threshold, the dedup check is silent and a new channel is created as normal.
+ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%).
+
+### What ECM tells you when there is no prompt
+
+An absent merge prompt used to mean nothing in particular. It covered three different outcomes, and the one operators most often read it as ("nothing in the group was similar enough") was frequently not the one that had happened. Both interactive paths, drag-drop and **Create in…**, now name the outcome in the same words, so what you learn on one path holds on the other.
+
+| Notification | What happened | What to do |
+|-|-|-|
+| *(no notification)* | A candidate cleared the threshold and the **StreamDedupModal** is on screen | Answer the modal |
+| **No duplicate found** | The check ran against the target group and nothing was close enough. A new channel is being created | Nothing, unless you expected a prompt. If you did, lower the dedup confidence threshold in Settings |
+| **Duplicate check unavailable** | The lookup itself failed. The channel is being created **without** a duplicate check | Check that ECM can reach its backend, then review the group for a duplicate by hand |
+| **Duplicate check skipped** | The check never ran: you selected or dropped more than one stream, or ECM could not read the stream's name | Retry with a single stream if you want the check |
+
+A found candidate stays quiet on purpose: the modal is the message, and a toast repeating it would only be noise.
 
 ---
 
@@ -71,8 +104,10 @@ After the bulk M3U refresh completes, ECM shows a toast notification indicating 
 ### Navigating to the Pending Merges page
 
 1. Under **Operations**, open **Channel Manager**.
-2. The subnav bar shows a **Pending Merges** item with a count badge (e.g., "Pending Merges (3)") when rows are waiting for a decision.
+2. The subnav bar shows a **Pending Merges** item with a count badge next to it.
 3. Click **Pending Merges** to open the page.
+
+> **The subnav is not always there.** It renders only when the pending count is above zero, or when you are already on the Pending Merges page. With an empty queue there is no subnav bar at all, not a **Pending Merges** item showing zero, so "I cannot find the Pending Merges link" almost always means "there is nothing pending". The count polls every 30 seconds, so a queue filled by an M3U refresh that just finished can take up to that long to appear. Resolving the last row leaves the subnav on screen while you are still on the page, so you always have a way back to **Channels & Streams**. (`frontend/src/components/tabs/ChannelManagerTab.tsx`: the condition is at line 480 and gates the whole `<nav>` at line 517.)
 
 The page lists all pending rows with:
 
@@ -180,4 +215,12 @@ No. The Channel Pipeline feature has its own unattended collision detection (`ma
 
 **What does the confidence score represent?**
 
-It is a fuzzy string similarity score (0–100%) computed by RapidFuzz `token_set_ratio` against the stream name and the candidate channel name. Higher is a closer match. ECM normalizes both names before scoring, so variations in spacing, punctuation, and common suffix patterns are factored in.
+It is a fuzzy string similarity score (0–100%) computed by RapidFuzz `token_set_ratio` against the stream name and the candidate channel name. Higher is a closer match. The matcher cleans both names before scoring, so variations in spacing, letter case, and Dispatcharr's channel-number prefix are factored in. That cleaner is the matcher's own and is not the normalization engine; see the next question.
+
+**Does turning off "Normalization Rules" weaken the duplicate check?**
+
+No. The two are independent, which is worth stating plainly now that the **Normalization Rules** toggle in the Create Channels dialog genuinely decides whether names are normalized. A control that real is easy to assume governs everything downstream of it, and this is one thing it does not.
+
+The duplicate check receives the **raw provider name**, before the Create Channels dialog exists, and applies its own cleaner to both that name and every candidate channel name: NFC Unicode normalization, then stripping a leading `N | ` channel-number prefix (Dispatcharr renders channel numbers that way), then lowercasing, then trimming. `US: CNN` and `CNN` therefore still score 100% against each other whether the **Normalization Rules** toggle is on or off, and the same candidate is offered either way.
+
+What the toggle *does* change is the name the resulting channel is created with, and, because that resolved name is also the key the bulk create merges streams on, how many channels a multi-stream create produces. See [Normalization](../normalization/index.md) and [Assign Streams to Channels](assign-streams-to-channels.md).

@@ -8,6 +8,8 @@ import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } fro
 import {
   SettingsModal,
   EditModeExitDialog,
+  EditModeRestoreDialog,
+  EditModeRestoredBadge,
   TabNavigation,
   PageHeader,
   UserMenu,
@@ -17,14 +19,20 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
+import { useAuth } from './hooks/useAuth';
+import { operatorLedgerKey, planLedgerRestore } from './utils/stagedLedgerStorage';
+import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
+import { OPEN_TASK_EDITOR_EVENT, OPEN_TASK_EDITOR_STORAGE_KEY } from './utils/openTaskEditor';
 import { computeAutoRename } from './utils/channelRename';
 import { planChannelNumberShift, type PlannedChannelShift } from './utils/channelNumberShift';
+import { NumberingConflictDialog } from './components/NumberingConflictDialog';
+import type { NumberingConflict, ReconcileDecision } from './utils/channelNumberConcurrency';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
@@ -33,7 +41,16 @@ import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPro
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SkipToMainContent } from './components/AppLandmarks';
 import { ROUTE_TITLES } from './components/routeTitles';
-import { getGuardedRouteDecision, isPlainPrimaryActivation, ROUTE_HIERARCHY } from './components/routeHierarchy';
+import {
+  getGuardedPopStateDecision,
+  getGuardedRouteDecision,
+  getGuardedSignOutDecision,
+  isPlainPrimaryActivation,
+  resolvePendingRouteResume,
+  ROUTE_HIERARCHY,
+  type PendingRouteChange,
+} from './components/routeHierarchy';
+import type { RouteChangeGuardDetail } from './hooks/useHashRoute';
 import type { SettingsPage } from './hooks/useHashRoute';
 import { useAdminNavVisible } from './hooks/useAuth';
 import { settingsSectionHeading } from './components/settingsSections';
@@ -126,6 +143,10 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
 type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
 
 function App() {
+  // Who is signed in. Read here only to bind staged Edit Mode work to an
+  // identity; every authorisation decision is the backend's.
+  const { user: authenticatedUser } = useAuth();
+
   // Health check and version info
   const [health, setHealth] = useState<api.HealthResponse | null>(null);
   const [healthSourceState, setHealthSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
@@ -309,9 +330,30 @@ function App() {
   // Set when a commit does not fully apply, so the exit dialog can say so
   // instead of closing silently (bead enhancedchannelmanager-udq1j).
   const [commitFailure, setCommitFailure] = useState<CommitFailure | null>(null);
+  /**
+   * Channel numbers somebody else changed while this session was staging, plus
+   * the server read they were found in (bead
+   * enhancedchannelmanager-ic884.4). Set when Apply refuses to write over them;
+   * cleared the moment the operator has answered for every one.
+   */
+  const [numberingConflicts, setNumberingConflicts] =
+    useState<{ conflicts: NumberingConflict[]; serverChannels: Channel[] } | null>(null);
+  /**
+   * Set when the operator has answered every conflict, so Apply can run again
+   * on the NEXT render rather than inside the handler that reconciled.
+   *
+   * Not a nicety. `commit` closes over `stagedOperations`, so calling it from
+   * the same tick as the reconcile would run the OLD plan — find the same
+   * conflict, reopen the dialog, and lose the operator's answers to the
+   * dialog's own "new conflicts are new questions" reset. The browser guard
+   * caught exactly that loop.
+   */
+  const [applyAfterReconcile, setApplyAfterReconcile] = useState(false);
 
   // Tab navigation state (hash-based routing)
-  const { activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage } = useHashRoute();
+  const {
+    activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage, resumeRejectedNavigation,
+  } = useHashRoute();
   // Gates the administration-only entries in the sidebar's Settings drill-in.
   // This used to be `Boolean(user?.is_admin)`, which hid the whole
   // Administration group on any auth-disabled instance, because `user` is
@@ -321,7 +363,42 @@ function App() {
   // enhancedchannelmanager-9kwzp.10); the navigation into it was the one place
   // still resolving unknown to hidden.
   const adminNavVisible = useAdminNavVisible();
-  const [pendingRouteChange, setPendingRouteChange] = useState<{ tab: TabId; settingsPage?: SettingsPage } | null>(null);
+  // `onCancel` undoes whatever the REQUESTER did before asking to navigate, and
+  // runs only if the operator keeps editing. A caller that leaves state behind
+  // for its destination to pick up (see the task-editor handoff below) needs a
+  // way to take it back when the guard refuses the navigation, or a deferred
+  // route becomes a stale intent (bead enhancedchannelmanager-6fi7p).
+  // A ref rather than state: nothing renders from the pending route, and an
+  // event handler has to be able to read the intent it is about to REPLACE. A
+  // second deferral — the operator presses Back while the exit dialog from a
+  // task-editor handoff is still up — must not drop the first one's `onCancel`
+  // on the floor, which would strand exactly the stale sessionStorage intent
+  // that callback exists to clear.
+  const pendingRouteChangeRef = useRef<PendingRouteChange | null>(null);
+  const replacePendingRouteChange = useCallback((next: PendingRouteChange | null) => {
+    const outgoing = pendingRouteChangeRef.current;
+    if (outgoing && outgoing !== next) outgoing.onCancel?.();
+    pendingRouteChangeRef.current = next;
+  }, []);
+  // Unmounting with a deferred navigation still pending abandons it for good:
+  // signing out flips auth state, ProtectedRoute swaps this whole tree for
+  // LoginPage, and nothing here gets another render to notice. The in-memory
+  // half of that does not matter — it dies with the tree — but `onCancel`
+  // clears a sessionStorage handoff, which SURVIVES both the unmount and the
+  // next sign-in in the same tab, and would then redirect the operator's next
+  // visit to ANY Settings page to Scheduled Tasks. Unmount is the honest
+  // trigger: it covers sign-out, session expiry and teardown alike, without
+  // App having to observe an auth transition it is never rendered for.
+  useEffect(() => () => {
+    pendingRouteChangeRef.current?.onCancel?.();
+    pendingRouteChangeRef.current = null;
+  }, []);
+  // Set when the operator asked to sign out with staged changes: the sign-out
+  // itself, held until they answer the exit dialog (bead epic
+  // enhancedchannelmanager-r93hq). A ref, not state — nothing renders from it,
+  // and running a stored continuation from inside a state updater would fire
+  // it twice under StrictMode.
+  const pendingSignOutRef = useRef<(() => void | Promise<void>) | null>(null);
   const [routeHeaderTargets, setRouteHeaderTargets] = useState({
     'primary-action': null as HTMLDivElement | null,
     status: null as HTMLDivElement | null,
@@ -364,6 +441,17 @@ function App() {
   // Manual entry trigger (for opening bulk create modal without pre-selected streams)
   const [manualEntryTrigger, setManualEntryTrigger] = useState(false);
 
+  /**
+   * Identity this tab's staged Edit Mode work belongs to (epic
+   * enhancedchannelmanager-r93hq).
+   *
+   * `ProtectedRoute` does not render this component until the auth check has
+   * settled, so `user` is resolved by the time `useEditMode` reads this on its
+   * first render — which is the render that decides whether a persisted ledger
+   * is offered or destroyed.
+   */
+  const operatorKey = useMemo(() => operatorLedgerKey(authenticatedUser), [authenticatedUser]);
+
   // Edit mode for staging changes
   const {
     isEditMode,
@@ -377,10 +465,18 @@ function App() {
     canLocalUndo,
     canLocalRedo,
     editModeEnteredAt,
+    pendingRestore,
+    restoredFrom,
+    restoreStagedLedger,
+    dismissPendingRestore,
     enterEditMode,
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
     stageAddStream,
+    stageSetProfileMembership,
+    stageRestoreChannelGroup,
+    stageClearStreamStats,
+    stagedSideEffects,
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
@@ -392,12 +488,14 @@ function App() {
     summary,
     commit,
     discard,
+    reconcileNumberingConflicts,
     localUndo,
     localRedo,
     startBatch,
     endBatch,
   } = useEditMode({
     channels,
+    operatorKey,
     onChannelsChange: setChannels,
     onCommitComplete: async (createdGroupIds) => {
       // Refresh data from server
@@ -547,6 +645,38 @@ function App() {
     onError: setError,
   });
 
+  // Every "the operator chose to leave" path ends the same way: honour what
+  // the exit dialog was holding back. Deliberately NOT a cancel path — none of
+  // these abandon the request, so none of them may fire `onCancel`.
+  //
+  // A deferred Back/Forward resumes as a real history transition rather than a
+  // pushState (bead enhancedchannelmanager-6fi7p): the operator pressed Back,
+  // so they should end up on the entry they pressed Back to, not on a new
+  // entry with that one still behind them.
+  //
+  // A history transition is a REQUEST, though, and the browser can decline it
+  // silently. The operator answered the dialog either way, so the destination
+  // still has to be honoured — by hash, on a new entry, which is the same
+  // fallback a navigation that was never a history transition already takes.
+  const completeDeferredExit = useCallback(() => {
+    const pendingRoute = pendingRouteChangeRef.current;
+    if (pendingRoute) {
+      pendingRouteChangeRef.current = null;
+      const resume = resolvePendingRouteResume(pendingRoute);
+      if (resume.kind === 'history') {
+        resumeRejectedNavigation(
+          resume.delta,
+          () => setHash(pendingRoute.tab, pendingRoute.settingsPage),
+        );
+      } else {
+        setHash(resume.tab, resume.settingsPage);
+      }
+    }
+    const pendingSignOut = pendingSignOutRef.current;
+    pendingSignOutRef.current = null;
+    if (pendingSignOut) void pendingSignOut();
+  }, [resumeRejectedNavigation, setHash]);
+
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
@@ -554,6 +684,22 @@ function App() {
       setCommitProgress(progress);
     }, { continueOnError: true });
     setCommitProgress(null);
+
+    // NOTHING WAS APPLIED, and this is a question rather than a failure: a
+    // channel number this session was about to write has moved on the server
+    // since the session's baseline was captured (bead
+    // enhancedchannelmanager-ic884.4). The operator answers keep-mine /
+    // take-theirs per channel and Apply runs again with those answers folded
+    // into the staged plan; the changes that do not overlap are untouched
+    // throughout. Handled BEFORE the failure branch so a conflict is never
+    // reported as "some changes were not applied", which would be false.
+    if (result.numberingConflicts && result.numberingConflicts.length > 0) {
+      setNumberingConflicts({
+        conflicts: result.numberingConflicts,
+        serverChannels: result.serverChannels ?? [],
+      });
+      return;
+    }
 
     // A commit the server reported as partially applied used to close the
     // dialog exactly like a clean one, leaving the operator to discover the
@@ -589,23 +735,60 @@ function App() {
     setSelectedChannelIds(new Set());
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
+    // Carry the operator wherever they were trying to go — or sign them out
+    completeDeferredExit();
+  }, [commit, clearHistory, completeDeferredExit]);
+
+  /**
+   * Fold the operator's per-channel answers into the staged plan, then Apply
+   * again (bead enhancedchannelmanager-ic884.4).
+   *
+   * The re-Apply is deliberate rather than a shortcut past the check: the
+   * reconcile re-baselines the session on the lineup the answers were given
+   * against, so the second pass runs the SAME check over the SAME staged queue
+   * and finds nothing left to ask about — unless something moved again in the
+   * meantime, in which case asking again is exactly right.
+   *
+   * An operation dropped whole by a take-theirs answer is named to the
+   * operator rather than left for them to notice, because a range renumbering
+   * disappearing from the change count with no explanation is indistinguishable
+   * from a bug.
+   */
+  const handleReconcileNumbering = useCallback((decisions: ReconcileDecision[]) => {
+    const pending = numberingConflicts;
+    if (!pending) return;
+    const outcome = reconcileNumberingConflicts(decisions, pending.serverChannels);
+    setNumberingConflicts(null);
+    if (outcome.removed.length > 0) {
+      // `setError` is the same channel Apply's own refusals use — `App`
+      // renders `NotificationProvider`, so it is outside its own provider and
+      // cannot raise a toast. A dropped renumbering has to be SAID: a change
+      // disappearing from the count with no explanation is indistinguishable
+      // from a bug.
+      setError(
+        `${outcome.removed.length} staged change${outcome.removed.length !== 1 ? 's were' : ' was'} ` +
+        `dropped so the server's channel numbers could be kept: ` +
+        `${outcome.removed.map((entry) => entry.description).join('; ')}`,
+      );
     }
-  }, [commit, clearHistory, pendingRouteChange, setHash]);
+    setApplyAfterReconcile(true);
+  }, [numberingConflicts, reconcileNumberingConflicts]);
+
+  // The re-Apply itself, one render later, when `commit` has been rebuilt from
+  // the reconciled operation queue. See `applyAfterReconcile`.
+  useEffect(() => {
+    if (!applyAfterReconcile) return;
+    setApplyAfterReconcile(false);
+    void handleApplyChanges();
+  }, [applyAfterReconcile]);
 
   const handleAcknowledgeCommitFailure = useCallback(() => {
     setCommitFailure(null);
     setShowExitDialog(false);
     setSelectedChannelIds(new Set());
     clearHistory();
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
-    }
-  }, [clearHistory, pendingRouteChange, setHash]);
+    completeDeferredExit();
+  }, [clearHistory, completeDeferredExit]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -613,21 +796,48 @@ function App() {
     setShowExitDialog(false);
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingRouteChange) {
-      setHash(pendingRouteChange.tab, pendingRouteChange.settingsPage);
-      setPendingRouteChange(null);
-    }
-  }, [discard, clearHistory, pendingRouteChange, setHash]);
+    // Carry the operator wherever they were trying to go — or sign them out
+    completeDeferredExit();
+  }, [discard, clearHistory, completeDeferredExit]);
 
+  // The ONE cancel path. The three handlers above all navigate through to the
+  // pending route, so `onCancel` must not fire from any of them: this is the
+  // only place the requested navigation is genuinely abandoned.
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
-    setPendingRouteChange(null);
+    replacePendingRouteChange(null);
+    // A vetoed Back has ALREADY been rewound to the entry the operator was on
+    // by the router, so keeping editing needs to undo nothing here — they are
+    // still on Channel Manager, still in Edit Mode, with their staged work.
+    pendingSignOutRef.current = null;
     focusHeadingOnRouteChangeRef.current = false;
-  }, []);
+  }, [replacePendingRouteChange]);
+
+  /**
+   * Abandon this Apply and go back to editing, with every staged change intact.
+   *
+   * Routed through {@link handleKeepEditing} rather than just closing the
+   * dialog: the operator asked to Apply, which may have deferred a navigation
+   * or a sign-out behind it, and answering "not now" to the conflict question
+   * abandons that intent exactly as pressing Keep Editing does. Closing only
+   * the dialogs would leave the deferred intent armed with nothing left to
+   * complete it.
+   */
+  const handleKeepNumberingConflicts = useCallback(() => {
+    setNumberingConflicts(null);
+    handleKeepEditing();
+  }, [handleKeepEditing]);
 
   // Handle tab change - check for edit mode with pending changes
-  const handleRouteChange = useCallback((newTab: TabId, settingsPage?: SettingsPage) => {
+  const handleRouteChange = useCallback((
+    newTab: TabId,
+    settingsPage?: SettingsPage,
+    options?: { onCancel?: () => void },
+  ) => {
+    // A same-route request with no settings page never navigates and never
+    // defers, so it can neither strand an intent nor cancel one — it just moves
+    // focus. `onCancel` deliberately does not fire here: nothing was abandoned.
+    // Both event callers below pass a settings page, so they cannot reach it.
     if (newTab === activeTab && !settingsPage) {
       routeHeadingRef.current?.focus();
       return;
@@ -638,7 +848,7 @@ function App() {
     if (decision === 'confirm') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
-      setPendingRouteChange({ tab: newTab, settingsPage });
+      replacePendingRouteChange({ tab: newTab, settingsPage, onCancel: options?.onCancel });
       return;
     }
 
@@ -649,31 +859,104 @@ function App() {
     }
 
     setHash(newTab, settingsPage);
-  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
+  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash, replacePendingRouteChange]);
 
   const handleTabChange = useCallback((newTab: TabId) => {
     handleRouteChange(newTab);
   }, [handleRouteChange]);
 
-  // Listen for task editor navigation events from NotificationCenter
+  // Browser Back/Forward — the one navigation the Edit Mode guard could not
+  // see (bead enhancedchannelmanager-6fi7p).
+  //
+  // `useHashRoute` has always asked permission before a popstate transition,
+  // via the cancelable `ecm:before-route-change` event, and always had working
+  // machinery to rewind a refused one. Nothing here listened. The only
+  // production listener for that event in the whole frontend was SettingsTab's
+  // unsaved-form guard, so an operator with staged channel edits who pressed
+  // Back left Edit Mode with no dialog and no staged work. `handleRouteChange`
+  // is not on that path at all: Back does not go through a tab click.
+  //
+  // Vetoing is synchronous and the operator's answer is not, so the two halves
+  // are split. This handler refuses the transition, which makes the router
+  // rewind history to the entry the operator was on — so the app is never left
+  // showing a route it did not accept — and opens the exit dialog carrying the
+  // delta that re-runs the transition. `completeDeferredExit` replays it on
+  // Apply or Discard; Keep Editing simply leaves the rewind in place.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<RouteChangeGuardDetail>).detail;
+      const decision = getGuardedPopStateDecision(detail, isEditMode, stagedOperationCount);
+      if (decision === 'ignore') return;
+
+      if (decision === 'exit-and-navigate') {
+        // Nothing staged: let the transition through and tidy up, exactly as
+        // a tab click to the same destination would.
+        rawExitEditMode();
+        setSelectedChannelIds(new Set());
+        return;
+      }
+
+      event.preventDefault();
+      focusHeadingOnRouteChangeRef.current = true;
+      setShowExitDialog(true);
+      replacePendingRouteChange({
+        tab: detail.tab,
+        settingsPage: detail.settingsPage ?? undefined,
+        historyDelta: detail.historyDelta,
+      });
+    };
+    window.addEventListener('ecm:before-route-change', handler);
+    return () => window.removeEventListener('ecm:before-route-change', handler);
+  }, [isEditMode, stagedOperationCount, rawExitEditMode, replacePendingRouteChange]);
+
+  // Signing out unmounts the app and takes the in-memory Edit Mode ledger with
+  // it, so it discards staged work exactly as navigating away does — but it is
+  // an SPA state transition, so `beforeunload` never fires and no route guard
+  // can see it (bead epic enhancedchannelmanager-r93hq). UserMenu hands the
+  // sign-out here instead of running it, and gets it back only once the
+  // operator has answered.
+  const requestSignOut = useCallback((proceed: () => void | Promise<void>) => {
+    if (getGuardedSignOutDecision(isEditMode, stagedOperationCount) === 'sign-out') {
+      void proceed();
+      return;
+    }
+    // A sign-out supersedes any deferred navigation: there will be no app left
+    // to navigate. Cancelling it rather than dropping it keeps the requester's
+    // handoff state from being stranded.
+    replacePendingRouteChange(null);
+    pendingSignOutRef.current = proceed;
+    setShowExitDialog(true);
+  }, [isEditMode, stagedOperationCount, replacePendingRouteChange]);
+
+  // Listen for task editor navigation events from NotificationCenter.
+  //
+  // Routed through the guard, so an operator with staged channel edits is asked
+  // before the work is abandoned (bead enhancedchannelmanager-6fi7p). The guard
+  // can DEFER this navigation, and NotificationCenter has already written its
+  // sessionStorage handoff by the time the event arrives — so if the operator
+  // keeps editing, that entry has to go with the cancelled request. Left behind,
+  // it redirects their next visit to ANY Settings page to Scheduled Tasks,
+  // because SettingsTab reads the key in a mount-only effect.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'scheduled-tasks');
+      handleRouteChange('settings', 'scheduled-tasks', {
+        onCancel: () => sessionStorage.removeItem(OPEN_TASK_EDITOR_STORAGE_KEY),
+      });
     };
-    window.addEventListener('ecm:open-task-editor', handler);
-    return () => window.removeEventListener('ecm:open-task-editor', handler);
-  }, [setHash]);
+    window.addEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+    return () => window.removeEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+  }, [handleRouteChange]);
 
   // Listen for "Clean up empty groups" navigation from ChannelsPane's
   // Channel List Filters panel (bead 09x38.15 item 3) — links to Settings →
   // Maintenance → Orphaned Channel Groups rather than embedding the tool.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'maintenance');
+      handleRouteChange('settings', 'maintenance');
     };
     window.addEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
     return () => window.removeEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
-  }, [setHash]);
+  }, [handleRouteChange]);
 
   // Check settings and load initial data
   useEffect(() => {
@@ -1914,6 +2197,13 @@ function App() {
   // rather than creating a duplicate. It used to be unreachable here, because
   // the manual path never reached the conflict dialog at all
   // (bead enhancedchannelmanager-fprsq).
+  //
+  // `name` arrives FINAL. StreamsPane has already put the operator's typed
+  // name through `resolveCreateChannelNames`, which is the one place the
+  // "Normalization Rules" question is answered, so neither branch below may
+  // normalize again and neither sets the API's `normalize` flag — doing either
+  // would normalize an already-normalized name a second time
+  // (bead enhancedchannelmanager-e9e5o).
   const handleCreateChannelManual = useCallback(
     async (
       name: string,
@@ -1965,8 +2255,7 @@ function App() {
             undefined,     // logoId
             undefined,     // logoUrl
             undefined,     // tvgId
-            undefined,     // tvcGuideStationId
-            false          // normalize
+            undefined      // tvcGuideStationId
           );
 
           // Track profile assignments (use default profiles for manual creation)
@@ -2070,21 +2359,23 @@ function App() {
       streamsToCreate: Stream[],
       startingNumber: number,
       channelGroupId: number | null,
-      newGroupName?: string,
-      timezonePreference?: api.TimezonePreference,
-      _stripCountryPrefix?: boolean,
-      addChannelNumber?: boolean,
-      numberSeparator?: api.NumberSeparator,
-      keepCountryPrefix?: boolean,
-      countrySeparator?: api.NumberSeparator,
-      prefixOrder?: api.PrefixOrder,
-      _stripNetworkPrefix?: boolean,
-      _customNetworkPrefixes?: string[],
-      _stripNetworkSuffix?: boolean,
-      _customNetworkSuffixes?: string[],
-      profileIds?: number[],
-      pushDownOnConflict?: boolean,
-      normalize?: boolean
+      // `| undefined` rather than `?` so `nameResolution` below can be
+      // REQUIRED; see `StreamsPaneProps.onBulkCreateFromGroup`.
+      newGroupName: string | undefined,
+      timezonePreference: api.TimezonePreference | undefined,
+      _stripCountryPrefix: boolean | undefined,
+      addChannelNumber: boolean | undefined,
+      numberSeparator: api.NumberSeparator | undefined,
+      keepCountryPrefix: boolean | undefined,
+      countrySeparator: api.NumberSeparator | undefined,
+      prefixOrder: api.PrefixOrder | undefined,
+      _stripNetworkPrefix: boolean | undefined,
+      _customNetworkPrefixes: string[] | undefined,
+      _stripNetworkSuffix: boolean | undefined,
+      _customNetworkSuffixes: string[] | undefined,
+      profileIds: number[] | undefined,
+      pushDownOnConflict: boolean | undefined,
+      nameResolution: api.ResolvedCreateChannelNames
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -2103,18 +2394,44 @@ function App() {
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Normalize stream names using the backend normalization engine
-        // This applies all configured rules (country prefixes, network tags, etc.)
-        const streamNames = filteredStreams.map(s => s.name);
-        const normalizedNames = await api.normalizeStreamNamesWithBackend(streamNames);
+        // The names these channels will be created with, as ALREADY RESOLVED
+        // by the dialog (bead enhancedchannelmanager-e9e5o).
+        //
+        // This used to receive the operator's toggle and call
+        // `resolveCreateChannelNames` itself, which made two independent
+        // answers to one question: the dialog resolved for its preview and
+        // count, this resolved again at submit, and the two were free to
+        // disagree — by timing, by the rules changing in between, or because
+        // the dialog grouped its answer differently. Consuming the resolution
+        // the operator was SHOWN is what removes that gap. The names are
+        // FINAL: nothing here or downstream may normalize them again.
+        //
+        // The resolution is REQUIRED and it is asked whether it covers these
+        // streams before anything is staged. It used to be optional, defaulted
+        // to an empty map, and read per stream with `|| stream.name` — so a
+        // caller that forgot it, or a resolution built from a different set of
+        // streams, silently created every channel under its raw provider name.
+        // Refusing here is atomic: no batch has been started, so nothing is
+        // half-staged (bead enhancedchannelmanager-e9e5o, fix round 4).
+        const normalizationFailed = nameResolution.normalizationFailed;
+        const unresolved = filteredStreams.filter((s) => !nameResolution.has(s.name));
+        if (unresolved.length > 0) {
+          logger.error('[BulkCreate] Unresolved stream names, refusing to create', unresolved.map((s) => s.name));
+          setError(
+            `Cannot create channels: ${unresolved.length} stream name(s) were not resolved, ` +
+            'so the names on screen are not the names that would be created. Close the dialog and try again.'
+          );
+          return;
+        }
 
         // Group streams by normalized base name (also stripping quality suffixes to merge variants)
         // The grouping key is the normalized name with quality suffixes stripped
         // The channel name will be the normalized name (without quality stripping)
         const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          // Get the backend-normalized name, fallback to original if not found
-          const normalizedName = normalizedNames.get(stream.name) || stream.name;
+          // Total by construction: the coverage refusal above already
+          // established that the resolution answers for every one of these.
+          const normalizedName = nameResolution.nameFor(stream.name);
           // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
           const groupingKey = api.stripQualitySuffixes(normalizedName);
           const existing = streamsByBaseName.get(groupingKey);
@@ -2301,7 +2618,12 @@ function App() {
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
           // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
-          // Pass normalize flag to apply normalization rules during channel creation
+          // `channelName` is already the final name — resolveCreateChannelNames
+          // above answered the normalization toggle, and the number/country
+          // prefixes were applied on top of its answer. That is why no
+          // normalize flag travels with the staged operation: a backend-side
+          // pass would normalize an already-normalized name a second time
+          // (bead enhancedchannelmanager-e9e5o).
           const tempChannelId = stageCreateChannel(
             channelName,
             channelNumber,
@@ -2310,8 +2632,7 @@ function App() {
             undefined, // logoId - will be resolved during commit
             logoUrl,
             tvgId,
-            tvcGuideStationId,
-            normalize
+            tvcGuideStationId
           );
 
           // Assign all streams in this group to the new channel
@@ -2357,6 +2678,10 @@ function App() {
           increment, // Use the same increment calculated for channel creation
         });
 
+        // The caller owns the operator-facing message: StreamsPane sits inside
+        // the notification provider, App renders it (bead
+        // enhancedchannelmanager-e9e5o).
+        return { normalizationFailed };
       } catch (err) {
         logger.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
@@ -2380,10 +2705,34 @@ function App() {
   // Wraps the single-stream drop-into-group flow with the BD-D candidates
   // lookup. Multi-stream drops bypass dedup entirely — bulk dedup is a
   // separate epic surface (bd-a5lb2 / bulk M3U dedup hook).
-  const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
+  // In Edit Mode the merge this hook offers stages like every other stream
+  // assignment (bead enhancedchannelmanager-kz089); outside it, it writes as
+  // before. Passing `undefined` rather than a no-op keeps the hook's own
+  // "am I staging?" test a simple presence check.
+  const dedupOnDrop = useDedupOnDrop({
+    reloadChannels: loadChannels,
+    stageAddStream: isEditMode ? stageAddStream : undefined,
+  });
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
-  const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
+  //
+  // Every branch below now NAMES what the duplicate check did (bead
+  // enhancedchannelmanager-ok8tj), closing the sibling of the defect commit
+  // `941d9087` fixed on the `Create in…` trigger path. Silence covered five
+  // different stories here — a candidate was found, nothing was similar
+  // enough, the lookup broke, the drop carried more than one stream, or the
+  // client could not read the stream's name — and the first was the only one
+  // the operator could actually see.
+  //
+  // The report is RETURNED rather than toasted here: `App` renders
+  // `NotificationProvider`, so it is outside its own provider and cannot call
+  // `useNotifications()`. `ChannelsPane`, which owns the drop target and knows
+  // the group's name, turns the report into the message.
+  const handleBulkStreamsDrop = useCallback(async (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ): Promise<DedupDropReport> => {
     const proceedWithCreate = () => {
       // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
       setDroppedStreamIds(streamIds);
@@ -2392,9 +2741,11 @@ function App() {
     };
 
     if (streamIds.length !== 1) {
-      // Multi-stream drops keep the existing bulk-create flow unchanged.
+      // Multi-stream drops keep the existing bulk-create flow unchanged —
+      // bulk dedup is a separate surface. Say so, rather than leaving the
+      // absent merge prompt to be read as "nothing matched".
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_multi_stream', streamName: null, streamCount: streamIds.length };
     }
 
     const streamId = streamIds[0];
@@ -2404,10 +2755,10 @@ function App() {
       // the drop is never silently dropped on the floor.
       logger.warn('[DEDUP] dropped stream id %s not found in client cache; skipping dedup lookup', streamId);
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_unknown_stream', streamName: null, streamCount: 1 };
     }
 
-    void dedupOnDrop.handleSingleStreamDrop(
+    const outcome = await dedupOnDrop.handleSingleStreamDrop(
       {
         streamId,
         streamName: stream.name,
@@ -2415,6 +2766,7 @@ function App() {
       },
       proceedWithCreate,
     );
+    return { outcome, streamName: stream.name, streamCount: 1 };
   }, [streams, seenStreams, dedupOnDrop]);
 
   // Handle open create channel modal (triggers bulk create modal in manual entry mode)
@@ -2561,6 +2913,30 @@ function App() {
   const workspaceEditUnavailable = channelWorkspaceSources.some((source) =>
     source.state === 'loading' || (source.state === 'error' && !source.hasSnapshot));
 
+  /**
+   * What a staged ledger left behind by a dead session can still be applied
+   * against (epic enhancedchannelmanager-r93hq).
+   *
+   * Planned against the channel and group lists as the server reports them
+   * NOW, and only once those lists are actually loaded: `workspaceEditUnavailable`
+   * is the same signal that holds Enter Edit Mode disabled, and planning against
+   * a half-loaded list would report every operation as stale.
+   *
+   * Recomputed rather than cached because the operator can leave the offer on
+   * screen while a refresh lands underneath it; the plan they act on must be
+   * the plan they are reading.
+   */
+  const restorePlan = useMemo(() => {
+    if (pendingRestore === null || workspaceEditUnavailable || workspacePermissionDenied) {
+      return null;
+    }
+    return planLedgerRestore(pendingRestore.operations, {
+      channels,
+      channelGroups,
+      profileIds: channelProfiles.map((profile) => profile.id),
+    });
+  }, [pendingRestore, workspaceEditUnavailable, workspacePermissionDenied, channels, channelGroups, channelProfiles]);
+
   const channelManagerPageAction = activeTab === 'channel-manager'
     && !workspacePermissionDenied && (
     isEditMode ? (
@@ -2574,6 +2950,7 @@ function App() {
             {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
           </span>
         )}
+        <EditModeRestoredBadge restoredFrom={restoredFrom} />
         {editModeEnteredAt !== null && <EditModeTimer enteredAt={editModeEnteredAt} />}
         <div className="edit-mode-buttons">
           <button
@@ -2699,7 +3076,7 @@ function App() {
             </svg>
           </a>
           <NotificationCenter dedupM3uToastSuppressed={dedupM3uToastSuppressed} />
-          <UserMenu />
+          <UserMenu onRequestSignOut={requestSignOut} />
         </div>
       </header>
 
@@ -2713,6 +3090,28 @@ function App() {
         isAdmin={adminNavVisible}
       />
 
+      {/* The one Edit Mode exit that cannot be guarded is the session dying
+          under the app. This is the way back from it (epic
+          enhancedchannelmanager-r93hq): the ledger survived in sessionStorage,
+          bound to the operator who staged it, and the operator decides whether
+          it comes back — after reading what of it still applies. */}
+      <EditModeRestoreDialog
+        isOpen={restorePlan !== null && pendingRestore !== null}
+        savedAt={pendingRestore?.savedAt ?? 0}
+        restorable={restorePlan?.restorable ?? []}
+        dropped={restorePlan?.dropped ?? []}
+        withdrawnAcknowledgements={restorePlan?.withdrawnAcknowledgements ?? []}
+        onRestore={() => {
+          if (pendingRestore === null || restorePlan === null) return;
+          restoreStagedLedger({
+            operations: restorePlan.restorable,
+            undoGroups: pendingRestore.undoGroups,
+            savedAt: pendingRestore.savedAt,
+          });
+        }}
+        onDiscard={dismissPendingRestore}
+      />
+
       <EditModeExitDialog
         isOpen={showExitDialog}
         summary={summary}
@@ -2723,6 +3122,19 @@ function App() {
         commitProgress={commitProgress}
         commitFailure={commitFailure}
         onAcknowledgeFailure={handleAcknowledgeCommitFailure}
+      />
+
+      {/* AFTER the exit dialog, deliberately: both render an
+          `.edit-mode-dialog-overlay`, so the later sibling is the one that
+          receives the operator's clicks. Nothing has been applied at this
+          point — this is a question, not a result — so it has to sit on top of
+          the Apply dialog that asked it (bead enhancedchannelmanager-ic884.4). */}
+      <NumberingConflictDialog
+        isOpen={numberingConflicts !== null}
+        conflicts={numberingConflicts?.conflicts ?? []}
+        isCommitting={isCommitting}
+        onKeepEditing={handleKeepNumberingConflicts}
+        onReconcile={handleReconcileNumbering}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
@@ -2855,6 +3267,10 @@ function App() {
               modifiedChannelIds={modifiedChannelIds}
               onStageUpdateChannel={stageUpdateChannel}
               onStageAddStream={stageAddStream}
+              onStageSetProfileMembership={stageSetProfileMembership}
+              stagedSideEffects={stagedSideEffects}
+              onStageRestoreChannelGroup={stageRestoreChannelGroup}
+              onStageClearStreamStats={stageClearStreamStats}
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}

@@ -1535,6 +1535,15 @@
 .channel-menu-dropdown {
   position: fixed;
   min-width: 180px;
+  /* Capped so the Edit Mode immediacy note WRAPS instead of laying itself out
+     on one line and dragging the menu with it: measured at 535px against a
+     180px natural width at the 1280px minimum viewport, and ~693px at 1600px
+     (bead enhancedchannelmanager-kz089 follow-up, PO decision 2026-08-16). The
+     note keeps its full wording — being unmissable is its purpose — so the box
+     is what gives. Pinned by e2e/edit-mode-immediacy-surfaces.spec.ts arm 3,
+     which asserts the cap AND that the note answered it by wrapping rather
+     than by being clipped. */
+  max-width: 320px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 6px;
@@ -4636,6 +4645,15 @@
 .group-menu-dropdown {
   position: fixed;
   min-width: 180px;
+  /* Capped so the Edit Mode immediacy note WRAPS instead of laying itself out
+     on one line and dragging the menu with it: measured at 535px against a
+     180px natural width at the 1280px minimum viewport, and ~693px at 1600px
+     (bead enhancedchannelmanager-kz089 follow-up, PO decision 2026-08-16). The
+     note keeps its full wording — being unmissable is its purpose — so the box
+     is what gives. Pinned by e2e/edit-mode-immediacy-surfaces.spec.ts arm 3,
+     which asserts the cap AND that the note answered it by wrapping rather
+     than by being clipped. */
+  max-width: 320px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 6px;

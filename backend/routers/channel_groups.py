@@ -10,6 +10,11 @@ import time
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
+from channel_group_reparent import (
+    UNGROUPED_TARGET_GROUP_NAME,
+    UngroupedTargetUnavailable,
+    reparent_group_channels,
+)
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
 import journal
@@ -904,12 +909,31 @@ async def delete_channel_group(group_id: int):
             logger.debug("[GROUPS] Hid channel group %s in %.1fms", group_id, elapsed_ms)
             return {"status": "hidden", "message": "Group hidden (M3U sync active)"}
         else:
-            # No M3U sync, safe to delete
+            # No M3U sync, safe to delete — once the group is EMPTY. Dispatcharr
+            # refuses to delete a group that still has channels, and refuses a
+            # null channel_group_id, so the members have to be moved to a real
+            # group first. This is the same helper, and therefore the same
+            # semantics, as the Edit Mode bulk commit (bead
+            # enhancedchannelmanager-auocn, sharing …-ayfn9's fix): both paths
+            # reach one confirm dialog that promises the move, so one
+            # implementation keeps that promise.
+            try:
+                moved = await reparent_group_channels(client, group_id)
+            except UngroupedTargetUnavailable as reparent_err:
+                # The operator can act on this, and the reason is the whole value
+                # of the answer, so it must not become an opaque 500.
+                logger.warning(
+                    "[GROUPS] Refusing to delete channel group %s: %s", group_id, reparent_err
+                )
+                raise HTTPException(status_code=400, detail=str(reparent_err))
             await client.delete_channel_group(group_id)
             elapsed_ms = (time.time() - start) * 1000
             logger.debug("[GROUPS] Deleted channel group %s via API in %.1fms", group_id, elapsed_ms)
-            logger.info("[GROUPS] Deleted channel group id=%s", group_id)
-            return {"status": "deleted"}
+            logger.info(
+                "[GROUPS] Deleted channel group id=%s (moved %s channel(s) to '%s')",
+                group_id, moved, UNGROUPED_TARGET_GROUP_NAME,
+            )
+            return {"status": "deleted", "channels_moved": moved}
     except HTTPException:
         raise
     except Exception as e:
