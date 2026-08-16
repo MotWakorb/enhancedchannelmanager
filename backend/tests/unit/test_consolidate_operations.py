@@ -1,5 +1,7 @@
 """Tests for _consolidate_operations in routers.channels."""
 
+import pytest
+
 from channel_number_plan import build_final_numbering_state
 from routers.channels import (
     _consolidate_operations,
@@ -423,6 +425,44 @@ def _final_numbers(operations, lineup=None):
     return {p.channel_id: p.number for p in state.placements}
 
 
+def _number_writers(operations) -> dict[int, list[str]]:
+    """Channel id -> the type of every emitted operation that WRITES its number.
+
+    The property, not the outcome. An assertion on the final materialised
+    number passes while two operations race to produce it: the create writes 5,
+    the range then writes 10, the materialiser says 10, and if the second write
+    fails the channel is left on a 5 nobody asked for. Only counting the
+    writers can see that.
+
+    A ``createChannel`` counts only when it still carries a number, which is
+    exactly the state stripping puts it in — the create is always emitted,
+    because it is what makes the channel exist.
+    """
+    writers: dict[int, list[str]] = {}
+    for op in operations:
+        if op.type == "updateChannel":
+            if isinstance(op.data, dict) and "channel_number" in op.data:
+                writers.setdefault(op.channelId, []).append(op.type)
+        elif op.type == "createChannel":
+            if op.channelNumber is not None:
+                writers.setdefault(op.tempId, []).append(op.type)
+        elif op.type == "bulkAssignChannelNumbers":
+            for cid in op.channelIds:
+                writers.setdefault(cid, []).append(op.type)
+    return writers
+
+
+def assert_one_writer_per_channel(operations) -> dict[int, list[str]]:
+    """Invariant: exactly one emitted operation writes any channel's number."""
+    writers = _number_writers(operations)
+    multiply_written = {cid: kinds for cid, kinds in writers.items() if len(kinds) > 1}
+    assert multiply_written == {}, (
+        f"more than one emitted operation writes these channels' numbers: "
+        f"{multiply_written}"
+    )
+    return writers
+
+
 def test_a_range_followed_by_an_edit_applies_the_edit():
     """The confirmed reproduction. Submitted order puts 20 last, so 20 wins."""
     ops = [
@@ -453,13 +493,24 @@ def test_only_one_operation_writes_a_channels_number():
         BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
         BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
     ]
-    result = _consolidate_operations(ops)
-    writers = [
-        o for o in result
-        if (o.type == "updateChannel" and "channel_number" in o.data)
-        or (o.type == "bulkAssignChannelNumbers" and 1 in o.channelIds)
+    assert assert_one_writer_per_channel(_consolidate_operations(ops)) == {
+        1: ["bulkAssignChannelNumbers"]
+    }
+
+
+def test_two_operations_writing_one_number_is_what_the_check_catches():
+    """Anti-vacuity control for :func:`assert_one_writer_per_channel`.
+
+    The submitted list has the defect the consolidated list must not, so a
+    check that could not fail while a channel was written twice would fail
+    here.
+    """
+    ops = [
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20}),
+        BulkAssignNumbersOp(channelIds=[1], startingNumber=10),
     ]
-    assert len(writers) == 1, result
+    with pytest.raises(AssertionError):
+        assert_one_writer_per_channel(ops)
 
 
 def test_a_superseded_edit_keeps_the_rest_of_its_data():
@@ -535,8 +586,193 @@ def test_a_range_after_the_create_it_names_still_places_it():
         BulkCreateChannelOp(tempId=-1, name="New", channelNumber=3),
         BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
     ]
-    assert _final_numbers(_consolidate_operations(ops)) == _final_numbers(ops)
+    consolidated = _consolidate_operations(ops)
+    assert _final_numbers(consolidated) == _final_numbers(ops)
     assert _final_numbers(ops)[-1] == 10
+    # The number, not just the number the materialiser ends up with. The
+    # create used to be emitted unchanged beside the range that supersedes it.
+    assert assert_one_writer_per_channel(consolidated) == {
+        -1: ["bulkAssignChannelNumbers"]
+    }
+
+
+# -- A created channel keeps exactly one number-writing operation ----------
+#
+# Fix round 4. ``channel_number_owner`` was consulted for merged updates and
+# for range assignments and NOT for creates, which were appended to
+# ``ordered_ops`` and copied straight into the output. So a create whose number
+# a later operation supersedes was still emitted carrying it: the channel was
+# created on the superseded number, the temp id resolved, and the owner then
+# wrote the real one. Two writes, and if the second failed the new channel was
+# left on an intermediate nobody asked for — the exact middle state ic884.3
+# exists to prevent.
+
+
+def test_a_create_superseded_by_a_range_is_emitted_without_its_number():
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="New", channelNumber=5),
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+    ]
+    consolidated = _consolidate_operations(ops)
+    creates = [o for o in consolidated if o.type == "createChannel"]
+    assert len(creates) == 1, "the create must still be emitted — it creates the channel"
+    assert creates[0].channelNumber is None
+    assert creates[0].name == "New"
+    assert creates[0].tempId == -1
+    assert assert_one_writer_per_channel(consolidated) == {
+        -1: ["bulkAssignChannelNumbers"]
+    }
+    assert _final_numbers(consolidated) == _final_numbers(ops)
+
+
+def test_a_create_superseded_by_an_edit_is_emitted_without_its_number():
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="New", channelNumber=5),
+        BulkUpdateChannelOp(channelId=-1, data={"channel_number": 10}),
+    ]
+    consolidated = _consolidate_operations(ops)
+    creates = [o for o in consolidated if o.type == "createChannel"]
+    assert len(creates) == 1
+    assert creates[0].channelNumber is None
+    assert assert_one_writer_per_channel(consolidated) == {-1: ["updateChannel"]}
+    assert _final_numbers(consolidated) == _final_numbers(ops)
+    # And the create is still emitted BEFORE the operation that numbers it, so
+    # the temp id has something to resolve to.
+    kinds = [o.type for o in consolidated]
+    assert kinds.index("createChannel") < kinds.index("updateChannel")
+
+
+def test_a_create_superseded_by_a_range_drops_its_consent_too():
+    """An acknowledgement on a create is consent to place THAT channel on THAT
+    number beside THOSE occupants. When the number comes off, the placement it
+    consented to is not the one that happens, so carrying it forward would
+    manufacture consent for a collision nobody was shown — the same reasoning
+    that governs a superseded update."""
+    ops = [
+        BulkCreateChannelOp(
+            tempId=-1,
+            name="New",
+            channelNumber=5,
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [1]},
+        ),
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+    ]
+    creates = [o for o in _consolidate_operations(ops) if o.type == "createChannel"]
+    assert len(creates) == 1
+    assert creates[0].acknowledgedDuplicate is None
+
+
+def test_a_create_that_owns_its_number_keeps_everything():
+    """The control. Nothing supersedes this create, so nothing comes off it —
+    a strip that fired unconditionally would pass every test above and lose
+    every number an operator typed into the create dialog."""
+    ops = [
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+        BulkCreateChannelOp(
+            tempId=-1,
+            name="New",
+            channelNumber=5,
+            acknowledgedDuplicate={"number": 5, "occupantChannelIds": [1]},
+        ),
+    ]
+    consolidated = _consolidate_operations(ops)
+    creates = [o for o in consolidated if o.type == "createChannel"]
+    assert len(creates) == 1
+    assert creates[0].channelNumber == 5
+    assert creates[0].acknowledgedDuplicate is not None
+    assert assert_one_writer_per_channel(consolidated) == {-1: ["createChannel"]}
+
+
+def test_a_lone_create_keeps_its_number():
+    ops = [BulkCreateChannelOp(tempId=-1, name="New", channelNumber=5)]
+    consolidated = _consolidate_operations(ops)
+    assert consolidated[0].channelNumber == 5
+    assert assert_one_writer_per_channel(consolidated) == {-1: ["createChannel"]}
+
+
+def test_a_superseded_create_keeps_everything_that_is_not_the_number():
+    """Stripping is scoped to the number and its bookkeeping. The channel this
+    operation creates must be the channel the operator described."""
+    ops = [
+        BulkCreateChannelOp(
+            tempId=-1,
+            name="New",
+            channelNumber=5,
+            groupId=7,
+            logoId=9,
+            logoUrl="http://example.invalid/logo.png",
+            tvgId="tvg-1",
+            tvcGuideStationId="gracenote-1",
+            normalize=True,
+        ),
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+    ]
+    created = [o for o in _consolidate_operations(ops) if o.type == "createChannel"][0]
+    assert created.model_dump() == {
+        **ops[0].model_dump(),
+        "channelNumber": None,
+        "acknowledgedDuplicate": None,
+    }
+
+
+def test_the_number_scoped_create_fields_are_pinned_against_the_model():
+    """The same pin as for ``BulkUpdateChannelOp``, for the same reason: a
+    field added to ``BulkCreateChannelOp`` has to be classified as describing
+    the number write or not, rather than silently riding through a strip.
+
+    Imported inside the test so the behavioural tests around it fail on
+    BEHAVIOUR rather than all failing together on a missing name. An
+    import-level red, and labelled as one.
+    """
+    from routers.channels import _NUMBER_SCOPED_CREATE_FIELDS
+
+    assert set(BulkCreateChannelOp.model_fields) == {
+        "type",
+        "tempId",
+        "name",
+        "groupId",
+        "newGroupName",
+        "logoId",
+        "logoUrl",
+        "tvgId",
+        "tvcGuideStationId",
+        "normalize",
+    } | set(_NUMBER_SCOPED_CREATE_FIELDS)
+
+
+def test_a_create_and_delete_that_cancel_leave_no_writer_behind():
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="New", channelNumber=5),
+        BulkDeleteChannelOp(channelId=-1),
+        BulkAssignNumbersOp(channelIds=[-1], startingNumber=10),
+    ]
+    consolidated = _consolidate_operations(ops)
+    assert [o.type for o in consolidated] == []
+    assert assert_one_writer_per_channel(consolidated) == {}
+
+
+@pytest.mark.parametrize(
+    "trailing",
+    [
+        BulkAssignNumbersOp(channelIds=[-1, -2], startingNumber=10),
+        BulkUpdateChannelOp(channelId=-1, data={"channel_number": 10}),
+    ],
+)
+def test_a_mixture_of_kinds_over_real_and_temp_ids_writes_each_number_once(trailing):
+    """The invariant across the whole mixture, not one demonstrated door:
+    creates, edits and ranges over both temp and real ids, in an order that
+    makes every kind win somewhere."""
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="A", channelNumber=5),
+        BulkCreateChannelOp(tempId=-2, name="B", channelNumber=6),
+        BulkUpdateChannelOp(channelId=1, data={"channel_number": 20, "name": "ESPN HD"}),
+        BulkAssignNumbersOp(channelIds=[1, 2], startingNumber=30),
+        BulkUpdateChannelOp(channelId=2, data={"channel_number": 40}),
+        trailing,
+    ]
+    consolidated = _consolidate_operations(ops)
+    assert_one_writer_per_channel(consolidated)
+    assert _final_numbers(consolidated) == _final_numbers(ops)
 
 
 # -- An omitted range start is 1 everywhere, and 0 means 0 -----------------

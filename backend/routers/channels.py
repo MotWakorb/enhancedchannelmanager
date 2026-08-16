@@ -1663,6 +1663,15 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
 #: for a placement that no longer happens.
 _NUMBER_SCOPED_UPDATE_FIELDS = ("acknowledgedDuplicate", "expectedNumber")
 
+#: The same classification for :class:`BulkCreateChannelOp`, and the same pin.
+#:
+#: The create is ALWAYS emitted — it is what makes the channel exist — so what
+#: yields to a later owner is the NUMBER on it and the consent that describes
+#: that placement, never the operation. ``channelNumber`` is therefore listed
+#: here beside the bookkeeping: it is the field being dropped, not a field
+#: dropped alongside one.
+_NUMBER_SCOPED_CREATE_FIELDS = ("channelNumber", "acknowledgedDuplicate")
+
 
 def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperation]:
     """Consolidate redundant operations to minimize API calls.
@@ -1691,6 +1700,15 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     taken off it. Exactly one operation in the output writes any given
     channel's number, which is what makes the emission order unable to change
     the answer.
+
+    THE NUMBER COMES OFF THE LOSER; THE LOSER DOES NOT ALWAYS COME OFF. A
+    superseded update with nothing else to PATCH is dropped, because it existed
+    only to write that number. A superseded CREATE is always emitted, because
+    it is what makes the channel exist and every operation naming its temp id
+    depends on it — only its number and the consent describing that placement
+    come off. That distinction is the fix-round-4 defect: creates were copied
+    into the output untouched, so a create whose number a later operation owned
+    was emitted carrying it and the channel was written twice.
     """
     start = time.time()
     original_count = len(operations)
@@ -1811,8 +1829,42 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             # optimise one.
             ordered_ops.append(op)
 
-    # Build consolidated list
-    consolidated: list[BulkOperation] = list(ordered_ops)
+    # Build consolidated list.
+    #
+    # A CREATE WHOSE NUMBER A LATER OPERATION OWNS IS EMITTED WITHOUT IT. The
+    # create itself must still be emitted — it is what makes the channel exist,
+    # and every operation naming its temp id depends on it. But it used to be
+    # copied through carrying its number as well, so `createChannel(-1, 5)`
+    # followed by `bulkAssignChannelNumbers([-1], 10)` created the channel on 5
+    # and then wrote 10 over it: two emitted operations writing one channel's
+    # number, and if the second one failed the new channel was left sitting on
+    # a superseded 5 nobody asked for.
+    #
+    # Without the number, the create posts no `channel_number` at all and
+    # Dispatcharr picks one, exactly as it does for the creates that never
+    # named a number; the owner then places the channel where the caller asked,
+    # resolving the temp id through `tempIdMap` because the create is emitted
+    # ahead of it and `ordered_ops` keeps it there. So the channel still ends
+    # up on the number the caller asked for, by one write instead of two.
+    #
+    # And what a failure leaves is now a state the operator can read. There is
+    # no all-or-nothing here and there cannot be (see
+    # `backend/channel_number_apply.py` for the measured absence of any
+    # conditional update in Dispatcharr 0.28.x), so if the owner's write fails
+    # the channel exists on the number DISPATCHARR chose — a channel that was
+    # created and never placed, reported as exactly that by the failed
+    # operation. Before, it existed on the superseded 5: a number the operator
+    # typed, on a channel the plan says belongs on 10, and nothing in the
+    # envelope to say which of the two writes was the authoritative one.
+    consolidated: list[BulkOperation] = []
+    for op in ordered_ops:
+        if (
+            op.type == "createChannel"
+            and op.channelNumber is not None
+            and channel_number_owner.get(op.tempId) != "createChannel"
+        ):
+            op = op.model_copy(update=dict.fromkeys(_NUMBER_SCOPED_CREATE_FIELDS))
+        consolidated.append(op)
 
     # Merged updateChannel ops. Copied from a real operation, never rebuilt —
     # see the note beside `channel_update_last`.
@@ -2499,20 +2551,26 @@ async def _run_bulk_commit(
         # is a channel or a stream.
         referenced_profile_ids = set()
         referenced_hidden_group_ids = set()
-        # A createChannel names no existing channel, so a batch of nothing but
-        # creates used to fetch no lineup at all — and the final-state check
-        # (bead enhancedchannelmanager-ic884.2) then had nothing to detect a
-        # collision AGAINST. That batch is not hypothetical: Edit Mode's Apply
-        # sends its creates in their own request, ahead of everything else. A
-        # create carrying an explicit number therefore asks for the lineup too.
-        # A create with no number does not: Dispatcharr picks that number, so
-        # there is nothing here to check.
-        numbering_needs_lineup = False
-        # Whether the final-state numbering check has anything to check. It is
-        # what decides whether a lineup that would not load is REPORTED (fix
-        # round 2 -- see the check itself, below). Broader than
-        # ``numbering_needs_lineup``, which only asks whether this batch would
-        # otherwise fetch no lineup at all.
+        # Whether the final-state numbering check (bead
+        # enhancedchannelmanager-ic884.2) has anything to check. It decides two
+        # things, and they are the same question asked twice: whether the
+        # lineup is FETCHED at all, and whether a lineup that would not load is
+        # REPORTED (fix round 2 -- see the check itself, below).
+        #
+        # It used to decide only the second, while a separate flag decided the
+        # fetch and was raised by exactly one thing: a create carrying an
+        # explicit number. Every other numbering operation relied on the
+        # channel it names being real, and therefore already in
+        # ``referenced_channel_ids``. A TEMP id never is — it names no existing
+        # channel — so a batch whose only numbering operation named a temp id
+        # fetched no lineup, reported itself unverifiable, and under the
+        # default ``continueOnError`` refused a legal request. Reachable by
+        # creating a channel and then renumbering it, and reachable for any
+        # create whose number consolidation hands to a later owner.
+        #
+        # A batch that places nobody still fetches nothing: a create with no
+        # number asks Dispatcharr to pick one, and there is nothing here to
+        # check it against.
         numbering_places_a_channel = False
 
         for idx, op in enumerate(request.operations):
@@ -2520,7 +2578,6 @@ async def _run_bulk_commit(
                 # This creates a channel, track its temp ID
                 channels_to_create.add(op.tempId)
                 if op.channelNumber is not None:
-                    numbering_needs_lineup = True
                     numbering_places_a_channel = True
             elif op.type in ("updateChannel", "deleteChannel"):
                 if op.channelId >= 0:  # Only real IDs need validation
@@ -2589,7 +2646,7 @@ async def _run_bulk_commit(
             sample_ids = sorted(referenced_channel_ids)[:20]
             logger.debug("[CHANNELS-BULK] Referenced channel IDs (sample): %s%s", sample_ids, '...' if len(referenced_channel_ids) > 20 else '')
 
-        if referenced_channel_ids or numbering_needs_lineup:
+        if referenced_channel_ids or numbering_places_a_channel:
             try:
                 logger.debug("[CHANNELS-BULK] Fetching existing channels for validation...")
                 # Fetch all pages of channels to build lookup

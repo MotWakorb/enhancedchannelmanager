@@ -445,3 +445,113 @@ class TestPreflightAndContinueOnError:
         assert not mock_client.create_channel.called, (
             "the default path must refuse before the first mutation"
         )
+
+
+class TestTheLineupIsFetchedWheneverTheCheckNeedsIt:
+    """The check runs whenever the batch places a channel, not only when a
+    channel it can name in advance is real.
+
+    Fix round 4. Which batches fetched the lineup was decided by a SECOND
+    flag, ``numbering_needs_lineup``, raised only by a create carrying an
+    explicit number. Every other numbering operation relied on the channel it
+    names being real and therefore already in ``referenced_channel_ids`` — and
+    a temp id is never added there, because a temp id names no existing
+    channel. So a batch whose only numbering operation named a temp id fetched
+    no lineup, reported ``numbering_preflight_unavailable``, and under the
+    default ``continueOnError`` REFUSED a request that was perfectly legal.
+
+    Reachable without consolidation at all — create a channel with no number
+    and then renumber it — and reachable through consolidation for any create
+    whose number a later operation owns, since that create is now emitted
+    without one.
+
+    ``numbering_places_a_channel`` is the whole condition now: a batch that
+    places a channel needs the lineup to check the placement against, and a
+    batch that places nobody needs nothing.
+    """
+
+    @staticmethod
+    async def _validate_consolidated(async_client, operations, consolidate=True):
+        with patch("routers.channels.get_client", return_value=_client()), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": operations,
+                "validateOnly": True,
+                "consolidate": consolidate,
+            })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @pytest.mark.asyncio
+    async def test_a_create_whose_number_a_range_owns_still_gets_the_lineup(
+        self, async_client
+    ):
+        """Consolidation strips the number off this create, so the create can
+        no longer be what asks for the lineup — but the range that took the
+        number over still places a channel."""
+        data = await self._validate_consolidated(async_client, [
+            {"type": "createChannel", "tempId": -1, "name": "New", "channelNumber": 5},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 10},
+        ])
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_numberless_create_then_an_edit_that_numbers_it(self, async_client):
+        """The same hole with no consolidation involved: the create never
+        carried a number, and the edit that numbers it names a temp id."""
+        data = await self._validate_consolidated(async_client, [
+            {"type": "createChannel", "tempId": -1, "name": "New"},
+            {"type": "updateChannel", "channelId": -1, "data": {"channel_number": 10}},
+        ], consolidate=False)
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is True
+
+    @pytest.mark.asyncio
+    async def test_the_lineup_it_fetched_is_the_one_the_collision_is_found_in(
+        self, async_client
+    ):
+        """Fetching is not the point; CHECKING is. The temp channel lands on 5,
+        which ESPN holds in the lineup, and that has to be reported."""
+        data = await self._validate_consolidated(async_client, [
+            {"type": "createChannel", "tempId": -1, "name": "New", "channelNumber": 99},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 5},
+        ])
+        issues = _numbering_issues(data)
+        assert len(issues) == 1, data["validationIssues"]
+        assert issues[0]["type"] == "duplicate_channel_number"
+        assert sorted(issues[0]["channelIds"]) == [-1, 1]
+
+    @pytest.mark.asyncio
+    async def test_a_batch_that_places_nobody_still_needs_no_lineup(self, async_client):
+        """The anti-vacuity control. Widening the fetch condition must not
+        make it unconditional — a batch that puts no channel on any number is
+        unaffected by a lineup it never needed."""
+        from routers import channels as router_module
+
+        broken = AsyncMock()
+        broken.get_channels.side_effect = RuntimeError("upstream unreachable")
+        broken.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        with patch("routers.channels.get_client", return_value=broken), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New"},
+                ],
+                "validateOnly": True,
+                "consolidate": True,
+            })
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert not any(
+            i["type"] == "numbering_preflight_unavailable" for i in data["validationIssues"]
+        ), data["validationIssues"]
+        assert data["validationPassed"] is True
+        assert not broken.get_channels.called, (
+            "a create with no number places nobody, so nothing here needs a lineup"
+        )
+        assert router_module is not None

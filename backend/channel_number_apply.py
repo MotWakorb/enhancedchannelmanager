@@ -153,11 +153,21 @@ def order_numbering_writes(
     """Order ``writes`` so a channel is moved onto a number only once its
     previous holder has left, and name the cycles where that is impossible.
 
-    Terminates on every input by construction: each pass either emits a write
-    whose dependencies are all satisfied, or, when none is available, breaks
-    the cycle containing the earliest remaining write by emitting that write.
-    Either way the remaining set strictly shrinks, so the loop runs at most
-    ``len(writes)`` times and every write is emitted exactly once.
+    Terminates on every input by construction: each pass either emits at least
+    one write whose dependencies are all satisfied, or, when none is available,
+    walks out from the earliest remaining write to a cycle and emits the
+    earliest-submitted MEMBER of that cycle. Both branches emit at least one
+    write and neither can emit a write twice, so the remaining set strictly
+    shrinks on every pass, the loop runs at most ``len(writes)`` times, and
+    every write is emitted exactly once. The walk itself terminates because it
+    only ever steps to a position that is still remaining and there are
+    finitely many of those, so it must revisit one.
+
+    The only writes that land on a number the plan has not vacated are the
+    cycle breaks — one per cycle, each a member of the cycle it breaks.
+    Enforced by ``assert_ordering_invariant`` in
+    ``backend/tests/unit/test_channel_number_apply.py``, exhaustively over
+    every plan shape that fits in four channels and four numbers.
 
     Ties are broken by the submitted order, so the result is deterministic and
     a plan with no dependencies at all comes back untouched.
@@ -209,21 +219,33 @@ def order_numbering_writes(
                 release(position)
             continue
 
-        # Nothing is ready, so every remaining write is waiting on another one:
-        # a cycle. Walk it from the earliest remaining write, report it, and
-        # break it by writing that one first — which shares a number for the
-        # duration of exactly one write.
-        start = remaining[0]
+        # Nothing is ready, so every remaining write is waiting on another one.
+        # Walk from the earliest remaining write until the walk repeats a
+        # position: the repeat is where the cycle starts, and everything the
+        # walk passed through BEFORE it is a chain leading into the cycle
+        # rather than part of it.
+        #
+        # THE BREAK GOES ON A MEMBER OF THE CYCLE THE WALK FOUND, never on the
+        # write the walk started from. Releasing a chain node instead leaves
+        # the cycle whole — so a second forced release is still needed to break
+        # it — and moves that node onto a number the write that was going to
+        # vacate it has not vacated, which is the one thing this ordering
+        # exists to prevent. The earliest-submitted member is the break, which
+        # is the start itself whenever the start is in the cycle, so a plan
+        # that is nothing but a cycle is ordered exactly as before.
         seen: list[int] = []
-        cursor = start
+        cursor = remaining[0]
         while cursor not in seen:
             seen.append(cursor)
-            # Any blocker still remaining continues the cycle; the lowest keeps
-            # the walk deterministic.
+            # Any blocker still remaining continues the walk; the lowest keeps
+            # it deterministic. ``blockers`` never names a released position —
+            # ``release`` discards it from every dependent — so on this branch,
+            # where no remaining position is free of blockers, this is always
+            # non-empty and the walk cannot leave ``remaining``.
             cursor = min(blockers[cursor] & set(remaining))
         cycle = seen[seen.index(cursor):]
         cycles.append(tuple(sorted(pending[position].channel_id for position in cycle)))
-        release(start)
+        release(min(cycle))
 
     cycles.sort()
     return NumberingOrder(writes=tuple(ordered), cycles=tuple(cycles))

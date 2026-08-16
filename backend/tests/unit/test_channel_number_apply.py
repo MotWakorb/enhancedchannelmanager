@@ -7,11 +7,14 @@ its boundaries — chains, three-cycles, the ``2**53`` regime change, tenths,
 ``None``, and a failure injected at the first, middle and last position.
 """
 
+import itertools
+
 import pytest
 
 from channel_number_apply import (
     NumberingCompensator,
     NumberingWrite,
+    _slot_key,
     order_numbering_writes,
 )
 
@@ -27,6 +30,98 @@ def w(channel_id: int, before, after, name: str | None = None) -> NumberingWrite
 
 def ids(order) -> list[int]:
     return [write.channel_id for write in order.writes]
+
+
+# -- The invariant, stated once and checked on every shape -----------------
+#
+# The reproductions below are EXAMPLES of it, not the specification. Stated as
+# a property because the last round's fix held for the shape it was written
+# against and not for the shape beside it: a chain feeding a cycle was broken
+# at the chain's head, which is not a member of the cycle it claimed to break.
+
+
+def _positions_in_order(writes, order) -> list[int]:
+    """The submitted position of each emitted write, in emitted order.
+
+    Two equal writes are interchangeable — identical ``before`` and ``after``
+    means identical blockers — so consuming a pool per distinct write is exact
+    rather than approximate.
+    """
+    pools: dict[NumberingWrite, list[int]] = {}
+    for position, write in enumerate(writes):
+        pools.setdefault(write, []).append(position)
+    return [pools[write].pop(0) for write in order.writes]
+
+
+def _premature_entries(writes, order) -> list[int]:
+    """Positions that entered a slot a planned occupant had not yet left.
+
+    Exactly the writes the ordering is allowed to make only as a deliberate
+    cycle break: one per cycle, and each a member of the cycle it breaks.
+    """
+    leaving: dict[str, set[int]] = {}
+    for position, write in enumerate(writes):
+        if not write.moves:
+            continue
+        slot = _slot_key(write.before)
+        if slot is None:
+            continue
+        leaving.setdefault(slot, set()).add(position)
+
+    emitted: set[int] = set()
+    premature: list[int] = []
+    for position in _positions_in_order(writes, order):
+        slot = _slot_key(writes[position].after)
+        if slot is not None:
+            still_holding = {
+                holder
+                for holder in leaving.get(slot, ())
+                if holder != position and holder not in emitted
+            }
+            if still_holding:
+                premature.append(position)
+        emitted.add(position)
+    return premature
+
+
+def assert_ordering_invariant(writes) -> "object":
+    """Order ``writes`` and assert every property the ordering promises.
+
+    1. Every submitted write is emitted exactly once (termination plus
+       completeness — the loop cannot stall and cannot duplicate).
+    2. No write enters a slot before its planned occupant has left, EXCEPT one
+       deliberate cycle-breaking write per reported cycle.
+    3. Every one of those breaking writes is a MEMBER of the cycle it breaks.
+    """
+    order = order_numbering_writes(writes)
+
+    assert sorted(_positions_in_order(writes, order)) == list(range(len(writes)))
+
+    premature = _premature_entries(writes, order)
+    assert len(premature) == len(order.cycles), (
+        f"{len(premature)} write(s) entered an occupied slot but "
+        f"{len(order.cycles)} cycle(s) were reported: "
+        f"premature={[writes[p].channel_id for p in premature]}, "
+        f"cycles={order.cycles}"
+    )
+
+    # One break per cycle, and each break inside the cycle it breaks. Matched
+    # one-to-one so a break that happens to share a channel id with an
+    # unrelated cycle cannot stand in for the real member.
+    unmatched = list(order.cycles)
+    for position in premature:
+        channel_id = writes[position].channel_id
+        for cycle in unmatched:
+            if channel_id in cycle:
+                unmatched.remove(cycle)
+                break
+        else:
+            raise AssertionError(
+                f"channel {channel_id} was written onto an occupied number but "
+                f"belongs to none of the reported cycles {order.cycles}"
+            )
+    assert unmatched == []
+    return order
 
 
 class TestOrderNumberingWrites:
@@ -121,6 +216,160 @@ class TestOrderNumberingWrites:
         emitted = ids(order)
         assert sorted(emitted) == [1, 2, 3]
         assert emitted.index(3) == 2
+
+
+class TestTheCycleBrokenIsTheCycleFound:
+    """A cycle is broken at one of ITS OWN members, on every plan shape.
+
+    Fix round 2. The break used to be applied to ``remaining[0]`` — the write
+    the cycle WALK started from — which is a member of the cycle only when the
+    walk starts inside it. Feed a chain into a cycle and the chain's head was
+    released instead: it moved onto a number its planned occupant had not left
+    (the one thing this ordering exists to prevent), the cycle survived
+    untouched, and a second forced release was needed to break it.
+
+    Every test here asserts the property through
+    :func:`assert_ordering_invariant` and then, where the answer is
+    interesting, the exact order as well.
+    """
+
+    def test_a_chain_feeding_a_cycle_breaks_the_cycle_not_the_chain(self):
+        """The confirmed reproduction, and an example of the invariant.
+
+        A wants 2, which B is leaving; B wants 3, which C is leaving; C wants
+        2, which B is leaving. The cycle is B<->C and A is a chain into it.
+        """
+        a, b, c = w(1, 1, 2), w(2, 2, 3), w(3, 3, 2)
+        order = assert_ordering_invariant([a, b, c])
+        assert order.cycles == ((2, 3),)
+        # B is the earliest-submitted member of the cycle, so B is the break —
+        # B moves onto 3 while C is still there, which is the one transient
+        # share this cycle costs. B leaving 2 then frees A and C together, and
+        # the submitted order breaks that tie. Before the fix the break was A,
+        # which put A on 2 while B was still on it and left B<->C to be broken
+        # a second time.
+        assert ids(order) == [2, 1, 3]
+        assert order.writes[0].channel_id == 2
+
+    def test_a_cycle_waiting_on_a_chain_lets_the_chain_go_first(self):
+        """The other direction: a CYCLE member waits on a write outside it.
+
+        Two channels sit on 200 (ic884.1 declined to enforce uniqueness). One
+        of them, 30, is going to 900 and blocks nothing; the other, 20, is in a
+        swap with 10. So 10 waits on both 20 and 30, and only 30 is free to go.
+        """
+        writes = [w(10, 100, 200), w(20, 200, 100), w(30, 200, 900)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ((10, 20),)
+        emitted = ids(order)
+        assert emitted[0] == 30
+        assert sorted(emitted) == [10, 20, 30]
+
+    def test_two_chains_converging_on_one_cycle_still_break_inside_it(self):
+        """Both chain heads are submitted BEFORE either cycle member, so the
+        walk starts outside the cycle from a position that is not even adjacent
+        to it."""
+        writes = [w(1, 10, 2), w(2, 11, 3), w(3, 2, 3), w(4, 3, 2)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ((3, 4),)
+        assert ids(order)[0] == 3
+
+    def test_multiple_disjoint_cycles_are_each_broken_once(self):
+        writes = [w(1, 1, 2), w(2, 2, 1), w(3, 3, 4), w(4, 4, 3)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ((1, 2), (3, 4))
+
+    def test_a_chain_into_each_of_two_disjoint_cycles(self):
+        writes = [
+            w(1, 100, 2),   # chain into the 2<->1 cycle
+            w(2, 1, 2.5),   # not part of anything: 2.5 is free
+            w(3, 2, 1),     # cycle with 4
+            w(4, 1, 2),     # cycle with 3
+            w(5, 200, 30),  # chain into the 30<->31 cycle
+            w(6, 30, 31),
+            w(7, 31, 30),
+        ]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ((3, 4), (6, 7))
+
+    def test_a_non_moving_write_is_not_an_occupant_anybody_waits_for(self):
+        """A self-edge — a write whose ``before`` and ``after`` are one slot —
+        never leaves that slot, so waiting for it would wait forever. The
+        duplicate it produces is the numbering preflight's business, not the
+        ordering's."""
+        writes = [w(1, 5, 5), w(2, 9, 5)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ()
+        assert ids(order) == [1, 2]
+
+    def test_a_canonical_self_edge_is_still_not_a_cycle(self):
+        # 7 and 7.0 are one slot, so this write moves nothing.
+        writes = [w(1, 7, 7.0), w(2, 4, 8)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ()
+
+    def test_one_channel_written_twice_orders_its_own_two_writes(self):
+        """The graph is over WRITES, not channels: the same channel may appear
+        in two operations, and the second write's slot may be the first's."""
+        writes = [w(1, 5, 6), w(1, 6, 7)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ()
+        assert [(write.before, write.after) for write in order.writes] == [
+            (6, 7),
+            (5, 6),
+        ]
+
+    def test_one_channel_whose_two_writes_form_a_cycle_still_terminates(self):
+        writes = [w(1, 5, 6), w(1, 6, 5)]
+        order = assert_ordering_invariant(writes)
+        assert order.cycles == ((1, 1),)
+
+    def test_the_shapes_the_earlier_tests_pin_also_satisfy_the_invariant(self):
+        """Every plan the reproduction-shaped tests above use, re-checked as a
+        property rather than as an expected output."""
+        for writes in (
+            [w(1, 5, 9), w(2, 6, 10)],
+            [w(1, 5, 6), w(2, 6, 7), w(3, 7, 8)],
+            [w(1, 5, 6), w(2, 6, 5)],
+            [w(1, 5, 6), w(2, 6, 7), w(3, 7, 5)],
+            [w(1, 5, 6), w(2, 6, 5), w(10, 11, 12), w(11, 12, 13)],
+            [w(1, 5, None), w(2, 9, 5)],
+            [w(1, None, 5)],
+            [w(1, 6, 20), w(2, 6, 21), w(3, 4, 6)],
+            [w(1, 2.0**53, 2.0**53 + 2), w(2, 2.0**53 + 2, 2.0**53)],
+        ):
+            assert_ordering_invariant(writes)
+
+    @pytest.mark.parametrize("size", [1, 2, 3, 4])
+    def test_every_plan_over_n_channels_and_n_slots_holds_the_invariant(self, size):
+        """EXHAUSTIVE over the shapes, which is what makes this a termination
+        argument rather than an anecdote.
+
+        ``size`` channels each starting on their own number and each ending on
+        any of those numbers is every combination of chain, cycle, fixed point
+        and convergence that fits in ``size`` slots — 1, 4, 27 and 256 plans.
+        For each, every write is emitted exactly once (so the remaining set
+        strictly shrank on every branch taken) and every premature entry is a
+        member of a reported cycle.
+        """
+        numbers = list(range(1, size + 1))
+        for combination in itertools.product(numbers, repeat=size):
+            writes = [
+                w(channel, channel, combination[channel - 1]) for channel in numbers
+            ]
+            assert_ordering_invariant(writes)
+
+    def test_every_plan_with_duplicate_starting_numbers_holds_the_invariant(self):
+        """The same sweep where two channels already share a number, which is
+        the case ``leaving`` keeps a LIST for: a slot is free only once every
+        one of its occupants has moved."""
+        befores = [1, 1, 2, 2]
+        for combination in itertools.product([1, 2, 3], repeat=4):
+            writes = [
+                w(channel + 1, befores[channel], combination[channel])
+                for channel in range(4)
+            ]
+            assert_ordering_invariant(writes)
 
 
 class TestNumberingCompensator:
