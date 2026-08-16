@@ -3,7 +3,7 @@ import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import { PendingMergesPage } from './PendingMergesPage';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord } from '../../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord, StagedSideEffects } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder, ResolvedCreateChannelNames } from '../../services/api';
 import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
 import type { DedupDropReport } from '../../hooks/useDedupOnDrop';
@@ -88,6 +88,12 @@ export interface ChannelManagerTabProps {
    * (bead enhancedchannelmanager-kz089).
    */
   onStageSetProfileMembership: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
+  /**
+   * Working-copy view of the staged operations that do not touch a Channel
+   * record, so the panes can show what is pending instead of the server value
+   * (bead …-kz089, fix round 2).
+   */
+  stagedSideEffects: StagedSideEffects;
   onStageRestoreChannelGroup: (groupId: number, description: string) => void;
   onStageClearStreamStats: (streamIds: number[], description: string) => void;
   onStageRemoveStream: (channelId: number, streamId: number, description: string) => void;
@@ -312,6 +318,7 @@ export function ChannelManagerTab({
   onStageUpdateChannel,
   onStageAddStream,
   onStageSetProfileMembership,
+  stagedSideEffects,
   onStageRestoreChannelGroup,
   onStageClearStreamStats,
   onStageRemoveStream,
@@ -621,6 +628,7 @@ export function ChannelManagerTab({
           onStageUpdateChannel={onStageUpdateChannel}
           onStageAddStream={onStageAddStream}
           onStageSetProfileMembership={onStageSetProfileMembership}
+          stagedSideEffects={stagedSideEffects}
           onStageRestoreChannelGroup={onStageRestoreChannelGroup}
           onStageClearStreamStats={onStageClearStreamStats}
           onStageRemoveStream={onStageRemoveStream}

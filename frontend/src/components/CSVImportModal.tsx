@@ -95,6 +95,15 @@ export const CSVImportModal = memo(function CSVImportModal({
 
   const handleImport = useCallback(async () => {
     if (!file) return;
+    // Same handler-level refusal as the two merge modals. The import creates
+    // channels and groups upstream and Discard cannot reach any of it, so the
+    // acknowledgement is re-checked here rather than trusted from the button
+    // (bead …-kz089, fix round 2).
+    if (!irreversibleAcknowledged) {
+      setError('Acknowledge that this import applies immediately before importing.');
+      setImportState('error');
+      return;
+    }
 
     setImportState('importing');
     setError(null);
@@ -116,7 +125,7 @@ export const CSVImportModal = memo(function CSVImportModal({
       setError(err instanceof Error ? err.message : 'Import failed');
       setImportState('error');
     }
-  }, [file, onSuccess]);
+  }, [file, onSuccess, irreversibleAcknowledged]);
 
   if (!isOpen) return null;
 

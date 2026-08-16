@@ -432,6 +432,7 @@ function App() {
     stageSetProfileMembership,
     stageRestoreChannelGroup,
     stageClearStreamStats,
+    stagedSideEffects,
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
@@ -3087,6 +3088,7 @@ function App() {
               onStageUpdateChannel={stageUpdateChannel}
               onStageAddStream={stageAddStream}
               onStageSetProfileMembership={stageSetProfileMembership}
+              stagedSideEffects={stagedSideEffects}
               onStageRestoreChannelGroup={stageRestoreChannelGroup}
               onStageClearStreamStats={stageClearStreamStats}
               onStageRemoveStream={stageRemoveStream}

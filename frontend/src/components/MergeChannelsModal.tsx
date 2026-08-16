@@ -137,6 +137,16 @@ export function MergeChannelsModal({
   const parsedChannelNumber = channelNumberParse.ok ? channelNumberParse.value : null;
 
   const handleMerge = async () => {
+    // Defence in depth for a destructive, unstageable action (bead
+    // enhancedchannelmanager-kz089, fix round 2). The button is disabled until
+    // the acknowledgement is ticked, and no bypass of that was demonstrated —
+    // but a `disabled` expression is a rendering decision, and this merge
+    // deletes the source channels. The refusal belongs in the handler, where it
+    // holds regardless of what any button says.
+    if (isEditMode && !irreversibleAcknowledged) {
+      setError('Acknowledge that this merge applies immediately before merging.');
+      return;
+    }
     if (channelNumberError) {
       setError(channelNumberError);
       return;

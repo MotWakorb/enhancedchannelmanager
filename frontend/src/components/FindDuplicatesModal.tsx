@@ -128,6 +128,13 @@ export function FindDuplicatesModal({ isEditMode = false, onClose, onMerged, cha
   );
 
   const handleMerge = async () => {
+    // Same handler-level refusal as MergeChannelsModal: this merge deletes the
+    // duplicate channels, so it must refuse independently of the button's
+    // `disabled` expression (bead …-kz089, fix round 2).
+    if (isEditMode && !irreversibleAcknowledged) {
+      setError('Acknowledge that this merge applies immediately before merging.');
+      return;
+    }
     setMerging(true);
     setError(null);
 

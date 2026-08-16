@@ -22,7 +22,9 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode } from '../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamStats, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, ChangeRecord, SavePoint, EPGData, EPGSource, StreamProfile, ChannelListFilterSettings, SortMode, StagedSideEffects } from '../types';
+import { EMPTY_STAGED_SIDE_EFFECTS } from '../types/editMode';
+import { ImmediateActionNote } from './ImmediateActionNote';
 import { logger } from '../utils/logger';
 import { getStreamDragData, hasStreamDragData, clearStreamDragData } from '../utils/dragStore';
 import { computeAutoRename } from '../utils/channelRename';
@@ -210,6 +212,14 @@ interface ChannelsPaneProps {
   onStageSetProfileMembership?: (profileId: number, channelIds: number[], enabled: boolean, description: string) => void;
   onStageRestoreChannelGroup?: (groupId: number, description: string) => void;
   onStageClearStreamStats?: (streamIds: number[], description: string) => void;
+  /**
+   * Working-copy view of those staged operations. Profile membership,
+   * hidden-group state and probe stats do not live on a Channel record, so this
+   * is what the pane renders instead of the server value while they are pending
+   * (bead …-kz089, fix round 2). Defaults to empty, which is exactly how it
+   * reads outside Edit Mode.
+   */
+  stagedSideEffects?: StagedSideEffects;
   onStartBatch?: (description: string) => void;
   onEndBatch?: () => void;
   isCommitting?: boolean;
@@ -1112,6 +1122,19 @@ const DroppableGroupHeader = memo(function DroppableGroupHeader({
                   <span>{isProbing ? 'Probing...' : 'Probe Group'}</span>
                 </button>
               )}
+              {/* Third probe entry point, and the only one that is Edit-Mode
+                  ONLY: this whole menu is. Found by re-enumerating Edit Mode's
+                  actions in fix round 2 rather than by the review, which named
+                  the per-channel and bulk probes. Same PO decision, same
+                  affordance (bead enhancedchannelmanager-kz089). */}
+              {canProbe && (
+                <ImmediateActionNote
+                  what="Probing"
+                  detail="It writes the stream stats it measures."
+                  compact
+                  testId="probe-immediate-note-group"
+                />
+              )}
               {/* Sort Streams sub-menu */}
               {canSortStreams && (
                 <>
@@ -1294,6 +1317,7 @@ export function ChannelsPane({
   onStageSetProfileMembership,
   onStageRestoreChannelGroup,
   onStageClearStreamStats,
+  stagedSideEffects = EMPTY_STAGED_SIDE_EFFECTS,
   onStartBatch,
   onEndBatch,
   isCommitting = false,
@@ -1410,8 +1434,27 @@ export function ChannelsPane({
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
   const [previewChannelName, setPreviewChannelName] = useState<string | undefined>(undefined);
 
-  // Stream stats state for displaying probe metadata
-  const [streamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  // Stream stats state for displaying probe metadata. The SERVER's view —
+  // every read below goes through `streamStatsMap`, which subtracts the clears
+  // this Edit Mode session has staged.
+  const [serverStreamStatsMap, setStreamStatsMap] = useState<Map<number, StreamStats>>(new Map());
+  /**
+   * Probe stats as the operator should see them right now: the server's, minus
+   * the streams whose stats are staged to be cleared.
+   *
+   * This used to be done by deleting from the state map at staging time, which
+   * Discard and Undo could not reach — so Discard dropped the change count
+   * while the stats stayed visually gone, and Redo could not put them back
+   * (bead …-kz089, fix round 2). Derived from the operation queue, all three
+   * work.
+   */
+  const streamStatsMap = useMemo(() => {
+    const cleared = stagedSideEffects.clearedStreamIds;
+    if (cleared.size === 0) return serverStreamStatsMap;
+    const next = new Map(serverStreamStatsMap);
+    for (const streamId of cleared) next.delete(streamId);
+    return next;
+  }, [serverStreamStatsMap, stagedSideEffects.clearedStreamIds]);
   // Dispatcharr-stale stream ids (bead enhancedchannelmanager-po78p / GH
   // #696) — the single source of truth for stale-stream decoration in this
   // pane. Populated best-effort by the mount effect below; an empty set
@@ -1566,9 +1609,14 @@ export function ChannelsPane({
   const [renumberAllUpdateNames, setRenumberAllUpdateNames] = useState<boolean>(true);
   const [renumberAllGroupOverrides, setRenumberAllGroupOverrides] = useState<Record<string, string>>({});
 
-  // Hidden groups state
+  // Hidden groups state. As above: the server's list, minus the restores this
+  // session has staged, so Discard and Undo put a row back.
   const hiddenGroupsModal = useModal();
-  const [hiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+  const [serverHiddenGroups, setHiddenGroups] = useState<{ id: number; name: string; hidden_at: string }[]>([]);
+  const hiddenGroups = useMemo(
+    () => serverHiddenGroups.filter((g) => !stagedSideEffects.restoredGroupIds.has(g.id)),
+    [serverHiddenGroups, stagedSideEffects.restoredGroupIds],
+  );
 
   // Group reorder modal state
   const groupReorderModal = useModal();
@@ -2357,19 +2405,18 @@ export function ChannelsPane({
     // Stage in Edit Mode (bead enhancedchannelmanager-kz089). Clearing probe
     // stats destroys probe history that only a re-probe can rebuild, and it
     // used to happen the instant the operator clicked, inside a mode that says
-    // it is staging. The local stats map is updated either way so the row
-    // reads the same as it will after Apply All.
+    // it is staging. The row reads the same as it will after Apply All either
+    // way — in Edit Mode because `streamStatsMap` subtracts the staged clears.
     if (isEditMode && onStageClearStreamStats) {
       const stream = channelStreams.find((s) => s.id === streamId);
       onStageClearStreamStats(
         [streamId],
         `Clear probe stats for "${stream?.name || `stream ${streamId}`}"`,
       );
-      setStreamStatsMap((prev) => {
-        const next = new Map(prev);
-        next.delete(streamId);
-        return next;
-      });
+      // Nothing local to update: `streamStatsMap` already subtracts the staged
+      // clears, so the row reads as cleared now AND comes back on Discard or
+      // Undo. Deleting from the state map here is what made Discard leave the
+      // stats gone (bead …-kz089, fix round 2).
       return;
     }
     try {
@@ -3187,7 +3234,8 @@ export function ChannelsPane({
         groupId,
         `Restore hidden group "${hidden?.name || groupId}"`,
       );
-      setHiddenGroups((prev) => prev.filter((g) => g.id !== groupId));
+      // As with the stats clear: `hiddenGroups` already subtracts the staged
+      // restores, so the row leaves the list now and returns on Discard or Undo.
       return;
     }
     try {
@@ -7310,6 +7358,11 @@ export function ChannelsPane({
         }}
         channels={channels}
         channelGroups={channelGroups}
+        isEditMode={isEditMode}
+        stagedSideEffects={stagedSideEffects}
+        onStageSetProfileMembership={onStageSetProfileMembership}
+        onStartBatch={onStartBatch}
+        onEndBatch={onEndBatch}
       />
 
       <div className="pane-filters">

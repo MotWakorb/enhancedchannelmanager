@@ -13,7 +13,9 @@ import type {
   ValidationResult,
   UseEditModeReturn,
   ApiCallSpec,
+  StagedSideEffects,
 } from '../types';
+import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
@@ -53,6 +55,52 @@ function computeModifiedChannelIds(
   }
 
   return modified;
+}
+
+/**
+ * Working-copy view of the staged operations that do not touch a Channel record
+ * (bead enhancedchannelmanager-kz089, fix round 2).
+ *
+ * Derived from `stagedOperations` rather than accumulated alongside it. That is
+ * the whole point: the operation queue is the collection `stageOperation`,
+ * `localUndo`, `localRedo` and `discard` already maintain, so deriving from it
+ * gives all four correct behaviour with no second reducer to keep in step. The
+ * two effects that previously showed on screen did so by mutating
+ * component-local state, which none of those four could reach.
+ *
+ * Later operations win, so staging enable-then-disable for the same channel
+ * reads as disabled, exactly as the server will see it.
+ */
+export function deriveStagedSideEffects(
+  stagedOperations: StagedOperation[]
+): StagedSideEffects {
+  const profileMembership = new Map<string, boolean>();
+  const restoredGroupIds = new Set<number>();
+  const clearedStreamIds = new Set<number>();
+
+  for (const operation of stagedOperations) {
+    const { apiCall } = operation;
+    switch (apiCall.type) {
+      case 'setProfileMembership':
+        profileMembership.set(
+          profileMembershipKey(apiCall.profileId, apiCall.channelId),
+          apiCall.enabled
+        );
+        break;
+      case 'restoreChannelGroup':
+        restoredGroupIds.add(apiCall.groupId);
+        break;
+      case 'clearStreamStats':
+        for (const streamId of apiCall.streamIds) {
+          clearedStreamIds.add(streamId);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return { profileMembership, restoredGroupIds, clearedStreamIds };
 }
 
 // Initial state for edit mode
@@ -245,9 +293,11 @@ export function useEditMode({
         case 'restoreChannelGroup':
         case 'clearStreamStats': {
           // Profile membership, hidden-group state and probe stats live
-          // outside the Channel record, so the channel working copy is
-          // unchanged. They are still staged operations: counted, undoable,
-          // and discarded with everything else (bead …-kz089).
+          // outside the Channel record, so the CHANNEL working copy is
+          // unchanged. Their working-copy representation is
+          // `deriveStagedSideEffects`, which the panes read instead of the
+          // server value — "counted but invisible" is a defect, not a
+          // limitation (bead …-kz089, fix round 2).
           return workingCopy;
         }
 
@@ -1730,6 +1780,15 @@ export function useEditMode({
     return renames;
   }, [state.isActive, state.stagedOperations]);
 
+  // Working-copy view of the staged operations that do not touch a Channel
+  // record. Leaving edit mode empties it, exactly like the two above.
+  const stagedSideEffects = useMemo(
+    () => (state.isActive
+      ? deriveStagedSideEffects(state.stagedOperations)
+      : EMPTY_STAGED_SIDE_EFFECTS),
+    [state.isActive, state.stagedOperations],
+  );
+
   return {
     // State
     isEditMode: state.isActive,
@@ -1740,6 +1799,7 @@ export function useEditMode({
     stagedGroups: stagedGroupsArray,
     deletedGroupIds,
     renamedGroupNames,
+    stagedSideEffects,
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeEnteredAt,

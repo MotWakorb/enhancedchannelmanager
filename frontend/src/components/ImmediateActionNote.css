@@ -1,0 +1,51 @@
+/* Point-of-action statement for an Edit Mode action that applies immediately
+   but is not destructive enough to gate behind an acknowledgement
+   (bead enhancedchannelmanager-kz089, fix round 2). See ImmediateActionNote.tsx.
+
+   Informational, so it uses the info token rather than the warning token
+   IrreversibleActionNotice carries — the two must not read as the same
+   severity, because only one of them destroys operator work.
+   Shared classes consumed: none (theme tokens from index.css only). */
+
+.immediate-action-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--info-text);
+  border-radius: 4px;
+  background: var(--info-bg);
+  color: var(--text-secondary);
+  /* Body role, SIZE only — this is prose beside a control, never a heading. */
+  font-size: var(--type-body-size);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+}
+
+.immediate-action-note-icon {
+  color: var(--info-text);
+  font-size: 18px;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.immediate-action-note-body {
+  min-width: 0;
+}
+
+.immediate-action-note-body strong {
+  color: var(--text-primary);
+}
+
+/* Inside a menu or a toolbar, where vertical space is the scarce thing. */
+.immediate-action-note--compact {
+  padding: 6px 8px;
+  gap: 6px;
+  font-size: var(--type-meta-size);
+}
+
+.immediate-action-note--compact .immediate-action-note-icon {
+  font-size: 15px;
+}

@@ -33,6 +33,44 @@ export type ApiCallSpec =
   | { type: 'clearStreamStats'; streamIds: number[] };
 
 /**
+ * Working-copy representation of the staged operations whose effect does NOT
+ * live on a Channel record (bead enhancedchannelmanager-kz089, fix round 2).
+ *
+ * `applyOperationToWorkingCopy` returns `Channel[]`, so profile membership,
+ * hidden-group state and probe stats had nowhere to go: the three operations
+ * were counted and summarised while the UI carried on showing the old value.
+ * That is worse than the immediate write it replaced — the operator is told
+ * something is pending and shown no evidence of it. The two that DID show
+ * evidence did it by mutating component-local state, which `discard` and
+ * `localUndo` cannot reach, so Discard dropped the count while the stats
+ * stayed gone.
+ *
+ * Both halves are fixed by deriving this from `stagedOperations`, the one
+ * collection stage / undo / redo / discard already maintain correctly. There is
+ * no second source of truth to drift.
+ */
+export interface StagedSideEffects {
+  /** `${profileId}:${channelId}` -> staged enabled state. */
+  profileMembership: Map<string, boolean>;
+  /** Hidden channel groups staged for restore. */
+  restoredGroupIds: Set<number>;
+  /** Streams whose probe stats are staged to be cleared. */
+  clearedStreamIds: Set<number>;
+}
+
+/** Key for {@link StagedSideEffects.profileMembership}. */
+export function profileMembershipKey(profileId: number, channelId: number): string {
+  return `${profileId}:${channelId}`;
+}
+
+/** A {@link StagedSideEffects} with nothing staged. */
+export const EMPTY_STAGED_SIDE_EFFECTS: StagedSideEffects = {
+  profileMembership: new Map(),
+  restoredGroupIds: new Set(),
+  clearedStreamIds: new Set(),
+};
+
+/**
  * A staged operation in the edit mode queue
  */
 export interface StagedOperation {
@@ -246,6 +284,12 @@ export interface UseEditModeReturn {
   stagedGroups: ChannelGroup[]; // new groups being staged (empty array if not in edit mode)
   renamedGroupNames: Map<number, string>; // groupId -> newName for staged renames
   deletedGroupIds: Set<number>; // group IDs staged for deletion
+  /**
+   * Working-copy view of the staged operations that do not touch a Channel
+   * record. Derived from the operation queue, so Discard, Undo and Redo cover
+   * it without a second reducer (bead …-kz089, fix round 2).
+   */
+  stagedSideEffects: StagedSideEffects;
   canLocalUndo: boolean;
   canLocalRedo: boolean;
   editModeEnteredAt: number | null; // timestamp when edit mode was entered
