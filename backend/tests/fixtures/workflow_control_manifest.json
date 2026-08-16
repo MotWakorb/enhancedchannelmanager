@@ -1520,6 +1520,26 @@
       "file": "test.yml",
       "path": [
         "jobs",
+        "edit-mode-immediacy-surfaces",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "edit-mode-immediacy-surfaces",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "failure()"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
         "semgrep-lint",
         "if"
       ],

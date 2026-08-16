@@ -1032,6 +1032,71 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # ─── Edit Mode immediacy surfaces (epic enhancedchannelmanager-r93hq) ──
+  # Fails the PR if one of the three Edit Mode surfaces that only a real
+  # browser can measure regresses:
+  #   1. `.selection-action-bar-shell` losing the `position: fixed` that
+  #      commit 165d00b3 moved onto it (or an ancestor establishing a
+  #      containing block, which reads as "fixed" in every computed style
+  #      while anchoring the bar to that ancestor instead of the viewport);
+  #   2. `.modal-footer:has(.irreversible-action-notice)` no longer giving the
+  #      warning its own line, so a 3-line notice is crammed in beside the
+  #      merge button it gates;
+  #   3. `.immediate-action-note` overlapping the menu items around it or
+  #      pushing its dropdown off-screen.
+  # jsdom does no layout, so the ~25 unit tests around these components pass
+  # in every one of those states. Proven red against all three mutations.
+  #
+  # WHY THIS ONE RUNS IN CI when frozen-chrome and friends do not: it stubs
+  # every /api call itself, so `.channels-pane` mounts with real rows on the
+  # backend-less E2E_EXACT_BUILD preview. That same stubbing is what makes it
+  # safe — it structurally refuses to start unless E2E_EXACT_BUILD and
+  # E2E_START_SERVER are both set, so it cannot be aimed at a live ECM, which
+  # matters because it drives Merge (deletes channels) and CSV Import.
+  #
+  # NOT a required context; may skip at the job level (see fake-test-guard).
+  edit-mode-immediacy-surfaces:
+    name: Edit Mode Immediacy Surfaces Guard
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Edit Mode immediacy surfaces guard
+        run: npm run test:css-guard:edit-mode-immediacy -- --reporter=github,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-mode-immediacy-surfaces-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
   # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
   # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call

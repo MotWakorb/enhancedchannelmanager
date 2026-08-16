@@ -648,7 +648,7 @@ def _expected_verdict_manifest():
     )
     for job in (
         "fake-test-guard", "visual-regression", "operator-workspace-release",
-        "sr-only-hidden",
+        "sr-only-hidden", "edit-mode-immediacy-surfaces",
     ):
         expected.add(("test.yml", ("jobs", job, "if"), code_true))
     return expected
