@@ -1347,6 +1347,13 @@ export function useEditMode({
             type: 'updateChannel',
             channelId: apiCall.channelId,
             data: apiCall.data,
+            // ECM's own bookkeeping, beside `data` rather than in it because
+            // `data` is the body PATCHed to Dispatcharr. It has to reach the
+            // server or the server's copy of the final-state check answers a
+            // different question than the browser's did, and reports an error
+            // against a decision the operator has already made (bead
+            // enhancedchannelmanager-vdxbx).
+            acknowledgedDuplicateNumber: apiCall.acknowledgedDuplicateNumber,
           });
           break;
 
@@ -1398,6 +1405,9 @@ export function useEditMode({
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
             tvcGuideStationId: apiCall.tvcGuideStationId,
+            // See the updateChannel arm: a created channel can land on an
+            // occupied number just as an edited one can.
+            acknowledgedDuplicateNumber: apiCall.acknowledgedDuplicateNumber,
           });
           break;
         }

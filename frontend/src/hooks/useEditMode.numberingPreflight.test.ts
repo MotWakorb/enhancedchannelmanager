@@ -335,3 +335,67 @@ describe('an acknowledgement survives a dead session', () => {
     expect(bulkCommit).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The acknowledgement has to reach the server, or the server's own copy of the
+ * final-state check answers a different question than the browser's.
+ *
+ * The two checks are deliberately not each other's safety net — the browser's
+ * holds the whole plan, the server's holds for callers that never touch the UI
+ * — but they must not DISAGREE about a duplicate the operator approved. An
+ * acknowledgement that stops at the browser leaves the server reporting an
+ * error against a decision that has already been made, which is invariant 4's
+ * failure wearing the wire's name.
+ *
+ * It travels beside `data`, never inside it: `data` is the body PATCHed to
+ * Dispatcharr, and this is ECM's own bookkeeping.
+ */
+describe('the acknowledgement reaches the server', () => {
+  it('rides beside the payload on the bulk-commit operation', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageUpdateChannel(2, { channel_number: 5 }, 'TNT to 5', {
+        acknowledgedDuplicateNumber: 5,
+      });
+    });
+    await act(async () => {
+      await view.result.current.commit();
+    });
+
+    const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
+    const op = body.operations.find((o) => o.type === 'updateChannel')!;
+    expect(op.acknowledgedDuplicateNumber).toBe(5);
+    expect(op.data).not.toHaveProperty('acknowledgedDuplicateNumber');
+  });
+
+  it('is absent from an ordinary edit rather than sent as null', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageUpdateChannel(2, { channel_number: 50 }, 'TNT to 50');
+    });
+    await act(async () => {
+      await view.result.current.commit();
+    });
+
+    const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
+    const op = body.operations.find((o) => o.type === 'updateChannel')!;
+    expect(op.acknowledgedDuplicateNumber).toBeUndefined();
+  });
+
+  it('leaves a created channel unmarked when nothing was acknowledged', async () => {
+    // 50 is free, so this create raises no question and answers none. The
+    // create path's wire shape is pinned here so adding an acknowledgement to
+    // it later cannot silently start sending `null`.
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageCreateChannel('Extra', 50);
+    });
+    await act(async () => {
+      await view.result.current.commit();
+    });
+    const body = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[] };
+    const op = body.operations.find((o) => o.type === 'createChannel')!;
+    expect(op).toBeDefined();
+    expect(op.acknowledgedDuplicateNumber).toBeUndefined();
+  });
+});
