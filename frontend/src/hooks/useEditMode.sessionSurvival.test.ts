@@ -150,6 +150,91 @@ describe('staged work is persisted as it is staged', () => {
   });
 });
 
+// ======================= a decision outlives the tree that was asked to make it
+
+/**
+ * The three tests below are about ONE mechanism, and it is not persistence —
+ * it is the difference between a decision and an accident.
+ *
+ * `App.tsx` defers a sign-out behind the Edit Mode exit dialog, and both
+ * answers — Discard and Apply All — call `completeDeferredExit()`, which
+ * invokes the stored sign-out callback in the same tick. Signing out flips
+ * auth state, `ProtectedRoute` renders `<LoginPage />` instead of `<App />`,
+ * and `App.tsx` states the consequence outright: "nothing here gets another
+ * render to notice". A ledger cleared by a passive effect is therefore not
+ * cleared at all on those two paths. The operator's next sign-in in the same
+ * tab is offered work they explicitly threw away, or work that has already
+ * been applied — and re-applying a create makes a SECOND channel.
+ *
+ * Each test unmounts inside the same `act` as the decision, which is what a
+ * `ProtectedRoute` swap does: no further render, no effect flush.
+ *
+ * The third test is the counterweight and matters just as much. An unmount
+ * that follows NO decision — an expired token, a 401, a closed tab — must
+ * leave the ledger untouched, because offering it back is the entire point of
+ * the mechanism. A "fix" that cleared on unmount would pass the first two and
+ * destroy the feature.
+ */
+describe('an operator decision survives the unmount it triggers', () => {
+  it('Discard destroys the ledger before a deferred sign-out can tear the tree down', () => {
+    const view = setup();
+    act(() => view.result.current.enterEditMode());
+    act(() => view.result.current.stageUpdateChannel(1, { name: 'Alpha HD' }, 'Rename "Alpha"'));
+    expect(storedLedger()).not.toBeNull();
+
+    act(() => {
+      view.result.current.discard();
+      view.unmount();
+    });
+
+    expect(storedLedger()).toBeNull();
+    expect(setup(OPERATOR_A).result.current.pendingRestore).toBeNull();
+  });
+
+  it('a create Applied through to the server is not offered back to the next session', async () => {
+    const bulkCommit = vi.spyOn(api, 'bulkCommit').mockResolvedValue({
+      success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+      tempIdMap: { '-1': 99 }, groupIdMap: {},
+    });
+    vi.spyOn(api, 'getChannels').mockResolvedValue({
+      count: 0, next: null, previous: null, results: [],
+    } as never);
+
+    const view = setup();
+    act(() => view.result.current.enterEditMode());
+    act(() => { view.result.current.stageCreateChannel('Gamma', 3); });
+    expect(storedLedger()).not.toBeNull();
+
+    // Read the store the instant `commit` returns — before act flushes the
+    // effect — because that is the only moment the sign-out leaves.
+    let ledgerWhenCommitReturned: string | null = 'not read';
+    await act(async () => {
+      await view.result.current.commit();
+      ledgerWhenCommitReturned = window.sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY);
+      view.unmount();
+    });
+
+    expect(bulkCommit).toHaveBeenCalled();
+    expect(ledgerWhenCommitReturned).toBeNull();
+    expect(storedLedger()).toBeNull();
+    expect(setup(OPERATOR_A).result.current.pendingRestore).toBeNull();
+  });
+
+  it('a session that dies with NO decision keeps its ledger, and offers it back', () => {
+    const view = setup();
+    act(() => view.result.current.enterEditMode());
+    act(() => view.result.current.stageUpdateChannel(1, { name: 'Alpha HD' }, 'Rename "Alpha"'));
+
+    // The expiry path: no Discard, no Apply, the tree simply goes away.
+    act(() => view.unmount());
+
+    expect(storedLedger()).not.toBeNull();
+    const returning = setup(OPERATOR_A);
+    expect(returning.result.current.pendingRestore).not.toBeNull();
+    expect(returning.result.current.pendingRestore!.operations).toHaveLength(1);
+  });
+});
+
 // ========================================== THE IDENTITY GUARD, AT HOOK LEVEL
 
 describe('a restored ledger is bound to the operator who staged it', () => {

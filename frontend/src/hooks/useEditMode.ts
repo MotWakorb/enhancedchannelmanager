@@ -346,6 +346,33 @@ export function useEditMode({
    */
   const ledgerWrittenRef = useRef(false);
 
+  /**
+   * Destroy this session's persisted ledger NOW, not on the next render.
+   *
+   * The persistence effect below also clears, and for a session that stays
+   * mounted the two are the same thing. They are not the same thing when the
+   * decision that emptied the staged queue ALSO tears the tree down: Discard
+   * and Apply-All both run `completeDeferredExit()` in `App.tsx`, which fires
+   * a deferred sign-out, and signing out flips auth state so `ProtectedRoute`
+   * swaps the whole app for `LoginPage`. `App.tsx` says it plainly — "nothing
+   * here gets another render to notice". The effect never runs, the ledger
+   * outlives the decision, and the next sign-in as the same operator is
+   * offered work they discarded, or work they already applied — which for a
+   * create is a second create.
+   *
+   * So an operator DECISION clears synchronously and an unmount clears
+   * nothing. That asymmetry is the point: a session that dies under the app —
+   * an expired token, a 401 forcing logout, a closed tab — must leave the
+   * ledger exactly where it is, because recovering it is what the whole
+   * mechanism exists for. Only `discard`, `exitEditMode` and a commit that has
+   * emptied the queue call this.
+   */
+  const forgetStagedLedger = useCallback(() => {
+    if (!ledgerWrittenRef.current) return;
+    clearStagedLedger();
+    ledgerWrittenRef.current = false;
+  }, []);
+
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
@@ -382,16 +409,24 @@ export function useEditMode({
     nextTempIdRef.current = -1; // Reset temp ID ref
     nextTempGroupIdRef.current = -1000;
     stagedGroupIdByNameRef.current = new Map();
+    // Before the state reset, not after: see `forgetStagedLedger`. The caller
+    // may unmount this tree in the same tick.
+    forgetStagedLedger();
     setState(createInitialState());
-  }, []);
+  }, [forgetStagedLedger]);
 
   // Discard all staged changes
   const discard = useCallback(() => {
     nextTempIdRef.current = -1; // Reset temp ID ref
     nextTempGroupIdRef.current = -1000;
     stagedGroupIdByNameRef.current = new Map();
+    // The operator said throw it away. `docs/user_guide/channels-streams/
+    // channels-overview.md` promises "as if it never happened", and the
+    // persistence effect cannot keep that promise when Discard is the answer
+    // to a sign-out prompt (see `forgetStagedLedger`).
+    forgetStagedLedger();
     setState(createInitialState());
-  }, []);
+  }, [forgetStagedLedger]);
 
   // Apply a staged operation to the working copy
   const applyOperationToWorkingCopy = useCallback(
@@ -2123,6 +2158,12 @@ export function useEditMode({
       // This ensures partial success is reflected in the UI
       if (hadSuccess) {
         onChannelsChange(allChannels);
+        // The staged queue is gone, so the ledger that mirrors it has to go in
+        // the same tick — Apply All from the exit dialog also completes a
+        // deferred sign-out, and a surviving ledger would offer these
+        // operations back to the operator's next session. Replaying a create
+        // is not idempotent (see `forgetStagedLedger`).
+        forgetStagedLedger();
         setState(createInitialState());
         const createdGroupIds = Array.from(newGroupIdMap.values());
         onCommitComplete?.(createdGroupIds);
@@ -2197,6 +2238,7 @@ export function useEditMode({
     onCommitComplete,
     onError,
     buildBulkOperations,
+    forgetStagedLedger,
   ]);
 
   /**
