@@ -221,24 +221,26 @@ export interface ChannelManagerTabProps {
     streams: Stream[],
     startingNumber: number,
     channelGroupId: number | null,
-    newGroupName?: string,
-    timezonePreference?: TimezonePreference,
-    stripCountryPrefix?: boolean,
-    addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator,
-    keepCountryPrefix?: boolean,
-    countrySeparator?: NumberSeparator,
-    prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean,
-    customNetworkPrefixes?: string[],
-    stripNetworkSuffix?: boolean,
-    customNetworkSuffixes?: string[],
-    profileIds?: number[],
-    pushDownOnConflict?: boolean,
-    // The names, already resolved by the dialog. Pass-through only; see
+    // `| undefined` rather than `?` so `nameResolution` can be required; see
+    // `StreamsPaneProps.onBulkCreateFromGroup`.
+    newGroupName: string | undefined,
+    timezonePreference: TimezonePreference | undefined,
+    stripCountryPrefix: boolean | undefined,
+    addChannelNumber: boolean | undefined,
+    numberSeparator: NumberSeparator | undefined,
+    keepCountryPrefix: boolean | undefined,
+    countrySeparator: NumberSeparator | undefined,
+    prefixOrder: PrefixOrder | undefined,
+    stripNetworkPrefix: boolean | undefined,
+    customNetworkPrefixes: string[] | undefined,
+    stripNetworkSuffix: boolean | undefined,
+    customNetworkSuffixes: string[] | undefined,
+    profileIds: number[] | undefined,
+    pushDownOnConflict: boolean | undefined,
+    // The names, already resolved by the dialog. REQUIRED pass-through; see
     // `StreamsPaneProps.onBulkCreateFromGroup`
     // (bead enhancedchannelmanager-e9e5o).
-    nameResolution?: ResolvedCreateChannelNames
+    nameResolution: ResolvedCreateChannelNames
   ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode - supports new group
   // creation). `pushDownOnConflict` moves whatever already occupies

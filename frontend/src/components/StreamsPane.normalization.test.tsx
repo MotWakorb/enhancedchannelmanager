@@ -15,6 +15,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
+import type { ResolvedCreateChannelNames } from '../services/api';
 import { NotificationProvider } from '../contexts/NotificationContext';
 import { server } from '../test/mocks/server';
 import type { Stream, StreamGroupInfo, Channel, ChannelGroup } from '../types';
@@ -273,11 +274,8 @@ describe('Create Channels "Normalization Rules" control', () => {
     // toggle's boolean, which the create then answered a SECOND time — two
     // independent answers to one question, free to disagree.
     const call = onBulkCreateFromGroup.mock.calls[0];
-    const resolution = call[call.length - 1] as {
-      names: Map<string, string>;
-      normalizationFailed: boolean;
-    };
-    expect(resolution.names.get('US: CNN HD')).toBe('CNN');
+    const resolution = call[call.length - 1] as ResolvedCreateChannelNames;
+    expect(resolution.nameFor('US: CNN HD')).toBe('CNN');
     expect(resolution.normalizationFailed).toBe(false);
   });
 
@@ -289,11 +287,8 @@ describe('Create Channels "Normalization Rules" control', () => {
     await user.click(await screen.findByRole('button', { name: /Create 1 Channel/i }));
 
     const call = onBulkCreateFromGroup.mock.calls[0];
-    const resolution = call[call.length - 1] as {
-      names: Map<string, string>;
-      normalizationFailed: boolean;
-    };
-    expect(resolution.names.get('US: CNN HD')).toBe('US: CNN HD');
+    const resolution = call[call.length - 1] as ResolvedCreateChannelNames;
+    expect(resolution.nameFor('US: CNN HD')).toBe('US: CNN HD');
     expect(resolution.normalizationFailed).toBe(false);
   });
 
@@ -493,6 +488,105 @@ describe('Create Channels channel count', () => {
     const list = preview.parentElement!.querySelector('.preview-list')!;
     expect(list.textContent).toContain('CNN');
     expect(list.textContent).not.toContain('US: CNN');
+  });
+});
+
+/**
+ * A resolution is all-or-nothing (bead `enhancedchannelmanager-e9e5o`, fix
+ * round 4).
+ *
+ * The reviewer's reproduction: ask the engine about two names, get a 200
+ * carrying only one. The service accepted it, stamped the partial map
+ * `normalizationFailed: false`, and every consumer independently filled the
+ * hole with the raw provider name — so the dialog enabled Create, planned the
+ * conflict check off a raw name, previewed a raw name, and submitted a raw
+ * name, with nothing on screen saying normalization had not run.
+ */
+describe('Create Channels when the engine answers about only some of the names', () => {
+  /** Answers about the FIRST name only, whatever it was asked. */
+  function partialAnswerHandler() {
+    return http.post('/api/normalization/normalize', async ({ request }) => {
+      const body = (await request.json()) as { texts: string[] };
+      const [first] = body.texts;
+      return HttpResponse.json({
+        results:
+          first === undefined
+            ? []
+            : [{ original: first, normalized: first.replace(/^US:\s*/, '') }],
+      });
+    });
+  }
+
+  it('says normalization did not run, rather than showing a half-normalized preview', async () => {
+    server.use(partialAnswerHandler());
+    const user = userEvent.setup();
+    renderDialog(vi.fn(), {
+      streams: COLLAPSING_STREAMS,
+      defaultNormalizeOnCreate: true,
+    });
+
+    // The collapsed summary already carries the verdict, before anything is
+    // expanded — the partial answer used to summarise as "1 name will change".
+    expect(await screen.findByText('Preview unavailable')).toBeInTheDocument();
+
+    await openNormalizationSection(user);
+    expect(
+      await screen.findByText(/Could not reach the normalization engine/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No names will change/i)).toBeNull();
+    expect(screen.queryByText(/name will change/i)).toBeNull();
+  });
+
+  it('plans and previews off the raw names it actually has, not a mix', async () => {
+    server.use(partialAnswerHandler());
+    const user = userEvent.setup();
+    const onCheckConflicts = vi.fn().mockReturnValue(0);
+    renderDialog(vi.fn(), {
+      streams: COLLAPSING_STREAMS,
+      defaultNormalizeOnCreate: true,
+      onCheckConflicts,
+    });
+
+    // The two raw names do not collapse, so this is TWO channels. The partial
+    // map used to collapse them to one, because "US: CNN HD" came back
+    // normalized while "CNN" did not.
+    const create = await screen.findByRole('button', { name: /Create 2 Channels/i });
+    const preview = screen.getByText('Channels (first 10)');
+    const list = preview.parentElement!.querySelector('.preview-list')!;
+    expect(list.textContent).toContain('US: CNN HD');
+
+    await user.click(create);
+    expect(onCheckConflicts).toHaveBeenCalledWith(200, 2);
+  });
+
+  it('hands the create a resolution marked failed, carrying every name raw', async () => {
+    server.use(partialAnswerHandler());
+    const user = userEvent.setup();
+    const { onBulkCreateFromGroup } = renderDialog(vi.fn(), {
+      streams: COLLAPSING_STREAMS,
+      defaultNormalizeOnCreate: true,
+    });
+
+    await user.click(await screen.findByRole('button', { name: /Create 2 Channels/i }));
+
+    const call = onBulkCreateFromGroup.mock.calls[0];
+    const resolution = call[call.length - 1] as ResolvedCreateChannelNames;
+    expect(resolution.normalizationFailed).toBe(true);
+    expect(resolution.nameFor('US: CNN HD')).toBe('US: CNN HD');
+    expect(resolution.nameFor('CNN')).toBe('CNN');
+  });
+
+  it('tells the operator the staged channels carry raw provider names', async () => {
+    server.use(partialAnswerHandler());
+    const user = userEvent.setup();
+    renderDialog(vi.fn().mockResolvedValue({ normalizationFailed: true }), {
+      streams: COLLAPSING_STREAMS,
+      defaultNormalizeOnCreate: true,
+    });
+
+    await user.click(await screen.findByRole('button', { name: /Create 2 Channels/i }));
+
+    expect(await screen.findByText('Normalization failed')).toBeInTheDocument();
   });
 });
 

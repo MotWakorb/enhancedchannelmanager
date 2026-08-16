@@ -151,7 +151,11 @@ export {
   normalizeStreamNamesWithBackend,
   resolveCreateChannelNames,
 };
-export type { ResolvedCreateChannelNames } from './streamNormalization';
+// `ResolvedCreateChannelNames` is a class, not an interface: it is exported as
+// a VALUE so nothing can satisfy it with an object literal carrying a plain
+// `Map`. Reintroducing the map is reintroducing the missing-entry case, which
+// is the defect (bead enhancedchannelmanager-e9e5o).
+export { ResolvedCreateChannelNames, NormalizationIncompleteError } from './streamNormalization';
 
 const API_BASE = '/api';
 

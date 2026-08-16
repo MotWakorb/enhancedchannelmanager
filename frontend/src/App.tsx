@@ -2238,21 +2238,23 @@ function App() {
       streamsToCreate: Stream[],
       startingNumber: number,
       channelGroupId: number | null,
-      newGroupName?: string,
-      timezonePreference?: api.TimezonePreference,
-      _stripCountryPrefix?: boolean,
-      addChannelNumber?: boolean,
-      numberSeparator?: api.NumberSeparator,
-      keepCountryPrefix?: boolean,
-      countrySeparator?: api.NumberSeparator,
-      prefixOrder?: api.PrefixOrder,
-      _stripNetworkPrefix?: boolean,
-      _customNetworkPrefixes?: string[],
-      _stripNetworkSuffix?: boolean,
-      _customNetworkSuffixes?: string[],
-      profileIds?: number[],
-      pushDownOnConflict?: boolean,
-      nameResolution?: api.ResolvedCreateChannelNames
+      // `| undefined` rather than `?` so `nameResolution` below can be
+      // REQUIRED; see `StreamsPaneProps.onBulkCreateFromGroup`.
+      newGroupName: string | undefined,
+      timezonePreference: api.TimezonePreference | undefined,
+      _stripCountryPrefix: boolean | undefined,
+      addChannelNumber: boolean | undefined,
+      numberSeparator: api.NumberSeparator | undefined,
+      keepCountryPrefix: boolean | undefined,
+      countrySeparator: api.NumberSeparator | undefined,
+      prefixOrder: api.PrefixOrder | undefined,
+      _stripNetworkPrefix: boolean | undefined,
+      _customNetworkPrefixes: string[] | undefined,
+      _stripNetworkSuffix: boolean | undefined,
+      _customNetworkSuffixes: string[] | undefined,
+      profileIds: number[] | undefined,
+      pushDownOnConflict: boolean | undefined,
+      nameResolution: api.ResolvedCreateChannelNames
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -2281,18 +2283,34 @@ function App() {
         // disagree — by timing, by the rules changing in between, or because
         // the dialog grouped its answer differently. Consuming the resolution
         // the operator was SHOWN is what removes that gap. The names are
-        // FINAL: nothing here or downstream may normalize them again, and a
-        // name with no entry keeps its raw value.
-        const normalizedNames = nameResolution?.names ?? new Map<string, string>();
-        const normalizationFailed = nameResolution?.normalizationFailed ?? false;
+        // FINAL: nothing here or downstream may normalize them again.
+        //
+        // The resolution is REQUIRED and it is asked whether it covers these
+        // streams before anything is staged. It used to be optional, defaulted
+        // to an empty map, and read per stream with `|| stream.name` — so a
+        // caller that forgot it, or a resolution built from a different set of
+        // streams, silently created every channel under its raw provider name.
+        // Refusing here is atomic: no batch has been started, so nothing is
+        // half-staged (bead enhancedchannelmanager-e9e5o, fix round 4).
+        const normalizationFailed = nameResolution.normalizationFailed;
+        const unresolved = filteredStreams.filter((s) => !nameResolution.has(s.name));
+        if (unresolved.length > 0) {
+          logger.error('[BulkCreate] Unresolved stream names, refusing to create', unresolved.map((s) => s.name));
+          setError(
+            `Cannot create channels: ${unresolved.length} stream name(s) were not resolved, ` +
+            'so the names on screen are not the names that would be created. Close the dialog and try again.'
+          );
+          return;
+        }
 
         // Group streams by normalized base name (also stripping quality suffixes to merge variants)
         // The grouping key is the normalized name with quality suffixes stripped
         // The channel name will be the normalized name (without quality stripping)
         const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          // Get the resolved name, fallback to original if not found
-          const normalizedName = normalizedNames.get(stream.name) || stream.name;
+          // Total by construction: the coverage refusal above already
+          // established that the resolution answers for every one of these.
+          const normalizedName = nameResolution.nameFor(stream.name);
           // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
           const groupingKey = api.stripQualitySuffixes(normalizedName);
           const existing = streamsByBaseName.get(groupingKey);

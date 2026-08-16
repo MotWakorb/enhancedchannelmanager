@@ -145,20 +145,25 @@ interface StreamsPaneProps {
     streams: Stream[],
     startingNumber: number,
     channelGroupId: number | null,
-    newGroupName?: string,
-    timezonePreference?: TimezonePreference,
-    stripCountryPrefix?: boolean,
-    addChannelNumber?: boolean,
-    numberSeparator?: NumberSeparator,
-    keepCountryPrefix?: boolean,
-    countrySeparator?: NumberSeparator,
-    prefixOrder?: PrefixOrder,
-    stripNetworkPrefix?: boolean,
-    customNetworkPrefixes?: string[],
-    stripNetworkSuffix?: boolean,
-    customNetworkSuffixes?: string[],
-    profileIds?: number[],
-    pushDownOnConflict?: boolean,
+    // Every parameter from here on is `| undefined` rather than `?`, so that
+    // `nameResolution` at the end can be REQUIRED. TypeScript will not let a
+    // required parameter follow an optional one, and making the resolution
+    // optional is what let a caller omit it and silently create channels under
+    // raw provider names (bead enhancedchannelmanager-e9e5o, fix round 4).
+    newGroupName: string | undefined,
+    timezonePreference: TimezonePreference | undefined,
+    stripCountryPrefix: boolean | undefined,
+    addChannelNumber: boolean | undefined,
+    numberSeparator: NumberSeparator | undefined,
+    keepCountryPrefix: boolean | undefined,
+    countrySeparator: NumberSeparator | undefined,
+    prefixOrder: PrefixOrder | undefined,
+    stripNetworkPrefix: boolean | undefined,
+    customNetworkPrefixes: string[] | undefined,
+    stripNetworkSuffix: boolean | undefined,
+    customNetworkSuffixes: string[] | undefined,
+    profileIds: number[] | undefined,
+    pushDownOnConflict: boolean | undefined,
     /**
      * The names these channels get, ALREADY RESOLVED by the dialog
      * (bead enhancedchannelmanager-e9e5o).
@@ -170,10 +175,14 @@ interface StreamsPaneProps {
      * — and the operator sees the dialog's answer while the callee stages its
      * own. Passing the resolution the operator was SHOWN is what removes that.
      *
-     * A missing entry means the raw name, exactly as an absent resolution
-     * means raw names throughout: the callee must never normalize.
+     * REQUIRED. It used to be optional and the callee defaulted a missing
+     * resolution to an empty map, so every name fell through to the raw
+     * provider name and the callee had no way to know that had happened. An
+     * unresolved name is not a name to create a channel from; there is no
+     * caller that has one, and the type no longer lets one pretend otherwise
+     * (fix round 4). The callee must never normalize.
      */
-    nameResolution?: ResolvedCreateChannelNames
+    nameResolution: ResolvedCreateChannelNames
   ) => Promise<BulkCreateFromGroupResult | void>;
   // Create a single channel (for manual entry mode). `pushDownOnConflict`
   // carries the operator's answer to the Channel Number Conflict dialog, which
@@ -664,12 +673,20 @@ export function StreamsPane({
    * round trip the dialog rendered a confident wrong count, and that count fed
    * the conflict check, the push-down plan and the Create button. Nothing may
    * render or plan while this is `null`.
+   *
+   * It holds the WHOLE resolution rather than its map. The failure flag used
+   * to live beside it in a second piece of state, which is a second copy of a
+   * fact the resolution already carries and can disagree with it; and the map
+   * on its own has a missing case every reader had to interpret, which is the
+   * defect this bead has been through four rounds of
+   * (see `ResolvedCreateChannelNames`).
    */
-  const [resolvedCreateNames, setResolvedCreateNames] = useState<Map<string, string> | null>(null);
-  // True when the preview fetch failed. Without it a failed preview renders as
-  // "No names will change", which is indistinguishable from a genuinely
-  // no-op rule set (bead enhancedchannelmanager-e9e5o).
-  const [normalizationPreviewFailed, setNormalizationPreviewFailed] = useState(false);
+  const [createNameResolution, setCreateNameResolution] = useState<ResolvedCreateChannelNames | null>(null);
+  // True when the preview fetch failed OR came back covering only some of the
+  // names. Without it a failed preview renders as "No names will change",
+  // which is indistinguishable from a genuinely no-op rule set
+  // (bead enhancedchannelmanager-e9e5o).
+  const normalizationPreviewFailed = createNameResolution?.normalizationFailed ?? false;
   const [normalizationExpanded, setNormalizationExpanded] = useState(false);
 
   // Sync normalization default when settings change
@@ -1451,6 +1468,21 @@ export function StreamsPane({
   );
 
   /**
+   * Ids of the streams the create will actually run on.
+   *
+   * The name resolution is built from exactly these streams, so anything that
+   * renders or plans off a WIDER set is asking the resolution about names it
+   * was never given. The separate-mode preview did that: it walked each
+   * group's full stream list while the resolution covered only the
+   * timezone-filtered ones, so an excluded stream rendered under its raw
+   * provider name as though it were a channel about to be created.
+   */
+  const bulkCreateIncludedStreamIds = useMemo(
+    () => new Set(bulkCreateFilteredStreams.map((s) => s.id)),
+    [bulkCreateFilteredStreams],
+  );
+
+  /**
    * The names the "Normalization Rules" control is asked about.
    *
    * Manual entry has no provider stream, so it asks about what the operator
@@ -1469,8 +1501,16 @@ export function StreamsPane({
    * Stream stats for the modal, including the channel count every planning
    * surface is sized by.
    *
-   * `resolved: false` means the resolver has not answered yet, and the counts
-   * are `null` rather than a provisional guess — see `resolvedCreateNames`.
+   * `resolved: false` means the resolver has not answered for THESE streams,
+   * and the counts are `null` rather than a provisional guess — see
+   * `createNameResolution`.
+   *
+   * "for these streams" is load-bearing. Memos recompute during render and the
+   * resolving effect runs after it, so the render in which `streamsToCreate` or
+   * the timezone filter changes still holds the PREVIOUS resolution. Reading a
+   * stale resolution used to fall through to the raw provider name per stream,
+   * silently, which merged and counted the wrong channels. The coverage check
+   * turns that render into the explicit unknown it already is.
    */
   const bulkCreateStats = useMemo((): {
     streamCount: number;
@@ -1484,7 +1524,10 @@ export function StreamsPane({
     const streamCount = filteredStreams.length;
     const excludedCount = streamsToCreate.length - filteredStreams.length;
 
-    if (resolvedCreateNames === null) {
+    if (
+      createNameResolution === null ||
+      !createNameResolution.coversAll(filteredStreams.map((s) => s.name))
+    ) {
       return {
         resolved: false,
         streamCount,
@@ -1506,11 +1549,10 @@ export function StreamsPane({
     // conflict check and the push-down plan, so it was not cosmetic
     // (bead enhancedchannelmanager-e9e5o). Combined mode really does hand
     // everything to one call, so there the single bucket is correct.
-    const includedStreamIds = new Set(filteredStreams.map((s) => s.id));
     const buckets = useSeparateMode
       ? bulkCreateGroups.map((group) => ({
         key: group.name,
-        streams: group.streams.filter((s) => includedStreamIds.has(s.id)),
+        streams: group.streams.filter((s) => bulkCreateIncludedStreamIds.has(s.id)),
       }))
       : [{ key: '', streams: filteredStreams }];
 
@@ -1520,7 +1562,11 @@ export function StreamsPane({
     const channelMap = new Map<string, { name: string; streams: Stream[] }>();
     for (const bucket of buckets) {
       for (const stream of bucket.streams) {
-        const resolvedName = resolvedCreateNames.get(stream.name) ?? stream.name;
+        // `nameFor`, not `get(...) ?? stream.name`. The coverage check above
+        // is what makes this total; the raw-name fallback that used to sit
+        // here is what let a name nobody resolved be counted, merged and
+        // planned as though it had been.
+        const resolvedName = createNameResolution.nameFor(stream.name);
         // The bucket key namespaces the map so the same resolved name in two
         // groups is two entries rather than a collision. NUL is the joiner
         // because a group name may contain any printable separator, and
@@ -1538,7 +1584,7 @@ export function StreamsPane({
     const mergedCount = streamCount - channelCount;
 
     return { resolved: true, streamCount, channelCount, mergedCount, excludedCount, filteredStreams, channelMap };
-  }, [streamsToCreate, bulkCreateFilteredStreams, resolvedCreateNames, useSeparateMode, bulkCreateGroups]);
+  }, [streamsToCreate, bulkCreateFilteredStreams, bulkCreateIncludedStreamIds, createNameResolution, useSeparateMode, bulkCreateGroups]);
 
   /**
    * How many channel numbers the pending create claims, which is what the
@@ -1574,20 +1620,18 @@ export function StreamsPane({
     // FIRST. Leaving the previous map in place while a new resolution is in
     // flight is the provisional-value trap in another form: the count on
     // screen would answer the question the operator asked a moment ago.
-    setResolvedCreateNames(null);
-    setNormalizationPreviewFailed(false);
+    setCreateNameResolution(null);
 
     if (!bulkCreateModalOpen) return;
 
     let cancelled = false;
     const resolve = async () => {
-      const { names, normalizationFailed } = await resolveCreateChannelNames(
+      const resolution = await resolveCreateChannelNames(
         normalizationSourceNames,
         bulkCreateNormalize,
       );
       if (cancelled) return;
-      setResolvedCreateNames(names);
-      setNormalizationPreviewFailed(normalizationFailed);
+      setCreateNameResolution(resolution);
     };
 
     // Only a normalize-on run with something to resolve reaches the network.
@@ -1613,17 +1657,17 @@ export function StreamsPane({
    * separate `loading` flag is a second copy of the same fact, and the two can
    * disagree (bead enhancedchannelmanager-e9e5o).
    */
-  const normalizationPreviewPending = resolvedCreateNames === null;
+  const normalizationPreviewPending = createNameResolution === null;
 
   // Count how many names will change with normalization
   const normalizationChangeCount = useMemo(() => {
-    if (!bulkCreateNormalize || !resolvedCreateNames || resolvedCreateNames.size === 0) return 0;
+    if (!bulkCreateNormalize || !createNameResolution || createNameResolution.size === 0) return 0;
     let count = 0;
-    for (const [original, normalized] of resolvedCreateNames) {
+    for (const [original, normalized] of createNameResolution.entries()) {
       if (original !== normalized) count++;
     }
     return count;
-  }, [bulkCreateNormalize, resolvedCreateNames]);
+  }, [bulkCreateNormalize, createNameResolution]);
 
   /**
    * The starting channel number each group gets in separate-group mode.
@@ -1676,7 +1720,7 @@ export function StreamsPane({
     // button is disabled in this state; this is the second lock, because a
     // create staged from a provisional name is the exact failure the resolved
     // count exists to prevent (bead enhancedchannelmanager-e9e5o).
-    if (resolvedCreateNames === null) return;
+    if (createNameResolution === null) return;
 
     // Handle manual entry mode - create a single channel without streams
     if (isManualEntry && onCreateChannel) {
@@ -1732,8 +1776,12 @@ export function StreamsPane({
         // preview and the name on the channel the same name by construction.
         // Nothing downstream normalizes again, and the backend's `normalize`
         // flag stays false (bead enhancedchannelmanager-e9e5o).
+        // `nameFor` throws rather than falling back to the typed text if the
+        // resolution is not about THIS name — the operator would then be
+        // creating a channel whose name nothing on screen ever showed them.
+        // The catch below turns that into a visible refusal.
         const typedName = manualEntryChannelName.trim();
-        const channelName = resolvedCreateNames.get(typedName) ?? typedName;
+        const channelName = createNameResolution.nameFor(typedName);
 
         // Create the channel. `pushDown` used to be accepted and dropped here,
         // so "Push channels down" was a button that did nothing.
@@ -1749,7 +1797,10 @@ export function StreamsPane({
         // the channel carries the name exactly as typed. Say so: with the
         // toggle a real control, an unchanged name otherwise reads as "the
         // rules matched nothing".
-        if (normalizationPreviewFailed) {
+        // Read off the resolution itself rather than the derived local, so the
+        // callback's dependency list names the one piece of state this fact
+        // comes from.
+        if (createNameResolution.normalizationFailed) {
           notifications.error(
             'ECM could not reach the normalization engine, so the channel was created with the name exactly as you typed it.',
             'Normalization failed',
@@ -1775,10 +1826,10 @@ export function StreamsPane({
     // a flag each call would answer for itself. This is what makes the names,
     // the count, the merge decisions and the number plan the same on both
     // sides by construction (bead enhancedchannelmanager-e9e5o).
-    const nameResolution: ResolvedCreateChannelNames = {
-      names: resolvedCreateNames,
-      normalizationFailed: normalizationPreviewFailed,
-    };
+    // It is the object the dialog resolved, passed through as-is. It used to be
+    // rebuilt here from two separate pieces of state, which is a second copy of
+    // the same fact and one more place for them to disagree.
+    const nameResolution = createNameResolution;
 
     // Aggregated across every call below, so a separate-groups run reports the
     // failure once rather than per group (bead enhancedchannelmanager-e9e5o).
@@ -1919,8 +1970,7 @@ export function StreamsPane({
     bulkCreateStripNetwork,
     bulkCreateStripSuffix,
     bulkCreateSelectedProfiles,
-    resolvedCreateNames,
-    normalizationPreviewFailed,
+    createNameResolution,
     channelGroups,
     onBulkCreateFromGroup,
     clearSelection,
@@ -3320,7 +3370,7 @@ export function StreamsPane({
                               {normalizationChangeCount} of {normalizationSourceNames.length} name{normalizationSourceNames.length !== 1 ? 's' : ''} will be normalized
                             </div>
                             <div className="normalization-changes">
-                              {Array.from((resolvedCreateNames ?? new Map<string, string>()).entries())
+                              {(createNameResolution?.entries() ?? [])
                                 .filter(([original, normalized]) => original !== normalized)
                                 .slice(0, 5)
                                 .map(([original, normalized]) => (
@@ -3354,7 +3404,7 @@ export function StreamsPane({
                 <div className="bulk-create-preview">
                   <label>Preview (first 3 channels per group)</label>
                   <div className="preview-list">
-                    {!bulkCreateStats.resolved ? (
+                    {!bulkCreateStats.resolved || createNameResolution === null ? (
                       <div className="preview-more">Resolving names...</div>
                     ) : bulkCreateGroups.map((group) => {
                       // The preview reads the same resolution the creation call
@@ -3367,7 +3417,10 @@ export function StreamsPane({
                       return (
                         <div key={group.name} className="preview-group">
                           <div className="preview-group-header">{customName}</div>
-                          {group.streams.slice(0, 3).map((stream, idx) => {
+                          {group.streams
+                            .filter((s) => bulkCreateIncludedStreamIds.has(s.id))
+                            .slice(0, 3)
+                            .map((stream, idx) => {
                             const num =
                               startNum !== null
                                 ? Math.round((startNum + idx * step) * 10) / 10
@@ -3380,13 +3433,15 @@ export function StreamsPane({
                                     provider's raw stream
                                     (bead enhancedchannelmanager-e9e5o). */}
                                 <span className="preview-name">
-                                  {resolvedCreateNames?.get(stream.name) ?? stream.name}
+                                  {createNameResolution.nameFor(stream.name)}
                                 </span>
                               </div>
                             );
                           })}
-                          {group.streams.length > 3 && (
-                            <div className="preview-more">... and {group.streams.length - 3} more</div>
+                          {group.streams.filter((s) => bulkCreateIncludedStreamIds.has(s.id)).length > 3 && (
+                            <div className="preview-more">
+                              ... and {group.streams.filter((s) => bulkCreateIncludedStreamIds.has(s.id)).length - 3} more
+                            </div>
                           )}
                         </div>
                       );

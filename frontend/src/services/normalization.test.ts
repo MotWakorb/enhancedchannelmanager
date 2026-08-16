@@ -11,6 +11,7 @@ import {
   createChannel,
   normalizeStreamNamesWithBackend,
   resolveCreateChannelNames,
+  NormalizationIncompleteError,
 } from './api';
 
 // Start/stop the mock server for these tests
@@ -252,6 +253,109 @@ describe('Normalization API', () => {
         normalizeStreamNamesWithBackend(['US: CNN HD'])
       ).rejects.toThrow();
     });
+
+    /**
+     * Completeness, at the boundary (bead `enhancedchannelmanager-e9e5o`, fix
+     * round 4). A 200 was previously accepted whatever it contained, so a
+     * response answering about two of the three names asked about produced a
+     * partial map that every caller then interpreted for itself — falling back
+     * to the raw provider name for the entries that were not there. That is the
+     * same swallowed failure the earlier rounds removed, one layer down.
+     */
+    it('rejects a 200 that answers about only some of the requested names', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [{ original: 'CNN', normalized: 'CNN' }],
+          })
+        )
+      );
+
+      await expect(
+        normalizeStreamNamesWithBackend(['CNN', 'MSNBC'])
+      ).rejects.toThrow(NormalizationIncompleteError);
+    });
+
+    it('names the missing entries on the rejection', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [{ original: 'CNN', normalized: 'CNN' }],
+          })
+        )
+      );
+
+      await normalizeStreamNamesWithBackend(['CNN', 'MSNBC', 'FOX']).then(
+        () => {
+          throw new Error('expected a rejection');
+        },
+        (error: unknown) => {
+          expect(error).toBeInstanceOf(NormalizationIncompleteError);
+          expect((error as NormalizationIncompleteError).missing).toEqual(['MSNBC', 'FOX']);
+        }
+      );
+    });
+
+    it('rejects a response that answers the same name twice', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [
+              { original: 'CNN', normalized: 'CNN' },
+              { original: 'CNN', normalized: 'CNN News' },
+            ],
+          })
+        )
+      );
+
+      await expect(normalizeStreamNamesWithBackend(['CNN'])).rejects.toThrow(
+        NormalizationIncompleteError
+      );
+    });
+
+    it('rejects a response carrying a name that was never requested', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [
+              { original: 'CNN', normalized: 'CNN' },
+              { original: 'BBC', normalized: 'BBC One' },
+            ],
+          })
+        )
+      );
+
+      await expect(normalizeStreamNamesWithBackend(['CNN'])).rejects.toThrow(
+        NormalizationIncompleteError
+      );
+    });
+
+    it('de-duplicates the request so "one result per name" is a real property', async () => {
+      let requested: string[] = [];
+      server.use(
+        http.post('/api/normalization/normalize', async ({ request }) => {
+          const body = (await request.json()) as { texts: string[] };
+          requested = body.texts;
+          return HttpResponse.json({
+            results: body.texts.map((original) => ({
+              original,
+              normalized: original.replace(/^US:\s*/, ''),
+            })),
+          });
+        })
+      );
+
+      const result = await normalizeStreamNamesWithBackend([
+        'US: CNN', 'US: CNN', 'US: MSNBC',
+      ]);
+
+      // Two providers can carry identically-named streams. Sending the name
+      // twice would make the backend answer twice, which the duplicate check
+      // above would then reject.
+      expect(requested).toEqual(['US: CNN', 'US: MSNBC']);
+      expect(result.get('US: CNN')).toBe('CNN');
+      expect(result.get('US: MSNBC')).toBe('MSNBC');
+    });
   });
 
   describe('resolveCreateChannelNames', () => {
@@ -271,7 +375,7 @@ describe('Normalization API', () => {
       const result = await resolveCreateChannelNames(['US: CNN HD'], false);
 
       expect(called).toBe(false);
-      expect(result.names.get('US: CNN HD')).toBe('US: CNN HD');
+      expect(result.nameFor('US: CNN HD')).toBe('US: CNN HD');
       expect(result.normalizationFailed).toBe(false);
     });
 
@@ -288,7 +392,7 @@ describe('Normalization API', () => {
 
       const result = await resolveCreateChannelNames(['US: CNN HD'], true);
 
-      expect(result.names.get('US: CNN HD')).toBe('CNN');
+      expect(result.nameFor('US: CNN HD')).toBe('CNN');
       expect(result.normalizationFailed).toBe(false);
     });
 
@@ -302,14 +406,69 @@ describe('Normalization API', () => {
       const result = await resolveCreateChannelNames(['US: CNN HD'], true);
 
       expect(result.normalizationFailed).toBe(true);
-      expect(result.names.get('US: CNN HD')).toBe('US: CNN HD');
+      expect(result.nameFor('US: CNN HD')).toBe('US: CNN HD');
     });
 
     it('reports no failure for an empty selection', async () => {
       const result = await resolveCreateChannelNames([], true);
 
-      expect(result.names.size).toBe(0);
+      expect(result.size).toBe(0);
       expect(result.normalizationFailed).toBe(false);
+    });
+
+    /**
+     * The reviewer's reproduction, at the boundary that owns it (bead
+     * `enhancedchannelmanager-e9e5o`, fix round 4). Ask about CNN and MSNBC,
+     * receive a 200 carrying only CNN. There is no partial success: the
+     * resolution is a FAILURE, it covers both names with their raw values, and
+     * no consumer is handed a map with a hole in it to interpret.
+     */
+    it('treats a response covering only some of the names as a failed resolution', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async () =>
+          HttpResponse.json({
+            results: [{ original: 'CNN', normalized: 'CNN News' }],
+          })
+        )
+      );
+
+      const result = await resolveCreateChannelNames(['CNN', 'MSNBC'], true);
+
+      expect(result.normalizationFailed).toBe(true);
+      // Both names answer, and both answer RAW — the half-normalized "CNN
+      // News" is not kept, because a resolution is all-or-nothing.
+      expect(result.nameFor('CNN')).toBe('CNN');
+      expect(result.nameFor('MSNBC')).toBe('MSNBC');
+      expect(result.coversAll(['CNN', 'MSNBC'])).toBe(true);
+    });
+
+    it('answers for every requested name on every branch', async () => {
+      server.use(
+        http.post('/api/normalization/normalize', async ({ request }) => {
+          const body = (await request.json()) as { texts: string[] };
+          return HttpResponse.json({
+            results: body.texts.map((original) => ({
+              original,
+              normalized: original.replace(/^US:\s*/, ''),
+            })),
+          });
+        })
+      );
+
+      for (const normalize of [true, false]) {
+        const result = await resolveCreateChannelNames(['US: CNN', 'US: MSNBC'], normalize);
+        expect(result.coversAll(['US: CNN', 'US: MSNBC'])).toBe(true);
+      }
+    });
+
+    it('refuses to answer for a name it was never asked about', async () => {
+      const result = await resolveCreateChannelNames(['CNN'], false);
+
+      expect(result.has('MSNBC')).toBe(false);
+      expect(result.coversAll(['CNN', 'MSNBC'])).toBe(false);
+      // No defaulting overload: the raw-name fallback IS the defect, so a
+      // caller that can be asking about an unresolved name has to find out.
+      expect(() => result.nameFor('MSNBC')).toThrow(/No resolved channel name/);
     });
   });
 });
