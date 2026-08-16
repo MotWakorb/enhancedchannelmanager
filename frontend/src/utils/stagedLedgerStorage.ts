@@ -531,6 +531,17 @@ export function planLedgerRestore(
     // never shown. So the occupants it named are compared against the ones the
     // projection puts on that number at this point in the replay, and a
     // mismatch withdraws the consent while keeping the edit.
+    //
+    // SUBSET, NOT EQUALITY, in the same direction as the two final-state
+    // validators (`channelNumberPlan.ts` and
+    // `backend/channel_number_plan.py`, both under that same heading) and the contract
+    // in `docs/api.md` §"Duplicate-number acknowledgements": consent to a
+    // WORSE collision covers a lesser one, so `standingNow ⊆ named` accepts a
+    // pile-up that shrank and refuses any stranger. Restore used to demand
+    // equality, which made it strictly stricter than the Apply it precedes:
+    // an operator who confirmed {A, C} and came back to find only A still on
+    // the number was re-interrogated by the restore dialog about a collision
+    // Apply would then have accepted unasked. Three validators, one rule.
     let restored = operation;
     const acknowledged = acknowledgementOf(apiCall);
     if (
@@ -545,9 +556,8 @@ export function planLedgerRestore(
         if (sameChannelNumber(number, acknowledged.number)) occupantsNow.add(channelId);
       }
       const named = new Set(acknowledged.occupantChannelIds ?? []);
-      const unchanged =
-        named.size === occupantsNow.size && [...named].every((id) => occupantsNow.has(id));
-      if (!unchanged) {
+      const stillCovered = [...occupantsNow].every((id) => named.has(id));
+      if (!stillCovered) {
         restored = {
           ...operation,
           apiCall: { ...apiCall, acknowledgedDuplicate: undefined },
@@ -556,9 +566,9 @@ export function planLedgerRestore(
           id: operation.id,
           description: operation.description,
           detail:
-            `The channels using number ${acknowledged.number} changed while you were away, so ` +
-            'your confirmation of that duplicate no longer applies. The number will be checked ' +
-            'again before anything is applied.',
+            `A channel you were not shown has joined number ${acknowledged.number} while you ` +
+            'were away, so your confirmation of that duplicate no longer describes it. The ' +
+            'number will be checked again before anything is applied.',
         });
       }
     }

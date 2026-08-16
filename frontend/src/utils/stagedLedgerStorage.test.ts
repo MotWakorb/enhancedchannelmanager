@@ -480,18 +480,64 @@ describe('planLedgerRestore withdraws an acknowledgement the lineup outgrew', ()
 
   it('does not mutate the persisted operation it withdraws from', () => {
     const staged = stagedOntoFive();
-    planLedgerRestore([staged], lineup(channel(5, { channel_number: 500 }), channel(6)));
+    planLedgerRestore(
+      [staged],
+      lineup(channel(5, { channel_number: 500 }), channel(6), channel(7, { channel_number: 105 })),
+    );
     const original = staged.apiCall as { acknowledgedDuplicate?: unknown };
     expect(original.acknowledgedDuplicate).toEqual({ number: 105, occupantChannelIds: [5] });
   });
 
-  it('withdraws it when nobody holds the number any more', () => {
-    // There is no longer a collision to consent to, so the consent is spent.
-    // Nothing downstream refuses this restore; the operator is simply told.
+  it('keeps it when the collision merely got SMALLER while the session was dead', () => {
+    // Channels 5 and 7 both held 105 and the operator confirmed joining both.
+    // 7 moved off while they were away. `{5} ⊂ {5, 7}` is the harmless
+    // direction — consent to a worse collision covers a lesser one — and it is
+    // the direction BOTH final-state validators already accept
+    // (`channelNumberPlan.ts` "SUBSET, NOT EQUALITY", `channel_number_plan.py`
+    // likewise, `docs/api.md` §"Duplicate-number acknowledgements"). Under
+    // equality the operator was re-interrogated here and then Apply accepted
+    // the very thing restore had just refused.
+    const staged = op(
+      {
+        type: 'updateChannel',
+        channelId: 6,
+        data: { channel_number: 105 },
+        acknowledgedDuplicate: { number: 105, occupantChannelIds: [5, 7] },
+      },
+      'Changed channel number from 106 to 105',
+    );
+    const plan = planLedgerRestore(
+      [staged],
+      lineup(channel(5), channel(6), channel(7, { channel_number: 700 })),
+    );
+    expect(plan.withdrawnAcknowledgements).toEqual([]);
+    expect(plan.restorable).toEqual([staged]);
+  });
+
+  it('keeps it when nobody holds the number any more', () => {
+    // The empty set is a subset of every set, and both validators short-circuit
+    // an empty slot to "consented" for the same reason: there is nothing left
+    // to consent to. Withdrawing here told the operator "the number will be
+    // checked again before anything is applied" about a check that then passed
+    // silently, which is a re-ask dressed as a warning.
     const staged = stagedOntoFive();
     const plan = planLedgerRestore([staged], lineup(channel(5, { channel_number: 500 }), channel(6)));
-    expect(plan.withdrawnAcknowledgements).toHaveLength(1);
+    expect(plan.withdrawnAcknowledgements).toEqual([]);
     expect(plan.restorable).toHaveLength(1);
+  });
+
+  it('still withdraws when a STRANGER joins the ones the operator was shown', () => {
+    // The dangerous direction, and the whole reason the occupant set is
+    // carried at all: `{5, 8} ⊄ {5}`. Channel 8 arrived on 105 while the
+    // session was dead and no dialog ever named it.
+    const staged = stagedOntoFive();
+    const plan = planLedgerRestore(
+      [staged],
+      lineup(channel(5), channel(6), channel(8, { channel_number: 105 })),
+    );
+    expect(plan.withdrawnAcknowledgements).toHaveLength(1);
+    const restored = plan.restorable[0].apiCall as { acknowledgedDuplicate?: unknown };
+    expect(restored.acknowledgedDuplicate).toBeUndefined();
   });
 
   it('measures the occupants against this ledger\'s own earlier operations, not only the server', () => {

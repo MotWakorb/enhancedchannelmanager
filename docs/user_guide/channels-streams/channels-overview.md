@@ -111,7 +111,7 @@ Four limits, all deliberate:
 | **It belongs to you** | Staged work is tied to the account that staged it. If a *different* person signs in on that tab, the work is destroyed rather than offered to them. Otherwise they would apply your edits under their name, and the Journal would record every change as theirs. |
 | **It dies with the tab** | Closing the tab discards it. It is not saved to disk and it will not follow you to another browser or machine. |
 | **It expires after 12 hours** | Long enough to cover an interrupted working session; short enough that a lineup which has had days to move is never applied against stale assumptions. |
-| **A duplicate you confirmed may be re-checked** | Your approval of a duplicate number named the channels that were on it. If that set changed while you were away, the approval no longer describes the collision, so it is withdrawn and the number is checked again before anything is applied. The restore dialog tells you upfront which confirmations this affects. |
+| **A duplicate you confirmed may be re-checked** | Your approval of a duplicate number named the channels that were on it. If a channel you were *not* shown has joined that number while you were away, the approval no longer describes the collision, so it is withdrawn and the number is checked again before anything is applied. The restore dialog tells you upfront which confirmations this affects. A collision that merely got *smaller*, because someone moved off the number, keeps your approval: you already agreed to the larger one. **Apply All** applies the same rule, so restore never asks you about something Apply would have accepted. |
 
 ### Undo, redo, and checkpoints within a session
 

@@ -253,7 +253,7 @@ It is ECM bookkeeping and is never forwarded to Dispatcharr. It tells the final-
 
 Three properties that are easy to get wrong:
 
-- **The occupants are load-bearing, not decoration.** Consent is checked as a subset test against who actually stands on the number. Consenting to share `102` with `{57}` while `{57, 91}` really stand there is **refused**, because the operator was never shown 91. The reverse (consenting to `{57, 91}` while only `{57}` stands) is accepted.
+- **The occupants are load-bearing, not decoration.** Consent is checked as a subset test against who actually stands on the number. Consenting to share `102` with `{57}` while `{57, 91}` really stand there is **refused**, because the operator was never shown 91. The reverse (consenting to `{57, 91}` while only `{57}` stands) is accepted. The same subset test (not equality) governs the third place an acknowledgement is judged, `planLedgerRestore` in `frontend/src/utils/stagedLedgerStorage.ts`, which decides whether a confirmation survives a dead session. All three agree deliberately: a restore stricter than the Apply it precedes re-interrogates the operator about a collision Apply then accepts unasked.
 - **A caller meaning "nobody was there" must send `[]` explicitly.** There is no default, precisely so that omission cannot be read as consent.
 - **It replaces, it does not accumulate.** A later placement of the same channel that carries no acknowledgement clears the earlier one.
 
