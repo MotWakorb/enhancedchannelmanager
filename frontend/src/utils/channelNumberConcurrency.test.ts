@@ -372,3 +372,66 @@ describe('expectedServerNumber', () => {
     expect(expectedServerNumber(operations[0], 1, 5)).toBe(88);
   });
 });
+
+describe('take-theirs withdraws the rename the surrendered number caused', () => {
+  function numberEditWithAutoRename(): StagedOperation {
+    operationCounter += 1;
+    return {
+      id: `op-${operationCounter}`,
+      timestamp: operationCounter,
+      description: 'Changed "5 | ESPN" to "150 | ESPN"',
+      apiCall: {
+        type: 'updateChannel',
+        channelId: 1,
+        data: { channel_number: 150, name: '150 | ESPN' },
+      },
+      beforeSnapshot: [snapshot(1, '5 | ESPN', 5)],
+      afterSnapshot: [snapshot(1, '150 | ESPN', 150)],
+    };
+  }
+
+  it('drops the automatic name along with the number', () => {
+    // Keeping it would leave the channel called "150 | ESPN" while it sits on
+    // the server's 199 — a state nobody chose and nobody was shown.
+    const { operations, removed } = applyReconcileDecisions(
+      [numberEditWithAutoRename()],
+      [{ channelId: 1, choice: 'take-theirs', baselineNumber: 5, serverNumber: 199 }],
+    );
+    expect(operations).toEqual([]);
+    expect(removed).toHaveLength(1);
+  });
+
+  it('keeps a name the operator typed', () => {
+    operationCounter += 1;
+    const typed: StagedOperation = {
+      id: `op-${operationCounter}`,
+      timestamp: operationCounter,
+      description: 'Edit ESPN',
+      apiCall: {
+        type: 'updateChannel',
+        channelId: 1,
+        data: { channel_number: 150, name: 'ESPN Deportes' },
+      },
+      beforeSnapshot: [snapshot(1, '5 | ESPN', 5)],
+      afterSnapshot: [],
+    };
+    const { operations, removed } = applyReconcileDecisions(
+      [typed],
+      [{ channelId: 1, choice: 'take-theirs', baselineNumber: 5, serverNumber: 199 }],
+    );
+    expect(removed).toEqual([]);
+    expect(operations[0].apiCall).toMatchObject({ data: { name: 'ESPN Deportes' } });
+    expect((operations[0].apiCall as { data: Record<string, unknown> }).data)
+      .not.toHaveProperty('channel_number');
+  });
+
+  it('keep-mine leaves the automatic name exactly where it was', () => {
+    const { operations } = applyReconcileDecisions(
+      [numberEditWithAutoRename()],
+      [{ channelId: 1, choice: 'keep-mine', baselineNumber: 5, serverNumber: 199 }],
+    );
+    expect(operations[0].apiCall).toMatchObject({
+      data: { channel_number: 150, name: '150 | ESPN' },
+    });
+  });
+});

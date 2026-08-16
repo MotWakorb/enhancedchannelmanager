@@ -36,7 +36,8 @@
  */
 
 import { sameChannelNumber } from './channelNumberPlan';
-import type { ChannelSnapshot } from '../types';
+import { computeAutoRename } from './channelRename';
+import type { Channel, ChannelSnapshot } from '../types';
 import type {
   ConcurrentNumberAcknowledgement,
   StagedOperation,
@@ -363,7 +364,17 @@ export function applyReconcileDecisions(
     }
 
     if (takeTheirs.has(apiCall.channelId)) {
-      const { channel_number: _dropped, ...rest } = apiCall.data;
+      const { channel_number: surrendered, ...kept } = apiCall.data;
+      // A NAME THE NUMBERING CAUSED GOES WITH THE NUMBER IT CAME FROM. Edit
+      // Mode stages an automatic rename in the SAME operation as the number
+      // that produced it, so surrendering the number and keeping the name
+      // would leave the channel called "150 | Alpha" while it sits on 199 —
+      // a state nobody chose and nobody was shown. A name the operator TYPED
+      // is untouched, because it is not what `computeAutoRename` would have
+      // produced.
+      const rest = surrenderedAutoRename(operation, apiCall.channelId, kept, surrendered ?? null)
+        ? Object.fromEntries(Object.entries(kept).filter(([key]) => key !== 'name'))
+        : kept;
       if (Object.keys(rest).length === 0) {
         removed.push({
           id: operation.id,
@@ -394,6 +405,28 @@ export function applyReconcileDecisions(
   }
 
   return { operations: next, removed };
+}
+
+/**
+ * Is the name in this payload the one the surrendered number would have
+ * produced?
+ *
+ * Reproduces the producer's own computation rather than asking any producer to
+ * flag itself, exactly as `deriveAutomaticRenames` does: the name is automatic
+ * exactly when it is what `computeAutoRename` yields from the name the channel
+ * had to the number this operation was setting. Everything else is a name the
+ * operator meant, and surrendering a number says nothing about it.
+ */
+function surrenderedAutoRename(
+  operation: StagedOperation,
+  channelId: number,
+  data: Partial<Channel>,
+  surrendered: number | null,
+): boolean {
+  if (typeof data.name !== 'string') return false;
+  const before = operation.beforeSnapshot.find((entry) => entry.id === channelId);
+  if (before === undefined) return false;
+  return data.name === computeAutoRename(before.name, before.channel_number, surrendered);
 }
 
 /** One acknowledgement per channel: a later decision replaces an earlier one. */
