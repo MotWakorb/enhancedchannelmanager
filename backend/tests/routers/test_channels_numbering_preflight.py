@@ -190,3 +190,94 @@ class TestFinalNumberingPreflight:
             {"type": "updateChannel", "channelId": 1, "data": {"name": "ESPN Renamed"}},
         ])
         assert _numbering_issues(data) == []
+
+
+class TestPreflightAndContinueOnError:
+    """How the final-state check interacts with Edit Mode's two-phase Apply.
+
+    Edit Mode's Apply is not one request: creates go up in their own call, then
+    everything else in batches of 200. So phase 1 can legitimately show a
+    collision that a phase-2 operation resolves — create a channel on 5 while a
+    later batch moves the incumbent off it — and refusing phase 1 outright would
+    break a plan that is fine as a whole.
+
+    The split that resolves it, pinned here because it is the kind of
+    interaction that breaks silently:
+
+    * The BROWSER holds the whole plan, so its preflight
+      (`frontend/src/utils/channelNumberPlan.ts`) is the binding gate for the
+      UI, and it blocks before the first request — proven in
+      `e2e/edit-mode-numbering-guards.spec.ts` by a request count of zero.
+    * The SERVER sees one request at a time. Under ``continueOnError`` — which
+      is exactly what Apply All sends — its finding is advisory and execution
+      proceeds, matching how every other validation issue already behaves.
+      Making numbering the one exception would change approved behaviour for a
+      plan that is legal.
+    * Without ``continueOnError``, which is the default and what a non-UI
+      caller gets, it blocks.
+    """
+
+    @pytest.mark.asyncio
+    async def test_continue_on_error_downgrades_the_finding_to_advisory(self, async_client):
+        from routers import channels as router_module
+        router_module._BULK_COMMIT_JOBS.clear()
+
+        mock_client = _client()
+        mock_client.create_channel.return_value = {"id": 99, "name": "New", "channel_number": 5}
+        mock_client.get_channel.return_value = {"id": 99, "name": "New", "channel_number": 5}
+
+        import asyncio
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New", "channelNumber": 5},
+                ],
+                "continueOnError": True,
+            })
+            assert response.status_code == 202, response.text
+            job_id = response.json()["job_id"]
+            payload = None
+            for _ in range(200):
+                await asyncio.sleep(0)
+                poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+                payload = poll.json()
+                if payload["status"] in ("completed", "failed"):
+                    break
+
+        assert payload["status"] == "completed", payload
+        assert mock_client.create_channel.called, (
+            "a phase-1 create must still execute; a phase-2 operation may be what resolves it"
+        )
+        # The finding is still REPORTED — advisory is not silent.
+        assert _numbering_issues(payload["result"]), payload["result"]
+
+    @pytest.mark.asyncio
+    async def test_without_continue_on_error_it_blocks_before_executing(self, async_client):
+        from routers import channels as router_module
+        router_module._BULK_COMMIT_JOBS.clear()
+
+        mock_client = _client()
+        mock_client.create_channel.return_value = {"id": 99, "name": "New", "channel_number": 5}
+
+        import asyncio
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New", "channelNumber": 5},
+                ],
+            })
+            assert response.status_code == 202, response.text
+            job_id = response.json()["job_id"]
+            payload = None
+            for _ in range(200):
+                await asyncio.sleep(0)
+                poll = await async_client.get(f"/api/channels/bulk-commit/{job_id}")
+                payload = poll.json()
+                if payload["status"] in ("completed", "failed"):
+                    break
+
+        assert not mock_client.create_channel.called, (
+            "the default path must refuse before the first mutation"
+        )
