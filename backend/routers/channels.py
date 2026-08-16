@@ -21,7 +21,11 @@ from pydantic import BaseModel, Field, PositiveInt, field_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
-from bulk_commit_accounting import OperationLedger, finalize_bulk_commit_result
+from bulk_commit_accounting import (
+    OperationLedger,
+    finalize_bulk_commit_result,
+    nothing_to_journal,
+)
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
@@ -1735,16 +1739,6 @@ async def _run_bulk_commit(
     client = get_client()
     batch_id = batch_id or str(uuid.uuid4())[:8]
 
-    # Per-entity journal rows accumulated as operations succeed, flushed in one
-    # transaction at the end alongside the Bulk Commit summary row. Before
-    # bead enhancedchannelmanager-r9py9 this path wrote ONLY the summary, so a
-    # channel changed through Edit Mode had no row carrying its name and its
-    # history could not be traced the way the operator guide describes. The
-    # rows mirror what the single-channel endpoints already write, because
-    # those are the rows an MCP agent produces and a channel's history must
-    # read the same whichever surface made the change.
-    journal_rows: list[dict] = []
-
     # Phase 1 onwards. Until this flips, nothing has been written anywhere, so
     # the two pre-execution early returns (validateOnly, validation failed with
     # continueOnError=false) must leave no journal trace at all — a dry run and
@@ -1754,15 +1748,32 @@ async def _run_bulk_commit(
     # exception handler, so it has to be idempotent.
     journal_flushed = False
 
-    def add_journal_row(
+    def journal_row(
         action_type: str,
         entity_id: Optional[int],
         entity_name: str,
         description: str,
         before_value: Optional[dict] = None,
         after_value: Optional[dict] = None,
-    ) -> None:
-        journal_rows.append({
+    ) -> dict:
+        """Build ONE per-entity journal row. Does not queue it.
+
+        Queueing is the ledger's job, and only ever happens as part of saying
+        that an upstream write landed (``ledger.record_write`` /
+        ``ledger.record_persisted``). This used to be an ``add_journal_row``
+        that appended to a list in this closure, which meant a branch could
+        write upstream and then fail before calling it — three of the five
+        findings in fix round 3 were exactly that (bead
+        ``enhancedchannelmanager-kz089``). A builder cannot be called at the
+        wrong time, because calling it is not what records anything.
+
+        The rows mirror what the single-channel endpoints already write,
+        because those are the rows an MCP agent produces and a channel's
+        history must read the same whichever surface made the change (bead
+        ``enhancedchannelmanager-r9py9``); before that bead this path wrote
+        only the Bulk Commit summary.
+        """
+        return {
             "category": "channel",
             "action_type": action_type,
             "entity_id": entity_id,
@@ -1771,7 +1782,7 @@ async def _run_bulk_commit(
             "before_value": before_value,
             "after_value": after_value,
             "batch_id": batch_id,
-        })
+        }
 
     # Count operation types for logging
     op_counts = {}
@@ -1955,14 +1966,19 @@ async def _run_bulk_commit(
         than swallowed: the mutations DID land, so nothing may be reported as
         failed, but the envelope has to say the audit trail is incomplete
         instead of looking like a clean commit.
+
+        The rows come from the LEDGER, which queued each one as its write
+        landed. Round 2 made this the single flush and left the rows in a list
+        the branches appended to whenever they got round to it; a flush that
+        cannot be skipped still writes nothing if the row was never built (fix
+        round 3).
         """
         nonlocal journal_flushed
         if journal_flushed or not execution_started:
             return
         journal_flushed = True
 
-        rows = list(journal_rows)
-        journal_rows.clear()
+        rows = ledger.drain_journal_rows()
         unwritten = write_journal_rows(rows)
 
         # The summary reads last so it closes the batch. Counters come from the
@@ -2087,9 +2103,19 @@ async def _run_bulk_commit(
         existing_profile_ids: set[int] = set()
         hidden_group_ids: set[int] = set()
         # Only validate against a lookup that actually SUCCEEDED. An upstream
-        # failure here must not turn every referenced profile into a reported
+        # failure here must not turn every referenced entity into a reported
         # "does not exist" — that would be the lookup's failure wearing the
-        # operation's name.
+        # operation's name, and under `continueOnError=false` it refuses the
+        # whole run on the deliberately traceless pre-execution path.
+        #
+        # Fix round 2 gave the profile and hidden-group lookups this guard and
+        # left the two OLDEST ones — channels and streams — reading their own
+        # emptiness as proof of absence, which is the asymmetry fix round 3
+        # closes. All four lookups are `except Exception` around an upstream or
+        # database read, so all four can be empty for a reason that is not
+        # "the entity does not exist".
+        channels_resolved = False
+        streams_resolved = False
         profiles_resolved = False
         hidden_groups_resolved = False
 
@@ -2112,6 +2138,7 @@ async def _run_bulk_commit(
                     if not response.get("next"):
                         break
                     page += 1
+                channels_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s existing channels", len(existing_channels))
                 # Check which referenced channels don't exist
                 missing_channels = referenced_channel_ids - set(existing_channels.keys())
@@ -2129,6 +2156,7 @@ async def _run_bulk_commit(
                 streams = await client.get_streams_by_ids(list(referenced_stream_ids))
                 for s in streams:
                     existing_streams[s["id"]] = s
+                streams_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s of %s referenced streams", len(existing_streams), len(referenced_stream_ids))
             except Exception as e:
                 logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", e)
@@ -2158,10 +2186,28 @@ async def _run_bulk_commit(
             except Exception as e:
                 logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", e)
 
+        def channel_is_missing(channel_id: int) -> bool:
+            """Is this channel KNOWN to be absent from Dispatcharr?
+
+            False when the catalog read failed, which is not the same fact and
+            must never be reported as one (fix round 3). Negative ids are the
+            frontend's staging placeholders and are resolved by `resolve_id`,
+            not looked up here.
+            """
+            return (
+                channels_resolved
+                and channel_id >= 0
+                and channel_id not in existing_channels
+            )
+
+        def stream_is_missing(stream_id: int) -> bool:
+            """Is this stream KNOWN to be absent? Same rule as channels."""
+            return streams_resolved and stream_id not in existing_streams
+
         # Validate each operation
         for idx, op in enumerate(request.operations):
             if op.type == "updateChannel":
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     ch_name = f"Channel {op.channelId}"
                     result["validationIssues"].append({
                         "type": "missing_channel",
@@ -2173,12 +2219,12 @@ async def _run_bulk_commit(
                     })
                     result["validationPassed"] = False
             elif op.type == "deleteChannel":
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     # Deleting a channel that doesn't exist is a no-op, not an error
                     logger.debug("[CHANNELS-BULK] deleteChannel: channel %s already gone, skipping", op.channelId)
 
             elif op.type == "addStreamToChannel":
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     ch_name = f"Channel {op.channelId}"
                     result["validationIssues"].append({
                         "type": "missing_channel",
@@ -2191,9 +2237,13 @@ async def _run_bulk_commit(
                     })
                     result["validationPassed"] = False
                 elif op.channelId >= 0:
-                    ch_name = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
+                    # `.get`, not `[]`: a failed catalog read leaves this empty
+                    # while the branch above deliberately does not fire.
+                    ch_name = existing_channels.get(op.channelId, {}).get(
+                        "name", f"Channel {op.channelId}"
+                    )
                     # Check stream exists
-                    if op.streamId not in existing_streams:
+                    if stream_is_missing(op.streamId):
                         result["validationIssues"].append({
                             "type": "missing_stream",
                             "severity": "error",
@@ -2206,7 +2256,7 @@ async def _run_bulk_commit(
                         result["validationPassed"] = False
 
             elif op.type == "removeStreamFromChannel":
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     result["validationIssues"].append({
                         "type": "missing_channel",
                         "severity": "error",
@@ -2218,7 +2268,7 @@ async def _run_bulk_commit(
                     result["validationPassed"] = False
 
             elif op.type == "reorderChannelStreams":
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     result["validationIssues"].append({
                         "type": "missing_channel",
                         "severity": "error",
@@ -2230,7 +2280,7 @@ async def _run_bulk_commit(
 
             elif op.type == "bulkAssignChannelNumbers":
                 for cid in op.channelIds:
-                    if cid >= 0 and cid not in existing_channels:
+                    if channel_is_missing(cid):
                         result["validationIssues"].append({
                             "type": "missing_channel",
                             "severity": "error",
@@ -2245,7 +2295,7 @@ async def _run_bulk_commit(
                 # resolved here exactly as updateChannel's channel id is. An
                 # error, not a warning: writing a membership for a channel or
                 # profile that does not exist cannot do what was asked.
-                if op.channelId >= 0 and op.channelId not in existing_channels:
+                if channel_is_missing(op.channelId):
                     result["validationIssues"].append({
                         "type": "missing_channel",
                         "severity": "error",
@@ -2291,7 +2341,7 @@ async def _run_bulk_commit(
                 # legitimately wants to do. Erroring here would make the only
                 # way to remove them impossible.
                 for sid in op.streamIds:
-                    if sid not in existing_streams:
+                    if stream_is_missing(sid):
                         result["validationIssues"].append({
                             "type": "missing_stream",
                             "severity": "warning",
@@ -2367,15 +2417,22 @@ async def _run_bulk_commit(
                     logger.debug("[CHANNELS-BULK] Creating group: '%s'", group_name)
                     # Try to create the group
                     new_group = await client.create_channel_group(group_name)
-                    result["groupIdMap"][group_name] = new_group["id"]
-                    groups_created += 1
-                    add_journal_row(
+                    # The group EXISTS from here on, so its row is queued before
+                    # anything that can raise — `new_group["id"]` below is one
+                    # such thing, and `.get` here is why the row survives a
+                    # response shape that has no id.
+                    created_group_id = (
+                        new_group.get("id") if isinstance(new_group, dict) else None
+                    )
+                    ledger.record_write(journal_row=journal_row(
                         action_type="group_create",
-                        entity_id=new_group["id"],
+                        entity_id=created_group_id,
                         entity_name=group_name,
                         description=f"Created channel group '{group_name}'",
                         after_value={"name": group_name},
-                    )
+                    ))
+                    result["groupIdMap"][group_name] = new_group["id"]
+                    groups_created += 1
                     logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", group_name, new_group['id'])
                 except Exception as e:
                     error_str = str(e)
@@ -2436,6 +2493,16 @@ async def _run_bulk_commit(
             Raises on a hard failure (pagination error, create error) so the
             caller's try/except can preserve the existing "create the channel
             without a logo" fallthrough behavior.
+
+            A logo CREATED here is an upstream mutation inside an operation that
+            may still fail as a whole — `create_channel` answering 500 leaves
+            the logo in Dispatcharr's catalog with the channel non-existent. The
+            settled product decision that catalog logo additions are immediate
+            and additive is not in question; being invisible to the journal was
+            the defect (bead ``enhancedchannelmanager-kz089``, fix round 3). It
+            is a `record_write` and not a `record_persisted` because a logo
+            existing is not the channel existing: this write must not stop the
+            operation being reported as the failure it is.
             """
             nonlocal logo_index
             if logo_index is None:
@@ -2461,6 +2528,16 @@ async def _run_bulk_commit(
                 return existing["id"]
 
             new_logo = await client.create_logo({"name": logo_name, "url": logo_url})
+            created_logo_id = (
+                new_logo.get("id") if isinstance(new_logo, dict) else None
+            )
+            ledger.record_write(journal_row=journal_row(
+                action_type="logo_create",
+                entity_id=created_logo_id,
+                entity_name=logo_name,
+                description=f"Created logo '{logo_name}' from {logo_url}",
+                after_value={"name": logo_name, "url": logo_url},
+            ))
             # Cache by url so a later op with the same logoUrl reuses it
             # (fixes a latent duplicate-logo bug too).
             logo_index[logo_url] = new_logo
@@ -2503,16 +2580,18 @@ async def _run_bulk_commit(
                         before_channel, op.data
                     )
                     await client.update_channel(channel_id, op.data)
-                    ledger.record_persisted()
+                    ledger.record_persisted(journal_row=journal_row(
+                        action_type="update",
+                        entity_id=channel_id,
+                        entity_name=channel_name_of(channel_id),
+                        description=f"Updated channel: {', '.join(changes)}",
+                        before_value=before_value,
+                        after_value=after_value,
+                    ) if changes else nothing_to_journal(
+                        f"the PATCH on channel {channel_id} described no change "
+                        "to any field the journal renders"
+                    ))
                     if changes:
-                        add_journal_row(
-                            action_type="update",
-                            entity_id=channel_id,
-                            entity_name=channel_name_of(channel_id),
-                            description=f"Updated channel: {', '.join(changes)}",
-                            before_value=before_value,
-                            after_value=after_value,
-                        )
                         # Keep the local catalog current so a later op in the
                         # same batch names this channel by its NEW name.
                         if channel_id in existing_channels:
@@ -2528,18 +2607,17 @@ async def _run_bulk_commit(
                     if op.streamId not in current_streams:
                         before_streams = list(current_streams)
                         current_streams.append(op.streamId)
-                        await client.update_channel(channel_id, {"streams": current_streams})
-                        ledger.record_persisted()
-                        logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
                         channel_name = channel.get("name") or channel_name_of(channel_id)
-                        add_journal_row(
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                        ledger.record_persisted(journal_row=journal_row(
                             action_type="stream_add",
                             entity_id=channel_id,
                             entity_name=channel_name,
                             description=f"Added stream to channel '{channel_name}'",
                             before_value={"streams": before_streams},
                             after_value={"streams": list(current_streams)},
-                        )
+                        ))
+                        logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
                     else:
                         # No write happened, so no row — the single-channel
                         # endpoint returns early here for the same reason.
@@ -2553,18 +2631,17 @@ async def _run_bulk_commit(
                     if op.streamId in current_streams:
                         before_streams = list(current_streams)
                         current_streams.remove(op.streamId)
-                        await client.update_channel(channel_id, {"streams": current_streams})
-                        ledger.record_persisted()
-                        logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
                         channel_name = channel.get("name") or channel_name_of(channel_id)
-                        add_journal_row(
+                        await client.update_channel(channel_id, {"streams": current_streams})
+                        ledger.record_persisted(journal_row=journal_row(
                             action_type="stream_remove",
                             entity_id=channel_id,
                             entity_name=channel_name,
                             description=f"Removed stream from channel '{channel_name}'",
                             before_value={"streams": before_streams},
                             after_value={"streams": list(current_streams)},
-                        )
+                        ))
+                        logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
                     else:
                         logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
 
@@ -2586,36 +2663,38 @@ async def _run_bulk_commit(
                         raise ValueError(
                             f"Cannot reorder streams for channel {channel_id}: {perm_error}"
                         )
-                    await client.update_channel(channel_id, {"streams": op.streamIds})
-                    ledger.record_persisted()
                     channel_name = channel.get("name") or channel_name_of(channel_id)
-                    add_journal_row(
+                    await client.update_channel(channel_id, {"streams": op.streamIds})
+                    ledger.record_persisted(journal_row=journal_row(
                         action_type="stream_reorder",
                         entity_id=channel_id,
                         entity_name=channel_name,
                         description=f"Reordered streams in channel '{channel_name}'",
                         before_value={"streams": list(current_streams)},
                         after_value={"streams": list(op.streamIds)},
-                    )
+                    ))
 
                 elif op.type == "bulkAssignChannelNumbers":
                     resolved_ids = [resolve_id(cid) for cid in op.channelIds]
                     logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
-                    await client.assign_channel_numbers(resolved_ids, op.startingNumber)
-                    ledger.record_persisted()
                     # One row per channel, matching POST /assign-numbers, which
                     # is the in-repo precedent for "renumbering is N per-channel
                     # facts, not one aggregate". Numbering is sequential from
                     # startingNumber in list order, mirroring the working copy
-                    # the operator was shown.
+                    # the operator was shown. Every row is built from the state
+                    # BEFORE the write, so they are all in hand the moment it
+                    # lands.
                     assign_start = op.startingNumber if op.startingNumber is not None else 1
+                    assigned_rows: list[dict] = []
+                    renumbered: dict[int, int] = {}
                     for offset, assigned_id in enumerate(resolved_ids):
                         old_number = existing_channels.get(assigned_id, {}).get("channel_number")
                         new_number = assign_start + offset
                         if old_number == new_number:
                             continue
                         assigned_name = channel_name_of(assigned_id)
-                        add_journal_row(
+                        renumbered[assigned_id] = new_number
+                        assigned_rows.append(journal_row(
                             action_type="reorder",
                             entity_id=assigned_id,
                             entity_name=assigned_name,
@@ -2625,7 +2704,12 @@ async def _run_bulk_commit(
                             ),
                             before_value={"channel_number": old_number, "name": assigned_name},
                             after_value={"channel_number": new_number, "name": assigned_name},
-                        )
+                        ))
+                    await client.assign_channel_numbers(resolved_ids, op.startingNumber)
+                    ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
+                        "every channel in the range already carried its target number"
+                    ))
+                    for assigned_id, new_number in renumbered.items():
                         if assigned_id in existing_channels:
                             existing_channels[assigned_id] = {
                                 **existing_channels[assigned_id], "channel_number": new_number
@@ -2714,7 +2798,37 @@ async def _run_bulk_commit(
                     # into a reported total failure — an integrator retrying an
                     # apparent total failure creates the channel a second time
                     # (bead enhancedchannelmanager-e9e5o, fix round 4).
-                    ledger.record_persisted(create_temp_id=op.tempId)
+                    #
+                    # The journal row goes WITH that statement, not after the
+                    # bookkeeping (bead …-kz089, fix round 3). The malformed-id
+                    # raise below used to sit between them, so a channel that
+                    # existed was correctly reported as applied-but-incomplete
+                    # and had no row anywhere — which is exactly the case where
+                    # an operator has to reconcile by hand and needs one most.
+                    # Everything the row needs comes from the response, read
+                    # defensively because "malformed" is the case being served.
+                    created_body = new_channel if isinstance(new_channel, dict) else {}
+                    created_id = created_body.get("id")
+                    created_name = created_body.get("name") or channel_name
+                    created_number = created_body.get("channel_number", op.channelNumber)
+                    ledger.record_persisted(
+                        create_temp_id=op.tempId,
+                        journal_row=journal_row(
+                            action_type="create",
+                            entity_id=created_id if isinstance(created_id, int)
+                            and not isinstance(created_id, bool) else None,
+                            entity_name=created_name,
+                            description=(
+                                f"Created channel '{created_name}'"
+                                + (f" with number {format_channel_number(created_number)}"
+                                   if created_number else "")
+                            ),
+                            after_value={
+                                "channel_number": created_number,
+                                "name": created_name,
+                            },
+                        ),
+                    )
                     channels_created += 1
 
                     # The channel exists, so the raw name it carries is now a
@@ -2732,7 +2846,6 @@ async def _run_bulk_commit(
                     # had been created. `{"id": null}` did not even raise: it
                     # mapped the temp id to null and the frontend then posted
                     # `channelId: null` on every follow-up operation.
-                    created_id = new_channel.get("id") if isinstance(new_channel, dict) else None
                     if not isinstance(created_id, int) or isinstance(created_id, bool):
                         raise MalformedCreateResponseError(
                             f"Dispatcharr accepted the create for '{channel_name}' but returned "
@@ -2748,17 +2861,6 @@ async def _run_bulk_commit(
 
                     # Nameable by later ops in this same batch.
                     existing_channels[created_id] = new_channel
-                    created_number = new_channel.get("channel_number", op.channelNumber)
-                    add_journal_row(
-                        action_type="create",
-                        entity_id=created_id,
-                        entity_name=new_channel.get("name", channel_name),
-                        description=(
-                            f"Created channel '{new_channel.get('name', channel_name)}'"
-                            + (f" with number {format_channel_number(created_number)}" if created_number else "")
-                        ),
-                        after_value={"channel_number": created_number, "name": new_channel.get("name", channel_name)},
-                    )
                     logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, created_id)
 
                 elif op.type == "deleteChannel":
@@ -2777,47 +2879,76 @@ async def _run_bulk_commit(
                             logger.debug("[CHANNELS-BULK] Channel %s already deleted, skipping", channel_id)
                         else:
                             raise
-                    ledger.record_persisted()
-                    if really_deleted:
-                        deleted_name = channel_name_of(channel_id)
-                        add_journal_row(
-                            action_type="delete",
-                            entity_id=channel_id,
-                            entity_name=deleted_name,
-                            description=f"Deleted channel '{deleted_name}'",
-                            before_value={
-                                "name": deleted_name,
-                                "channel_number": (deleted_before or {}).get("channel_number"),
-                            },
-                        )
+                    deleted_name = channel_name_of(channel_id)
+                    ledger.record_persisted(journal_row=journal_row(
+                        action_type="delete",
+                        entity_id=channel_id,
+                        entity_name=deleted_name,
+                        description=f"Deleted channel '{deleted_name}'",
+                        before_value={
+                            "name": deleted_name,
+                            "channel_number": (deleted_before or {}).get("channel_number"),
+                        },
+                    ) if really_deleted else nothing_to_journal(
+                        f"Dispatcharr answered 404 for channel {channel_id}: it was "
+                        "already gone, so this run deleted nothing"
+                    ))
 
                 elif op.type == "createGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createGroup: name='%s'", idx+1, len(request.operations), op.name)
                     # Groups should be created in Phase 1, but handle here if needed
                     if op.name not in result["groupIdMap"]:
                         new_group = await client.create_channel_group(op.name)
-                        ledger.record_persisted()
-                        result["groupIdMap"][op.name] = new_group["id"]
-                        groups_created += 1
-                        add_journal_row(
+                        # Same shape as Phase 1: the row is queued off the
+                        # response before `new_group["id"]` can raise on one
+                        # that carries no id.
+                        ledger.record_persisted(journal_row=journal_row(
                             action_type="group_create",
-                            entity_id=new_group["id"],
+                            entity_id=new_group.get("id") if isinstance(new_group, dict) else None,
                             entity_name=op.name,
                             description=f"Created channel group '{op.name}'",
                             after_value={"name": op.name},
-                        )
+                        ))
+                        result["groupIdMap"][op.name] = new_group["id"]
+                        groups_created += 1
                         logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", op.name, new_group['id'])
                     else:
                         logger.debug("[CHANNELS-BULK] Group '%s' already exists with ID %s", op.name, result['groupIdMap'][op.name])
 
                 elif op.type == "deleteChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
+                    # Each reparent is an independent write that can be the last
+                    # one this operation lands, so each is journalled as it
+                    # happens rather than summarised after the delete succeeds
+                    # (bead …-kz089, fix round 3). `record_write`, not
+                    # `record_persisted`: a moved channel is not a deleted
+                    # group, and the operation must stay reportable as the
+                    # failure it is when the group survives.
+                    deleted_group_id = op.groupId
+
+                    def journal_moved_channel(
+                        channel_id: int, channel_name: str, target_group: dict,
+                        _group_id: int = deleted_group_id,
+                    ) -> None:
+                        target_name = target_group.get("name") or UNGROUPED_TARGET_GROUP_NAME
+                        ledger.record_write(journal_row=journal_row(
+                            action_type="update",
+                            entity_id=channel_id,
+                            entity_name=channel_name,
+                            description=(
+                                f"Moved channel '{channel_name}' to '{target_name}' "
+                                f"before channel group {_group_id} was deleted"
+                            ),
+                            before_value={"channel_group_id": _group_id},
+                            after_value={"channel_group_id": target_group.get("id")},
+                        ))
+
                     moved = await reparent_group_channels(
-                        client, op.groupId, log_prefix="[CHANNELS-BULK]"
+                        client, op.groupId, log_prefix="[CHANNELS-BULK]",
+                        on_channel_moved=journal_moved_channel,
                     )
                     await client.delete_channel_group(op.groupId)
-                    ledger.record_persisted()
-                    add_journal_row(
+                    ledger.record_persisted(journal_row=journal_row(
                         action_type="group_delete",
                         entity_id=op.groupId,
                         entity_name=f"Group {op.groupId}",
@@ -2826,7 +2957,7 @@ async def _run_bulk_commit(
                             + (f" (moved {moved} channel(s) to '{UNGROUPED_TARGET_GROUP_NAME}')" if moved else "")
                         ),
                         before_value={"group_id": op.groupId, "channels_moved": moved},
-                    )
+                    ))
                     logger.debug("[CHANNELS-BULK] Deleted group %s (moved %s channel(s) to '%s')", op.groupId, moved, UNGROUPED_TARGET_GROUP_NAME)
 
                 elif op.type == "setProfileMembership":
@@ -2835,13 +2966,12 @@ async def _run_bulk_commit(
                         f"setProfileMembership on profile {op.profileId}",
                     )
                     logger.debug("[CHANNELS-BULK] [%s/%s] setProfileMembership: profile=%s channel=%s enabled=%s", idx+1, len(request.operations), op.profileId, channel_id, op.enabled)
+                    membership_name = channel_name_of(channel_id)
+                    verb = "Enabled" if op.enabled else "Disabled"
                     await client.update_profile_channel(
                         op.profileId, channel_id, {"enabled": op.enabled}
                     )
-                    ledger.record_persisted()
-                    membership_name = channel_name_of(channel_id)
-                    verb = "Enabled" if op.enabled else "Disabled"
-                    add_journal_row(
+                    ledger.record_persisted(journal_row=journal_row(
                         action_type="profile_membership",
                         entity_id=channel_id,
                         entity_name=membership_name,
@@ -2849,7 +2979,7 @@ async def _run_bulk_commit(
                             f"{verb} channel '{membership_name}' in channel profile {op.profileId}"
                         ),
                         after_value={"profile_id": op.profileId, "enabled": op.enabled},
-                    )
+                    ))
 
                 elif op.type == "restoreChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] restoreChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
@@ -2863,19 +2993,19 @@ async def _run_bulk_commit(
                             restored_name = hidden.group_name
                             db.delete(hidden)
                             db.commit()
-                    ledger.record_persisted()
-                    if restored_name is not None:
-                        add_journal_row(
-                            action_type="group_restore",
-                            entity_id=op.groupId,
-                            entity_name=restored_name,
-                            description=f"Restored hidden channel group '{restored_name}'",
-                            after_value={"group_id": op.groupId, "name": restored_name},
-                        )
-                    else:
+                    ledger.record_persisted(journal_row=journal_row(
+                        action_type="group_restore",
+                        entity_id=op.groupId,
+                        entity_name=restored_name,
+                        description=f"Restored hidden channel group '{restored_name}'",
+                        after_value={"group_id": op.groupId, "name": restored_name},
+                    ) if restored_name is not None else nothing_to_journal(
                         # Not hidden any more: the op is a no-op, not a failure
-                        # (another session may have restored it first).
-                        logger.debug("[CHANNELS-BULK] Group %s was not hidden, nothing to restore", op.groupId)
+                        # (another session may have restored it first), and no
+                        # row was deleted.
+                        f"channel group {op.groupId} was not hidden, so nothing "
+                        "was restored"
+                    ))
 
                 elif op.type == "clearStreamStats":
                     logger.debug("[CHANNELS-BULK] [%s/%s] clearStreamStats: %s streams", idx+1, len(request.operations), len(op.streamIds))
@@ -2887,29 +3017,28 @@ async def _run_bulk_commit(
                                 StreamStats.stream_id.in_(op.streamIds)
                             ).delete(synchronize_session=False)
                             db.commit()
-                    ledger.record_persisted()
-                    if cleared:
-                        add_journal_row(
-                            action_type="stream_stats_clear",
-                            entity_id=None,
-                            entity_name="Stream Stats",
-                            description=(
-                                f"Cleared probe stats for {cleared} stream(s)"
-                            ),
-                            before_value={"stream_ids": list(op.streamIds)},
-                        )
+                    ledger.record_persisted(journal_row=journal_row(
+                        action_type="stream_stats_clear",
+                        entity_id=None,
+                        entity_name="Stream Stats",
+                        description=(
+                            f"Cleared probe stats for {cleared} stream(s)"
+                        ),
+                        before_value={"stream_ids": list(op.streamIds)},
+                    ) if cleared else nothing_to_journal(
+                        "none of the named streams had probe stats to clear"
+                    ))
 
                 elif op.type == "renameChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] renameChannelGroup: groupId=%s, newName='%s'", idx+1, len(request.operations), op.groupId, op.newName)
                     await client.update_channel_group(op.groupId, {"name": op.newName})
-                    ledger.record_persisted()
-                    add_journal_row(
+                    ledger.record_persisted(journal_row=journal_row(
                         action_type="group_rename",
                         entity_id=op.groupId,
                         entity_name=op.newName,
                         description=f"Renamed channel group {op.groupId} to '{op.newName}'",
                         after_value={"name": op.newName},
-                    )
+                    ))
                     logger.debug("[CHANNELS-BULK] Renamed group %s to '%s'", op.groupId, op.newName)
 
                 else:

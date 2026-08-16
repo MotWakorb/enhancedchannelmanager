@@ -38,6 +38,8 @@ The property, stated as an invariant rather than as a reproduction:
        uncounted, which is how a run that created a group and then bailed
        reported ``success: false`` with ``operationsFailed: 0`` and no entry
        anywhere saying what had failed.
+    7. Every upstream write that LANDS has its journal row queued at the moment
+       it lands, whatever fails afterwards. See :meth:`OperationLedger.record_write`.
 
 Enforcement, not convention: :class:`OperationLedger` is the ONLY thing that
 writes the counters, and :func:`finalize_bulk_commit_result` derives ``success``
@@ -47,33 +49,53 @@ counters wrong by forgetting to increment, because it has nothing to increment.
 finished envelope, and it raises rather than logging, so a violation cannot ship
 as a quiet log line.
 
+Rule 7 is enforced the same way, added in fix round 3 of bead
+``enhancedchannelmanager-kz089``. Round 2 put the journal FLUSH behind a single
+unavoidable exit, which could only ever write rows that were already queued;
+three separate paths mutated upstream and then failed before reaching the code
+that built the row, so the flush had nothing to write. The ledger now owns the
+row queue and both of its "a write landed" methods REQUIRE the row:
+:meth:`OperationLedger.record_write` for any landed write, and
+:meth:`OperationLedger.record_persisted`, which is that plus the statement that
+the write is the open operation's own outcome. There is no other way to enqueue
+a row and no way to mark something persisted without one. A write that genuinely
+has nothing to record says so by name, with a reason, via
+:func:`nothing_to_journal` — an explicit sentence a reviewer can disagree with,
+rather than an omission nobody can see.
+
 Enforced by ``backend/tests/routers/test_e9e5o_bulk_commit_accounting.py``,
 which generates the scenario matrix (normalization succeeded/failed x create
 succeeded/threw/returned malformed x first/middle/last in batch) and asserts
-this invariant over every cell.
+rules 1-6 over every cell, and by
+``backend/tests/routers/test_kz089_journal_at_the_moment_of_the_write.py``,
+which pins rule 7 and the shape of the API that makes it structural.
 
 KNOWN LIMIT, deliberately not papered over: an operation with more than one
 upstream side effect can land the first and fail the second — the clearest case
 is ``deleteChannelGroup``, which reparents the group's channels and then deletes
 the group. The envelope has one outcome per operation and cannot express "the
 channels moved but the group is still there", so such an operation is reported
-as a failure and its partial side effect is visible only in the journal. Marking
-it applied would be the worse lie, because the group still exists. Recorded as a
-follow-up rather than fixed here.
+as a failure. Marking it applied would be the worse lie, because the group still
+exists. What rule 7 fixes is the second half of that sentence: the partial side
+effect is now genuinely visible in the journal, per moved channel, which is what
+this docstring already claimed before anything made it true.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "BulkCommitAccountingError",
+    "JournalRowSpec",
+    "NothingToJournal",
     "OperationLedger",
     "bulk_commit_accounting_violations",
     "finalize_bulk_commit_result",
+    "nothing_to_journal",
 ]
 
 
@@ -84,6 +106,41 @@ class BulkCommitAccountingError(RuntimeError):
     integrator into a retry that duplicates data, so it must not be able to
     leave the executor looking like a normal result.
     """
+
+
+class NothingToJournal:
+    """An upstream call landed and left nothing an operator could read back.
+
+    Built through :func:`nothing_to_journal`, and accepted anywhere a
+    ``journal_row`` is required. The reason is mandatory and is logged, so the
+    absence of a row is always a sentence somebody wrote — "the channel was
+    already gone upstream", "the PATCH matched what was already there" — and
+    never an omission that looks exactly like forgetting.
+    """
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        if not isinstance(reason, str) or not reason.strip():
+            raise BulkCommitAccountingError(
+                "nothing_to_journal() needs a reason: a write with no journal "
+                "row has to say in words why there is nothing to record"
+            )
+        self.reason = reason
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return f"NothingToJournal({self.reason!r})"
+
+
+def nothing_to_journal(reason: str) -> NothingToJournal:
+    """Declare that a landed write has no journal row, and why."""
+    return NothingToJournal(reason)
+
+
+#: What the ledger accepts for a landed write: one row, several rows from a
+#: single write (one ``assign_channel_numbers`` call is N per-channel facts), or
+#: an explicit statement that there is nothing to record.
+JournalRowSpec = Union[dict, list, NothingToJournal]
 
 
 class OperationLedger:
@@ -101,6 +158,13 @@ class OperationLedger:
     lands with :meth:`record_persisted`, and closes it with exactly one of
     :meth:`record_applied` / :meth:`record_failed`. Opening twice without
     closing, or closing twice, raises.
+
+    It owns the run's journal rows for the same reason (fix round 3). The rows
+    used to be appended to a list in the executor at whatever point in a branch
+    was convenient, which was usually several statements after the write — so a
+    branch that raised in between lost the row for a mutation that had already
+    landed. Queueing is now part of saying the write landed, and there is no
+    other queue to append to.
     """
 
     __slots__ = (
@@ -111,6 +175,7 @@ class OperationLedger:
         "setup_failures",
         "aborted",
         "applied_create_temp_ids",
+        "journal_rows",
         "_open",
         "_persisted",
         "_pending_create_temp_id",
@@ -137,6 +202,10 @@ class OperationLedger:
         #: audit uses it to check that ``normalizationFailures`` only ever names
         #: a channel that exists.
         self.applied_create_temp_ids: set[int] = set()
+        #: Journal rows for every upstream write this run has landed, in the
+        #: order they landed. Drained by the executor's single exit
+        #: (``flush_journal``) — see :meth:`drain_journal_rows`.
+        self.journal_rows: list[dict] = []
         self._open = False
         self._persisted = False
         self._pending_create_temp_id: Optional[int] = None
@@ -171,17 +240,75 @@ class OperationLedger:
         self._persisted = False
         self._pending_create_temp_id = None
 
-    def record_persisted(self, *, create_temp_id: Optional[int] = None) -> None:
-        """Note that this operation's upstream write has LANDED.
+    def record_write(self, *, journal_row: JournalRowSpec) -> None:
+        """An upstream write LANDED. Queue its journal row, now.
+
+        Says nothing about any operation's outcome, which is what makes it the
+        right call for the two kinds of write that are not an operation's own:
+
+        * a write OUTSIDE the operation list — Phase 1 group creation, which
+          runs before any operation is attempted;
+        * a write INSIDE an operation that is not that operation's outcome — the
+          catalog logo a ``createChannel`` creates before the channel itself, and
+          each channel ``reparent_group_channels`` moves before the group delete.
+          These must not make the operation applied: the logo existing is not the
+          channel existing, and the channels having moved is not the group being
+          gone. They must still be journalled, because they happened.
+
+        ``journal_row`` is required and has no default. That is the mechanism:
+        rule 7 cannot be broken by forgetting, only by writing
+        ``nothing_to_journal(reason)`` and being wrong out loud.
+        """
+        self._queue_journal(journal_row)
+
+    def record_persisted(
+        self,
+        *,
+        journal_row: JournalRowSpec,
+        create_temp_id: Optional[int] = None,
+    ) -> None:
+        """:meth:`record_write`, plus: this write is the OPEN operation's outcome.
 
         Called immediately after the upstream call returns, before any of ECM's
         own bookkeeping. Everything after this point can fail without making the
         operation a total failure — the entity exists either way, and telling
         the caller otherwise is what produces a duplicate on retry.
+
+        The row is queued HERE rather than after the bookkeeping, because
+        "everything after this point can fail" included the row construction
+        itself: a create whose response carried no usable id raised between the
+        two, and the mutation that had landed went unrecorded.
         """
+        self._queue_journal(journal_row)
         self._persisted = True
         if create_temp_id is not None:
             self._pending_create_temp_id = create_temp_id
+
+    def drain_journal_rows(self) -> list[dict]:
+        """Take the queued rows away. Idempotent by construction — a second
+        call returns nothing, so a flush that runs twice cannot double-write."""
+        rows = list(self.journal_rows)
+        self.journal_rows.clear()
+        return rows
+
+    def _queue_journal(self, journal_row: JournalRowSpec) -> None:
+        if isinstance(journal_row, NothingToJournal):
+            logger.debug(
+                "[LEDGER] Upstream write with no journal row: %s", journal_row.reason
+            )
+            return
+        rows = journal_row if isinstance(journal_row, list) else [journal_row]
+        if not rows:
+            raise BulkCommitAccountingError(
+                "an upstream write was recorded with an empty list of journal "
+                "rows; pass nothing_to_journal(reason) to say so deliberately"
+            )
+        for row in rows:
+            if not isinstance(row, dict) or not row:
+                raise BulkCommitAccountingError(
+                    f"a journal row must be a non-empty dict, got {row!r}"
+                )
+        self.journal_rows.extend(rows)
 
     def record_applied(self, *, incomplete: bool = False) -> None:
         """Close the open operation as applied."""

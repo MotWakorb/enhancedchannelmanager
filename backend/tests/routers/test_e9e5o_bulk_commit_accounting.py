@@ -509,8 +509,13 @@ class TestOperationLedgerRefusesToMiscount:
         ledger = OperationLedger(1)
         ledger.begin()
         assert ledger.persisted is False
-        ledger.record_persisted(create_temp_id=-1)
+        # The journal row travels WITH the "this landed" statement (bead
+        # …-kz089, fix round 3): there is no way to say one without the other.
+        ledger.record_persisted(
+            create_temp_id=-1, journal_row={"action_type": "create", "entity_id": 9},
+        )
         assert ledger.persisted is True
+        assert len(ledger.journal_rows) == 1
         ledger.record_applied(incomplete=True)
         assert ledger.applied == 1
         assert ledger.failed == 0
@@ -529,7 +534,7 @@ class TestOperationLedgerRefusesToMiscount:
     def test_finalize_derives_success_and_partial_from_the_ledger(self):
         ledger = OperationLedger(2)
         ledger.begin()
-        ledger.record_persisted()
+        ledger.record_persisted(journal_row={"action_type": "create", "entity_id": 9})
         ledger.record_applied(incomplete=True)
         ledger.begin()
         ledger.record_applied()

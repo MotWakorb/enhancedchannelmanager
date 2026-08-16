@@ -18,9 +18,14 @@ which resolves the same group by the same name so the dialog can NAME the real
 destination — or say up front that there isn't one.
 """
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+#: Called once per channel that has actually been moved, immediately after its
+#: PATCH returns: ``(channel_id, channel_name, target_group)``. See the
+#: ``on_channel_moved`` parameter of :func:`reparent_group_channels`.
+ChannelMovedCallback = Callable[[int, str, dict], None]
 
 
 # Dispatcharr's baseline channel group — where a channel goes when it belongs to
@@ -118,7 +123,12 @@ async def _still_belongs_to_group(client, channel_id: int, group_id: int, log_pr
     return False
 
 
-async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GROUPS]") -> int:
+async def reparent_group_channels(
+    client,
+    group_id: int,
+    log_prefix: str = "[GROUPS]",
+    on_channel_moved: Optional[ChannelMovedCallback] = None,
+) -> int:
     """Move every channel out of ``group_id`` before it is deleted; return how many.
 
     Bead ``enhancedchannelmanager-ayfn9``. Dispatcharr refuses to delete a group
@@ -144,6 +154,17 @@ async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GRO
     not move must NOT be followed by a delete Dispatcharr is going to reject: the
     reason is the thing the operator needs.
 
+    ``on_channel_moved`` is called once per channel, immediately after its PATCH
+    returns, and is how the caller records each move as it lands rather than
+    after the whole delete has succeeded (bead ``enhancedchannelmanager-kz089``,
+    fix round 3). This is N independent writes, and any of them can be the last
+    one: with channels 10 and 11 in the group, 10 moving and 11 raising leaves
+    10 genuinely reparented, the group undeleted, and the operation reported as
+    a failure. The caller used to record ONE aggregate journal row after
+    everything had succeeded, so channel 10's landed move had no row anywhere.
+    The return value cannot carry that — it does not survive the raise, and a
+    count is not a per-channel fact.
+
     KNOWN LIMITATION, not closed by anything below: the read is live relative to
     the CALLER, but it is not atomic relative to these writes. Another operator
     who moves a channel to a third group between our read and our write will have
@@ -166,12 +187,19 @@ async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GRO
     changes the failure from a silent overwrite into a logged skip.
     """
     member_ids: list[int] = []
+    # Names are read here because this scan is the only place they are on hand,
+    # and ``on_channel_moved`` needs one for the journal's Entity column.
+    member_names: dict[int, str] = {}
     page = 1
     while True:
         response = await client.get_channels(page=page, page_size=500)
         for ch in response.get("results", []):
             if ch.get("channel_group_id") == group_id and ch.get("id") is not None:
                 member_ids.append(ch["id"])
+                name = ch.get("name")
+                member_names[ch["id"]] = (
+                    name if isinstance(name, str) and name else f"Channel {ch['id']}"
+                )
         if not response.get("next"):
             break
         page += 1
@@ -208,6 +236,8 @@ async def reparent_group_channels(client, group_id: int, log_prefix: str = "[GRO
             continue
         await client.update_channel(channel_id, {"channel_group_id": target["id"]})
         moved += 1
+        if on_channel_moved is not None:
+            on_channel_moved(channel_id, member_names[channel_id], target)
     # What actually moved, not what was read — the count is reported to the
     # operator as ``channels_moved``, and a skipped channel did not move.
     return moved
