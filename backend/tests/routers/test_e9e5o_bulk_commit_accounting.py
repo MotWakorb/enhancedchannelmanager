@@ -410,6 +410,11 @@ class TestAccountingAuditCatchesWhatItClaimsTo:
             "success": True,
             "operationsApplied": 2,
             "operationsFailed": 0,
+            # Rule 8's counter, always present on a finished envelope (bead
+            # …-1e4at). The audit checks it against the ledger, so a hand-built
+            # envelope that omits it is reported — which is the point: the
+            # audit exists to catch a future edit that stops setting a field.
+            "operationsPartiallyApplied": 0,
             "partial": False,
             "errors": [],
             "normalizationFailures": [],
@@ -494,6 +499,10 @@ class TestOperationLedgerRefusesToMiscount:
     def test_an_outcome_recorded_twice_raises(self):
         ledger = OperationLedger(1)
         ledger.begin()
+        # Rule 9 (bead …-jd3kn): closing as applied requires the operation to
+        # have told the ledger something first. Stated here so the test still
+        # exercises DOUBLE-closing rather than tripping over that rule.
+        ledger.applied_without_writing("the requested state already held")
         ledger.record_applied()
         with pytest.raises(BulkCommitAccountingError):
             ledger.record_failed()
@@ -525,6 +534,7 @@ class TestOperationLedgerRefusesToMiscount:
     def test_finalize_raises_rather_than_returning_a_contradictory_envelope(self):
         ledger = OperationLedger(2)
         ledger.begin()
+        ledger.applied_without_writing("the requested state already held")
         ledger.record_applied()
         result = {"errors": [], "normalizationFailures": []}
         # One operation of two resolved, and the run did not abort.
@@ -537,6 +547,7 @@ class TestOperationLedgerRefusesToMiscount:
         ledger.record_persisted(journal_row={"action_type": "create", "entity_id": 9})
         ledger.record_applied(incomplete=True)
         ledger.begin()
+        ledger.applied_without_writing("the requested state already held")
         ledger.record_applied()
         result = {
             "errors": [{"operationId": "op-0-createChannel", "applied": True, "error": "x"}],

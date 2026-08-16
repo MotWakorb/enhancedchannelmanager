@@ -621,8 +621,13 @@ class TestReorderStreams:
 
         assert response.status_code == 200
         mock_client.update_channel.assert_called_once_with(1, {"streams": [10, 5]})
-        # Journal entry still logged on success.
-        mock_journal.log_entry.assert_called_once()
+        # Journal entry still logged on success. Written through the shared
+        # `write_journal_rows`, which uses the BATCH api and checks its return
+        # value, rather than the fire-and-forget `log_entry` this endpoint used
+        # to call (bead enhancedchannelmanager-ftidn).
+        mock_journal.log_entries.assert_called_once()
+        rows = mock_journal.log_entries.call_args.args[0]
+        assert [row["action_type"] for row in rows] == ["stream_reorder"]
 
     @pytest.mark.asyncio
     async def test_rejects_partial_list_that_would_detach(self, async_client):
