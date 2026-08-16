@@ -2270,7 +2270,7 @@ class TestBulkCommitAsync:
         mock_client = AsyncMock()
         gate = _asyncio.Event()
 
-        async def slow_run(req):
+        async def slow_run(req, batch_id=None):
             await gate.wait()
             return {
                 "success": True,
@@ -2309,7 +2309,7 @@ class TestBulkCommitAsync:
         mock_client = AsyncMock()
         gate = _asyncio.Event()
 
-        async def slow_run(req):
+        async def slow_run(req, batch_id=None):
             await gate.wait()
             return {
                 "success": True,
@@ -2348,7 +2348,7 @@ class TestBulkCommitAsync:
 
         mock_client = AsyncMock()
 
-        async def fast_run(req):
+        async def fast_run(req, batch_id=None):
             return {
                 "success": True,
                 "operationsApplied": 3,
@@ -2388,7 +2388,7 @@ class TestBulkCommitAsync:
 
         mock_client = AsyncMock()
 
-        async def boom(req):
+        async def boom(req, batch_id=None):
             raise RuntimeError("dispatcharr unreachable")
 
         with patch("routers.channels.get_client", return_value=mock_client), \
@@ -2426,7 +2426,7 @@ class TestBulkCommitAsync:
         mock_client = AsyncMock()
         gate = _asyncio.Event()
 
-        async def slow_run(req):
+        async def slow_run(req, batch_id=None):
             await gate.wait()
             return {
                 "success": True,

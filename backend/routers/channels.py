@@ -25,6 +25,7 @@ from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
     InvalidChannelNumberError,
+    format_channel_number,
     parse_channel_number_text,
     validate_channel_number_in_payload,
 )
@@ -44,6 +45,67 @@ import journal
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/channels", tags=["Channels"])
+
+
+#: Channel fields the journal describes in prose, in the order a description
+#: lists them. ``label`` receives the NEW value and returns the phrase; a
+#: falsy new value takes ``cleared_label`` instead when one is given.
+#: Shared by the single-channel PATCH handler and the bulk-commit executor so
+#: the two paths cannot drift into describing the same edit differently
+#: (bead enhancedchannelmanager-r9py9).
+_CHANNEL_CHANGE_DESCRIBERS: tuple[tuple[str, object, Optional[str]], ...] = (
+    ("name", lambda v: f"name to '{v}'", None),
+    ("channel_number", lambda v: f"number to {format_channel_number(v)}", None),
+    ("tvg_id", lambda v: f"EPG mapping to '{v}'", "cleared EPG mapping"),
+    ("logo_id", lambda _v: "logo", "cleared logo"),
+    ("channel_group_id", lambda v: f"group to {v}", "cleared group"),
+    ("epg_data_id", lambda v: f"EPG source to {v}", "cleared EPG source"),
+    ("stream_profile_id", lambda v: f"stream profile to {v}", "cleared stream profile"),
+    ("tvc_guide_stationid", lambda v: f"Gracenote ID to '{v}'", "cleared Gracenote ID"),
+)
+
+
+def describe_channel_update(
+    before_channel: dict, data: dict
+) -> tuple[list[str], dict, dict]:
+    """Reduce a channel PATCH payload to ``(changes, before_value, after_value)``.
+
+    ``changes`` is the human-readable phrase list a journal description joins
+    with ", "; the two dicts carry only the fields that actually moved, so an
+    expanded journal row shows the edit rather than the whole record. A field
+    absent from ``data``, or present but equal to what the channel already has,
+    contributes nothing — which is what makes "no changes, no row" decidable
+    without a second fetch.
+
+    Both the ``PATCH /api/channels/{id}`` handler (the path an MCP agent takes,
+    and the one that has always written per-channel rows) and the Edit Mode
+    bulk-commit executor call this. Before bead enhancedchannelmanager-r9py9
+    only the former journaled at all, so a channel's history was traceable by
+    name for AI-sourced edits and invisible for UI-sourced ones.
+
+    ``before_channel`` may be ``{}`` when the before-state is genuinely unknown
+    — a channel created earlier in the same batch, for instance. Every supplied
+    field then reads as a change against ``None``, which is accurate: it is new.
+    """
+    changes: list[str] = []
+    before_value: dict = {}
+    after_value: dict = {}
+
+    for field, label, cleared_label in _CHANNEL_CHANGE_DESCRIBERS:
+        if field not in data:
+            continue
+        new_value = data[field]
+        old_value = before_channel.get(field)
+        if new_value == old_value:
+            continue
+        if not new_value and cleared_label is not None:
+            changes.append(cleared_label)
+        else:
+            changes.append(label(new_value))
+        before_value[field] = old_value
+        after_value[field] = new_value
+
+    return changes, before_value, after_value
 
 
 def validate_stream_permutation(
@@ -294,6 +356,37 @@ class BulkRenameGroupOp(BaseModel):
     newName: str
 
 
+# --------------------------------------------------------------------------
+# Operations added so Edit Mode can stage what it used to write immediately
+# (bead enhancedchannelmanager-kz089)
+#
+# Edit Mode presents itself as a staging area, and these three actions sat in
+# its toolbars writing straight through it: an operator who set profile
+# visibility for a selection, restored a hidden group, or cleared a stream's
+# probe stats and then hit Discard had already changed the server. They stage
+# now, which means they need a wire representation here.
+# --------------------------------------------------------------------------
+
+class BulkSetProfileMembershipOp(BaseModel):
+    """Enable or disable one channel in one channel profile."""
+    type: Literal["setProfileMembership"] = "setProfileMembership"
+    profileId: int
+    channelId: int
+    enabled: bool
+
+
+class BulkRestoreGroupOp(BaseModel):
+    """Un-hide a channel group ECM previously hid (ECM-local state)."""
+    type: Literal["restoreChannelGroup"] = "restoreChannelGroup"
+    groupId: int
+
+
+class BulkClearStreamStatsOp(BaseModel):
+    """Delete probe stats for streams, returning them to 'never probed'."""
+    type: Literal["clearStreamStats"] = "clearStreamStats"
+    streamIds: list[int]
+
+
 # Union type for all bulk operations
 BulkOperation = Union[
     BulkUpdateChannelOp,
@@ -306,6 +399,9 @@ BulkOperation = Union[
     BulkCreateGroupOp,
     BulkDeleteGroupOp,
     BulkRenameGroupOp,
+    BulkSetProfileMembershipOp,
+    BulkRestoreGroupOp,
+    BulkClearStreamStatsOp,
 ]
 
 
@@ -1282,7 +1378,10 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
                 action_type="reorder",
                 entity_id=channel_id,
                 entity_name=channel_name,
-                description=f"Changed channel number from {old_number} to {new_number}",
+                description=(
+                    f"Changed channel number from {format_channel_number(old_number)} "
+                    f"to {format_channel_number(new_number)}"
+                ),
                 before_value={"channel_number": old_number, "name": channel_name},
                 after_value={"channel_number": new_number, "name": new_name},
                 batch_id=batch_id,
@@ -1366,7 +1465,19 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             else:
                 ordered_ops.append(op)
 
-        elif op.type in ("createGroup", "deleteChannelGroup", "renameChannelGroup"):
+        else:
+            # Everything with nothing to fold — group ops, and the operations
+            # added so Edit Mode can stage profile visibility, hidden-group
+            # restore and stream-stat clears (bead
+            # enhancedchannelmanager-kz089) — passes through in order.
+            #
+            # This is deliberately a catch-all rather than another explicit
+            # tuple. The frontend always sends `consolidate: true`, so an op
+            # type this function did not enumerate was DROPPED here: the
+            # operator saw it staged, saw it counted, saw the commit succeed,
+            # and the change never left the browser. A pass-through default
+            # cannot lose an operation; the worst it can do is fail to
+            # optimise one.
             ordered_ops.append(op)
 
     # Build consolidated list
@@ -1488,10 +1599,17 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     - continueOnError: If true, continue processing even when operations fail
     - consolidate: If true, server-side dedup of redundant ops
     """
+    # One Apply All is several bulk-commit requests: a create phase, then
+    # batches of 200. A client that sends the same X-ECM-Batch-Id on all of
+    # them gets every journal row of that session under one correlatable batch
+    # (bead enhancedchannelmanager-r9py9). Read here, in the request, rather
+    # than in the background task, so nothing depends on contextvar copying.
+    request_batch_id = journal.get_request_batch_id()
+
     # Validate-only is fast — keep it sync so the frontend gets pre-commit
     # feedback in one round-trip instead of POST+poll.
     if request.validateOnly:
-        return await _run_bulk_commit(request)
+        return await _run_bulk_commit(request, batch_id=request_batch_id)
 
     # Enqueue the actual commit as a supervised background task.
     _prune_old_bulk_commit_jobs()
@@ -1505,7 +1623,7 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
             logger.warning("[CHANNELS-BULK] Job %s missing before start", job_id)
             return
         try:
-            result = await _run_bulk_commit(request)
+            result = await _run_bulk_commit(request, batch_id=request_batch_id)
             job.result = result
             job.status = "completed"
             job.completed_at = time.time()
@@ -1571,15 +1689,51 @@ async def get_bulk_commit_status(job_id: str):
     return {"job_id": job_id, "status": "completed", "result": result}
 
 
-async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
+async def _run_bulk_commit(
+    request: BulkCommitRequest, batch_id: Optional[str] = None
+) -> dict:
     """Execute a bulk-commit request and return the result envelope.
 
     Pure work function — no HTTP / endpoint awareness. Invoked synchronously by
     POST /bulk-commit when ``validateOnly=true``, and from the supervised
     background task dispatched by POST /bulk-commit otherwise (bd-ggxks).
+
+    ``batch_id`` correlates this run's journal rows. The caller passes the
+    request's ``X-ECM-Batch-Id`` when the client sent one, so the several
+    bulk-commit requests one Apply All fans out into land under a single batch
+    (bead enhancedchannelmanager-r9py9); otherwise a fresh id is minted here.
     """
     client = get_client()
-    batch_id = str(uuid.uuid4())[:8]
+    batch_id = batch_id or str(uuid.uuid4())[:8]
+
+    # Per-entity journal rows accumulated as operations succeed, flushed in one
+    # transaction at the end alongside the Bulk Commit summary row. Before
+    # bead enhancedchannelmanager-r9py9 this path wrote ONLY the summary, so a
+    # channel changed through Edit Mode had no row carrying its name and its
+    # history could not be traced the way the operator guide describes. The
+    # rows mirror what the single-channel endpoints already write, because
+    # those are the rows an MCP agent produces and a channel's history must
+    # read the same whichever surface made the change.
+    journal_rows: list[dict] = []
+
+    def add_journal_row(
+        action_type: str,
+        entity_id: Optional[int],
+        entity_name: str,
+        description: str,
+        before_value: Optional[dict] = None,
+        after_value: Optional[dict] = None,
+    ) -> None:
+        journal_rows.append({
+            "category": "channel",
+            "action_type": action_type,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "description": description,
+            "before_value": before_value,
+            "after_value": after_value,
+            "batch_id": batch_id,
+        })
 
     # Count operation types for logging
     op_counts = {}
@@ -1617,6 +1771,15 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
         # indistinguishable from `normalize=false`.
         "normalizationFailures": [],
     }
+
+    # Counters the summary row reports. Kept as locals rather than derived from
+    # the id maps at write time (bead enhancedchannelmanager-r9py9):
+    # ``len(tempIdMap)`` misses a createChannel whose temp id was not negative,
+    # and ``len(groupIdMap)`` is plain wrong for "created" because that map also
+    # collects PRE-EXISTING groups resolved by name in Phase 1. A counter that
+    # only ever increments where the thing actually happens cannot drift.
+    channels_created = 0
+    groups_created = 0
 
     # Helper to resolve temp IDs to real IDs
     def resolve_id(channel_id: int) -> int:
@@ -1867,6 +2030,14 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     # Try to create the group
                     new_group = await client.create_channel_group(group_name)
                     result["groupIdMap"][group_name] = new_group["id"]
+                    groups_created += 1
+                    add_journal_row(
+                        action_type="group_create",
+                        entity_id=new_group["id"],
+                        entity_name=group_name,
+                        description=f"Created channel group '{group_name}'",
+                        after_value={"name": group_name},
+                    )
                     logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", group_name, new_group['id'])
                 except Exception as e:
                     error_str = str(e)
@@ -1949,6 +2120,18 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
 
         # Phase 2: Process operations sequentially
         logger.debug("[CHANNELS-BULK] Phase 2: Processing %s operations", len(request.operations))
+
+        def channel_name_of(cid: int) -> str:
+            """Best available display name for a journal row's Entity column.
+
+            ``existing_channels`` is the Phase 0 catalog fetch, and
+            ``createChannel`` adds to it below, so a channel created earlier in
+            the same batch is nameable too. The ``Channel {id}`` fallback keeps
+            a row writable rather than dropping it, matching how the error
+            builder names channels it cannot resolve.
+            """
+            return existing_channels.get(cid, {}).get("name") or f"Channel {cid}"
+
         for idx, op in enumerate(request.operations):
             op_id = f"op-{idx}-{op.type}"
             try:
@@ -1960,8 +2143,27 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                             op.data["channel_group_id"],
                             f"updateChannel on channel {channel_id}",
                         )
+                    before_channel = existing_channels.get(channel_id, {})
+                    changes, before_value, after_value = describe_channel_update(
+                        before_channel, op.data
+                    )
                     await client.update_channel(channel_id, op.data)
                     result["operationsApplied"] += 1
+                    if changes:
+                        add_journal_row(
+                            action_type="update",
+                            entity_id=channel_id,
+                            entity_name=channel_name_of(channel_id),
+                            description=f"Updated channel: {', '.join(changes)}",
+                            before_value=before_value,
+                            after_value=after_value,
+                        )
+                        # Keep the local catalog current so a later op in the
+                        # same batch names this channel by its NEW name.
+                        if channel_id in existing_channels:
+                            existing_channels[channel_id] = {
+                                **existing_channels[channel_id], **after_value
+                            }
 
                 elif op.type == "addStreamToChannel":
                     channel_id = resolve_id(op.channelId)
@@ -1969,10 +2171,22 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId not in current_streams:
+                        before_streams = list(current_streams)
                         current_streams.append(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
                         logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
+                        channel_name = channel.get("name") or channel_name_of(channel_id)
+                        add_journal_row(
+                            action_type="stream_add",
+                            entity_id=channel_id,
+                            entity_name=channel_name,
+                            description=f"Added stream to channel '{channel_name}'",
+                            before_value={"streams": before_streams},
+                            after_value={"streams": list(current_streams)},
+                        )
                     else:
+                        # No write happened, so no row — the single-channel
+                        # endpoint returns early here for the same reason.
                         logger.debug("[CHANNELS-BULK] Stream %s already in channel %s, skipping", op.streamId, channel_id)
                     result["operationsApplied"] += 1
 
@@ -1982,9 +2196,19 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
                     if op.streamId in current_streams:
+                        before_streams = list(current_streams)
                         current_streams.remove(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
                         logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
+                        channel_name = channel.get("name") or channel_name_of(channel_id)
+                        add_journal_row(
+                            action_type="stream_remove",
+                            entity_id=channel_id,
+                            entity_name=channel_name,
+                            description=f"Removed stream from channel '{channel_name}'",
+                            before_value={"streams": before_streams},
+                            after_value={"streams": list(current_streams)},
+                        )
                     else:
                         logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
                     result["operationsApplied"] += 1
@@ -2009,12 +2233,48 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                         )
                     await client.update_channel(channel_id, {"streams": op.streamIds})
                     result["operationsApplied"] += 1
+                    channel_name = channel.get("name") or channel_name_of(channel_id)
+                    add_journal_row(
+                        action_type="stream_reorder",
+                        entity_id=channel_id,
+                        entity_name=channel_name,
+                        description=f"Reordered streams in channel '{channel_name}'",
+                        before_value={"streams": list(current_streams)},
+                        after_value={"streams": list(op.streamIds)},
+                    )
 
                 elif op.type == "bulkAssignChannelNumbers":
                     resolved_ids = [resolve_id(cid) for cid in op.channelIds]
                     logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
                     result["operationsApplied"] += 1
+                    # One row per channel, matching POST /assign-numbers, which
+                    # is the in-repo precedent for "renumbering is N per-channel
+                    # facts, not one aggregate". Numbering is sequential from
+                    # startingNumber in list order, mirroring the working copy
+                    # the operator was shown.
+                    assign_start = op.startingNumber if op.startingNumber is not None else 1
+                    for offset, assigned_id in enumerate(resolved_ids):
+                        old_number = existing_channels.get(assigned_id, {}).get("channel_number")
+                        new_number = assign_start + offset
+                        if old_number == new_number:
+                            continue
+                        assigned_name = channel_name_of(assigned_id)
+                        add_journal_row(
+                            action_type="reorder",
+                            entity_id=assigned_id,
+                            entity_name=assigned_name,
+                            description=(
+                                f"Changed channel number from {format_channel_number(old_number)} "
+                                f"to {format_channel_number(new_number)}"
+                            ),
+                            before_value={"channel_number": old_number, "name": assigned_name},
+                            after_value={"channel_number": new_number, "name": assigned_name},
+                        )
+                        if assigned_id in existing_channels:
+                            existing_channels[assigned_id] = {
+                                **existing_channels[assigned_id], "channel_number": new_number
+                            }
 
                 elif op.type == "createChannel":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createChannel: name='%s', tempId=%s, groupId=%s, newGroupName=%s, normalize=%s", idx+1, len(request.operations), op.name, op.tempId, op.groupId, op.newGroupName, op.normalize)
@@ -2103,20 +2363,51 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                         result["tempIdMap"][op.tempId] = new_channel["id"]
 
                     result["operationsApplied"] += 1
+                    channels_created += 1
+                    # Nameable by later ops in this same batch.
+                    existing_channels[new_channel["id"]] = new_channel
+                    created_number = new_channel.get("channel_number", op.channelNumber)
+                    add_journal_row(
+                        action_type="create",
+                        entity_id=new_channel["id"],
+                        entity_name=new_channel.get("name", channel_name),
+                        description=(
+                            f"Created channel '{new_channel.get('name', channel_name)}'"
+                            + (f" with number {format_channel_number(created_number)}" if created_number else "")
+                        ),
+                        after_value={"channel_number": created_number, "name": new_channel.get("name", channel_name)},
+                    )
                     logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, new_channel['id'])
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannel: channel_id=%s", idx+1, len(request.operations), channel_id)
+                    deleted_before = existing_channels.get(channel_id)
+                    really_deleted = True
                     try:
                         await client.delete_channel(channel_id)
                         logger.debug("[CHANNELS-BULK] Deleted channel %s", channel_id)
                     except Exception as del_err:
                         if "404" in str(del_err) or "not found" in str(del_err).lower():
+                            # Already gone: the op succeeds, but nothing changed
+                            # here, so there is nothing to journal.
+                            really_deleted = False
                             logger.debug("[CHANNELS-BULK] Channel %s already deleted, skipping", channel_id)
                         else:
                             raise
                     result["operationsApplied"] += 1
+                    if really_deleted:
+                        deleted_name = channel_name_of(channel_id)
+                        add_journal_row(
+                            action_type="delete",
+                            entity_id=channel_id,
+                            entity_name=deleted_name,
+                            description=f"Deleted channel '{deleted_name}'",
+                            before_value={
+                                "name": deleted_name,
+                                "channel_number": (deleted_before or {}).get("channel_number"),
+                            },
+                        )
 
                 elif op.type == "createGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createGroup: name='%s'", idx+1, len(request.operations), op.name)
@@ -2124,6 +2415,14 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     if op.name not in result["groupIdMap"]:
                         new_group = await client.create_channel_group(op.name)
                         result["groupIdMap"][op.name] = new_group["id"]
+                        groups_created += 1
+                        add_journal_row(
+                            action_type="group_create",
+                            entity_id=new_group["id"],
+                            entity_name=op.name,
+                            description=f"Created channel group '{op.name}'",
+                            after_value={"name": op.name},
+                        )
                         logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", op.name, new_group['id'])
                     else:
                         logger.debug("[CHANNELS-BULK] Group '%s' already exists with ID %s", op.name, result['groupIdMap'][op.name])
@@ -2136,12 +2435,96 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
                     )
                     await client.delete_channel_group(op.groupId)
                     result["operationsApplied"] += 1
+                    add_journal_row(
+                        action_type="group_delete",
+                        entity_id=op.groupId,
+                        entity_name=f"Group {op.groupId}",
+                        description=(
+                            f"Deleted channel group {op.groupId}"
+                            + (f" (moved {moved} channel(s) to '{UNGROUPED_TARGET_GROUP_NAME}')" if moved else "")
+                        ),
+                        before_value={"group_id": op.groupId, "channels_moved": moved},
+                    )
                     logger.debug("[CHANNELS-BULK] Deleted group %s (moved %s channel(s) to '%s')", op.groupId, moved, UNGROUPED_TARGET_GROUP_NAME)
+
+                elif op.type == "setProfileMembership":
+                    channel_id = resolve_id(op.channelId)
+                    logger.debug("[CHANNELS-BULK] [%s/%s] setProfileMembership: profile=%s channel=%s enabled=%s", idx+1, len(request.operations), op.profileId, channel_id, op.enabled)
+                    await client.update_profile_channel(
+                        op.profileId, channel_id, {"enabled": op.enabled}
+                    )
+                    result["operationsApplied"] += 1
+                    membership_name = channel_name_of(channel_id)
+                    verb = "Enabled" if op.enabled else "Disabled"
+                    add_journal_row(
+                        action_type="profile_membership",
+                        entity_id=channel_id,
+                        entity_name=membership_name,
+                        description=(
+                            f"{verb} channel '{membership_name}' in channel profile {op.profileId}"
+                        ),
+                        after_value={"profile_id": op.profileId, "enabled": op.enabled},
+                    )
+
+                elif op.type == "restoreChannelGroup":
+                    logger.debug("[CHANNELS-BULK] [%s/%s] restoreChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
+                    from models import HiddenChannelGroup
+                    restored_name = None
+                    with get_session() as db:
+                        hidden = db.query(HiddenChannelGroup).filter_by(
+                            group_id=op.groupId
+                        ).first()
+                        if hidden is not None:
+                            restored_name = hidden.group_name
+                            db.delete(hidden)
+                            db.commit()
+                    result["operationsApplied"] += 1
+                    if restored_name is not None:
+                        add_journal_row(
+                            action_type="group_restore",
+                            entity_id=op.groupId,
+                            entity_name=restored_name,
+                            description=f"Restored hidden channel group '{restored_name}'",
+                            after_value={"group_id": op.groupId, "name": restored_name},
+                        )
+                    else:
+                        # Not hidden any more: the op is a no-op, not a failure
+                        # (another session may have restored it first).
+                        logger.debug("[CHANNELS-BULK] Group %s was not hidden, nothing to restore", op.groupId)
+
+                elif op.type == "clearStreamStats":
+                    logger.debug("[CHANNELS-BULK] [%s/%s] clearStreamStats: %s streams", idx+1, len(request.operations), len(op.streamIds))
+                    from models import StreamStats
+                    cleared = 0
+                    if op.streamIds:
+                        with get_session() as db:
+                            cleared = db.query(StreamStats).filter(
+                                StreamStats.stream_id.in_(op.streamIds)
+                            ).delete(synchronize_session=False)
+                            db.commit()
+                    result["operationsApplied"] += 1
+                    if cleared:
+                        add_journal_row(
+                            action_type="stream_stats_clear",
+                            entity_id=None,
+                            entity_name="Stream Stats",
+                            description=(
+                                f"Cleared probe stats for {cleared} stream(s)"
+                            ),
+                            before_value={"stream_ids": list(op.streamIds)},
+                        )
 
                 elif op.type == "renameChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] renameChannelGroup: groupId=%s, newName='%s'", idx+1, len(request.operations), op.groupId, op.newName)
                     await client.update_channel_group(op.groupId, {"name": op.newName})
                     result["operationsApplied"] += 1
+                    add_journal_row(
+                        action_type="group_rename",
+                        entity_id=op.groupId,
+                        entity_name=op.newName,
+                        description=f"Renamed channel group {op.groupId} to '{op.newName}'",
+                        after_value={"name": op.newName},
+                    )
                     logger.debug("[CHANNELS-BULK] Renamed group %s to '%s'", op.groupId, op.newName)
 
             except Exception as e:
@@ -2217,6 +2600,26 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
         logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", result['operationsApplied'], result['operationsFailed'])
         logger.debug("[CHANNELS-BULK] ID mappings: %s channels, %s groups", len(result['tempIdMap']), len(result['groupIdMap']))
 
+        # A dry run must leave no trace. `validateOnly` already returns above,
+        # before Phase 1 and Phase 2, so this branch is unreachable today and is
+        # a guard rather than a fix: the journal writes below are now the LAST
+        # thing this function does, and a future early-exit moved past the
+        # validate-only return would otherwise start recording a commit that
+        # never happened. Pinned by
+        # tests/routers/test_r9py9_bulk_commit_journal.py.
+        if request.validateOnly:
+            logger.debug("[CHANNELS-BULK] validateOnly: skipping journal writes")
+            return result
+
+        # Per-entity rows first, in ONE transaction, then the summary. The
+        # article this bead came from describes both ("one Bulk Commit row plus
+        # the individual rows"), and the summary reads last so it closes the
+        # batch. `log_entries` is a single commit for N rows, which is what
+        # keeps a several-hundred-channel Apply All from becoming several
+        # hundred transactions.
+        if journal_rows:
+            journal.log_entries(journal_rows)
+
         # Log summary to journal
         journal.log_entry(
             category="channel",
@@ -2228,8 +2631,9 @@ async def _run_bulk_commit(request: BulkCommitRequest) -> dict:
             after_value={
                 "operations_applied": result["operationsApplied"],
                 "operations_failed": result["operationsFailed"],
-                "channels_created": len(result["tempIdMap"]),
-                "groups_created": len(result["groupIdMap"]),
+                "channels_created": channels_created,
+                "groups_created": groups_created,
+                "entity_rows_written": len(journal_rows),
                 "validation_issues": len(result["validationIssues"]),
                 "continue_on_error": request.continueOnError,
             },
@@ -2577,40 +2981,11 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Updated channel %s via API in %.1fms", channel_id, elapsed_ms)
 
-        # Determine what changed for description and build before/after values
-        changes = []
-        before_value = {}
-        after_value = {}
-
-        if "name" in data and data["name"] != before_channel.get("name"):
-            changes.append(f"name to '{data['name']}'")
-            before_value["name"] = before_channel.get("name")
-            after_value["name"] = data["name"]
-
-        if "channel_number" in data and data["channel_number"] != before_channel.get("channel_number"):
-            changes.append(f"number to {data['channel_number']}")
-            before_value["channel_number"] = before_channel.get("channel_number")
-            after_value["channel_number"] = data["channel_number"]
-
-        if "tvg_id" in data and data["tvg_id"] != before_channel.get("tvg_id"):
-            old_tvg = before_channel.get("tvg_id")
-            new_tvg = data["tvg_id"]
-            if new_tvg:
-                changes.append(f"EPG mapping to '{new_tvg}'")
-            else:
-                changes.append("cleared EPG mapping")
-            before_value["tvg_id"] = old_tvg
-            after_value["tvg_id"] = new_tvg
-
-        if "logo_id" in data and data["logo_id"] != before_channel.get("logo_id"):
-            old_logo = before_channel.get("logo_id")
-            new_logo = data["logo_id"]
-            if new_logo:
-                changes.append("logo")
-            else:
-                changes.append("cleared logo")
-            before_value["logo_id"] = old_logo
-            after_value["logo_id"] = new_logo
+        # Determine what changed for description and build before/after values.
+        # Shared with the bulk-commit executor so Edit Mode's Apply All and this
+        # handler describe the same edit identically (bead
+        # enhancedchannelmanager-r9py9).
+        changes, before_value, after_value = describe_channel_update(before_channel, data)
 
         if changes:
             logger.info("[CHANNELS] Updated channel id=%s: %s", channel_id, ', '.join(changes))

@@ -369,3 +369,24 @@ def _pydantic_channel_number(value: Any) -> Any:
 #: Field type for every request model carrying a channel number. Use as
 #: ``Optional[ChannelNumber]`` where the field may be absent or cleared.
 ChannelNumber = Annotated[float, BeforeValidator(_pydantic_channel_number)]
+
+
+def format_channel_number(value: Any) -> str:
+    """Render a channel number the way an operator wrote it, for prose.
+
+    Channel numbers are stored and validated as ``float`` (:data:`ChannelNumber`)
+    so sub-channels like ``4.1`` are representable. Interpolating that float
+    straight into a journal description turns the number the operator typed,
+    ``10``, into ``10.0`` — and the Journal is read by people, not parsers.
+    Whole values therefore render without the trailing zero and fractional
+    values render unchanged.
+
+    Non-numeric input (including ``None``) is returned via ``str`` untouched, so
+    a description can always be built without the caller branching first
+    (bead enhancedchannelmanager-r9py9).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
