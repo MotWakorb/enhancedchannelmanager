@@ -1,0 +1,338 @@
+"""The final channel-number state a bulk commit proposes, and what is wrong with it.
+
+Bead ``enhancedchannelmanager-ic884.2``. The property under test is about the
+COMBINED result of every staged operation, not about any one of them: each
+operation in the collision cases below is individually legal against the
+lineup the operator is looking at, and only the whole plan puts two channels on
+one number.
+
+Two things this must never do, both settled by bead
+``enhancedchannelmanager-ic884.1``:
+
+* report a duplicate the lineup already had. Dispatcharr declares
+  ``channel_number`` as a non-unique float and permits duplicates; uniqueness
+  is deliberately not enforced.
+* report a duplicate the operator confirmed. That acknowledgement travels on
+  the operation.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from channel_number_plan import (
+    NumberingIssue,
+    build_final_numbering_state,
+    evaluate_final_numbering,
+)
+
+
+class Op:
+    """Minimal stand-in for a parsed bulk operation.
+
+    The planner reads attributes off whatever it is handed, exactly as the
+    router hands it Pydantic models, so a plain object is a faithful double.
+    """
+
+    def __init__(self, type: str, **fields):
+        self.type = type
+        for key, value in fields.items():
+            setattr(self, key, value)
+
+    def __getattr__(self, name):  # pragma: no cover - absent optional fields
+        return None
+
+
+def channel(cid: int, name: str, number):
+    return {"id": cid, "name": name, "channel_number": number}
+
+
+LINEUP = [channel(1, "ESPN", 5), channel(2, "TNT", 6), channel(3, "AMC", 7)]
+
+
+def messages(issues: list[NumberingIssue]) -> str:
+    return " ".join(issue.message for issue in issues)
+
+
+class TestBuildFinalNumberingState:
+    def test_reflects_a_staged_update(self):
+        state = build_final_numbering_state(
+            LINEUP, [Op("updateChannel", channelId=2, data={"channel_number": 9})]
+        )
+        assert state.number_of(2) == 9
+
+    def test_includes_a_staged_create(self):
+        state = build_final_numbering_state(
+            LINEUP, [Op("createChannel", tempId=-1, name="New", channelNumber=50)]
+        )
+        assert state.number_of(-1) == 50
+
+    def test_drops_a_staged_delete(self):
+        state = build_final_numbering_state(LINEUP, [Op("deleteChannel", channelId=1)])
+        assert state.number_of(1) is None
+        assert 1 not in state.channel_ids()
+
+    def test_expands_a_bulk_range(self):
+        state = build_final_numbering_state(
+            LINEUP,
+            [Op("bulkAssignChannelNumbers", channelIds=[1, 2, 3], startingNumber=10)],
+        )
+        assert [state.number_of(i) for i in (1, 2, 3)] == [10, 11, 12]
+
+    def test_later_operations_win(self):
+        state = build_final_numbering_state(
+            LINEUP,
+            [
+                Op("updateChannel", channelId=1, data={"channel_number": 20}),
+                Op("updateChannel", channelId=1, data={"channel_number": 30}),
+            ],
+        )
+        assert state.number_of(1) == 30
+
+    def test_an_operation_naming_an_unknown_channel_is_ignored(self):
+        state = build_final_numbering_state(
+            LINEUP, [Op("updateChannel", channelId=999, data={"channel_number": 1})]
+        )
+        assert 999 not in state.channel_ids()
+
+
+class TestEvaluateFinalNumbering:
+    def test_a_clean_plan_passes(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op("updateChannel", channelId=1, data={"channel_number": 100}),
+                Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            ],
+        )
+        assert issues == []
+
+    def test_blocks_a_collision_only_the_combination_creates(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op("updateChannel", channelId=1, data={"channel_number": 100}),
+                Op("updateChannel", channelId=2, data={"channel_number": 5}),
+                Op("updateChannel", channelId=3, data={"channel_number": 5}),
+            ],
+        )
+        assert len(issues) == 1
+        assert issues[0].type == "duplicate_channel_number"
+        assert sorted(issues[0].channel_ids) == [2, 3]
+
+    def test_a_valid_swap_passes(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op("updateChannel", channelId=1, data={"channel_number": 6}),
+                Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            ],
+        )
+        assert issues == []
+
+    def test_a_vacated_number_may_be_reused(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op("deleteChannel", channelId=1),
+                Op("updateChannel", channelId=2, data={"channel_number": 5}),
+            ],
+        )
+        assert issues == []
+
+    def test_a_channel_moved_away_causes_no_false_conflict(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op("updateChannel", channelId=1, data={"channel_number": 999}),
+                Op("createChannel", tempId=-1, name="Replacement", channelNumber=5),
+            ],
+        )
+        assert issues == []
+
+    def test_leaves_a_pre_existing_duplicate_alone(self):
+        lineup = [channel(1, "ESPN", 5), channel(2, "ESPN HD", 5), channel(3, "AMC", 7)]
+        issues = evaluate_final_numbering(
+            lineup, [Op("updateChannel", channelId=3, data={"name": "AMC HD"})]
+        )
+        assert issues == []
+
+    def test_re_asserting_a_channels_own_number_is_not_a_placement(self):
+        lineup = [channel(1, "ESPN", 5), channel(2, "ESPN HD", 5)]
+        issues = evaluate_final_numbering(
+            lineup, [Op("updateChannel", channelId=1, data={"channel_number": 5.0})]
+        )
+        assert issues == []
+
+    def test_accepts_an_acknowledged_duplicate(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicateNumber=5,
+                )
+            ],
+        )
+        assert issues == []
+
+    def test_an_acknowledgement_holds_at_any_canonical_spelling(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicateNumber=5.0,
+                )
+            ],
+        )
+        assert issues == []
+
+    def test_an_acknowledgement_of_a_different_number_does_not_carry(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicateNumber=6,
+                )
+            ],
+        )
+        assert len(issues) == 1
+
+    def test_an_unacknowledged_operation_joining_an_acknowledged_duplicate_still_blocks(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "updateChannel",
+                    channelId=2,
+                    data={"channel_number": 5},
+                    acknowledgedDuplicateNumber=5,
+                ),
+                Op("updateChannel", channelId=3, data={"channel_number": 5}),
+            ],
+        )
+        assert len(issues) == 1
+        # Only the operation nobody agreed to is named.
+        assert issues[0].operation_indexes == [1]
+
+    def test_an_acknowledged_create_is_accepted(self):
+        issues = evaluate_final_numbering(
+            LINEUP,
+            [
+                Op(
+                    "createChannel",
+                    tempId=-1,
+                    name="Second ESPN",
+                    channelNumber=5,
+                    acknowledgedDuplicateNumber=5,
+                )
+            ],
+        )
+        assert issues == []
+
+    def test_names_the_channels_and_the_operation(self):
+        issues = evaluate_final_numbering(
+            LINEUP, [Op("updateChannel", channelId=2, data={"channel_number": 5})]
+        )
+        assert "ESPN" in messages(issues)
+        assert "TNT" in messages(issues)
+        assert issues[0].operation_indexes == [0]
+
+    def test_clearing_a_number_vacates_rather_than_occupies(self):
+        lineup = [channel(1, "ESPN", 5), channel(2, "TNT", None), channel(3, "AMC", None)]
+        issues = evaluate_final_numbering(
+            lineup, [Op("updateChannel", channelId=1, data={"channel_number": None})]
+        )
+        assert issues == []
+
+    def test_reports_once_per_number_however_many_pile_on(self):
+        lineup = [channel(i, f"Ch{i}", i + 100) for i in range(1, 6)]
+        issues = evaluate_final_numbering(
+            lineup,
+            [Op("updateChannel", channelId=i, data={"channel_number": 5}) for i in range(1, 6)],
+        )
+        assert len(issues) == 1
+        assert len(issues[0].channel_ids) == 5
+
+    @pytest.mark.parametrize("magnitude", [1, 1_000, 10_000_000, 2**40])
+    def test_detects_a_conflict_at_every_magnitude(self, magnitude):
+        lineup = [channel(1, "A", magnitude + 0.1), channel(2, "B", magnitude + 0.2)]
+        issues = evaluate_final_numbering(
+            lineup,
+            [Op("updateChannel", channelId=2, data={"channel_number": magnitude + 0.1})],
+        )
+        assert len(issues) == 1
+
+    @pytest.mark.parametrize("magnitude", [1, 1_000, 10_000_000, 2**40])
+    def test_invents_no_conflict_at_every_magnitude(self, magnitude):
+        lineup = [channel(1, "A", magnitude + 0.1), channel(2, "B", magnitude + 0.2)]
+        issues = evaluate_final_numbering(
+            lineup,
+            [Op("updateChannel", channelId=2, data={"channel_number": magnitude + 0.3})],
+        )
+        assert issues == []
+
+    def test_a_range_past_exact_integer_representability_is_refused(self):
+        lineup = [channel(1, "A", None), channel(2, "B", None), channel(3, "C", None)]
+        issues = evaluate_final_numbering(
+            lineup,
+            [
+                Op(
+                    "bulkAssignChannelNumbers",
+                    channelIds=[1, 2, 3],
+                    startingNumber=2.0**53 - 1,
+                )
+            ],
+        )
+        # Consecutive integers stop being distinct floats there, so the tail of
+        # the range silently lands several channels on one number.
+        assert issues
+
+    def test_absurd_but_finite_numbers_stay_in_contract_and_still_compare(self):
+        lineup = [channel(1, "A", 1e308), channel(2, "B", 6)]
+        assert evaluate_final_numbering(
+            lineup, [Op("updateChannel", channelId=2, data={"channel_number": 1e307})]
+        ) == []
+        assert (
+            len(
+                evaluate_final_numbering(
+                    lineup, [Op("updateChannel", channelId=2, data={"channel_number": 1e308})]
+                )
+            )
+            == 1
+        )
+
+    def test_terminates_on_a_large_plan(self):
+        lineup = [channel(i, f"Ch{i}", i) for i in range(1, 2001)]
+        ops = [
+            Op("updateChannel", channelId=i, data={"channel_number": i + 5000})
+            for i in range(1, 2001)
+        ]
+        assert evaluate_final_numbering(lineup, ops) == []
+
+    def test_an_out_of_contract_final_number_is_refused(self):
+        # Only reachable from a caller that bypassed the schema, which is
+        # exactly the caller this check exists for.
+        issues = evaluate_final_numbering(
+            LINEUP, [Op("updateChannel", channelId=1, data={"channel_number": 1.05})]
+        )
+        assert len(issues) == 1
+        assert issues[0].type == "invalid_channel_number"
+
+    def test_an_out_of_contract_number_the_plan_did_not_touch_is_left_alone(self):
+        # It came from Dispatcharr, which enforces nothing. Refusing the whole
+        # Apply over a value the operator cannot reach from here would be a
+        # dead end rather than a safeguard.
+        lineup = [channel(1, "Legacy", 1.05), channel(2, "TNT", 6)]
+        issues = evaluate_final_numbering(
+            lineup, [Op("updateChannel", channelId=2, data={"channel_number": 8})]
+        )
+        assert issues == []

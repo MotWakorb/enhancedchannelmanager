@@ -220,6 +220,31 @@ export function EditModeExitDialog({
                 )}
               </ul>
 
+              {/* Renames nobody typed (bead enhancedchannelmanager-ic884.5).
+                  These are already counted above under channel name changes;
+                  this block does not add to `totalChanges`, it explains part
+                  of it. A count alone is not actionable — an operator asked to
+                  approve a name change they did not make needs the before and
+                  the after, so both are shown rather than summarised. */}
+              {summary.automaticRenames.length > 0 && (
+                <div className="edit-mode-dialog-auto-renames" data-testid="automatic-rename-preview">
+                  <p className="edit-mode-dialog-auto-renames-intro">
+                    {summary.automaticRenames.length} channel name
+                    {summary.automaticRenames.length !== 1 ? 's' : ''} will also be rewritten because
+                    the number changed:
+                  </p>
+                  <ul className="edit-mode-dialog-auto-renames-list">
+                    {summary.automaticRenames.map((rename) => (
+                      <li key={rename.channelId}>
+                        <span className="auto-rename-from">{rename.from}</span>
+                        <span className="material-icons auto-rename-arrow">arrow_forward</span>
+                        <span className="auto-rename-to">{rename.to}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Toggle for detailed change list */}
               <button
                 className="edit-mode-dialog-toggle"

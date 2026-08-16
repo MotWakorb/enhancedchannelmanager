@@ -7,18 +7,49 @@
 
 import type { Channel, ChannelSnapshot, ChannelGroup } from './index';
 import type { PersistedStagedLedger, RestoreStagedLedgerInput } from '../utils/stagedLedgerStorage';
+import type { AutomaticRename } from '../utils/channelNumberPlan';
+
+export type { AutomaticRename };
+
+/**
+ * Bookkeeping a caller can attach to a staged channel update that is not part
+ * of the Dispatcharr payload.
+ */
+export interface StageUpdateChannelOptions {
+  /**
+   * The channel number the operator was warned about and chose to use anyway
+   * (bead enhancedchannelmanager-vdxbx). Recorded so the final-state preflight
+   * can tell a deliberate duplicate from an accidental one and does not
+   * re-litigate a decision the operator already made.
+   */
+  acknowledgedDuplicateNumber?: number;
+}
 
 /**
  * API operation specifications - discriminated union of all API calls
  * that can be staged during edit mode
  */
 export type ApiCallSpec =
-  | { type: 'updateChannel'; channelId: number; data: Partial<Channel> }
+  /**
+   * `acknowledgedDuplicateNumber` is the operator's recorded answer to "that
+   * number is already used by another channel — use it anyway?" (bead
+   * enhancedchannelmanager-vdxbx). It rides on the OPERATION rather than in a
+   * registry beside it for three reasons: it survives the sessionStorage
+   * ledger with no extra plumbing, undoing the operation withdraws the
+   * acknowledgement automatically, and deleting an unrelated earlier action
+   * cannot silently empty it. It is not part of `data`, because `data` is the
+   * body sent to Dispatcharr and this is ECM's own bookkeeping.
+   *
+   * The value is the NUMBER that was acknowledged, not a boolean: an operator
+   * who accepted a duplicate on 5 has said nothing about 6, so re-staging the
+   * same channel onto a different occupied number asks again.
+   */
+  | { type: 'updateChannel'; channelId: number; data: Partial<Channel>; acknowledgedDuplicateNumber?: number }
   | { type: 'addStreamToChannel'; channelId: number; streamId: number }
   | { type: 'removeStreamFromChannel'; channelId: number; streamId: number }
   | { type: 'reorderChannelStreams'; channelId: number; streamIds: number[] }
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string }
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicateNumber?: number }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
@@ -155,6 +186,17 @@ export interface EditModeSummary {
   restoredGroups: number;
   /** Streams whose probe stats are staged to be cleared (bead …-kz089). */
   clearedStreamStats: number;
+  /**
+   * Channel names a numbering change rewrote with nobody typing them (bead
+   * enhancedchannelmanager-ic884.5).
+   *
+   * Not a count, because a count is not actionable: an operator asked to
+   * approve a rename they did not ask for needs the before and after. These
+   * renames are ALSO counted in {@link EditModeSummary.channelNameChanges} and
+   * are not added to `totalChanges` again — they are the same staged change
+   * described in more detail, not an extra one.
+   */
+  automaticRenames: AutomaticRename[];
   // Detailed list of all operations with descriptions
   operationDetails: OperationDetail[];
 }
@@ -228,7 +270,18 @@ export interface EditModeState {
  * Validation issue found during pre-commit validation
  */
 export interface ValidationIssue {
-  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  /**
+   * The two numbering types are raised by the final-state preflight
+   * (`channelNumberPlan.ts` in the browser, `backend/channel_number_plan.py`
+   * on the server) rather than by the per-operation checks, so they describe
+   * the COMBINED result of the staged plan rather than any one operation.
+   */
+  type:
+    | 'missing_channel'
+    | 'missing_stream'
+    | 'invalid_operation'
+    | 'duplicate_channel_number'
+    | 'invalid_channel_number';
   severity: 'error' | 'warning';
   message: string;
   operationIndex?: number;
@@ -337,7 +390,12 @@ export interface UseEditModeReturn {
   exitEditMode: () => void;
 
   // Staging operations (local-only changes)
-  stageUpdateChannel: (channelId: number, data: Partial<Channel>, description: string) => void;
+  stageUpdateChannel: (
+    channelId: number,
+    data: Partial<Channel>,
+    description: string,
+    options?: StageUpdateChannelOptions,
+  ) => void;
   stageAddStream: (channelId: number, streamId: number, description: string) => void;
   stageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;

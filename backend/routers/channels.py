@@ -34,6 +34,7 @@ from channel_number import (
     parse_channel_number_text,
     validate_channel_number_in_payload,
 )
+from channel_number_plan import evaluate_final_numbering
 from channel_group_reparent import (
     UNGROUPED_TARGET_GROUP_NAME,
     reparent_group_channels,
@@ -320,6 +321,12 @@ class BulkUpdateChannelOp(BaseModel):
     type: Literal["updateChannel"] = "updateChannel"
     channelId: int
     data: dict
+    #: The channel number the operator was warned about and chose to use
+    #: anyway (bead enhancedchannelmanager-vdxbx). ECM's own bookkeeping, never
+    #: forwarded to Dispatcharr: it lives beside ``data`` rather than in it
+    #: precisely because ``data`` is the PATCH body. The final-state preflight
+    #: reads it to tell a deliberate duplicate from an accidental one.
+    acknowledgedDuplicateNumber: Optional[ChannelNumber] = None
 
     @field_validator("data")
     @classmethod
@@ -373,6 +380,9 @@ class BulkCreateChannelOp(BaseModel):
     tvgId: Optional[str] = None
     tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
     normalize: Optional[bool] = False  # Apply normalization rules to channel name
+    #: See BulkUpdateChannelOp.acknowledgedDuplicateNumber. A created channel
+    #: can land on an occupied number just as an edited one can.
+    acknowledgedDuplicateNumber: Optional[ChannelNumber] = None
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -2106,11 +2116,22 @@ async def _run_bulk_commit(
         # is a channel or a stream.
         referenced_profile_ids = set()
         referenced_hidden_group_ids = set()
+        # A createChannel names no existing channel, so a batch of nothing but
+        # creates used to fetch no lineup at all — and the final-state check
+        # (bead enhancedchannelmanager-ic884.2) then had nothing to detect a
+        # collision AGAINST. That batch is not hypothetical: Edit Mode's Apply
+        # sends its creates in their own request, ahead of everything else. A
+        # create carrying an explicit number therefore asks for the lineup too.
+        # A create with no number does not: Dispatcharr picks that number, so
+        # there is nothing here to check.
+        numbering_needs_lineup = False
 
         for idx, op in enumerate(request.operations):
             if op.type == "createChannel":
                 # This creates a channel, track its temp ID
                 channels_to_create.add(op.tempId)
+                if op.channelNumber is not None:
+                    numbering_needs_lineup = True
             elif op.type in ("updateChannel", "deleteChannel"):
                 if op.channelId >= 0:  # Only real IDs need validation
                     referenced_channel_ids.add(op.channelId)
@@ -2169,7 +2190,7 @@ async def _run_bulk_commit(
             sample_ids = sorted(referenced_channel_ids)[:20]
             logger.debug("[CHANNELS-BULK] Referenced channel IDs (sample): %s%s", sample_ids, '...' if len(referenced_channel_ids) > 20 else '')
 
-        if referenced_channel_ids:
+        if referenced_channel_ids or numbering_needs_lineup:
             try:
                 logger.debug("[CHANNELS-BULK] Fetching existing channels for validation...")
                 # Fetch all pages of channels to build lookup
@@ -2395,6 +2416,29 @@ async def _run_bulk_commit(
                             "operationIndex": idx,
                             "streamId": sid,
                         })
+
+        # The COMBINED final state, checked once, after every operation has had
+        # its own say (bead enhancedchannelmanager-ic884.2).
+        #
+        # The loop above asks "is this operation possible?" one operation at a
+        # time, and that question cannot see a collision three legal operations
+        # make between them. This asks "is the lineup they leave behind legal?"
+        # — the same question with the operations composed — and it is the only
+        # check here whose answer can change when an unrelated operation is
+        # added or removed.
+        #
+        # It runs against whatever `existing_channels` holds rather than being
+        # gated on `channels_resolved`. That is safe in the direction that
+        # matters: an incomplete lineup can only make this MISS a conflict,
+        # never invent one, because every channel it reports as occupying a
+        # number came from a page that really was read. Reporting a conflict it
+        # cannot see would be the lookup's failure wearing the operation's
+        # name, which is exactly what fix round 3 removed above.
+        for numbering_issue in evaluate_final_numbering(
+            existing_channels.values(), request.operations
+        ):
+            result["validationIssues"].append(numbering_issue.as_validation_issue())
+            result["validationPassed"] = False
 
         # Log validation summary
         logger.debug("[CHANNELS-BULK] Validation complete: passed=%s, issues=%s", result['validationPassed'], len(result['validationIssues']))

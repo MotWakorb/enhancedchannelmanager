@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { parseChannelNumberInput } from '../utils/channelNumber';
+import { channelsHoldingNumber } from '../utils/channelNumberPlan';
 import { logger } from '../utils/logger';
 import './ModalBase.css';
 
@@ -17,14 +18,35 @@ export interface ChannelMetadataChanges {
   stream_profile_id?: number | null;
 }
 
+/** Bookkeeping travelling back with a save that is not part of the payload. */
+export interface ChannelMetadataSaveOptions {
+  /**
+   * The channel number the operator was warned about and chose to use anyway
+   * (bead enhancedchannelmanager-vdxbx). The caller puts it on the staged
+   * operation, so the final-state preflight does not refuse at Apply the very
+   * duplicate that was just approved here.
+   */
+  acknowledgedDuplicateNumber?: number;
+}
+
 export interface EditChannelModalProps {
   channel: Channel;
+  /**
+   * The EFFECTIVE lineup this channel number is checked against (bead
+   * enhancedchannelmanager-vdxbx, acceptance criterion 4). In Edit Mode the
+   * caller passes the working copy, so numbers staged earlier in this session
+   * and channels created in it are included, and channels deleted in it are
+   * not. Omitted means "nothing to check against" and the modal warns about
+   * nothing — an absent lineup is not an empty one, and inventing a conflict
+   * from missing data would be worse than missing one.
+   */
+  channelsForNumberCheck?: { id: number; name: string; channel_number: number | null }[];
   logos: Logo[];
   epgData: { id: number; tvg_id: string; name: string; icon_url: string | null; epg_source: number }[];
   epgSources: { id: number; name: string; source_type?: string; priority?: number }[];
   streamProfiles: { id: number; name: string; is_active: boolean }[];
   onClose: () => void;
-  onSave: (changes: ChannelMetadataChanges) => Promise<void>;
+  onSave: (changes: ChannelMetadataChanges, options?: ChannelMetadataSaveOptions) => Promise<void>;
   onLogoCreate: (url: string) => Promise<Logo>;
   onLogoUpload: (file: File) => Promise<Logo>;
   epgDataLoading?: boolean;
@@ -32,6 +54,7 @@ export interface EditChannelModalProps {
 
 export const EditChannelModal = memo(function EditChannelModal({
   channel,
+  channelsForNumberCheck,
   logos,
   epgData,
   epgSources,
@@ -117,6 +140,15 @@ export const EditChannelModal = memo(function EditChannelModal({
 
   const [saving, setSaving] = useState(false);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  /**
+   * The duplicate question is open (bead enhancedchannelmanager-vdxbx).
+   *
+   * Not a "has acknowledged" flag. An acknowledgement is about ONE number, and
+   * a sticky flag would carry a decision about 2 forward onto a later 3 the
+   * operator was never asked about. So the answer is consumed immediately by
+   * the save it authorises and nothing is remembered.
+   */
+  const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
 
   // LCN fetch state
   const [fetchingLcn, setFetchingLcn] = useState(false);
@@ -165,6 +197,26 @@ export const EditChannelModal = memo(function EditChannelModal({
     selectedEpgDataId !== channel.epg_data_id ||
     selectedStreamProfileId !== channel.stream_profile_id;
 
+  /**
+   * Channels the proposed number would join (bead
+   * enhancedchannelmanager-vdxbx). Empty when the number is unchanged, because
+   * the channel is excluded from its own check — retaining a number can never
+   * be a new conflict.
+   *
+   * Only computed for a number that already passed the contract, so a
+   * malformed entry is refused as malformed and never dressed up as a
+   * duplicate.
+   */
+  const numberIsChanging =
+    parsedChannelNumber !== null && parsedChannelNumber !== channel.channel_number;
+  const duplicateConflicts = useMemo(
+    () =>
+      numberIsChanging
+        ? channelsHoldingNumber(channelsForNumberCheck ?? [], parsedChannelNumber, [channel.id])
+        : [],
+    [numberIsChanging, channelsForNumberCheck, parsedChannelNumber, channel.id],
+  );
+
   // Handle close with unsaved changes check
   const handleClose = () => {
     if (showDiscardConfirm) {
@@ -178,10 +230,15 @@ export const EditChannelModal = memo(function EditChannelModal({
     }
   };
 
-  const handleSave = async () => {
-    // Nothing out of contract reaches the API from here, even if the disabled
-    // Save button is bypassed.
-    if (channelNumberError) return;
+  /**
+   * Save, having decided about any duplicate.
+   *
+   * `acknowledgedDuplicateNumber` is passed on as a second argument only when
+   * there is one, so an ordinary save's call shape is exactly what it has
+   * always been and no caller has to learn a new signature to keep behaving
+   * the way it did.
+   */
+  const commitSave = async (acknowledgedDuplicateNumber?: number) => {
     setSaving(true);
     try {
       const changes: ChannelMetadataChanges = {};
@@ -208,10 +265,28 @@ export const EditChannelModal = memo(function EditChannelModal({
         changes.stream_profile_id = selectedStreamProfileId;
       }
 
-      await onSave(changes);
+      if (acknowledgedDuplicateNumber === undefined) {
+        await onSave(changes);
+      } else {
+        await onSave(changes, { acknowledgedDuplicateNumber });
+      }
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = async () => {
+    // Nothing out of contract reaches the API from here, even if the disabled
+    // Save button is bypassed. Checked FIRST, so a value that is not a channel
+    // number can never reach the duplicate question.
+    if (channelNumberError) return;
+    // A WARNING, not a block: `ic884.1` declined to enforce uniqueness because
+    // Dispatcharr permits duplicates. What stops here is the ACCIDENTAL one.
+    if (duplicateConflicts.length > 0) {
+      setShowDuplicateConfirm(true);
+      return;
+    }
+    await commitSave();
   };
 
   const handleAddLogoFromUrl = async () => {
@@ -1037,6 +1112,43 @@ export const EditChannelModal = memo(function EditChannelModal({
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
+
+        {/* Duplicate channel-number confirmation (bd-vdxbx). A warning, never a
+            block: Dispatcharr permits duplicate channel numbers and real
+            lineups have them, so the operator can proceed — deliberately. */}
+        {showDuplicateConfirm && (
+          <div className="discard-confirm-overlay">
+            <div
+              className="discard-confirm-dialog"
+              data-testid="edit-channel-duplicate-confirm"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="discard-confirm-title">Channel Number Already Used</div>
+              <div className="discard-confirm-message">
+                Channel number {parsedChannelNumber} is already used by{' '}
+                {duplicateConflicts.map((c) => c.name).join(', ')}. Dispatcharr allows duplicate
+                channel numbers, so this is not an error — but it is rarely what you meant.
+              </div>
+              <div className="discard-confirm-actions">
+                <button
+                  className="discard-confirm-cancel"
+                  onClick={() => setShowDuplicateConfirm(false)}
+                >
+                  Go Back
+                </button>
+                <button
+                  className="discard-confirm-discard"
+                  onClick={async () => {
+                    setShowDuplicateConfirm(false);
+                    await commitSave(parsedChannelNumber ?? undefined);
+                  }}
+                >
+                  Use It Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Discard Changes Confirmation Dialog */}
         {showDiscardConfirm && (

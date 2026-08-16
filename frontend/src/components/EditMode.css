@@ -217,6 +217,50 @@
   margin-bottom: 0.25rem;
 }
 
+/* Renames the numbering caused, previewed before Apply (bd-ic884.5) */
+.edit-mode-dialog-auto-renames {
+  margin: 0 0 1rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--warning-color, #d9822b);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
+.edit-mode-dialog-auto-renames-intro {
+  margin: 0 0 0.5rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.edit-mode-dialog-auto-renames-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.edit-mode-dialog-auto-renames-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  word-break: break-word;
+}
+
+.auto-rename-arrow {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.auto-rename-to {
+  color: var(--text-primary);
+}
+
 .edit-mode-dialog-question {
   margin: 0;
   color: var(--text-primary);

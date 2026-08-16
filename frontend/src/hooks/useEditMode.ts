@@ -14,8 +14,15 @@ import type {
   UseEditModeReturn,
   ApiCallSpec,
   StagedSideEffects,
+  StageUpdateChannelOptions,
 } from '../types';
 import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
+import {
+  buildFinalNumberingPlan,
+  deriveAutomaticRenames,
+  validateFinalNumberingPlan,
+  type NumberingPlanIssue,
+} from '../utils/channelNumberPlan';
 import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
@@ -705,8 +712,21 @@ export function useEditMode({
 
   // Staging functions for each operation type
   const stageUpdateChannel = useCallback(
-    (channelId: number, data: Partial<Channel>, description: string) => {
-      stageOperation({ type: 'updateChannel', channelId, data }, description);
+    (
+      channelId: number,
+      data: Partial<Channel>,
+      description: string,
+      options?: StageUpdateChannelOptions,
+    ) => {
+      stageOperation(
+        {
+          type: 'updateChannel',
+          channelId,
+          data,
+          acknowledgedDuplicateNumber: options?.acknowledgedDuplicateNumber,
+        },
+        description,
+      );
     },
     [stageOperation]
   );
@@ -1050,6 +1070,10 @@ export function useEditMode({
       profileVisibilityChanges: 0,
       restoredGroups: 0,
       clearedStreamStats: 0,
+      // Derived from the staged operations by reproducing the producer's own
+      // computation, so a rename nobody typed is visible before Apply (bead
+      // enhancedchannelmanager-ic884.5).
+      automaticRenames: deriveAutomaticRenames(state.stagedOperations),
       operationDetails: [],
     };
 
@@ -1497,8 +1521,6 @@ export function useEditMode({
       };
     }
 
-    setIsCommitting(true);
-
     const result: CommitResult = {
       success: true,
       operationsApplied: 0,
@@ -1506,6 +1528,57 @@ export function useEditMode({
       errors: [],
       updatedChannels: [],
     };
+
+    /**
+     * Refuse the whole Apply when the PROPOSED FINAL STATE is illegal, before
+     * anything is mutated (bead enhancedchannelmanager-ic884.2).
+     *
+     * Per-operation validation cannot see this. Every edit in "move ESPN off
+     * 5, move TNT to 5, move AMC to 5" is individually legal against the
+     * server the operator is looking at; only the three of them together put
+     * two channels on one number. So the check is over the materialised final
+     * state — server list plus every staged create, edit, delete and range —
+     * and it runs here, above the first request, rather than inside the
+     * per-batch loop, because the creates go up in their own call and a batch
+     * that fails halfway has already written.
+     *
+     * The backend runs the same check on its own (`backend/
+     * channel_number_plan.py`) for callers that never touch this hook. Neither
+     * is the other's safety net: this one is what gives the operator the staged
+     * operations to fix, which the server cannot name because it never saw them
+     * as operations the operator recognises.
+     */
+    const numberingIssues: NumberingPlanIssue[] = validateFinalNumberingPlan(
+      // The LATEST server list plus the staged plan, not the working copy. The
+      // working copy is already the answer, but it carries no record of which
+      // number a channel started on, and "did this session put a channel
+      // here?" is the whole difference between a duplicate the operator made
+      // and one the lineup already had.
+      buildFinalNumberingPlan(channels, state.stagedOperations),
+    );
+    if (numberingIssues.length > 0) {
+      logger.error('[EditMode] Final-state numbering preflight refused Apply:', numberingIssues);
+      result.success = false;
+      result.validationPassed = false;
+      result.validationIssues = numberingIssues.map((issue) => ({
+        type: issue.type,
+        severity: issue.severity,
+        message:
+          issue.operationDescriptions.length > 0
+            ? `${issue.message} (from: ${issue.operationDescriptions.join('; ')})`
+            : issue.message,
+        channelId: issue.channelIds[0],
+      }));
+      result.updatedChannels = channels;
+      onError?.(
+        `Nothing was applied: ${numberingIssues.length} numbering ` +
+        `conflict${numberingIssues.length !== 1 ? 's' : ''} in the final result. ` +
+        `${result.validationIssues[0].message} Your changes are still pending.`,
+      );
+      return result;
+    }
+
+    setIsCommitting(true);
 
     // Server-side consolidation: operations are sent raw, backend deduplicates
     const consolidatedOps = state.stagedOperations;

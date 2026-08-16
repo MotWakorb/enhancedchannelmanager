@@ -3,7 +3,7 @@ import { SplitPane, ChannelsPane, StreamsPane } from '../';
 import { PendingMergesPage } from './PendingMergesPage';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord, StagedSideEffects } from '../../types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, Logo, EPGData, EPGSource, StreamProfile, M3UGroupSetting, ChannelListFilterSettings, ChangeInfo, SavePoint, ChangeRecord, StagedSideEffects, StageUpdateChannelOptions } from '../../types';
 import type { TimezonePreference, NumberSeparator, PrefixOrder, ResolvedCreateChannelNames } from '../../services/api';
 import type { BulkCreateFromGroupResult, ChannelDefaults } from '../StreamsPane';
 import type { DedupDropReport } from '../../hooks/useDedupOnDrop';
@@ -81,7 +81,12 @@ export interface ChannelManagerTabProps {
   isEditMode: boolean;
   isCommitting: boolean;
   modifiedChannelIds: Set<number>;
-  onStageUpdateChannel: (channelId: number, updates: Partial<Channel>, description: string) => void;
+  onStageUpdateChannel: (
+    channelId: number,
+    updates: Partial<Channel>,
+    description: string,
+    options?: StageUpdateChannelOptions,
+  ) => void;
   onStageAddStream: (channelId: number, streamId: number, description: string) => void;
   /**
    * Staging hooks for the actions Edit Mode used to write through itself
