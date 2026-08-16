@@ -75,6 +75,7 @@ describe('useEditMode — workingCopy ↔ API sync', () => {
           channels,
           onChannelsChange: mockOnChannelsChange,
           onError: mockOnError,
+          operatorKey: 'test#1',
         }),
       { initialProps: { channels: initial } }
     );
@@ -103,6 +104,7 @@ describe('useEditMode — workingCopy ↔ API sync', () => {
           channels,
           onChannelsChange: mockOnChannelsChange,
           onError: mockOnError,
+          operatorKey: 'test#1',
         }),
       { initialProps: { channels: initial } }
     );

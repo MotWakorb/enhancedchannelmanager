@@ -59,6 +59,7 @@ export const DIALOG_CATALOG = [
   { id: 'dummy-epg-profile', file: 'src/components/DummyEPGProfileModal.tsx', label: 'Dummy EPG profile editor', status: 'stubbed', via: 'direct' },
   { id: 'dummy-epg-source', file: 'src/components/DummyEPGSourceModal.tsx', label: 'Dummy EPG source editor', status: 'stubbed', via: 'direct' },
   { id: 'edit-channel', file: 'src/components/EditChannelModal.tsx', label: 'Edit channel', status: 'stubbed', via: 'direct' },
+  { id: 'edit-mode-restore', file: 'src/components/EditModeRestoreDialog.tsx', label: 'Edit Mode staged-ledger restore offer', status: 'stubbed', via: 'direct' },
   { id: 'find-duplicates', file: 'src/components/FindDuplicatesModal.tsx', label: 'Find duplicate channels', status: 'stubbed', via: 'direct' },
   { id: 'gracenote-conflict', file: 'src/components/GracenoteConflictModal.tsx', label: 'Gracenote conflict', status: 'stubbed', via: 'direct' },
   { id: 'group-multi-select-dropdown', file: 'src/components/GroupMultiSelectDropdown.tsx', label: 'Group multi-select (portal listbox)', status: 'stubbed', via: 'direct' },

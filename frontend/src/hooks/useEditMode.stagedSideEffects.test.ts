@@ -48,7 +48,7 @@ const CHANNELS = [makeChannel(1, 'Alpha'), makeChannel(2, 'Bravo')];
 
 function setup() {
   const view = renderHook(() =>
-    useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn() }),
+    useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
   );
   act(() => view.result.current.enterEditMode());
   return view;
@@ -187,7 +187,7 @@ describe('the staged side effects a pane renders', () => {
 
   it('is empty outside Edit Mode', () => {
     const view = renderHook(() =>
-      useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn() }),
+      useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
     );
 
     const effects = view.result.current.stagedSideEffects;

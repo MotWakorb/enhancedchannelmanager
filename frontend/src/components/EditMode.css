@@ -424,3 +424,73 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ------------------------------------------------------------------------
+   Staged-ledger restore offer, and the standing marker a restored session
+   carries (epic enhancedchannelmanager-r93hq).
+
+   The dialog reuses the `.edit-mode-dialog*` chassis above; only the two
+   blocks that are new to it are defined here.
+   Shared classes consumed: none (theme tokens from index.css only).
+   ------------------------------------------------------------------------ */
+
+.edit-mode-restore-headline {
+  margin: 0 0 0.75rem;
+  color: var(--text-primary);
+}
+
+/* The account of what could NOT be restored. Scrolls rather than truncates —
+   an operator is entitled to every line of it. */
+.edit-mode-restore-dropped {
+  margin: 0 0 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--danger-text);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+}
+
+.edit-mode-restore-dropped > p {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  color: var(--text-primary);
+}
+
+.edit-mode-restore-dropped > p .material-icons {
+  color: var(--danger-text);
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.edit-mode-restore-dropped ul {
+  margin: 0;
+  padding-left: 1.5rem;
+  color: var(--text-secondary);
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.edit-mode-restore-dropped li {
+  margin-bottom: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+/* Header marker: this session's staged work survived a dead session. */
+.edit-mode-restored-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 8px;
+  border: 1px solid var(--info-text);
+  border-radius: 10px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  font-size: var(--type-meta-size);
+  white-space: nowrap;
+}
+
+.edit-mode-restored-badge .material-icons {
+  font-size: 14px;
+}

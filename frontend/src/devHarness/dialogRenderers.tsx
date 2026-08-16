@@ -33,6 +33,7 @@ import { DummyEPGManagerSection } from '../components/DummyEPGManagerSection'
 import { DummyEPGProfileModal } from '../components/DummyEPGProfileModal'
 import { DummyEPGSourceModal } from '../components/DummyEPGSourceModal'
 import { EditChannelModal } from '../components/EditChannelModal'
+import { EditModeRestoreDialog } from '../components/EditModeRestoreDialog'
 import { FindDuplicatesModal } from '../components/FindDuplicatesModal'
 import { GracenoteConflictModal } from '../components/GracenoteConflictModal'
 import { GroupMultiSelectDropdown } from '../components/GroupMultiSelectDropdown'
@@ -223,6 +224,55 @@ const RENDERERS = {
         onSave={stub.asyncNoop}
         onLogoCreate={async () => stub.logos[0]}
         onLogoUpload={async () => stub.logos[0]}
+      />
+    ),
+  },
+
+  // The offer an operator gets when a dead session left staged Edit Mode work
+  // behind. Rendered with BOTH halves populated, because the half that is easy
+  // to get wrong is the account of what could not be restored
+  // (epic enhancedchannelmanager-r93hq).
+  'edit-mode-restore': {
+    render: () => (
+      <EditModeRestoreDialog
+        isOpen
+        savedAt={Date.now() - 45 * 60 * 1000}
+        restorable={[
+          {
+            id: 'op-1',
+            timestamp: Date.now(),
+            description: 'Rename "BBC One HD"',
+            apiCall: { type: 'updateChannel', channelId: 1, data: { name: 'BBC One HD (London)' } },
+            beforeSnapshot: [],
+            afterSnapshot: [],
+          },
+          {
+            id: 'op-2',
+            timestamp: Date.now(),
+            description: 'Create group "Drill Locals"',
+            apiCall: { type: 'createGroup', name: 'Drill Locals', tempGroupId: -1000 },
+            beforeSnapshot: [],
+            afterSnapshot: [],
+          },
+        ]}
+        dropped={[
+          {
+            id: 'op-3',
+            type: 'updateChannel',
+            description: 'Renumber "Sky Sports Main Event"',
+            reason: 'channel-missing',
+            detail: 'Channel "Sky Sports Main Event" (id 412) no longer exists.',
+          },
+          {
+            id: 'op-4',
+            type: 'reorderChannelStreams',
+            description: 'Reorder streams on "ITV1 HD"',
+            reason: 'stream-detached',
+            detail: 'The streams on channel "ITV1 HD" (id 88) changed, so this reordering would drop or invent one.',
+          },
+        ]}
+        onRestore={stub.noop}
+        onDiscard={stub.noop}
       />
     ),
   },

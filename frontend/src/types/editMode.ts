@@ -6,6 +6,7 @@
  */
 
 import type { Channel, ChannelSnapshot, ChannelGroup } from './index';
+import type { PersistedStagedLedger, RestoreStagedLedgerInput } from '../utils/stagedLedgerStorage';
 
 /**
  * API operation specifications - discriminated union of all API calls
@@ -168,6 +169,17 @@ export interface EditModeState {
   // Timestamp when edit mode was entered
   enteredAt: number | null;
 
+  /**
+   * When this session's staged work came back from a persisted ledger, the
+   * epoch-ms the ledger was last written; null for work staged here and now.
+   *
+   * Session provenance, not derivable from anything else: an operator landing
+   * back in Edit Mode after re-authenticating has to be able to tell restored
+   * staged changes from changes they just made, and the operation list looks
+   * identical either way.
+   */
+  restoredFrom: number | null;
+
   // Snapshot of all channels when edit mode was entered (baseline)
   baselineSnapshot: ChannelSnapshot[];
 
@@ -296,6 +308,29 @@ export interface UseEditModeReturn {
   canLocalUndo: boolean;
   canLocalRedo: boolean;
   editModeEnteredAt: number | null; // timestamp when edit mode was entered
+
+  /**
+   * A staged ledger this operator left behind in a previous session of this
+   * tab, waiting to be offered. Null when there is none, when it belonged to a
+   * different operator, when it is past its age bound, or once the offer has
+   * been taken or dismissed.
+   *
+   * The offer is deliberately NOT taken automatically: the operations may
+   * reference channels, groups or streams that moved while the session was
+   * dead, and an operator is entitled to read the account of what can and
+   * cannot be restored before any of it becomes live staged work.
+   */
+  pendingRestore: PersistedStagedLedger | null;
+  /** @see EditModeState.restoredFrom */
+  restoredFrom: number | null;
+  /**
+   * Enter Edit Mode rebuilt from a persisted ledger. `operations` is the
+   * survivor list the caller's staleness plan produced, never the raw
+   * persisted list.
+   */
+  restoreStagedLedger: (input: RestoreStagedLedgerInput) => void;
+  /** Refuse the pending offer and destroy the persisted ledger. */
+  dismissPendingRestore: () => void;
 
   // Actions
   enterEditMode: () => void;

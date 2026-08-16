@@ -20,6 +20,13 @@ import * as api from '../services/api';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
 import { logger } from '../utils/logger';
+import {
+  clearStagedLedger,
+  readStagedLedger,
+  saveStagedLedger,
+  type PersistedStagedLedger,
+  type RestoreStagedLedgerInput,
+} from '../utils/stagedLedgerStorage';
 
 // Compute which channels are modified by comparing working copy to baseline
 function computeModifiedChannelIds(
@@ -153,11 +160,81 @@ export function deriveStagedGroups(
   return groups;
 }
 
+/**
+ * The channels an operation's snapshots have to cover, read off the operation
+ * itself.
+ *
+ * Every `stage*` wrapper used to hand `stageOperation` this list by hand, and
+ * every one of them handed it exactly what the `apiCall` already says. That
+ * duplication was harmless while staging was the only producer of operations;
+ * restoring a persisted ledger is a second producer, and two producers
+ * computing the same list independently is precisely how a derived value goes
+ * out of step with the thing it derives from (bead …-kz089's whole fix round
+ * 3). One function, both callers.
+ */
+export function affectedChannelIdsOf(apiCall: ApiCallSpec): number[] {
+  switch (apiCall.type) {
+    case 'updateChannel':
+    case 'addStreamToChannel':
+    case 'removeStreamFromChannel':
+    case 'reorderChannelStreams':
+    case 'deleteChannel':
+    case 'setProfileMembership':
+      return [apiCall.channelId];
+    case 'bulkAssignChannelNumbers':
+      return apiCall.channelIds;
+    // A createChannel has no PRIOR channel to snapshot — the channel it makes
+    // is picked up by the `nextTempId` arm of the after-snapshot filter — and
+    // group and stream-stat operations touch no Channel record at all.
+    case 'createChannel':
+    case 'createGroup':
+    case 'deleteChannelGroup':
+    case 'renameChannelGroup':
+    case 'restoreChannelGroup':
+    case 'clearStreamStats':
+      return [];
+    default:
+      return [];
+  }
+}
+
+/** The working-copy channel a staged `createChannel` stands for, under `tempId`. */
+function buildStagedChannel(
+  apiCall: Extract<ApiCallSpec, { type: 'createChannel' }>,
+  tempId: number,
+): Channel {
+  // An existing group's id, or the temp id allocated for `newGroupName`. That
+  // allocation is idempotent by name (`ensureStagedGroupId`), so restaging the
+  // same name lands on the same group with no map to consult.
+  const channelGroupId: number | null =
+    (apiCall.newGroupName ? apiCall.stagedGroupId : undefined)
+    ?? apiCall.groupId ?? null;
+
+  return {
+    id: tempId,
+    channel_number: apiCall.channelNumber ?? null,
+    name: apiCall.name,
+    channel_group_id: channelGroupId,
+    tvg_id: apiCall.tvgId ?? null,
+    tvc_guide_stationid: apiCall.tvcGuideStationId ?? null,
+    epg_data_id: null,
+    streams: [],
+    stream_profile_id: null,
+    uuid: `temp-${tempId}`,
+    logo_id: apiCall.logoId ?? null,
+    auto_created: false,
+    auto_created_by: null,
+    auto_created_by_name: null,
+    _stagedLogoUrl: apiCall.logoUrl,
+  };
+}
+
 // Initial state for edit mode
 function createInitialState(): EditModeState {
   return {
     isActive: false,
     enteredAt: null,
+    restoredFrom: null,
     baselineSnapshot: [],
     workingCopy: [],
     stagedOperations: [],
@@ -175,6 +252,13 @@ export interface UseEditModeOptions {
   onChannelsChange: (channels: Channel[]) => void;
   onCommitComplete?: (createdGroupIds: number[]) => void;
   onError?: (message: string) => void;
+  /**
+   * Identity of the operator staging this work, from
+   * {@link operatorLedgerKey}. Required, not optional: a persisted ledger with
+   * no owner is a ledger any operator can pick up, and the whole survival
+   * feature is unsafe without it.
+   */
+  operatorKey: string;
 }
 
 export function useEditMode({
@@ -182,6 +266,7 @@ export function useEditMode({
   onChannelsChange,
   onCommitComplete,
   onError,
+  operatorKey,
 }: UseEditModeOptions): UseEditModeReturn {
   const [state, setState] = useState<EditModeState>(createInitialState);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -225,6 +310,28 @@ export function useEditMode({
     [state.stagedOperations],
   );
 
+  /**
+   * A ledger this operator left behind in a previous session of this tab.
+   *
+   * Read once, during the first render, and BEFORE the persistence effect
+   * below can run — the effect owns the stored copy from then on, and reading
+   * later would race it. `readStagedLedger` destroys anything it refuses, so a
+   * ledger belonging to somebody else is gone by the end of this line.
+   */
+  const [pendingRestore, setPendingRestore] = useState<PersistedStagedLedger | null>(
+    () => readStagedLedger(operatorKey),
+  );
+
+  /**
+   * True once THIS session has written a ledger.
+   *
+   * The persistence effect must not clear the store just because Edit Mode is
+   * inactive: on mount it always is, and the pending offer above has to
+   * survive a plain page reload (`sessionStorage` does; the React state does
+   * not). So the effect only destroys a ledger it can see itself put there.
+   */
+  const ledgerWrittenRef = useRef(false);
+
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
     const snapshot = channels.map(createSnapshot);
@@ -235,9 +342,15 @@ export function useEditMode({
     nextTempGroupIdRef.current = -1000;
     stagedGroupIdByNameRef.current = new Map();
 
+    // Starting fresh answers the offer: the operator chose new work over the
+    // old ledger, so the ledger stops being pending and the effect below drops
+    // it on the next write.
+    setPendingRestore(null);
+
     setState({
       isActive: true,
       enteredAt: Date.now(),
+      restoredFrom: null,
       baselineSnapshot: snapshot,
       workingCopy,
       stagedOperations: [],
@@ -365,9 +478,143 @@ export function useEditMode({
     []
   );
 
+  /**
+   * Rebuild an Edit Mode session from a persisted ledger.
+   *
+   * Every operation is REPLAYED against today's channel list rather than
+   * deserialised into place: `beforeSnapshot` and `afterSnapshot` are
+   * recomputed here, so Undo lands on the value the server holds now and not
+   * on the value the dead session happened to see. That is the whole reason
+   * the snapshots are not trusted from the store.
+   *
+   * Only `stagedOperations` and the undo GROUPING come out of the ledger.
+   * Everything else — the staged groups, the staged side effects, the deleted
+   * and renamed group views, the change summary, `modifiedChannelIds` — is
+   * derived from the operation queue by the same code that derives it during
+   * an ordinary session, so a restored session cannot disagree with a live one.
+   *
+   * The temp-id allocators are re-armed BELOW the ids the ledger already used.
+   * Reallocating from -1 would hand a second staged channel an id the restored
+   * ledger is already using, and both would go up in the same commit.
+   */
+  const restoreStagedLedger = useCallback(({ operations, undoGroups, savedAt }: RestoreStagedLedgerInput) => {
+    const baselineSnapshot = channels.map(createSnapshot);
+    let workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
+
+    const rebuilt: StagedOperation[] = [];
+    let lowestTempChannelId = 0;
+    let lowestTempGroupId = -999;
+    const groupIdByName = new Map<string, number>();
+
+    for (const persisted of operations) {
+      const { apiCall } = persisted;
+      const affectedChannelIds = affectedChannelIdsOf(apiCall);
+
+      const operation: StagedOperation = {
+        ...persisted,
+        beforeSnapshot: workingCopy
+          .filter((ch) => affectedChannelIds.includes(ch.id))
+          .map(createSnapshot),
+        afterSnapshot: [],
+      };
+
+      workingCopy = applyOperationToWorkingCopy(workingCopy, operation);
+
+      let tempChannelId: number | undefined;
+      if (apiCall.type === 'createChannel') {
+        // The id the dead session allocated, kept: other operations in this
+        // same ledger reference it.
+        tempChannelId = persisted.afterSnapshot[0]?.id;
+        if (typeof tempChannelId !== 'number' || tempChannelId >= 0) {
+          tempChannelId = lowestTempChannelId - 1;
+        }
+        lowestTempChannelId = Math.min(lowestTempChannelId, tempChannelId);
+        workingCopy = [...workingCopy, buildStagedChannel(apiCall, tempChannelId)];
+        if (apiCall.newGroupName && typeof apiCall.stagedGroupId === 'number') {
+          lowestTempGroupId = Math.min(lowestTempGroupId, apiCall.stagedGroupId);
+          if (!groupIdByName.has(apiCall.newGroupName)) {
+            groupIdByName.set(apiCall.newGroupName, apiCall.stagedGroupId);
+          }
+        }
+      } else if (apiCall.type === 'createGroup') {
+        lowestTempGroupId = Math.min(lowestTempGroupId, apiCall.tempGroupId);
+        if (!groupIdByName.has(apiCall.name)) {
+          groupIdByName.set(apiCall.name, apiCall.tempGroupId);
+        }
+      }
+
+      operation.afterSnapshot = workingCopy
+        .filter((ch) => affectedChannelIds.includes(ch.id) || ch.id === tempChannelId)
+        .map(createSnapshot);
+
+      rebuilt.push(operation);
+    }
+
+    // Rebuild the undo stack from the persisted grouping, in the operations'
+    // own order. A group naming only operations the staleness plan dropped
+    // contributes no entry at all — an undo step that undoes nothing is a step
+    // the operator can press to no effect.
+    const operationById = new Map(rebuilt.map((operation) => [operation.id, operation]));
+    const groupByOperationId = new Map<string, string[]>();
+    for (const group of undoGroups) {
+      for (const id of group) groupByOperationId.set(id, group);
+    }
+    const emittedGroups = new Set<string[]>();
+    const localUndoStack: UndoEntry[] = [];
+    const pushEntry = (entryOperations: StagedOperation[]) => {
+      if (entryOperations.length === 0) return;
+      localUndoStack.push({
+        id: generateId(),
+        timestamp: entryOperations[0].timestamp,
+        description: entryOperations[0].description,
+        operations: entryOperations,
+      });
+    };
+    for (const operation of rebuilt) {
+      const group = groupByOperationId.get(operation.id);
+      if (group === undefined) {
+        // Staged inside a batch the dead session never closed, so it belongs
+        // to no group. It gets its own step rather than being dropped.
+        pushEntry([operation]);
+        continue;
+      }
+      if (emittedGroups.has(group)) continue;
+      emittedGroups.add(group);
+      pushEntry(group.map((id) => operationById.get(id)).filter((op): op is StagedOperation => op !== undefined));
+    }
+
+    nextTempIdRef.current = lowestTempChannelId - 1;
+    nextTempGroupIdRef.current = lowestTempGroupId - 1;
+    stagedGroupIdByNameRef.current = groupIdByName;
+    setPendingRestore(null);
+
+    setState({
+      isActive: true,
+      enteredAt: Date.now(),
+      restoredFrom: savedAt,
+      baselineSnapshot,
+      workingCopy,
+      stagedOperations: rebuilt,
+      localUndoStack,
+      localRedoStack: [],
+      modifiedChannelIds: computeModifiedChannelIds(workingCopy, baselineSnapshot),
+      nextTempId: lowestTempChannelId - 1,
+      tempIdMap: new Map(),
+      currentBatch: null,
+    });
+  }, [channels, applyOperationToWorkingCopy]);
+
+  /** Refuse the offer, and destroy the ledger rather than leave it findable. */
+  const dismissPendingRestore = useCallback(() => {
+    clearStagedLedger();
+    ledgerWrittenRef.current = false;
+    setPendingRestore(null);
+  }, []);
+
   // Stage an operation
   const stageOperation = useCallback(
-    (apiCall: ApiCallSpec, description: string, affectedChannelIds: number[]) => {
+    (apiCall: ApiCallSpec, description: string) => {
+      const affectedChannelIds = affectedChannelIdsOf(apiCall);
       setState((prev) => {
         if (!prev.isActive) {
           return prev;
@@ -402,34 +649,7 @@ export function useEditMode({
 
         // Handle create channel specially
         if (apiCall.type === 'createChannel') {
-          const tempId = prev.nextTempId;
-
-          // Determine channel_group_id: an existing group's id, or the temp id
-          // `stageCreateChannel` allocated for `newGroupName`. That allocation
-          // is idempotent by name (`ensureStagedGroupId`), so restaging the
-          // same name lands on the same group with no map to consult.
-          const channelGroupId: number | null =
-            (apiCall.newGroupName ? apiCall.stagedGroupId : undefined)
-            ?? apiCall.groupId ?? null;
-
-          const newChannel: Channel = {
-            id: tempId,
-            channel_number: apiCall.channelNumber ?? null,
-            name: apiCall.name,
-            channel_group_id: channelGroupId,
-            tvg_id: apiCall.tvgId ?? null,
-            tvc_guide_stationid: apiCall.tvcGuideStationId ?? null,
-            epg_data_id: null,
-            streams: [],
-            stream_profile_id: null,
-            uuid: `temp-${tempId}`,
-            logo_id: apiCall.logoId ?? null,
-            auto_created: false,
-            auto_created_by: null,
-            auto_created_by_name: null,
-            _stagedLogoUrl: apiCall.logoUrl,
-          };
-          newWorkingCopy = [...newWorkingCopy, newChannel];
+          newWorkingCopy = [...newWorkingCopy, buildStagedChannel(apiCall, prev.nextTempId)];
         }
 
         // Compute after snapshot
@@ -486,51 +706,35 @@ export function useEditMode({
   // Staging functions for each operation type
   const stageUpdateChannel = useCallback(
     (channelId: number, data: Partial<Channel>, description: string) => {
-      stageOperation({ type: 'updateChannel', channelId, data }, description, [channelId]);
+      stageOperation({ type: 'updateChannel', channelId, data }, description);
     },
     [stageOperation]
   );
 
   const stageAddStream = useCallback(
     (channelId: number, streamId: number, description: string) => {
-      stageOperation(
-        { type: 'addStreamToChannel', channelId, streamId },
-        description,
-        [channelId]
-      );
+      stageOperation({ type: 'addStreamToChannel', channelId, streamId }, description);
     },
     [stageOperation]
   );
 
   const stageRemoveStream = useCallback(
     (channelId: number, streamId: number, description: string) => {
-      stageOperation(
-        { type: 'removeStreamFromChannel', channelId, streamId },
-        description,
-        [channelId]
-      );
+      stageOperation({ type: 'removeStreamFromChannel', channelId, streamId }, description);
     },
     [stageOperation]
   );
 
   const stageReorderStreams = useCallback(
     (channelId: number, streamIds: number[], description: string) => {
-      stageOperation(
-        { type: 'reorderChannelStreams', channelId, streamIds },
-        description,
-        [channelId]
-      );
+      stageOperation({ type: 'reorderChannelStreams', channelId, streamIds }, description);
     },
     [stageOperation]
   );
 
   const stageBulkAssignNumbers = useCallback(
     (channelIds: number[], startingNumber: number, description: string) => {
-      stageOperation(
-        { type: 'bulkAssignChannelNumbers', channelIds, startingNumber },
-        description,
-        channelIds
-      );
+      stageOperation({ type: 'bulkAssignChannelNumbers', channelIds, startingNumber }, description);
     },
     [stageOperation]
   );
@@ -544,7 +748,6 @@ export function useEditMode({
       stageOperation(
         { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId },
         `Create channel "${name}"`,
-        []
       );
       return tempId;
     },
@@ -553,11 +756,7 @@ export function useEditMode({
 
   const stageDeleteChannel = useCallback(
     (channelId: number, description: string) => {
-      stageOperation(
-        { type: 'deleteChannel', channelId },
-        description,
-        [channelId]
-      );
+      stageOperation({ type: 'deleteChannel', channelId }, description);
     },
     [stageOperation]
   );
@@ -568,7 +767,6 @@ export function useEditMode({
       stageOperation(
         { type: 'createGroup', name, tempGroupId },
         `Create group "${name}"`,
-        [] // No channels directly affected
       );
       return tempGroupId;
     },
@@ -577,22 +775,14 @@ export function useEditMode({
 
   const stageDeleteChannelGroup = useCallback(
     (groupId: number, description: string) => {
-      stageOperation(
-        { type: 'deleteChannelGroup', groupId },
-        description,
-        [] // No channels directly affected
-      );
+      stageOperation({ type: 'deleteChannelGroup', groupId }, description);
     },
     [stageOperation]
   );
 
   const stageRenameChannelGroup = useCallback(
     (groupId: number, newName: string, description: string) => {
-      stageOperation(
-        { type: 'renameChannelGroup', groupId, newName },
-        description,
-        [] // No channels directly affected
-      );
+      stageOperation({ type: 'renameChannelGroup', groupId, newName }, description);
     },
     [stageOperation]
   );
@@ -611,11 +801,7 @@ export function useEditMode({
   const stageSetProfileMembership = useCallback(
     (profileId: number, channelIds: number[], enabled: boolean, description: string) => {
       for (const channelId of channelIds) {
-        stageOperation(
-          { type: 'setProfileMembership', profileId, channelId, enabled },
-          description,
-          [channelId]
-        );
+        stageOperation({ type: 'setProfileMembership', profileId, channelId, enabled }, description);
       }
     },
     [stageOperation]
@@ -623,14 +809,14 @@ export function useEditMode({
 
   const stageRestoreChannelGroup = useCallback(
     (groupId: number, description: string) => {
-      stageOperation({ type: 'restoreChannelGroup', groupId }, description, []);
+      stageOperation({ type: 'restoreChannelGroup', groupId }, description);
     },
     [stageOperation]
   );
 
   const stageClearStreamStats = useCallback(
     (streamIds: number[], description: string) => {
-      stageOperation({ type: 'clearStreamStats', streamIds }, description, []);
+      stageOperation({ type: 'clearStreamStats', streamIds }, description);
     },
     [stageOperation]
   );
@@ -1721,6 +1907,42 @@ export function useEditMode({
     buildBulkOperations,
   ]);
 
+  /**
+   * Keep the persisted ledger in step with the staged queue.
+   *
+   * Written on every change rather than on some "leaving" event, because the
+   * event this exists for is not one the app is told about: a token refresh
+   * fails, `useAuth` clears the user, `ProtectedRoute` swaps the app for the
+   * login page, and this component is unmounted with no notice and no chance
+   * to flush. The last write therefore has to already be on disk, whenever
+   * that happens.
+   *
+   * The undo GROUPING travels with the operations because
+   * `stagedOperationCount` — the number in the header, and the thing
+   * `handleExitEditMode` tests before it will even open the Apply dialog — is
+   * the undo-entry count, not the operation count. A restore that rebuilt one
+   * entry per operation would report twenty changes where the operator made
+   * one.
+   */
+  useEffect(() => {
+    if (!state.isActive || state.stagedOperations.length === 0) {
+      // Only destroy a ledger this session put there. A pending offer from a
+      // PREVIOUS session must survive a plain reload, and on mount edit mode
+      // is always inactive.
+      if (ledgerWrittenRef.current) {
+        clearStagedLedger();
+        ledgerWrittenRef.current = false;
+      }
+      return;
+    }
+    saveStagedLedger({
+      operatorKey,
+      operations: state.stagedOperations,
+      undoGroups: state.localUndoStack.map((entry) => entry.operations.map((operation) => operation.id)),
+    });
+    ledgerWrittenRef.current = true;
+  }, [state.isActive, state.stagedOperations, state.localUndoStack, operatorKey]);
+
   // Expose the raw timestamp so consumers can compute duration locally
   // without causing re-renders of the entire component tree every second
   const editModeEnteredAt = state.isActive ? state.enteredAt : null;
@@ -1828,10 +2050,14 @@ export function useEditMode({
     canLocalUndo: state.localUndoStack.length > 0,
     canLocalRedo: state.localRedoStack.length > 0,
     editModeEnteredAt,
+    pendingRestore,
+    restoredFrom: state.isActive ? state.restoredFrom : null,
 
     // Actions
     enterEditMode,
     exitEditMode,
+    restoreStagedLedger,
+    dismissPendingRestore,
 
     // Staging operations
     stageUpdateChannel,

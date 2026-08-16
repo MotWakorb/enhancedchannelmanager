@@ -6,6 +6,8 @@ export { HistoryToolbar } from './HistoryToolbar';
 export { EditModeToggle } from './EditModeToggle';
 export { EditModeBanner } from './EditModeBanner';
 export { EditModeExitDialog } from './EditModeExitDialog';
+export { EditModeRestoreDialog } from './EditModeRestoreDialog';
+export { EditModeRestoredBadge } from './EditModeRestoredBadge';
 export { TabNavigation, type TabId } from './TabNavigation';
 export { PageHeader } from './PageHeader';
 export { CSVImportModal } from './CSVImportModal';

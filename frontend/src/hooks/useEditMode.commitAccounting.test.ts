@@ -53,7 +53,7 @@ afterEach(() => {
 
 function setup() {
   const view = renderHook(() =>
-    useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn() }),
+    useEditMode({ channels: CHANNELS, onChannelsChange: vi.fn(), operatorKey: 'test#1' }),
   );
   act(() => view.result.current.enterEditMode());
   return view;

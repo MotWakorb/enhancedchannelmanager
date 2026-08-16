@@ -131,7 +131,7 @@ function makeChannel(id: number, name: string, groupId: number | null = null): C
 
 function renderEditMode(channels: Channel[] = [], onError = vi.fn()) {
   const view = renderHook(() =>
-    useEditMode({ channels, onChannelsChange: vi.fn(), onError })
+    useEditMode({ channels, onChannelsChange: vi.fn(), onError, operatorKey: 'test#1' })
   );
   act(() => {
     view.result.current.enterEditMode();

@@ -8,6 +8,8 @@ import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } fro
 import {
   SettingsModal,
   EditModeExitDialog,
+  EditModeRestoreDialog,
+  EditModeRestoredBadge,
   TabNavigation,
   PageHeader,
   UserMenu,
@@ -17,6 +19,8 @@ import {
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
+import { useAuth } from './hooks/useAuth';
+import { operatorLedgerKey, planLedgerRestore } from './utils/stagedLedgerStorage';
 import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
@@ -137,6 +141,10 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
 type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
 
 function App() {
+  // Who is signed in. Read here only to bind staged Edit Mode work to an
+  // identity; every authorisation decision is the backend's.
+  const { user: authenticatedUser } = useAuth();
+
   // Health check and version info
   const [health, setHealth] = useState<api.HealthResponse | null>(null);
   const [healthSourceState, setHealthSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
@@ -412,6 +420,17 @@ function App() {
   // Manual entry trigger (for opening bulk create modal without pre-selected streams)
   const [manualEntryTrigger, setManualEntryTrigger] = useState(false);
 
+  /**
+   * Identity this tab's staged Edit Mode work belongs to (epic
+   * enhancedchannelmanager-r93hq).
+   *
+   * `ProtectedRoute` does not render this component until the auth check has
+   * settled, so `user` is resolved by the time `useEditMode` reads this on its
+   * first render — which is the render that decides whether a persisted ledger
+   * is offered or destroyed.
+   */
+  const operatorKey = useMemo(() => operatorLedgerKey(authenticatedUser), [authenticatedUser]);
+
   // Edit mode for staging changes
   const {
     isEditMode,
@@ -425,6 +444,10 @@ function App() {
     canLocalUndo,
     canLocalRedo,
     editModeEnteredAt,
+    pendingRestore,
+    restoredFrom,
+    restoreStagedLedger,
+    dismissPendingRestore,
     enterEditMode,
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
@@ -450,6 +473,7 @@ function App() {
     endBatch,
   } = useEditMode({
     channels,
+    operatorKey,
     onChannelsChange: setChannels,
     onCommitComplete: async (createdGroupIds) => {
       // Refresh data from server
@@ -2793,6 +2817,30 @@ function App() {
   const workspaceEditUnavailable = channelWorkspaceSources.some((source) =>
     source.state === 'loading' || (source.state === 'error' && !source.hasSnapshot));
 
+  /**
+   * What a staged ledger left behind by a dead session can still be applied
+   * against (epic enhancedchannelmanager-r93hq).
+   *
+   * Planned against the channel and group lists as the server reports them
+   * NOW, and only once those lists are actually loaded: `workspaceEditUnavailable`
+   * is the same signal that holds Enter Edit Mode disabled, and planning against
+   * a half-loaded list would report every operation as stale.
+   *
+   * Recomputed rather than cached because the operator can leave the offer on
+   * screen while a refresh lands underneath it; the plan they act on must be
+   * the plan they are reading.
+   */
+  const restorePlan = useMemo(() => {
+    if (pendingRestore === null || workspaceEditUnavailable || workspacePermissionDenied) {
+      return null;
+    }
+    return planLedgerRestore(pendingRestore.operations, {
+      channels,
+      channelGroups,
+      profileIds: channelProfiles.map((profile) => profile.id),
+    });
+  }, [pendingRestore, workspaceEditUnavailable, workspacePermissionDenied, channels, channelGroups, channelProfiles]);
+
   const channelManagerPageAction = activeTab === 'channel-manager'
     && !workspacePermissionDenied && (
     isEditMode ? (
@@ -2806,6 +2854,7 @@ function App() {
             {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
           </span>
         )}
+        <EditModeRestoredBadge restoredFrom={restoredFrom} />
         {editModeEnteredAt !== null && <EditModeTimer enteredAt={editModeEnteredAt} />}
         <div className="edit-mode-buttons">
           <button
@@ -2943,6 +2992,27 @@ function App() {
         settingsPage={settingsPage}
         onSettingsPageChange={(page) => handleRouteChange('settings', page)}
         isAdmin={adminNavVisible}
+      />
+
+      {/* The one Edit Mode exit that cannot be guarded is the session dying
+          under the app. This is the way back from it (epic
+          enhancedchannelmanager-r93hq): the ledger survived in sessionStorage,
+          bound to the operator who staged it, and the operator decides whether
+          it comes back — after reading what of it still applies. */}
+      <EditModeRestoreDialog
+        isOpen={restorePlan !== null && pendingRestore !== null}
+        savedAt={pendingRestore?.savedAt ?? 0}
+        restorable={restorePlan?.restorable ?? []}
+        dropped={restorePlan?.dropped ?? []}
+        onRestore={() => {
+          if (pendingRestore === null || restorePlan === null) return;
+          restoreStagedLedger({
+            operations: restorePlan.restorable,
+            undoGroups: pendingRestore.undoGroups,
+            savedAt: pendingRestore.savedAt,
+          });
+        }}
+        onDiscard={dismissPendingRestore}
       />
 
       <EditModeExitDialog
