@@ -1395,6 +1395,18 @@ export function useEditMode({
       let completedSteps = 0;
       let totalApplied = 0;
       let totalFailed = 0;
+      /**
+       * True when any bulk-commit response reported an unclean outcome that its
+       * own failure count does not describe.
+       *
+       * `success = totalFailed === 0` alone laundered exactly one case, and it
+       * is the case the backend's accounting invariant now names: an operation
+       * whose upstream write LANDED and which ECM could not finish recording is
+       * counted in `operationsApplied`, not in `operationsFailed`, and the
+       * response says `success: false`. Summing only the counters turned that
+       * into a clean Apply All (bead enhancedchannelmanager-e9e5o, fix round 4).
+       */
+      let sawUncleanResponse = false;
 
       // Report initial progress
       reportProgress(0, totalSteps, `Preparing ${totalOps} operations...`);
@@ -1427,6 +1439,7 @@ export function useEditMode({
 
         totalApplied += createResponse.operationsApplied;
         totalFailed += createResponse.operationsFailed;
+        if (!createResponse.success) sawUncleanResponse = true;
         result.errors.push(...createResponse.errors);
       }
 
@@ -1507,6 +1520,7 @@ export function useEditMode({
 
         totalApplied += batchResponse.operationsApplied;
         totalFailed += batchResponse.operationsFailed;
+        if (!batchResponse.success) sawUncleanResponse = true;
         result.errors.push(...batchResponse.errors);
 
         // If a batch completely fails and we're not continuing on error, stop
@@ -1521,7 +1535,7 @@ export function useEditMode({
       // Update result totals
       result.operationsApplied = totalApplied;
       result.operationsFailed = totalFailed;
-      result.success = totalFailed === 0;
+      result.success = totalFailed === 0 && !sawUncleanResponse;
 
       logger.info(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
 

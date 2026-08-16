@@ -1334,18 +1334,30 @@ def register(mcp: FastMCP):
             # the default 202+poll path so this site keeps a single shape.
             result = await _bulk_commit_with_wait(client, payload)
             success = result.get("success", False)
-            # Per-operation result list is available at result["errors"] but not
-            # surfaced in the response below — the operator gets aggregate status,
-            # the temp-id → real-id map, and validation issues only.
             # (Backend BulkCommitResponse exposes `tempIdMap`/`groupIdMap`, not
             # `idMappings` — the old key here always read empty: contract drift
             # fixed in bd-vtghg Phase 1.)
             id_mappings = {**(result.get("tempIdMap") or {}), **(result.get("groupIdMap") or {})}
             issues = result.get("validationIssues") or []
+            # `errors` used to be fetched, commented about, and dropped, and the
+            # applied/failed counts were never rendered at all: an agent read
+            # "Bulk commit FAILED: 1 operations submitted" about a batch whose
+            # channel HAD been created, retried it, and created it twice
+            # (bead enhancedchannelmanager-e9e5o, fix round 4).
+            errors = result.get("errors") or []
+            applied = result.get("operationsApplied")
+            failed = result.get("operationsFailed")
 
             lines = []
             status = "SUCCESS" if success else "FAILED"
             lines.append(f"Bulk commit {status}: {len(operations)} operations submitted.")
+            if applied is not None or failed is not None:
+                lines.append(f"{applied or 0} applied, {failed or 0} failed.")
+            if result.get("partial"):
+                lines.append(
+                    "PARTIAL: some operations landed and some did not. Reconcile "
+                    "against the ID mappings below rather than resubmitting the batch."
+                )
             if validate_only:
                 lines.append("(validate-only mode — no changes applied)")
             if id_mappings:
@@ -1355,6 +1367,37 @@ def register(mcp: FastMCP):
                 lines.append(f"Validation issues ({len(issues)}):")
                 for issue in issues[:10]:
                     lines.append(f"  - {issue}")
+
+            # An error entry carrying `applied: true` names an operation whose
+            # upstream write LANDED and which ECM then could not finish
+            # recording — most often a create Dispatcharr accepted and answered
+            # without a usable id. It must never be presented as work still to
+            # do: retrying it is what produces the duplicate channel. Kept
+            # separate from the failures below for exactly that reason.
+            applied_incomplete = [e for e in errors if e.get("applied") is True]
+            genuine_failures = [e for e in errors if e.get("applied") is not True]
+
+            if applied_incomplete:
+                lines.append(
+                    f"APPLIED BUT NOT FULLY RECORDED ({len(applied_incomplete)}) — "
+                    "these changes are live in Dispatcharr. DO NOT RETRY them; "
+                    "reconcile against Dispatcharr instead:"
+                )
+                for entry in applied_incomplete[:10]:
+                    lines.append(
+                        f"  ! {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+            if genuine_failures:
+                lines.append(f"Failed operations ({len(genuine_failures)}):")
+                for entry in genuine_failures[:10]:
+                    lines.append(
+                        f"  x {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+
             # createChannel ops that asked for normalization and did not get it
             # (bead enhancedchannelmanager-e9e5o). These ops APPLIED, so they
             # appear nowhere in `errors` and nothing else here would mention

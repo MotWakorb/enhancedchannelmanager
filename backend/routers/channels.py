@@ -21,6 +21,7 @@ from pydantic import BaseModel, field_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
+from bulk_commit_accounting import OperationLedger, finalize_bulk_commit_result
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
@@ -1791,6 +1792,21 @@ async def _run_bulk_commit(
             return result["groupIdMap"][new_group_name]
         return group_id
 
+    # One outcome per operation, and the only thing that writes the counters.
+    # Constructed before the try so the outer handler can still report what the
+    # run managed to do (bead enhancedchannelmanager-e9e5o, fix round 4).
+    ledger = OperationLedger(len(request.operations))
+
+    class MalformedCreateResponseError(Exception):
+        """Dispatcharr accepted a create but answered without a usable id.
+
+        The channel EXISTS. This is raised so the operation stops early and is
+        reported, but the ledger has already recorded the write as persisted, so
+        the operation is counted as applied-but-incomplete rather than failed.
+        Reporting it as a failure is what made an integrator retry and create
+        the channel twice.
+        """
+
     class UnresolvedGroupError(Exception):
         """A group id that was never resolved to a real Dispatcharr group.
 
@@ -2134,6 +2150,13 @@ async def _run_bulk_commit(
 
         for idx, op in enumerate(request.operations):
             op_id = f"op-{idx}-{op.type}"
+            # Exactly one outcome per operation, recorded by this loop rather
+            # than by the branches. See bulk_commit_accounting.OperationLedger:
+            # branches used to increment `operationsApplied` themselves, at
+            # whatever point suited them, which let an operation be counted
+            # twice (increment, then raise), zero times (a type no branch
+            # claimed), or as a failure after its upstream write had landed.
+            ledger.begin()
             try:
                 if op.type == "updateChannel":
                     channel_id = resolve_id(op.channelId)
@@ -2148,7 +2171,7 @@ async def _run_bulk_commit(
                         before_channel, op.data
                     )
                     await client.update_channel(channel_id, op.data)
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     if changes:
                         add_journal_row(
                             action_type="update",
@@ -2174,6 +2197,7 @@ async def _run_bulk_commit(
                         before_streams = list(current_streams)
                         current_streams.append(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
+                        ledger.record_persisted()
                         logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
                         channel_name = channel.get("name") or channel_name_of(channel_id)
                         add_journal_row(
@@ -2188,7 +2212,6 @@ async def _run_bulk_commit(
                         # No write happened, so no row — the single-channel
                         # endpoint returns early here for the same reason.
                         logger.debug("[CHANNELS-BULK] Stream %s already in channel %s, skipping", op.streamId, channel_id)
-                    result["operationsApplied"] += 1
 
                 elif op.type == "removeStreamFromChannel":
                     channel_id = resolve_id(op.channelId)
@@ -2199,6 +2222,7 @@ async def _run_bulk_commit(
                         before_streams = list(current_streams)
                         current_streams.remove(op.streamId)
                         await client.update_channel(channel_id, {"streams": current_streams})
+                        ledger.record_persisted()
                         logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
                         channel_name = channel.get("name") or channel_name_of(channel_id)
                         add_journal_row(
@@ -2211,7 +2235,6 @@ async def _run_bulk_commit(
                         )
                     else:
                         logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
-                    result["operationsApplied"] += 1
 
                 elif op.type == "reorderChannelStreams":
                     channel_id = resolve_id(op.channelId)
@@ -2232,7 +2255,7 @@ async def _run_bulk_commit(
                             f"Cannot reorder streams for channel {channel_id}: {perm_error}"
                         )
                     await client.update_channel(channel_id, {"streams": op.streamIds})
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     channel_name = channel.get("name") or channel_name_of(channel_id)
                     add_journal_row(
                         action_type="stream_reorder",
@@ -2247,7 +2270,7 @@ async def _run_bulk_commit(
                     resolved_ids = [resolve_id(cid) for cid in op.channelIds]
                     logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     # One row per channel, matching POST /assign-numbers, which
                     # is the in-repo precedent for "renumbering is N per-channel
                     # facts, not one aggregate". Numbering is sequential from
@@ -2353,23 +2376,50 @@ async def _run_bulk_commit(
                     logger.debug("[CHANNELS-BULK] Creating channel with data: %s", channel_data)
                     new_channel = await client.create_channel(channel_data)
 
+                    # Dispatcharr answered the POST without raising, so the
+                    # channel EXISTS. Everything below this line is ECM's own
+                    # bookkeeping, and none of it may turn a channel that exists
+                    # into a reported total failure — an integrator retrying an
+                    # apparent total failure creates the channel a second time
+                    # (bead enhancedchannelmanager-e9e5o, fix round 4).
+                    ledger.record_persisted(create_temp_id=op.tempId)
+                    channels_created += 1
+
                     # The channel exists, so the raw name it carries is now a
                     # fact a caller can act on (bead enhancedchannelmanager-e9e5o).
                     if pending_normalization_failure is not None:
                         result["normalizationFailures"].append(pending_normalization_failure)
 
+                    # A success body without a usable id. The channel is there
+                    # and ECM cannot name it, which is a real problem — but it
+                    # is an INCOMPLETE apply, not a failure. This used to be an
+                    # unhandled `KeyError` on `new_channel["id"]` raised AFTER
+                    # the normalization failure had been recorded, so the
+                    # envelope reported the op as failed, listed it in `errors`,
+                    # and listed it in `normalizationFailures` as a channel that
+                    # had been created. `{"id": null}` did not even raise: it
+                    # mapped the temp id to null and the frontend then posted
+                    # `channelId: null` on every follow-up operation.
+                    created_id = new_channel.get("id") if isinstance(new_channel, dict) else None
+                    if not isinstance(created_id, int) or isinstance(created_id, bool):
+                        raise MalformedCreateResponseError(
+                            f"Dispatcharr accepted the create for '{channel_name}' but returned "
+                            f"no usable channel id ({created_id!r}). The channel exists; ECM "
+                            f"cannot map temp id {op.tempId} to it, so any operation in this "
+                            "batch that referenced it will fail. Do not retry the create — "
+                            "reconcile against Dispatcharr instead."
+                        )
+
                     # Track temp ID -> real ID mapping
                     if op.tempId < 0:
-                        result["tempIdMap"][op.tempId] = new_channel["id"]
+                        result["tempIdMap"][op.tempId] = created_id
 
-                    result["operationsApplied"] += 1
-                    channels_created += 1
                     # Nameable by later ops in this same batch.
-                    existing_channels[new_channel["id"]] = new_channel
+                    existing_channels[created_id] = new_channel
                     created_number = new_channel.get("channel_number", op.channelNumber)
                     add_journal_row(
                         action_type="create",
-                        entity_id=new_channel["id"],
+                        entity_id=created_id,
                         entity_name=new_channel.get("name", channel_name),
                         description=(
                             f"Created channel '{new_channel.get('name', channel_name)}'"
@@ -2377,7 +2427,7 @@ async def _run_bulk_commit(
                         ),
                         after_value={"channel_number": created_number, "name": new_channel.get("name", channel_name)},
                     )
-                    logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, new_channel['id'])
+                    logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, created_id)
 
                 elif op.type == "deleteChannel":
                     channel_id = resolve_id(op.channelId)
@@ -2395,7 +2445,7 @@ async def _run_bulk_commit(
                             logger.debug("[CHANNELS-BULK] Channel %s already deleted, skipping", channel_id)
                         else:
                             raise
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     if really_deleted:
                         deleted_name = channel_name_of(channel_id)
                         add_journal_row(
@@ -2414,6 +2464,7 @@ async def _run_bulk_commit(
                     # Groups should be created in Phase 1, but handle here if needed
                     if op.name not in result["groupIdMap"]:
                         new_group = await client.create_channel_group(op.name)
+                        ledger.record_persisted()
                         result["groupIdMap"][op.name] = new_group["id"]
                         groups_created += 1
                         add_journal_row(
@@ -2426,7 +2477,6 @@ async def _run_bulk_commit(
                         logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", op.name, new_group['id'])
                     else:
                         logger.debug("[CHANNELS-BULK] Group '%s' already exists with ID %s", op.name, result['groupIdMap'][op.name])
-                    result["operationsApplied"] += 1
 
                 elif op.type == "deleteChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
@@ -2434,7 +2484,7 @@ async def _run_bulk_commit(
                         client, op.groupId, log_prefix="[CHANNELS-BULK]"
                     )
                     await client.delete_channel_group(op.groupId)
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     add_journal_row(
                         action_type="group_delete",
                         entity_id=op.groupId,
@@ -2453,7 +2503,7 @@ async def _run_bulk_commit(
                     await client.update_profile_channel(
                         op.profileId, channel_id, {"enabled": op.enabled}
                     )
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     membership_name = channel_name_of(channel_id)
                     verb = "Enabled" if op.enabled else "Disabled"
                     add_journal_row(
@@ -2478,7 +2528,7 @@ async def _run_bulk_commit(
                             restored_name = hidden.group_name
                             db.delete(hidden)
                             db.commit()
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     if restored_name is not None:
                         add_journal_row(
                             action_type="group_restore",
@@ -2502,7 +2552,7 @@ async def _run_bulk_commit(
                                 StreamStats.stream_id.in_(op.streamIds)
                             ).delete(synchronize_session=False)
                             db.commit()
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     if cleared:
                         add_journal_row(
                             action_type="stream_stats_clear",
@@ -2517,7 +2567,7 @@ async def _run_bulk_commit(
                 elif op.type == "renameChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] renameChannelGroup: groupId=%s, newName='%s'", idx+1, len(request.operations), op.groupId, op.newName)
                     await client.update_channel_group(op.groupId, {"name": op.newName})
-                    result["operationsApplied"] += 1
+                    ledger.record_persisted()
                     add_journal_row(
                         action_type="group_rename",
                         entity_id=op.groupId,
@@ -2526,6 +2576,20 @@ async def _run_bulk_commit(
                         after_value={"name": op.newName},
                     )
                     logger.debug("[CHANNELS-BULK] Renamed group %s to '%s'", op.groupId, op.newName)
+
+                else:
+                    # No branch claimed this type. Counting it as applied would
+                    # report work that never happened, and falling through
+                    # silently — which is what used to happen — counted it as
+                    # neither, so `applied + failed` quietly stopped equalling
+                    # the batch. Pydantic's discriminated union makes this
+                    # unreachable from the wire; it is the backstop for a new
+                    # operation model added without a branch.
+                    raise ValueError(
+                        f"Unsupported bulk-commit operation type '{op.type}'"
+                    )
+
+                ledger.record_applied()
 
             except Exception as e:
                 # Build detailed error info with channel/stream names
@@ -2560,13 +2624,33 @@ async def _run_bulk_commit(
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
                 logger.exception("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, e)
 
-                result["operationsFailed"] += 1
+                if ledger.persisted:
+                    # The upstream write LANDED and only ECM's bookkeeping after
+                    # it failed. Reporting this as a total failure is what makes
+                    # an integrator retry and duplicate the entity, so it counts
+                    # as applied and carries `applied: true` — the marker that
+                    # tells a caller "this happened, and something about it is
+                    # wrong" rather than "this did not happen". `success` is
+                    # still false and `partial` still true, so nobody reads the
+                    # batch as clean (bead enhancedchannelmanager-e9e5o).
+                    error_details["applied"] = True
+                    ledger.record_applied(incomplete=True)
+                    logger.error(
+                        "[CHANNELS-BULK] Operation %s APPLIED upstream but could not be "
+                        "recorded; do not retry it: %s", op_id, e,
+                    )
+                else:
+                    ledger.record_failed()
                 result["errors"].append(error_details)
 
                 # If continueOnError, keep processing; otherwise stop
                 if not request.continueOnError:
                     logger.debug("[CHANNELS-BULK] Stopping due to error (continueOnError=false)")
-                    result["success"] = False
+                    # The remaining operations are never attempted, so neither
+                    # counter may claim them. `abort_remaining` is what lets the
+                    # accounting audit accept `applied + failed < len(operations)`
+                    # here and nowhere else.
+                    ledger.abort_remaining()
                     break
                 else:
                     logger.debug("[CHANNELS-BULK] Continuing despite error (continueOnError=true)")
@@ -2574,7 +2658,8 @@ async def _run_bulk_commit(
                 # success, and `partial` below is what records that some of it
                 # still landed.
 
-        # Determine final success status.
+        # Write the counters and DERIVE `success` / `partial` from the ledger,
+        # then audit the finished envelope against the accounting invariant.
         #
         # A failed operation is a failure whatever `continueOnError` says (bead
         # …-ayfn9). That flag answers "keep going after one fails?", NOT "call the
@@ -2584,17 +2669,18 @@ async def _run_bulk_commit(
         # 2026-08-08-run17: Delete Group raised 400 server-side, the operator was
         # told it worked, and the only trace was an ERROR in the container log.
         #
-        # `partial` (below) is what still distinguishes "some of it landed" from
-        # "none of it did", and the frontend renders that case as
-        # "X succeeded, Y failed" rather than as a flat failure.
-        result["success"] = result["operationsFailed"] == 0
-
-        # Partial outcome flag (bd-5xciq): some ops committed AND some failed.
-        # The frontend uses this to render "X applied, Y failed" distinctly so
-        # the operator reconciles via tempIdMap instead of blindly retrying and
-        # piling up duplicate channels. A full success or a total failure
-        # (nothing applied) is NOT partial.
-        result["partial"] = result["operationsApplied"] > 0 and result["operationsFailed"] > 0
+        # `partial` still distinguishes "some of it landed" from "none of it
+        # did", and the frontend renders that case as "X succeeded, Y failed"
+        # rather than as a flat failure.
+        #
+        # These two used to be assigned here from the counters the branches had
+        # been incrementing, which made every rule about them a convention.
+        # `finalize_bulk_commit_result` is the enforcement:
+        # `backend/bulk_commit_accounting.py` states the invariant, derives both
+        # flags from the ledger so they cannot drift, and RAISES rather than
+        # returning an envelope that contradicts itself
+        # (bead enhancedchannelmanager-e9e5o, fix round 4).
+        finalize_bulk_commit_result(result, ledger)
 
         # Log summary
         logger.debug("[CHANNELS-BULK] Phase 2 complete: %s applied, %s failed", result['operationsApplied'], result['operationsFailed'])
@@ -2647,6 +2733,11 @@ async def _run_bulk_commit(
 
     except Exception as e:
         logger.exception("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, e)
+        # Report what the run actually managed before it fell over. The counters
+        # live on the ledger now, so without this they would read 0/0 for a
+        # crash in Phase 3 that happened after every operation had applied.
+        result["operationsApplied"] = ledger.applied
+        result["operationsFailed"] = ledger.failed
         result["success"] = False
         result["errors"].append({
             "operationId": "bulk-commit",
