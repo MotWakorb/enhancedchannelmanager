@@ -101,8 +101,8 @@ private. Skim it if that matters to you.
 
 ### Attaching a backup artifact
 
-A **standard** backup, meaning an unencrypted one, is safe to attach to a
-support ticket. It is built to be: it carries no part of a provider
+A **standard** backup, meaning an unencrypted one, is the only backup format
+appropriate to consider for a support ticket. It carries no part of a provider
 credential (not the password and not the username), none of your ECM
 accounts, no journal or telemetry, and no notification or cloud-storage
 credentials. See
@@ -110,11 +110,12 @@ credentials. See
 for the full account of what is removed and what is kept.
 
 What it does still carry is your configuration itself: channel and group
-names, rule definitions, and any provider address that did not have a
+names, rule definitions and notes, and any provider address that did not have a
 credential in it. An address that did carry one, in its userinfo or its
 query string, is replaced whole rather than trimmed, so it is not there to
-leak. If a provider hostname is something you would rather not post
-publicly, say so and ask where to send the artifact privately.
+leak. Review the artifact for text and addresses you do not want to disclose.
+If any of that content is private, say so and ask where to send the artifact
+privately.
 
 !!! danger "Never attach an encrypted backup taken with Include credentials"
     That artifact is the migration path and it deliberately carries

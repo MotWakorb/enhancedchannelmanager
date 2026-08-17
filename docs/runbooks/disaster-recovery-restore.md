@@ -104,7 +104,7 @@ curl -s -X POST http://localhost:8080/api/backup/save \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-Or use the UI: **Settings → Backup & Restore → Back Up Now**.
+Or use the UI: **Settings → Backup & Restore → Configuration Backup → Create Configuration Backup**.
 
 !!! danger "If this backup fails with a scrub error, that is the control working"
     ECM removes its accounts, credentials, telemetry and history from the artifact's copy of

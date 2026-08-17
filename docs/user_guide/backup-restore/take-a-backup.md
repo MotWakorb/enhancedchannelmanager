@@ -12,19 +12,17 @@ Read [Backup & Restore overview](backup-overview.md) to understand what a backup
 
 ## Option A: Manual backup (on demand)
 
-Use this when you want a backup right now: before a major change, before a restore, or before migrating to a new install.
+Use this first when setting up backups, and whenever you want a fresh recovery point before a major change or restore.
 
-The Backup & Restore page does not have a "Backup" card or a "Back Up Now" button. The working on-demand path today is running the `dbas_backup` task directly from Scheduled Tasks:
-
-1. Go to **Settings → Scheduled Tasks**.
-2. Find the **DBAS Backup** task card.
-3. Click **Run Now**.
+1. Go to **Settings → Backup & Restore**.
+2. Find the **Configuration Backup** card.
+3. Click **Create Configuration Backup**.
 
 ECM builds the artifact in the background via the `dbas_backup` task. A notification appears when the backup completes. The artifact and a `.sha256` sidecar are saved to `/config/backups/` on the ECM host.
 
-> A single-click "Back Up Now" control on the Backup & Restore page itself does not exist yet and may be added in a future release. Until then, Scheduled Tasks → DBAS Backup → Run Now is the supported on-demand path.
+This is a **configuration-only** backup. It does not contain working M3U or EPG provider credentials, and it does not contain your ECM login accounts. On a fresh install, you must create an ECM admin account and re-enter every provider credential after restoring it. Operator-authored free text, such as source names and rule notes, may travel verbatim. Credential-bearing URLs are replaced; credential-free provider addresses remain. Inspect that content before sharing the artifact outside your control.
 
-If you need credentials to travel with the artifact instead, use the Encrypted Backup card described below. That card **does** live on the Backup & Restore page.
+If you need credentials and ECM accounts to travel with the artifact for a migration, use the Encrypted Backup card described below and enable **Include credentials**.
 
 ### Taking an encrypted backup
 
@@ -59,7 +57,7 @@ Encrypted backups are always manual. A passphrase cannot be persisted in the tas
 
 ## Option B: Scheduled backup (recurring)
 
-Use this for routine protection. A scheduled backup runs automatically and applies the retention policy after each successful run.
+After creating and verifying a manual backup, set up a schedule for ongoing protection. A backup you take by hand only reflects that moment; a schedule keeps a current recovery point on disk. Scheduled backups are always redacted configuration backups because ECM never stores an encryption passphrase in the scheduler.
 
 1. Go to **Settings → Scheduled Tasks**.
 2. Find the **DBAS Backup** task, or create a new schedule for it.
