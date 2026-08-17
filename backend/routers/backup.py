@@ -21,6 +21,7 @@ import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -49,7 +50,7 @@ from config import (
     save_settings,
     clear_settings_cache,
 )
-from credential_sentinel import REDACTION_SENTINEL
+from credential_sentinel import REDACTION_SENTINEL, strip_redaction_sentinels
 from dbas import artifact_crypto
 from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, EPG_INDEX_MAX_ROWS, as_int
 from dbas.importers.logos import MAX_LOGO_BYTES, remote_logo_url, safe_logo_basename
@@ -153,13 +154,33 @@ REDACTED = REDACTION_SENTINEL
 # edit in ``config`` now moves both surfaces. Do NOT re-inline these names.
 # ``dict.fromkeys`` dedupes the overlap (``telegram_bot_token`` is in both
 # halves) while keeping the historical order stable for the artifact contract.
+#
+# THIRD-PARTY BEARER CREDENTIALS THE EXACT-MATCH DENYLIST MISSED (bead …-gi4zn).
+# ``_REDACT_KEYS`` matches key names EXACTLY, which is the right RUNTIME rule —
+# a substring rule on "url" would rewrite the boolean ``show_stream_urls`` to a
+# string sentinel. Its cost is that a newly added ``<vendor>_api_key`` ships in
+# clear until someone remembers this list, and three of them had:
+# ``emby_api_key`` and ``jellyfin_api_key`` are admin API keys for the
+# operator's media server, and ``plex_token`` is a bearer credential for a Plex
+# ACCOUNT. All three were exported verbatim in every standard artifact.
+# ``smtp_user`` is the identity half of a pair whose secret half
+# (``smtp_password``) was already listed — the same asymmetry the M3U username
+# had. The class is closed by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_no_credential_shaped_settings_field_is_left_unredacted``, which reads the
+# live settings model, so the NEXT vendor field fails a required check rather
+# than a drill.
 _SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
     "password",
     "dispatcharr_api_key",
     "api_key",
     "smtp_password",
+    "smtp_user",
     "telegram_bot_token",
     "mcp_api_key",
+    "emby_api_key",
+    "jellyfin_api_key",
+    "plex_token",
     *sorted(ADMIN_ONLY_READ_REDACTED_FIELDS),
 )))
 
@@ -180,6 +201,34 @@ _SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
 # this comment goes false again and this tuple is the thing that silently
 # drifts.
 _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+
+# The IDENTITY half of the same alert-method config blobs (bead …-gi4zn). An
+# SMTP alert method stores ``username`` beside its ``password`` and a Telegram
+# one stores ``chat_id`` beside its ``bot_token``; only the secret halves were
+# scrubbed, so the standard artifact's journal.db carried the relay account name
+# and the chat capability in clear. ``telegram_chat_id`` is already treated as a
+# bearer capability at the SETTINGS level
+# (``config.ADMIN_ONLY_READ_REDACTED_FIELDS``) — the identical value nested
+# inside alert_methods.config was not, which is the same
+# protected-beside-unprotected asymmetry the M3U username had.
+#
+# DELIBERATELY SEPARATE from :data:`_ALERT_METHOD_CREDENTIAL_KEYS` rather than
+# appended to it, for two reasons. That tuple's docstring asserts lock-step with
+# ``AlertMethod.to_dict``'s masking set, and that claim must stay literally true;
+# changing the API-response masking is a different decision on a different
+# surface. And it feeds :data:`_REDACT_KEYS`, which is matched against dict keys
+# in EVERY category — a global ``chat_id`` entry would be scope this bead did not
+# establish. These keys are therefore applied only where they were found
+# leaking: the journal.db alert_methods scrub, and its restore-side merge-back.
+_ALERT_METHOD_IDENTITY_KEYS = ("username", "chat_id")
+
+# Every alert_methods.config key the backup scrubs and the restore merges back.
+# One tuple so the two halves of that round-trip cannot drift: a key scrubbed on
+# the way out but not merged on the way back in would be silently DESTROYED by a
+# legacy-ZIP restore.
+_ALERT_METHOD_PROTECTED_KEYS = tuple(
+    dict.fromkeys(_ALERT_METHOD_CREDENTIAL_KEYS + _ALERT_METHOD_IDENTITY_KEYS)
+)
 
 # SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
 # D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
@@ -235,8 +284,142 @@ _REDACT_KEYS = frozenset(
 # for streams is therefore scoped to the producer that emits them.
 _STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
 
+# The IDENTITY half of a THIRD-PARTY provider credential (bead …-gi4zn).
+#
+# WHY A USERNAME IS A CREDENTIAL. The 2026-08-05 drill (run 3, finding F4) found
+# an Xtream Codes account's ``username`` in clear in a standard artifact beside a
+# correctly-redacted ``password``, in BOTH places it appears — the account row
+# and ``profiles[].custom_properties.user_info``. For an XC provider the username
+# is half the credential pair and the half that identifies the SUBSCRIPTION: ECM
+# renders XC stream URLs that contain it. A standard artifact is the DEFAULT
+# artifact, is described to operators simply as "redacted", and is what gets
+# attached to support tickets and forum posts. So the PO's 2026-08-05 decision is
+# that the standard artifact is FULLY redacted: it carries no value that
+# identifies OR authenticates against a third-party service.
+#
+# SEPARATE FROM :data:`_REDACT_KEYS` because ``username`` is the one key whose
+# meaning depends on WHOSE service it names — see
+# :data:`_IDENTITY_EXEMPT_CATEGORIES`. Every other consumer of the deep redactor
+# gets identity redaction by DEFAULT (fail-closed); a caller must name its
+# exemption to opt out.
+_PROVIDER_IDENTITY_KEYS = frozenset({"username"})
 
-def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
+# The ONLY categories exempt from :data:`_PROVIDER_IDENTITY_KEYS`.
+#
+# ``dispatcharr_users`` is the operator's OWN Dispatcharr instance's account
+# list, not a third-party subscription, so it is outside the property this bead
+# establishes. It is also load-bearing: ``dbas.importers.users`` CREATES each
+# user by ``username`` and uses it for the destination-collision check, so a
+# sentinel there would not merely degrade the category — it would delete the
+# restore path (every user would collide or be created named ``***REDACTED***``).
+#
+# Kept as a closed set rather than a per-call flag so the exemption is auditable
+# in one place, and pinned by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_identity_exemption_is_exactly_one_named_category`` so it cannot quietly
+# grow into a general escape hatch.
+_IDENTITY_EXEMPT_CATEGORIES: frozenset[str] = frozenset({"dispatcharr_users"})
+
+# Query-parameter names that make a URL credential-bearing. Providers routinely
+# put the whole credential in the query string (``get.php?username=…&password=…``
+# for a plain-M3U account, ``xmltv.php?username=…&password=…`` for an XC-derived
+# EPG source), where NO credential-named dict key carries it and a key denylist
+# is therefore blind. Short aliases are included because provider URLs use them.
+_URL_CREDENTIAL_QUERY_KEYS = frozenset(
+    _REDACT_KEYS
+    | _PROVIDER_IDENTITY_KEYS
+    | {"user", "pass", "pwd", "token", "apikey", "auth", "key", "sig", "signature"}
+)
+
+# Finds URL-shaped substrings inside an arbitrary string. Needed because a
+# credential-bearing URL is not always the WHOLE value: Dispatcharr echoes
+# upstream failures into ``last_message``, and an upstream error body can quote
+# the request URL it failed on.
+_URL_IN_TEXT_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s\"'<>]+")
+
+
+def _url_carries_credentials(candidate: str) -> bool:
+    """True when a URL embeds a credential in its userinfo or query string.
+
+    A URL with neither is left ALONE — the restore needs the address to recreate
+    the account or source at all, and blanket-redacting URL fields would leave
+    every restored provider with nowhere to point.
+
+    WHAT THIS DOES NOT COVER, stated so the next reader does not read it as
+    exhaustive: an Xtream Codes STREAM url carries its credential in PATH
+    SEGMENTS (``/live/<user>/<pass>/<id>.ts``), which no general rule can
+    distinguish from an ordinary path without guessing — and guessing here costs
+    the operator a URL the restore needs. That shape is handled at the producer
+    instead: the channels producer never emits a stream url at all
+    (:data:`_STREAM_CREDENTIAL_FIELDS` / ``_safe_embedded_stream``, bead
+    …-7i8rf), pinned by
+    ``tests/routers/test_0i2vt_backup_artifact.py::
+    test_embedded_stream_url_never_in_artifact``. No other producer emits one.
+
+    Args:
+        candidate: A single URL-shaped string.
+
+    Returns:
+        True when the URL carries a credential and must not enter a standard
+        artifact.
+    """
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        # Unparseable is not a URL; other rules still apply to the raw string.
+        return False
+    if not parts.scheme or not parts.netloc:
+        return False
+    if "@" in parts.netloc:
+        # RFC 3986 userinfo: everything before the ``@`` in the authority.
+        return True
+    # Blank values are dropped (parse_qsl default): ``?username=`` with nothing
+    # after it carries no credential and must not cost the operator the address.
+    return any(
+        key.lower() in _URL_CREDENTIAL_QUERY_KEYS for key, _ in parse_qsl(parts.query)
+    )
+
+
+def _scrub_credential_urls(value: str):
+    """Remove credentials embedded in URL VALUES, or return ``None`` if clean.
+
+    Two shapes, because the right restore-side behaviour differs:
+
+    * The value IS a credential-bearing URL (an M3U ``server_url``, an EPG
+      ``url``). The WHOLE value becomes the sentinel, so the restore recognizes
+      it, leaves the field unset rather than writing a half-URL that silently
+      fails to authenticate, and names the field in
+      ``credential_reentry_details``.
+    * The value CONTAINS one (a status message quoting a failed request). Only
+      the URL substring is replaced, so the operator keeps the diagnostic.
+
+    Args:
+        value: Any string value from a gathered payload.
+
+    Returns:
+        The scrubbed string, or ``None`` when the value carries no URL
+        credential and must be left byte-identical.
+    """
+    if "://" not in value:
+        return None
+    found = _URL_IN_TEXT_RE.findall(value)
+    dirty = [url for url in found if _url_carries_credentials(url)]
+    if not dirty:
+        return None
+    if len(dirty) == 1 and value.strip() == dirty[0]:
+        return REDACTED
+    scrubbed = value
+    for url in dirty:
+        scrubbed = scrubbed.replace(url, REDACTED)
+    return scrubbed
+
+
+def _redact_credentials_deep(
+    obj,
+    preserve_keys: frozenset = frozenset(),
+    exempt_identity_keys: frozenset = frozenset(),
+    scrub_credential_urls: bool = True,
+):
     """Recursively replace any value whose key (case-insensitive) is in the
     shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
 
@@ -244,6 +427,19 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     switch. Walks dicts and lists in place-safe fashion (returns a new
     structure) so credential-class values never enter the archive regardless of
     which category/source produced them. Non-credential values are untouched.
+
+    Three things are redacted, and the second and third exist because the first
+    is not sufficient on its own (bead …-gi4zn):
+
+    1. A value under a :data:`_REDACT_KEYS` key — the credential itself.
+    2. A value under a :data:`_PROVIDER_IDENTITY_KEYS` key — the IDENTITY half of
+       a third-party credential pair. Applied by DEFAULT; ``exempt_identity_keys``
+       is how a caller names an exemption (see
+       :data:`_IDENTITY_EXEMPT_CATEGORIES`), so a new caller fails closed.
+    3. A credential embedded in a URL VALUE, under any key at all
+       (:func:`_scrub_credential_urls`). A plain-M3U account's whole provider
+       credential lives in ``server_url``'s query string, where rules 1 and 2 —
+       which look only at KEY names — cannot see it.
 
     ``preserve_keys`` is the opt-in ``include_credentials`` re-injection
     allowlist (ADR-012 D12 / u81kh): a key in this set is NOT redacted — its real
@@ -254,12 +450,22 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     ever non-empty — see :func:`build_backup_artifact`). Keys NOT in this set
     (and never approved — e.g. ``password_hash``, never in :data:`_REDACT_KEYS`)
     stay redacted regardless.
+
+    ``scrub_credential_urls`` is the URL-rule counterpart of ``preserve_keys``
+    and is set False on that SAME cred-carrying path: an encrypted migration
+    artifact is the one artifact allowed to carry credentials, and a provider URL
+    with its query-string credential intact is exactly what makes it restorable
+    without re-entry. It is a separate parameter rather than derived from
+    ``preserve_keys`` because rule 3 does not key off names at all, so there is
+    no key set that could express it.
     """
+    identity_keys = _PROVIDER_IDENTITY_KEYS - exempt_identity_keys
+    denied = _REDACT_KEYS | identity_keys
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
             klower = key.lower() if isinstance(key, str) else key
-            if isinstance(key, str) and klower in _REDACT_KEYS and klower not in preserve_keys:
+            if isinstance(key, str) and klower in denied and klower not in preserve_keys:
                 # Only redact truthy values — preserve None/"" so restore-side
                 # preserve-on-omit semantics still distinguish "unset".
                 out[key] = REDACTED if value not in (None, "") else value
@@ -268,10 +474,21 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
                 # a credential value is a scalar, not a nested structure).
                 out[key] = value
             else:
-                out[key] = _redact_credentials_deep(value, preserve_keys)
+                out[key] = _redact_credentials_deep(
+                    value, preserve_keys, exempt_identity_keys, scrub_credential_urls
+                )
         return out
     if isinstance(obj, list):
-        return [_redact_credentials_deep(item, preserve_keys) for item in obj]
+        return [
+            _redact_credentials_deep(
+                item, preserve_keys, exempt_identity_keys, scrub_credential_urls
+            )
+            for item in obj
+        ]
+    if scrub_credential_urls and isinstance(obj, str):
+        scrubbed = _scrub_credential_urls(obj)
+        if scrubbed is not None:
+            return scrubbed
     return obj
 
 
@@ -351,7 +568,7 @@ def _scrub_journal_db_to_temp(src: Path, include_credentials: bool = False) -> P
             if not isinstance(cfg, dict):
                 continue
             changed = False
-            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
+            for key in _ALERT_METHOD_PROTECTED_KEYS:
                 if key in cfg and cfg[key]:
                     cfg[key] = REDACTED
                     changed = True
@@ -766,12 +983,21 @@ async def _gather_redacted_categories(
       intermediate. Informational only: it never adds a degraded category.
     """
     # include_credentials (D12) preserves the approved migration-cred allowlist
-    # (== _REDACT_KEYS; password_hash is never in that set and so is never
-    # carried). Redaction STILL runs over every key — only the explicitly
-    # approved creds are preserved — so this is re-injection, not a redaction
-    # bypass (checklist 28). preserve_keys is empty unless the caller opted in
-    # AND set a passphrase (enforced in build_backup_artifact).
-    preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
+    # (== _REDACT_KEYS plus the provider IDENTITY keys; password_hash is in
+    # neither and so is never carried). Redaction STILL runs over every key —
+    # only the explicitly approved creds are preserved — so this is
+    # re-injection, not a redaction bypass (checklist 28). preserve_keys is
+    # empty unless the caller opted in AND set a passphrase (enforced in
+    # build_backup_artifact).
+    #
+    # The identity keys MUST be in the preserve set (bead …-gi4zn): the whole
+    # point of the encrypted cred-carrying artifact is that a migration does not
+    # have to re-enter the provider credential, and half a credential pair is
+    # not a credential. Omitting them here would have widened redaction into the
+    # one artifact the constraint says must be left alone.
+    preserve_keys = (
+        (_REDACT_KEYS | _PROVIDER_IDENTITY_KEYS) if include_credentials else frozenset()
+    )
     out: dict[str, str] = {}
     degraded: list[str] = []
     unresolved_epg_links = 0
@@ -783,9 +1009,26 @@ async def _gather_redacted_categories(
         # category's gathered payload passes through the shared NON-BYPASSABLE
         # deep redactor before it is serialized into the archive — one denylist,
         # every category, no plaintext path.
-        yaml_text = await build_yaml_export({key}, include_credentials=include_credentials)
+        #
+        # ``exempt_identity_keys`` is per-CATEGORY because ``username`` is the
+        # one key whose meaning depends on whose service it names (see
+        # :data:`_IDENTITY_EXEMPT_CATEGORIES`). Absent from the map means "no
+        # exemption", so a category added later is redacted by default.
+        exempt = (
+            _PROVIDER_IDENTITY_KEYS if key in _IDENTITY_EXEMPT_CATEGORIES else frozenset()
+        )
+        yaml_text = await build_yaml_export(
+            {key},
+            include_credentials=include_credentials,
+            exempt_identity_keys=exempt,
+        )
         parsed = yaml.safe_load(yaml_text)
-        redacted = _redact_credentials_deep(parsed, preserve_keys)
+        redacted = _redact_credentials_deep(
+            parsed,
+            preserve_keys,
+            exempt_identity_keys=exempt,
+            scrub_credential_urls=not include_credentials,
+        )
         dispatcharr_blob = redacted.get("dispatcharr") if isinstance(redacted, dict) else None
         if isinstance(dispatcharr_blob, dict):
             section_value = dispatcharr_blob.get(key)
@@ -2107,7 +2350,7 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
                 continue
             prior_cfg = prior.get(row_id, {})
             changed = False
-            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
+            for key in _ALERT_METHOD_PROTECTED_KEYS:
                 if cfg.get(key) == REDACTED and prior_cfg.get(key) not in (None, "", REDACTED):
                     cfg[key] = prior_cfg[key]
                     changed = True
@@ -3343,7 +3586,9 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
 
 
 async def build_yaml_export(
-    sections: Optional[set[str]] = None, include_credentials: bool = False
+    sections: Optional[set[str]] = None,
+    include_credentials: bool = False,
+    exempt_identity_keys: frozenset = frozenset(),
 ) -> str:
     """Build a YAML export string, optionally limited to specific sections.
 
@@ -3355,6 +3600,22 @@ async def build_yaml_export(
     passphrase-encrypted migration path; it is only ever True from
     :func:`build_backup_artifact`. The user-facing ``/export`` endpoint never
     sets it (always redacts).
+
+    WHY THE DEEP REDACTOR RUNS HERE and not only in the artifact builder (bead
+    …-gi4zn). This function is the shared gather for TWO operator-shareable
+    artifacts: the DBAS artifact (via :func:`_gather_redacted_categories`) and
+    the legacy ``GET /api/backup/export`` YAML. Only the first passed its
+    payload through :func:`_redact_credentials_deep`, so the second scrubbed
+    settings-class fields and nothing else — a Dispatcharr-sourced M3U or EPG
+    record went out with whatever the upstream returned. Redacting at the gather
+    makes ONE authority cover both surfaces; the artifact builder still runs the
+    deep redactor afterwards (idempotent: a sentinel re-redacts to itself) so its
+    NON-BYPASSABLE-stage property is unchanged even if a future caller reaches
+    the gather another way.
+
+    ``exempt_identity_keys`` names the provider-identity keys this particular
+    gather must NOT redact — see :data:`_IDENTITY_EXEMPT_CATEGORIES`. Defaulting
+    to empty means a caller that says nothing gets full redaction.
 
     The default set (``sections=None``) excludes ``artifact_only`` categories
     (channels / dispatcharr_users — 7i8rf): those are restorable only via the
@@ -3389,6 +3650,11 @@ async def build_yaml_export(
     dispatcharr_data = await _gather_dispatcharr_sections(selected)
     if dispatcharr_data:
         export_data["dispatcharr"] = dispatcharr_data
+
+    if not include_credentials:
+        export_data = _redact_credentials_deep(
+            export_data, exempt_identity_keys=exempt_identity_keys
+        )
 
     return yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
@@ -4168,6 +4434,22 @@ _SECTION_RESTORERS = {
 # Dispatcharr section restore functions (async — use Dispatcharr API)
 # ---------------------------------------------------------------------------
 
+def _warn_credential_reentry(entity: str, label, removed: list[str]) -> list[str]:
+    """The legacy YAML restore's credential-re-entry warning — field NAMES only.
+
+    The DBAS restore reports this structurally (``credential_reentry_details``);
+    this path has only a warnings list, so it says the same thing in prose. Bead
+    …-gi4zn: silence here is what lets an operator believe a restored provider is
+    configured when it cannot authenticate.
+    """
+    if not removed:
+        return []
+    return [
+        "%s '%s': %s could not be carried by a redacted export and must be "
+        "re-entered before it will refresh." % (entity, label, ", ".join(removed))
+    ]
+
+
 async def _restore_m3u_accounts(items: list) -> dict:
     """Delete all M3U accounts and recreate from YAML via Dispatcharr API."""
     client = get_client()
@@ -4184,10 +4466,22 @@ async def _restore_m3u_accounts(items: list) -> dict:
     # Recreate
     for item in items:
         create_data = {k: v for k, v in item.items() if k not in ("id", "channel_groups", "streams_count")}
+        # Never write ECM's own placeholder into a destination credential field
+        # (bead …-6pilh, applied to this legacy path by …-gi4zn). A sentinel
+        # written through produces an account that LOOKS configured — the field
+        # is populated and every truthiness probe says yes — and fails at the
+        # provider, which is strictly worse than a visibly-unset field. The DBAS
+        # importer has stripped sentinels since 6pilh; this path did not, and
+        # became reachable for the IDENTITY half once the export redacted it.
+        create_data, removed = strip_redaction_sentinels(create_data)
         try:
             await client.create_m3u_account(create_data)
         except Exception as e:
             warnings.append("Failed to create M3U account %s: %s" % (item.get("name"), e))
+            continue
+        warnings.extend(
+            _warn_credential_reentry("M3U account", item.get("name"), removed)
+        )
     return {"warnings": warnings}
 
 
@@ -4205,10 +4499,16 @@ async def _restore_epg_sources(items: list) -> dict:
             warnings.append("Failed to delete EPG source %s: %s" % (src.get("name"), e))
     for item in items:
         create_data = {k: v for k, v in item.items() if k not in ("id",)}
+        # Same rule as the M3U path above — see its comment.
+        create_data, removed = strip_redaction_sentinels(create_data)
         try:
             await client.create_epg_source(create_data)
         except Exception as e:
             warnings.append("Failed to create EPG source %s: %s" % (item.get("name"), e))
+            continue
+        warnings.extend(
+            _warn_credential_reentry("EPG source", item.get("name"), removed)
+        )
     return {"warnings": warnings}
 
 

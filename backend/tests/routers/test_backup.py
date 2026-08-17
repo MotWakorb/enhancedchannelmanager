@@ -905,7 +905,16 @@ class TestExportYaml:
 
     @pytest.mark.asyncio
     async def test_redacts_passwords(self, async_client, test_session):
-        """Export redacts sensitive fields from settings."""
+        """Export redacts sensitive fields from settings.
+
+        ``username`` used to be asserted PRESENT here, which recorded the
+        defect bead …-gi4zn fixes rather than a decision: it is the identity
+        half of the Dispatcharr connection credential whose secret half two
+        lines above is redacted, and the debug-bundle redactor
+        (``routers/channel_pipeline.py``) had already been redacting it for the
+        whole time this assertion said it should survive. The export is
+        described to operators as redacted, so it carries neither half.
+        """
         mock_settings = MagicMock()
         mock_settings.model_dump.return_value = {
             "url": "http://test:9191",
@@ -922,7 +931,9 @@ class TestExportYaml:
         data = yaml.safe_load(response.text)
         assert data["settings"]["password"] == "***REDACTED***"
         assert data["settings"]["smtp_password"] == "***REDACTED***"
-        assert data["settings"]["username"] == "admin"
+        assert data["settings"]["username"] == "***REDACTED***"
+        # Not a credential, and the operator needs it to reconnect.
+        assert data["settings"]["url"] == "http://test:9191"
 
     @pytest.mark.asyncio
     async def test_exports_db_tables(self, async_client, test_session):
@@ -1965,7 +1976,13 @@ class TestZipExportRedaction:
         assert configs[1]["host"] == "smtp.example.com"  # non-cred preserved
         assert configs[2]["webhook_url"] == "***REDACTED***"
         assert configs[3]["bot_token"] == "***REDACTED***"
-        assert configs[3]["chat_id"] == "1234"  # non-cred preserved
+        # ``chat_id`` was asserted here as "non-cred preserved". Bead …-gi4zn
+        # reclassifies it: a Telegram chat id is a bearer capability to post
+        # into a chat, which is why the SETTINGS-level ``telegram_chat_id`` is
+        # already in ``config.ADMIN_ONLY_READ_REDACTED_FIELDS`` and withheld
+        # from a non-admin read. The identical value nested inside
+        # alert_methods.config was the unprotected half of that pair.
+        assert configs[3]["chat_id"] == "***REDACTED***"
 
 
 class TestZipRestoreRedactionAware:
