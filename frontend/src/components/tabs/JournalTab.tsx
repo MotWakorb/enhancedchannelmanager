@@ -52,9 +52,28 @@ function getActionClass(actionType: JournalActionType): string {
   }
 }
 
+/**
+ * Action types whose title-cased identifier is not the words an operator is
+ * told to look for. The generic transform below turns `merge_unapplied` into
+ * "Merge Unapplied", while the filter dropdown and the Pending Merges notice
+ * both say "Merge Not Applied" — so an operator following the notice found a
+ * badge with different words and no way to know they were the same thing.
+ *
+ * One label per action type, defined once and used by both the badge and the
+ * filter option, so the two cannot drift again. Module-local rather than
+ * exported: this file exports a component, and a second export trips the
+ * react-refresh lint rule (see docs/frontend_lint.md).
+ */
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  merge_unapplied: 'Merge Not Applied',
+};
+
 // Format action type for display
 function formatActionType(actionType: string): string {
-  return actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    ACTION_TYPE_LABELS[actionType] ??
+    actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
 // Format category for display
@@ -382,7 +401,10 @@ export function JournalTab() {
             { value: 'stream_remove', label: 'Stream Remove' },
             { value: 'stream_reorder', label: 'Stream Reorder' },
             { value: 'reorder', label: 'Reorder' },
-            { value: 'merge_unapplied', label: 'Merge Not Applied' },
+            {
+              value: 'merge_unapplied',
+              label: ACTION_TYPE_LABELS.merge_unapplied,
+            },
           ]}
         />
         <CustomSelect
