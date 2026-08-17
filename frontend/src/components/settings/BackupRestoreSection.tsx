@@ -523,9 +523,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <h3>Restore DBAS Backup</h3>
         </div>
         <p className="backup-card-description">
-          Restore a v0.18.0 backup artifact (.zip) — the format produced by scheduled backups and
-          the Encrypted Backup card. Preview the changes first (dry run), then apply. Encrypted
-          artifacts prompt for the passphrase.
+          Restore a v0.18.0 backup artifact (.zip) — the format produced by Configuration Backup,
+          scheduled backups, and Encrypted Backup (Migration). Preview the changes first (dry
+          run), then apply. Encrypted artifacts prompt for the passphrase.
         </p>
         <button className="btn-primary" onClick={() => setShowDbasRestoreModal(true)}>
           <span className="material-icons">upload_file</span>

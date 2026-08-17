@@ -89,9 +89,9 @@ export function ConfigurationBackupCard() {
       <p className="backup-card-description">
         Save this instance&apos;s configuration to the server as a .zip artifact — the same
         artifact a scheduled backup produces. It appears in Saved Backups above when it finishes.
-        Nothing in it authenticates on your behalf: provider sign-ins and ECM accounts are
-        replaced with placeholders. Everything else you typed travels verbatim — source names,
-        URLs, and the notes on your rules — so check what is in it before sending it to anyone
+        Provider sign-ins, credentials embedded in URLs, and ECM accounts are replaced with
+        placeholders. Other text you entered — including source names and the notes on your rules
+        — may still travel verbatim, so check what is in the artifact before sending it to anyone
         outside your control.
       </p>
       <div className="backup-sensitive-warning">

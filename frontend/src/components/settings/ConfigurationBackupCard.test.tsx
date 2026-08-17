@@ -99,12 +99,14 @@ describe('ConfigurationBackupCard (bead pui76)', () => {
   it("says the operator's own text travels with the artifact", () => {
     render(<ConfigurationBackupCard />);
     const card = screen.getByTestId('configuration-backup-card');
-    // What the producer DOES guarantee is still stated...
-    expect(card).toHaveTextContent(/nothing in it authenticates on your behalf/i);
+    // What the producer DOES guarantee is still stated precisely...
+    expect(card).toHaveTextContent(/credentials embedded in URLs/i);
+    expect(card).toHaveTextContent(/ECM accounts are replaced with placeholders/i);
+    expect(card).not.toHaveTextContent(/nothing in it authenticates on your behalf/i);
     // ...and the judgement it cannot make is handed back, naming the content
     // that actually travels rather than gesturing at "some data".
     expect(card).toHaveTextContent(/notes/i);
-    expect(card).toHaveTextContent(/verbatim/i);
+    expect(card).toHaveTextContent(/may still travel verbatim/i);
     expect(card).toHaveTextContent(/before sending it to anyone outside your control/i);
   });
 

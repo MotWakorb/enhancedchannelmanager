@@ -242,6 +242,23 @@ describe('BackupRestoreSection', () => {
       expect(within(savedCard).getByText(/DBAS Backup/i)).toBeInTheDocument();
     });
 
+    it('names every current DBAS artifact producer in the restore guidance', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const restoreCard = screen
+        .getByRole('heading', { name: 'Restore DBAS Backup' })
+        .closest('.backup-card') as HTMLElement;
+      expect(restoreCard).not.toBeNull();
+      expect(restoreCard).toHaveTextContent(/Configuration Backup/i);
+      expect(restoreCard).toHaveTextContent(/scheduled backups/i);
+      expect(restoreCard).toHaveTextContent(/Encrypted Backup \(Migration\)/i);
+
+      // Let the section's mount-time requests settle before teardown.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
     it('renders YAML export button', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Export YAML')).toBeInTheDocument();
