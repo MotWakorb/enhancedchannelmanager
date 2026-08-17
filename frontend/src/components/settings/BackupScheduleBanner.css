@@ -93,17 +93,40 @@
   font-size: var(--icon-action);
 }
 
+/* The CTA and the snooze sit on one row so the operator reads both options
+   before choosing (bead enhancedchannelmanager-iij6s). Wraps on narrow
+   viewports rather than truncating the snooze's label, which is the part that
+   says what the control actually does. */
+.backup-schedule-banner-actions {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+/* Was an icon-only ✕ in the banner's top-right corner. A bare ✕ reads as
+   "gone", and under the old one-time behaviour that is exactly what it did:
+   permanently silenced the only signal that an install had no backups. It is
+   now a labelled snooze that states its own window, so the operator knows what
+   the click buys before making it — the label carries the meaning, not a
+   tooltip (bead enhancedchannelmanager-iij6s). Secondary weight and no
+   underline keep "Set one up" the primary action of the two.
+   --text-secondary on --warning-bg is the same pairing the detail line above
+   already uses, so the contrast-AA guard's verdict on it carries over. */
 .backup-schedule-banner-dismiss {
-  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 0.125rem;
   background: none;
   border: none;
-  padding: 0.125rem;
+  padding: 0;
   cursor: pointer;
   color: var(--text-secondary);
-  display: flex;
-  align-items: center;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .backup-schedule-banner-dismiss:hover {
   color: var(--text-primary);
+  text-decoration: underline;
 }

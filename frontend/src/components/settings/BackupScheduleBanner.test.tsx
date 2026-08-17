@@ -1,16 +1,20 @@
 /**
- * Tests for BackupScheduleBanner (bead ikv8z).
+ * Tests for BackupScheduleBanner (beads ikv8z, enhancedchannelmanager-iij6s).
  *
  * Contract:
- *   - Scheduled DBAS backup ships OFF by default. To stop an operator silently
- *     ending up with zero backups, surface a one-time banner when no enabled
- *     `dbas_backup` schedule exists: "Backups are not scheduled yet. Set one up".
- *   - The banner is one-time: dismissing it persists, and it stays gone on the
- *     next mount AS LONG AS backups are still unscheduled... but the dismissal
- *     is keyed so it can never permanently hide a real "no backups" risk — once
- *     dismissed it does not nag, matching the bead's "dismiss/persist" rule.
- *   - When an enabled schedule exists, the banner never renders (regardless of
- *     dismissal state).
+ *   - Scheduled DBAS backup ships OFF by default and STAYS off by default (PO
+ *     decision D2). This banner is the whole enforcement mechanism for that
+ *     decision, so its dismissal cannot be permanent: one click by one operator
+ *     in one browser used to silence the only signal that an install has no
+ *     backups, forever (bead iij6s).
+ *   - Dismissal is therefore a SNOOZE. It hides the banner for a fixed window
+ *     and the banner returns afterwards while the install is still unscheduled.
+ *   - The control says so: "Remind me in 30 days", not a bare ✕.
+ *   - An enabled schedule hides the banner and clears any stored snooze, so a
+ *     schedule that is later disabled brings the warning straight back rather
+ *     than being suppressed by a stale snooze.
+ *   - The legacy permanent-dismissal flag is not honoured and is cleaned up —
+ *     installs silenced under the old behaviour get told again.
  *   - "Set one up" routes the operator to the schedule editor for dbas_backup.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -25,7 +29,9 @@ import { BackupScheduleBanner } from './BackupScheduleBanner';
 
 type Mock = ReturnType<typeof vi.fn>;
 
-const DISMISS_KEY = 'ecm:dbas-backup-banner-dismissed';
+const SNOOZE_KEY = 'ecm:dbas-backup-banner-snoozed-until';
+const LEGACY_DISMISS_KEY = 'ecm:dbas-backup-banner-dismissed';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function schedule(overrides: Partial<api.TaskSchedule> = {}): api.TaskSchedule {
   return {
@@ -50,6 +56,14 @@ function schedule(overrides: Partial<api.TaskSchedule> = {}): api.TaskSchedule {
   };
 }
 
+const banner = () => screen.queryByTestId('backup-schedule-banner');
+
+async function renderUnscheduled() {
+  (api.getTaskSchedules as Mock).mockResolvedValue({ schedules: [] });
+  render(<BackupScheduleBanner />);
+  await waitFor(() => expect(api.getTaskSchedules).toHaveBeenCalled());
+}
+
 describe('BackupScheduleBanner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,14 +71,11 @@ describe('BackupScheduleBanner', () => {
   });
 
   it('shows the banner when no backup schedule exists', async () => {
-    (api.getTaskSchedules as Mock).mockResolvedValue({ schedules: [] });
-    render(<BackupScheduleBanner />);
-    await waitFor(() =>
-      expect(screen.getByTestId('backup-schedule-banner')).toBeInTheDocument(),
-    );
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
     expect(screen.getByText(/not scheduled yet/i)).toBeInTheDocument();
     // No "SSRF"/"RFC1918"-style jargon — plain language only.
-    expect(screen.getByTestId('backup-schedule-banner')).toHaveTextContent(/set one up/i);
+    expect(banner()).toHaveTextContent(/set one up/i);
   });
 
   it('shows the banner when only DISABLED schedules exist', async () => {
@@ -72,9 +83,7 @@ describe('BackupScheduleBanner', () => {
       schedules: [schedule({ enabled: false })],
     });
     render(<BackupScheduleBanner />);
-    await waitFor(() =>
-      expect(screen.getByTestId('backup-schedule-banner')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(banner()).toBeInTheDocument());
   });
 
   it('does NOT show the banner when an enabled schedule exists', async () => {
@@ -82,44 +91,95 @@ describe('BackupScheduleBanner', () => {
       schedules: [schedule({ enabled: true })],
     });
     render(<BackupScheduleBanner />);
-    // Let the fetch resolve, then assert the banner never appears.
     await waitFor(() => expect(api.getTaskSchedules).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(screen.queryByTestId('backup-schedule-banner')).not.toBeInTheDocument(),
+    await waitFor(() => expect(banner()).not.toBeInTheDocument());
+  });
+
+  it('warns that a hand-taken backup is not a substitute for a schedule', async () => {
+    // PO decision D4 routes operators to the manual button first, so the state
+    // this banner has to catch is "one stale backup, no schedule".
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+    expect(banner()).toHaveTextContent(/by hand/i);
+  });
+
+  it('labels the dismissal with what it actually does', async () => {
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+    // A bare ✕ reads as "gone". This control is a snooze and has to say so
+    // before it is clicked, not in a tooltip after.
+    expect(screen.getByTestId('backup-schedule-banner-dismiss')).toHaveTextContent(
+      /remind me in 30 days/i,
     );
   });
 
-  it('hides the banner after dismiss and persists the dismissal', async () => {
-    (api.getTaskSchedules as Mock).mockResolvedValue({ schedules: [] });
-    render(<BackupScheduleBanner />);
-    await waitFor(() =>
-      expect(screen.getByTestId('backup-schedule-banner')).toBeInTheDocument(),
-    );
+  it('snoozes rather than permanently dismissing (bead iij6s)', async () => {
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
 
+    const before = Date.now();
     fireEvent.click(screen.getByTestId('backup-schedule-banner-dismiss'));
-    expect(screen.queryByTestId('backup-schedule-banner')).not.toBeInTheDocument();
-    expect(localStorage.getItem(DISMISS_KEY)).toBe('1');
+    expect(banner()).not.toBeInTheDocument();
+
+    const storedUntil = Number(localStorage.getItem(SNOOZE_KEY));
+    expect(Number.isFinite(storedUntil)).toBe(true);
+    // ~30 days out, generously bounded so the assertion is about the window
+    // being finite and roughly a month, not about clock precision.
+    expect(storedUntil).toBeGreaterThan(before + 29 * DAY_MS);
+    expect(storedUntil).toBeLessThan(before + 31 * DAY_MS);
   });
 
-  it('stays hidden on remount once dismissed (still unscheduled)', async () => {
-    localStorage.setItem(DISMISS_KEY, '1');
-    (api.getTaskSchedules as Mock).mockResolvedValue({ schedules: [] });
+  it('stays hidden for the snooze window while still unscheduled', async () => {
+    localStorage.setItem(SNOOZE_KEY, String(Date.now() + 5 * DAY_MS));
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).not.toBeInTheDocument());
+  });
+
+  it('comes back once the snooze expires and the install is still unscheduled', async () => {
+    // This is the property bead iij6s exists for: the signal cannot be
+    // permanently silenced while the condition it reports is still true.
+    localStorage.setItem(SNOOZE_KEY, String(Date.now() - 1));
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+  });
+
+  it('does not honour the legacy permanent dismissal, and clears it', async () => {
+    localStorage.setItem(LEGACY_DISMISS_KEY, '1');
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+    expect(localStorage.getItem(LEGACY_DISMISS_KEY)).toBeNull();
+  });
+
+  it('treats an unreadable snooze value as expired rather than as forever', async () => {
+    localStorage.setItem(SNOOZE_KEY, 'never');
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+  });
+
+  it('clears a stored snooze once an enabled schedule exists', async () => {
+    // Otherwise a snooze taken today outlives the schedule that replaced it,
+    // and disabling that schedule tomorrow leaves the install silently
+    // unscheduled and silently un-warned.
+    localStorage.setItem(SNOOZE_KEY, String(Date.now() + 5 * DAY_MS));
+    (api.getTaskSchedules as Mock).mockResolvedValue({
+      schedules: [schedule({ enabled: true })],
+    });
     render(<BackupScheduleBanner />);
-    // Dismissed acknowledgement short-circuits before any schedule fetch — the
-    // operator has already seen and dismissed the nudge.
-    await waitFor(() =>
-      expect(screen.queryByTestId('backup-schedule-banner')).not.toBeInTheDocument(),
-    );
-    expect(api.getTaskSchedules).not.toHaveBeenCalled();
+    await waitFor(() => expect(localStorage.getItem(SNOOZE_KEY)).toBeNull());
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it('stays quiet when the schedule check fails', async () => {
+    (api.getTaskSchedules as Mock).mockRejectedValue(new Error('offline'));
+    render(<BackupScheduleBanner />);
+    await waitFor(() => expect(api.getTaskSchedules).toHaveBeenCalled());
+    await waitFor(() => expect(banner()).not.toBeInTheDocument());
   });
 
   it('"Set one up" navigates to the dbas_backup schedule editor', async () => {
-    (api.getTaskSchedules as Mock).mockResolvedValue({ schedules: [] });
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
-    render(<BackupScheduleBanner />);
-    await waitFor(() =>
-      expect(screen.getByTestId('backup-schedule-banner')).toBeInTheDocument(),
-    );
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('backup-schedule-banner-cta'));
 
