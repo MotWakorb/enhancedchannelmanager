@@ -23,6 +23,14 @@
  *     One click buys a month of quiet, the button says so before it is clicked,
  *     and enabling a schedule ends the reminders outright.
  *
+ * The rules that make those properties hold — the ceiling on a stored snooze,
+ * voiding one whenever an enabled schedule is observed anywhere in the app,
+ * and surviving Web Storage that throws — live in
+ * `utils/backupBannerSnooze.ts` and are documented there. They are not in this
+ * file because two of the three have to hold while this component is NOT
+ * mounted, and a rule that only runs while a component is on screen is not a
+ * rule (bead enhancedchannelmanager-pui76, review round 2).
+ *
  * The window is client-side, so it is per browser profile. That is deliberate
  * rather than a shortcut: the only alternative is a server-side, admin-writable
  * suppression flag whose entire function is to hide a safety warning across
@@ -42,42 +50,18 @@ import { useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
 import {
+  BACKUP_TASK_ID,
+  SNOOZE_DAYS,
+  discardLegacyBackupBannerDismissal,
+  isBackupBannerSnoozed,
+  startBackupBannerSnooze,
+} from '../../utils/backupBannerSnooze';
+import {
   OPEN_TASK_EDITOR_EVENT,
   OPEN_TASK_EDITOR_STORAGE_KEY,
   type OpenTaskEditorIntent,
 } from '../../utils/openTaskEditor';
 import './BackupScheduleBanner.css';
-
-/**
- * localStorage key holding the epoch-milliseconds instant the snooze runs out.
- * Named for what it stores: an expiry, not a boolean. Deliberately a NEW key —
- * the legacy one below held a permanent `'1'`, and reusing it would have to
- * decide what `'1'` means as a timestamp on every install already carrying one.
- */
-const SNOOZE_UNTIL_KEY = 'ecm:dbas-backup-banner-snoozed-until';
-/**
- * The pre-iij6s permanent-dismissal flag. Not honoured — installs silenced
- * under the old behaviour are precisely the ones that need telling again — and
- * removed on sight so it does not sit in storage meaning nothing.
- */
-const LEGACY_DISMISS_KEY = 'ecm:dbas-backup-banner-dismissed';
-/** How long one dismissal buys. Quoted verbatim in the button's label. */
-const SNOOZE_DAYS = 30;
-const SNOOZE_MS = SNOOZE_DAYS * 24 * 60 * 60 * 1000;
-/** The scheduled-backup task this banner is about. */
-const BACKUP_TASK_ID = 'dbas_backup';
-
-/**
- * True only while a readable snooze is still in the future. An unreadable or
- * missing value means "not snoozed" — a value nobody can interpret must fail
- * toward showing the warning, never toward hiding it forever.
- */
-function isSnoozed(now: number): boolean {
-  const raw = localStorage.getItem(SNOOZE_UNTIL_KEY);
-  if (raw === null) return false;
-  const until = Number(raw);
-  return Number.isFinite(until) && until > now;
-}
 
 export function BackupScheduleBanner() {
   // `null` = still checking; `true`/`false` = whether to render.
@@ -86,20 +70,22 @@ export function BackupScheduleBanner() {
   useEffect(() => {
     let cancelled = false;
 
-    localStorage.removeItem(LEGACY_DISMISS_KEY);
-    const snoozed = isSnoozed(Date.now());
+    discardLegacyBackupBannerDismissal();
+    const snoozed = isBackupBannerSnoozed(Date.now());
 
-    // The schedule check runs even while snoozed. It is one cheap GET, and it
-    // is what lets an enabled schedule clear a stale snooze: without it, a
-    // snooze taken today outlives the schedule that replaced it, and disabling
-    // that schedule tomorrow leaves the install unscheduled AND un-warned.
+    // The schedule check runs even while snoozed, because the snooze only ever
+    // buys quiet against an unscheduled install and this is what confirms the
+    // install is still unscheduled. Voiding a stale snooze is NOT this call's
+    // job any more (bead pui76 round 2): `api.getTaskSchedules` does it, along
+    // with every other path an enabled schedule enters the frontend through,
+    // so the sequence "snooze here, enable and disable from Scheduled Tasks,
+    // come back" no longer depends on this component having been mounted at
+    // the right moment.
     api
       .getTaskSchedules(BACKUP_TASK_ID)
       .then(({ schedules }) => {
-        const hasEnabled = schedules.some((s) => s.enabled);
-        if (hasEnabled) localStorage.removeItem(SNOOZE_UNTIL_KEY);
         if (cancelled) return;
-        setShow(!hasEnabled && !snoozed);
+        setShow(!schedules.some((s) => s.enabled) && !snoozed);
       })
       .catch((err) => {
         // Fail quiet: a transient schedule-load error must not nag the operator
@@ -116,7 +102,16 @@ export function BackupScheduleBanner() {
   if (!show) return null;
 
   const handleSnooze = () => {
-    localStorage.setItem(SNOOZE_UNTIL_KEY, String(Date.now() + SNOOZE_MS));
+    // `setShow(false)` is unconditional and comes second on purpose: the
+    // operator clicked, so the banner goes away for this session even where
+    // Web Storage refuses the write and the quiet cannot outlive the tab. A
+    // control that visibly does nothing is worse than one whose effect is
+    // shorter than advertised.
+    if (!startBackupBannerSnooze(Date.now())) {
+      logger.warn(
+        'Could not persist the backup-banner snooze; it will last this session only',
+      );
+    }
     setShow(false);
   };
 

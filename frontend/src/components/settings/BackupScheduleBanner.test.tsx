@@ -10,9 +10,16 @@
  *   - Dismissal is therefore a SNOOZE. It hides the banner for a fixed window
  *     and the banner returns afterwards while the install is still unscheduled.
  *   - The control says so: "Remind me in 30 days", not a bare ✕.
- *   - An enabled schedule hides the banner and clears any stored snooze, so a
+ *   - An enabled schedule hides the banner, and voids any stored snooze so a
  *     schedule that is later disabled brings the warning straight back rather
- *     than being suppressed by a stale snooze.
+ *     than being suppressed by a stale snooze. The voiding is enforced in the
+ *     API layer, not here (bead enhancedchannelmanager-pui76 round 2) — this
+ *     file mocks `services/api` away, so it pins the banner's own behaviour
+ *     and defers that rule to `services/api.backupBannerSnooze.test.ts` and
+ *     `BackupScheduleBanner.lifecycle.test.tsx`.
+ *   - A stored snooze can never push the next warning further out than the
+ *     snooze window, and Web Storage that throws never hides the banner and
+ *     never eats a dismissal click.
  *   - The legacy permanent-dismissal flag is not honoured and is cleaned up —
  *     installs silenced under the old behaviour get told again.
  *   - "Set one up" routes the operator to the schedule editor for dbas_backup.
@@ -156,16 +163,70 @@ describe('BackupScheduleBanner', () => {
     await waitFor(() => expect(banner()).toBeInTheDocument());
   });
 
-  it('clears a stored snooze once an enabled schedule exists', async () => {
-    // Otherwise a snooze taken today outlives the schedule that replaced it,
-    // and disabling that schedule tomorrow leaves the install silently
-    // unscheduled and silently un-warned.
+  // Bead enhancedchannelmanager-pui76, review round 2. A stored value beyond
+  // the snooze window is not a value this code could have written, so it is
+  // not a snooze — it fails toward showing the warning. Rendered-behaviour
+  // counterpart of the property swept in utils/backupBannerSnooze.test.ts;
+  // 1e308 is listed as one instance of the rule, not as the rule.
+  it.each([
+    ['1e308', 1e308],
+    ['the largest safe integer', Number.MAX_SAFE_INTEGER],
+    ['a year out', Date.now() + 365 * DAY_MS],
+  ])('still shows the banner when the stored snooze is %s', async (_label, until) => {
+    localStorage.setItem(SNOOZE_KEY, String(until));
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+  });
+
+  it('still shows the banner when the clock has moved backwards past a real snooze', async () => {
+    const realSnooze = Date.now() + 20 * DAY_MS;
+    vi.spyOn(Date, 'now').mockReturnValue(realSnooze - 60 * DAY_MS);
+    localStorage.setItem(SNOOZE_KEY, String(realSnooze));
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+  });
+
+  it('shows the banner when reading localStorage throws', async () => {
+    // Private-mode / policy-restricted Web Storage. The whole effect used to
+    // abort here, leaving `show === null`, so the ONLY signal that an install
+    // has no backups never rendered at all (bead pui76, review round 2).
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('SecurityError');
+    });
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new DOMException('SecurityError');
+    });
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+  });
+
+  it('still hides the banner for the session when the snooze cannot be persisted', async () => {
+    // The other direction, and it fails the other way on purpose: the operator
+    // clicked, so the click is honoured now even though the quiet cannot
+    // outlive the tab. A control that visibly does nothing is worse.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError');
+    });
+    await renderUnscheduled();
+    await waitFor(() => expect(banner()).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('backup-schedule-banner-dismiss'));
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it('does not show while an enabled schedule exists, snooze or no snooze', async () => {
+    // The banner's own remaining duty. VOIDING the stale snooze is no longer
+    // this component's job — `api.getTaskSchedules` is mocked out here, and
+    // the clearing now rides on that call and on every other path an enabled
+    // schedule enters the frontend through, so it is pinned at that seam
+    // instead: services/api.backupBannerSnooze.test.ts, plus the off-page
+    // lifecycle in BackupScheduleBanner.lifecycle.test.tsx.
     localStorage.setItem(SNOOZE_KEY, String(Date.now() + 5 * DAY_MS));
     (api.getTaskSchedules as Mock).mockResolvedValue({
       schedules: [schedule({ enabled: true })],
     });
     render(<BackupScheduleBanner />);
-    await waitFor(() => expect(localStorage.getItem(SNOOZE_KEY)).toBeNull());
+    await waitFor(() => expect(api.getTaskSchedules).toHaveBeenCalled());
     expect(banner()).not.toBeInTheDocument();
   });
 
