@@ -815,8 +815,8 @@ blocks the eventual real test from being added (the suite is already "green").
 
 *Origin: beads `enhancedchannelmanager-vmk2m.1`, `enhancedchannelmanager-vmk2m.2`,
 `enhancedchannelmanager-5dckk`. Two frontend tests were "fixed" for flakiness by
-raising a `waitFor` timeout, and both recurred through that fix, twice blocking
-the `dev` image publish.*
+raising a `waitFor` timeout, and both recurred through that fix, three times
+blocking the `dev` image publish.*
 
 - **Raising a `waitFor` timeout is a longer wait for the same race, not a fix.**
   Two fixes in this repo did exactly that and both recurred.
