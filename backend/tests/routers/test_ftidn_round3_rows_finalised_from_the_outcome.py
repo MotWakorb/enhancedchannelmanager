@@ -322,6 +322,27 @@ class TestBulkMergeRowsDescribeWhatHappened:
         assert response.json()["results"][0]["sources_failed"] == 0
 
     @pytest.mark.asyncio
+    async def test_a_group_naming_no_sources_reads_as_prose(self, async_client):
+        """``source_channel_ids`` has no minimum length, so this is reachable.
+
+        Not a behaviour question — the row is complete either way — but "deleted
+        all 0 source channel(s)" in an operator-facing description reads as a
+        bug in the row rather than as what happened.
+        """
+        client = self._client()
+        journal_double = _journal_double()
+
+        response = await self._post(
+            async_client, client, journal_double,
+            [{"target_channel_id": 1, "source_channel_ids": []}],
+        )
+
+        assert response.status_code == 200, response.text
+        row = _rows(journal_double)[0]
+        assert row["action_type"] == "bulk_merge"
+        assert "0 source" not in row["description"], row["description"]
+
+    @pytest.mark.asyncio
     async def test_a_cancelled_delete_flushes_a_row_true_at_that_instant(
         self, async_client,
     ):

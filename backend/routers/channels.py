@@ -364,7 +364,12 @@ def finalise_bulk_merge_row(row: dict) -> dict:
         head = f"Moved {after['stream_count']} stream(s) into '{target_name}'"
     else:
         head = f"'{target_name}' needed no stream change"
-    if complete:
+    if complete and not total:
+        # `source_channel_ids` has no minimum length, so a group naming no
+        # sources is reachable. "deleted all 0" is technically true and reads
+        # as a mistake.
+        tail = "and had no source channel to delete"
+    elif complete:
         tail = f"and deleted all {total} source channel(s)"
     elif deleted:
         tail = (
