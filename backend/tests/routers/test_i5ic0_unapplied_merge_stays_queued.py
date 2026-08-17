@@ -370,3 +370,61 @@ class TestDismissStillResolvesAFlaggedRow:
             PendingMerge.id == row.id
         ).one()
         assert refreshed.status == "dismissed"
+
+
+class TestTheResolutionCounterStillCountsResolutions:
+    """SLI-10b's numerator is "terminal-state transitions out of the queue".
+
+    ``docs/sre/slos.md`` defines it that way and the alert
+    ``ECMDedupPendingMergeResolutionStale`` fires when the ratio of those
+    transitions to queue insertions falls below 95% over 24h. An accept that
+    leaves its row queued is not one of them, so counting it as ``success``
+    would report the queue being cleared while flagged rows piled up in it —
+    and would suppress the one alert that exists to notice that. The request
+    still happened, so it is still counted, under its own label: dropping it
+    entirely would instead shrink SLI-10c's error-rate DENOMINATOR.
+    """
+
+    def _metric_value(self, status: str) -> float:
+        import observability
+
+        metric = observability.get_metric("dedup_merge_requests_total")
+        for sample_family in metric.collect():
+            for sample in sample_family.samples:
+                if (
+                    sample.name.endswith("_total")
+                    and sample.labels.get("status") == status
+                ):
+                    return sample.value
+        return 0.0
+
+    @pytest.mark.asyncio
+    async def test_an_unapplied_accept_is_not_counted_as_a_resolution(
+        self, async_client, test_session,
+    ):
+        row = _make_pending(test_session)
+        before_success = self._metric_value("success")
+        before_unapplied = self._metric_value("unapplied")
+
+        await _accept(async_client, _client(streams=[]), _journal_double(), row.id)
+
+        assert self._metric_value("success") == pytest.approx(before_success)
+        assert self._metric_value("unapplied") == pytest.approx(before_unapplied + 1)
+
+    @pytest.mark.asyncio
+    async def test_a_retry_that_lands_is_counted_as_one(
+        self, async_client, test_session,
+    ):
+        """The other direction, or the label change has taken the signal away."""
+        row = _make_pending(test_session)
+        await _accept(async_client, _client(streams=[]), _journal_double(), row.id)
+        before_success = self._metric_value("success")
+
+        await _accept(
+            async_client,
+            _client(streams=[{"id": 100, "name": "ESPN HD"}]),
+            _journal_double(),
+            row.id,
+        )
+
+        assert self._metric_value("success") == pytest.approx(before_success + 1)

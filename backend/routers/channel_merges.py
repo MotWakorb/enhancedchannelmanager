@@ -704,8 +704,24 @@ def _bump_metric(status: str) -> None:
     business failure. A failed emit logs at DEBUG and continues.
 
     The ``status`` argument is the BD-M contract label
-    (``success`` | ``error`` | ``dismissed``); ``cancelled`` is
-    reserved for the modal surface and never emitted from this router.
+    (``success`` | ``error`` | ``dismissed`` | ``unapplied``);
+    ``cancelled`` is reserved for the modal surface and never emitted from
+    this router.
+
+    ``unapplied`` was added with the PO decision of 2026-08-16 (bead
+    ``enhancedchannelmanager-i5ic0``) and is REQUIRED by SLI-10b's own
+    definition rather than being an extra dimension. ``docs/sre/slos.md``
+    defines that SLI's numerator as "terminal-state transitions out of the
+    queue", and an accept ECM could not apply now makes no such transition:
+    its row stays ``pending``, flagged. Counting it as ``success`` would have
+    reported the queue being cleared while flagged rows accumulated in it, and
+    would have suppressed ``ECMDedupPendingMergeResolutionStale``, the one
+    alert that exists to notice that. Dropping the emit entirely was the other
+    option and is worse: the request happened, and not counting it shrinks
+    SLI-10c's error-rate DENOMINATOR instead. Additive for every existing
+    query — ``{status="error"}`` and ``{status=~"success|dismissed"}`` keep
+    working and become more accurate. ``docs/sre/slos.md`` and
+    ``docs/runbooks/dedup-*.md`` enumerate the label values and need amending.
     """
     try:
         get_metric("dedup_merge_requests_total").labels(status=status).inc()
@@ -1479,7 +1495,10 @@ async def accept_pending_merge(
                 detail="Internal error persisting merge outcome",
             )
 
-        _bump_metric("success")
+        # `success` is SLI-10b's numerator and means the row LEFT the queue.
+        # An accept ECM could not apply did not resolve anything, so it is
+        # counted as itself; see `_bump_metric`.
+        _bump_metric("success" if dispatcharr_updated else "unapplied")
         # Update the companion queue-depth gauge (bd-wvr1d). Best-effort:
         # a failed COUNT or gauge.set is logged at WARN inside the helper and
         # never blocks the accept response — the DB commit is the source of truth.
