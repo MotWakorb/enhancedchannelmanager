@@ -83,7 +83,8 @@ below for what to do next.
 will not play, and their stream lists show the provider **ECM Custom
 Streams (DBAS restore)** instead of your real provider.
 
-**Cause:** A standard artifact carries no provider credentials, so at the
+**Cause:** A standard artifact replaces the structured provider credential
+fields and credential-bearing URLs, so at the
 moment the restore reattaches channels to real streams there are no real
 streams to attach to: the M3U account cannot authenticate yet. Every
 channel is parked on a URL-less placeholder instead. Immediately after a

@@ -199,7 +199,7 @@ decisions that the PO resolved on 2026-06-16. They extend D1–D9:
 These are recorded as PO-accepted. The threat model and the affected child beads (`0i2vt.13`,
 the new passphrase-encryption bead, `0i2vt.7`/restore) are updated to match.
 
-## Amendment, 2026-08-17: "redact by default" means fully redacted (bead `enhancedchannelmanager-gi4zn`)
+## Amendment, 2026-08-17: "redact by default" covers structured credentials (bead `enhancedchannelmanager-gi4zn`)
 
 PO decision, 2026-08-05, implemented 2026-08-17. This does not overturn a decision above; it fixes
 what one of them was taken to mean, after a live drill showed the shipped behaviour was narrower

@@ -20,7 +20,7 @@ Use this first when setting up backups, and whenever you want a fresh recovery p
 
 ECM builds the artifact in the background via the `dbas_backup` task. A notification appears when the backup completes. The artifact and a `.sha256` sidecar are saved to `/config/backups/` on the ECM host.
 
-This is a **configuration-only** backup. It does not contain working M3U or EPG provider credentials, and it does not contain your ECM login accounts. On a fresh install, you must create an ECM admin account and re-enter every provider credential after restoring it. Operator-authored free text, such as source names and rule notes, may travel verbatim. Credential-bearing URLs are replaced; credential-free provider addresses remain. Inspect that content before sharing the artifact outside your control.
+This is a **configuration-only** backup. ECM replaces recognized M3U and EPG provider credential fields and credential-bearing URL values, and it removes your ECM login accounts. On a fresh install, you must create an ECM admin account and re-enter every provider credential after restoring it. Operator-authored free text, such as source names and rule notes, may travel verbatim and could contain a secret ECM cannot recognize. Credential-free provider addresses remain. Inspect that content before sharing the artifact outside your control.
 
 If you need credentials and ECM accounts to travel with the artifact for a migration, use the Encrypted Backup card described below and enable **Include credentials**.
 

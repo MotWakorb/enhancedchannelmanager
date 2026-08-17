@@ -105,7 +105,7 @@ When you opt in to restoring users:
 
 ## What a standard backup cannot restore, and how ECM tells you
 
-A standard (non-encrypted) backup is fully redacted, so some things simply are not in it to restore. See [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry) for the complete list. The two that need action from you after a restore:
+A standard (non-encrypted) backup applies ECM's structured credential-redaction rules, so some things simply are not in it to restore. See [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry) for the complete list and the free-text limitation. The two that need action from you after a restore:
 
 - **Provider credentials.** Restored M3U accounts and EPG sources come back with the credential unset rather than wrong, username as well as password. The restore report names each account and field that needs re-entering. See [Step 6 of Migrate to a new install](migrate-to-a-new-install.md#step-6-re-enter-credentials-standard-backup-only).
 - **ECM's own accounts, and the settings that hold credentials.** These live in `journal.db`, which only the **Restore Full Backup** path writes. The **Restore DBAS Backup** flow on this page does not write `journal.db` at all, so it never changes your ECM accounts in either direction.

@@ -283,8 +283,9 @@ encrypt stage and the Phase-2 decrypt-at-ingest gate. See Addendum C (§10) for 
 28. **REDACT-THEN-ENCRYPT is structural (Addendum C)**: redaction runs **inside** the build path and
     cannot be skipped; `include_credentials` only re-injects the approved credential set before
     encryption. There is no "encrypt instead of redact, skipping redaction" code path. Test: a backup
-    with `include_credentials=false` + a passphrase still contains no plaintext credentials after
-    decryption. *(C2, C3)*
+    with `include_credentials=false` + a passphrase still replaces the approved structured
+    credential set and credential-bearing URL values after decryption. Operator-authored free text
+    remains outside that guarantee. *(C2, C3)*
 29. **KDF + AEAD construction (Addendum C, per spike `0zrse`)**: scrypt KDF with **N ≥ 2¹⁵** (floor),
     r=8, p=1; per-artifact random salt; KDF params + salt live in a **cleartext authenticated header**.
     Chunked streaming AEAD (ChaCha20-Poly1305 **or** AES-256-GCM); per-chunk nonce (random base XOR
@@ -504,7 +505,7 @@ is protected solely by the operator's passphrase. See §10 for that path's contr
 
 ### 8.4 Residual risk (Addendum A)
 
-- **Residual: artifact handling after egress (Medium, accepted, PO-resolved).** Once the ZIP leaves the container ECM has zero control. Even fully redacted, the artifact still reveals the *shape* of a deployment (channel names, source URLs minus creds, user list). Mitigations reduce a credential breach to a topology disclosure; they cannot make the artifact safe to publish. **PO decision (2026-06-16, ADR-012 D12):** "redacted backup may be stored anywhere; encrypted backup needs the passphrase kept separate" **is** the accepted posture, and the PO went further than the original "v0.18.x candidate" recommendation, deciding to **ship an optional whole-artifact passphrase encryption path in v0.18.0** (opt-in; redact-by-default stays the default). That path is specified in **Addendum C (§10)**. The topology-disclosure residual of a *redacted* artifact remains accepted (it is inherent to producing a portable backup at all).
+- **Residual: artifact handling after egress (Medium, accepted, PO-resolved).** Once the ZIP leaves the container ECM has zero control. After structured credential fields and credential-bearing URL values are replaced, the artifact still reveals the *shape* of a deployment and retains operator-authored free text, which could itself contain an unrecognized secret. Mitigations reduce the known structured-credential exposure; they cannot make the artifact safe to publish. **PO decision (2026-06-16, ADR-012 D12):** "redacted backup may be stored anywhere; encrypted backup needs the passphrase kept separate" **is** the accepted posture, and the PO went further than the original "v0.18.x candidate" recommendation, deciding to **ship an optional whole-artifact passphrase encryption path in v0.18.0** (opt-in; redact-by-default stays the default). That path is specified in **Addendum C (§10)**. The topology and authored-content residual of a *redacted* artifact remains accepted (it is inherent to producing a portable backup at all).
 - **Residual: redaction-denylist completeness (Low).** A credential-class key not in the denylist ships in plaintext. Mitigated by the shared-list discipline (one place to audit) and the unit test that fails if a known secret leaks; but a *novel* category added without a denylist review is the failure mode. Action: the "add a Dispatcharr category" checklist must include "add its secret keys to `_REDACT_KEYS`".
 - **Residual: Fernet key compromise (Low, for v0.18.0 scope).** If both the encrypted artifact and the Fernet key leak, the carve-out creds are exposed. Out of scope to fix here (no KMS for MVP, ADR-012 D3); the key-bootstrap integrity check (`0i2vt.2`, mode 0600 + ownership) is the compensating control.
 
