@@ -57,33 +57,26 @@ This walkthrough assumes:
 
 Take a **manual encrypted backup** so credentials travel with the artifact. If you are OK re-entering credentials on the new install, a standard (unencrypted) backup is sufficient.
 
-!!! warning "Take the standard backup first, if you want one at all"
-    Creating an encrypted backup leaves the `DBAS Backup` task contaminated:
-    every later run of that task on this install, including the standard
-    **Run Now** path and every unattended scheduled run, produces an
-    **encrypted, credential-bearing artifact** instead of the default
-    redacted one, until ECM's container restarts. If you want both a standard artifact
-    for your records and an encrypted one for the migration, take the
-    standard backup **before** you create any encrypted backup.
+If you want both a redacted recovery point and a credential-complete migration artifact, create the configuration backup first, then create the encrypted backup. The encrypted-backup settings apply only to that one run; later manual and scheduled backups return to the standard redacted format.
 
 ### Standard backup (if re-entering credentials is acceptable)
 
-The Backup & Restore page does not have a **Back Up Now** button. Use the Scheduled Tasks path:
+1. On the old install, go to **Settings → Backup & Restore**.
+2. Find the **Configuration Backup** card.
+3. Click **Create Configuration Backup**.
+4. Wait for the completion notification, then download the new `.zip` from **Saved Backups** to your workstation.
 
-1. On the old install, go to **Settings → Scheduled Tasks**.
-2. Find the **DBAS Backup** task card.
-3. Click **Run Now**.
-4. Wait for the completion notification, then go to **Settings → Backup & Restore → Saved Backups** and download the `.zip` to your workstation.
+This artifact does not contain working provider credentials or ECM login accounts. Restoring it onto a fresh install means creating an ECM admin account and re-entering every M3U and EPG provider credential by hand.
 
 See [Take a backup](take-a-backup.md#option-a-manual-backup-on-demand) for the full on-demand backup walkthrough.
 
 ### Encrypted backup (recommended for migration)
 
-1. On the old install, go to **Settings → Backup & Restore → Encrypted Backup**.
+1. On the old install, go to **Settings → Backup & Restore → Encrypted Backup (Migration)**.
 2. Check the acknowledgement: *"I understand a lost passphrase makes this artifact permanently unrecoverable."*
 3. Enter a passphrase of at least 12 characters. **Write it down in a password manager right now.** You need this passphrase on the new install. There is no recovery path if you lose it.
 4. Enable **Include credentials** to include M3U/EPG passwords, SMTP passwords, and alert-method credentials in the artifact.
-5. Click **Create encrypted backup**.
+5. Click **Create Encrypted Backup**.
 
 Wait for the backup to complete (a notification appears). Then go to **Settings → Backup & Restore → Saved Backups** and download the `.zip` to your workstation.
 

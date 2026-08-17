@@ -6,6 +6,7 @@ import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
 import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import { ConfigurationBackupCard } from './ConfigurationBackupCard';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
 import { CloudTargetsCard } from './CloudTargetsCard';
@@ -374,8 +375,19 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <span className="material-icons">folder</span>
           <h3>Saved Backups</h3>
         </div>
+        {/* Both strings in this card described a card that no longer exists
+            (bead enhancedchannelmanager-e4iok). The caption called the list
+            YAML-only while list_saved_backups globs ecm-backup-*.yaml AND
+            *.zip, and the rows below render restore / download / delete for
+            DBAS .zip artifacts; the empty state named a "YAML Backup"
+            scheduled task, which is not the task that writes what this card
+            shows. Both now name what actually lands here and what produces
+            it. */}
         <p className="backup-card-description">
-          YAML backups saved on the server by the scheduled backup task.
+          Backups saved on the server, in /config/backups/ — YAML exports and .zip artifacts
+          alike, however they were produced. A .zip here is either a DBAS artifact or a
+          pre-v0.18.0 full backup, and a full backup also carries TLS certificates and uploaded
+          files.
         </p>
         {loadingSaved ? (
           <div className="backup-loading">
@@ -384,7 +396,8 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </div>
         ) : savedBackups.length === 0 ? (
           <div className="saved-backups-empty empty-inline">
-            No saved backups. Enable the YAML Backup scheduled task to create automatic backups.
+            No saved backups yet. Use Configuration Backup below to take one now, or enable a
+            schedule on the DBAS Backup task to have them taken automatically.
           </div>
         ) : (
           <div className="saved-backups-list">
@@ -445,9 +458,28 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         )}
       </div>
 
-      {/* Separator */}
+      {/* One-click standard DBAS artifact (bead enhancedchannelmanager-pui76).
+          Placed immediately above the encrypted card so the two DBAS producers
+          are adjacent and this card's "use Encrypted Backup below" pointer
+          lands on the next thing the operator sees. */}
+      <ConfigurationBackupCard />
+
+      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
+      <EncryptedBackupCard />
+
+      {/* THE ORDER OF THESE THREE CARDS IS LOAD-BEARING (bead
+          enhancedchannelmanager-pui76, review round 2). "Create Full Backup"
+          used to render ABOVE both DBAS producers, so the first backup control
+          an operator met was the deprecated pre-v0.18.0 one — while this
+          page's own "Which one do I need?" helper recommends DBAS for disaster
+          recovery and reserves the full format for restoring older files. The
+          legacy artifact is also the riskier one to hold: unlike the DBAS
+          artifact it carries TLS private keys and uploaded playlists, so the
+          neighbouring DBAS card's redaction language must not be easy to read
+          across onto it. Both reasons point the same way: the deprecated
+          producer goes last, behind its own divider. */}
       <div className="backup-section-divider">
-        <span>Full System Backup</span>
+        <span>Full System Backup (legacy)</span>
       </div>
 
       {/* Full ZIP Backup */}
@@ -476,9 +508,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         )}
       </div>
 
-      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
-      <EncryptedBackupCard />
-
       {/* Cross-Instance Sync — epic i39wu / nnl9s */}
       <SyncTargetsCard />
 
@@ -494,9 +523,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <h3>Restore DBAS Backup</h3>
         </div>
         <p className="backup-card-description">
-          Restore a v0.18.0 backup artifact (.zip) — the format produced by scheduled backups and
-          the Encrypted Backup card. Preview the changes first (dry run), then apply. Encrypted
-          artifacts prompt for the passphrase.
+          Restore a v0.18.0 backup artifact (.zip) — the format produced by Configuration Backup,
+          scheduled backups, and Encrypted Backup (Migration). Preview the changes first (dry
+          run), then apply. Encrypted artifacts prompt for the passphrase.
         </p>
         <button className="btn-primary" onClick={() => setShowDbasRestoreModal(true)}>
           <span className="material-icons">upload_file</span>

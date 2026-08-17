@@ -69,7 +69,7 @@ with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
 
 If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact. Go to an older unencrypted backup.
 
-Note that encrypted does not imply credential-bearing. Only an artifact taken with **Include credentials** carries provider credentials and ECM accounts; an encrypted artifact taken without it is redacted exactly like a standard one, and nothing in the file distinguishes the two. If you are recovering onto a fresh instance and need credentials to travel, confirm which artifact you have before planning around it.
+Note that encrypted does not imply credential-bearing. Only an artifact taken with **Include credentials** preserves the recognized structured provider credential fields, credential-bearing URL values, and ECM accounts; an encrypted artifact taken without it applies the same structured redaction rules as a standard one, and nothing in the file distinguishes the two. If you are recovering onto a fresh instance and need those credentials to travel, confirm which artifact you have before planning around it.
 
 ### Step 5: Confirm the restoring build is not older than the artifact
 
@@ -82,7 +82,7 @@ Compare that version against the `app_version` the artifact's manifest reports. 
 
 `schema_version` did not move when full redaction shipped, so the version gate will **not** stop you from restoring a new artifact with an older ECM. That combination has three known problems, all of which arrive behind an apparently successful restore:
 
-1. **The restoring admin can be signed out of their own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a fully redacted artifact carries none of its own. During a DR rebuild this looks like the restore working and then dropping you at the setup wizard on an instance you were administering.
+1. **The restoring admin can be signed out of their own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a standard credential-redacted artifact carries none of its own accounts. During a DR rebuild this looks like the restore working and then dropping you at the setup wizard on an instance you were administering.
 2. Alert-method `username` and `chat_id` are written in as the literal text `***REDACTED***`.
 3. An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety and stops sending notifications until reconfigured.
 
@@ -104,7 +104,7 @@ curl -s -X POST http://localhost:8080/api/backup/save \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-Or use the UI: **Settings → Backup & Restore → Back Up Now**.
+Or use the UI: **Settings → Backup & Restore → Configuration Backup → Create Configuration Backup**.
 
 !!! danger "If this backup fails with a scrub error, that is the control working"
     ECM removes its accounts, credentials, telemetry and history from the artifact's copy of

@@ -199,7 +199,7 @@ decisions that the PO resolved on 2026-06-16. They extend D1–D9:
 These are recorded as PO-accepted. The threat model and the affected child beads (`0i2vt.13`,
 the new passphrase-encryption bead, `0i2vt.7`/restore) are updated to match.
 
-## Amendment, 2026-08-17: "redact by default" means fully redacted (bead `enhancedchannelmanager-gi4zn`)
+## Amendment, 2026-08-17: "redact by default" covers structured credentials (bead `enhancedchannelmanager-gi4zn`)
 
 PO decision, 2026-08-05, implemented 2026-08-17. This does not overturn a decision above; it fixes
 what one of them was taken to mean, after a live drill showed the shipped behaviour was narrower
@@ -226,7 +226,7 @@ Three consequences for this ADR's decisions:
 |---|---|
 | **D1 / redact-by-default** | Specified as the property above rather than as a field list. Implemented as three rules in one place: a credential-class key denylist, provider-identity keys (`username`), and a value-level URL credential scrub. Identity redaction is on by default so a new caller fails closed; there is exactly one exemption, `dispatcharr_users`, whose username is the operator's own instance and the natural key its importer creates and collision-checks on. |
 | **D12 / preserve set** | The cred-carrying encrypted artifact is unaffected, and that required a deliberate widening: the provider-identity keys join its **preserve set** (`_REDACT_KEYS` plus `_PROVIDER_IDENTITY_KEYS`), and the URL scrub is off on that path. Half a credential pair is not a credential, so omitting them would have widened redaction into the one artifact D12 exists to leave alone. `password_hash` is in neither the denylist nor the preserve set and is never carried by a category; the encrypted artifact carries the operator's accounts through its byte-for-byte `journal.db` copy instead. |
-| **D3 / at-rest ciphertext** | Unchanged as a storage decision, but `cloud_storage_targets` and `sync_targets` are now dropped from a standard artifact entirely. Fernet ciphertext is still credential material in an artifact whose whole purpose is being safe to share. |
+| **D3 / at-rest ciphertext** | Unchanged as a storage decision, but `cloud_storage_targets` and `sync_targets` are now dropped from a standard artifact entirely. Fernet ciphertext is still credential material in an artifact whose purpose is to remove working credentials before export. Operator-authored configuration remains and still requires a disclosure review. |
 
 **The `journal.db` scrub is now an allowlist.** Three review rounds each found more tables that
 should not ship, which is the failure mode of any denylist maintained by people who keep

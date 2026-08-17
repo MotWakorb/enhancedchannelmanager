@@ -102,6 +102,7 @@ import type {
   RejectEventSyncReviewOutcome,
 } from '../types/eventSync';
 import { logger } from '../utils/logger';
+import { voidBackupBannerSnoozeIfScheduled } from '../utils/backupBannerSnooze';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
 import {
   type TimezonePreference,
@@ -3020,16 +3021,31 @@ export interface TaskConfigUpdate {
   show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
+/**
+ * Every function below that can carry a `dbas_backup` schedule reports what it
+ * saw to `voidBackupBannerSnoozeIfScheduled`. That helper owns the invariant
+ * "an observed enabled backup schedule voids any stored banner snooze"; these
+ * call sites only owe it the observation. See `utils/backupBannerSnooze.ts` —
+ * the point of doing it here rather than in the banner component is that the
+ * fact has to take effect when the banner is not mounted, which is exactly the
+ * lifecycle that was broken (bead enhancedchannelmanager-pui76, round 2).
+ */
 export async function getTasks(): Promise<{ tasks: TaskStatus[] }> {
-  return fetchJson(`${API_BASE}/tasks`, {
+  const result = await fetchJson<{ tasks: TaskStatus[] }>(`${API_BASE}/tasks`, {
     method: 'GET',
   });
+  for (const task of result?.tasks ?? []) {
+    voidBackupBannerSnoozeIfScheduled(task.task_id, task.schedules);
+  }
+  return result;
 }
 
 export async function getTask(taskId: string): Promise<TaskStatus> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+  const task = await fetchJson<TaskStatus>(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
     method: 'GET',
   });
+  voidBackupBannerSnoozeIfScheduled(taskId, task?.schedules);
+  return task;
 }
 
 export async function updateTask(taskId: string, config: TaskConfigUpdate): Promise<TaskStatus> {
@@ -3080,17 +3096,24 @@ export async function getTaskHistory(taskId: string, limit = 50, offset = 0): Pr
 // -------------------------------------------------------------------------
 
 export async function getTaskSchedules(taskId: string): Promise<{ schedules: TaskSchedule[] }> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
-    method: 'GET',
-  });
+  const result = await fetchJson<{ schedules: TaskSchedule[] }>(
+    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`,
+    {
+      method: 'GET',
+    }
+  );
+  voidBackupBannerSnoozeIfScheduled(taskId, result?.schedules);
+  return result;
 }
 
 export async function createTaskSchedule(taskId: string, data: TaskScheduleCreate): Promise<TaskSchedule> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+  const schedule = await fetchJson<TaskSchedule>(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
+  voidBackupBannerSnoozeIfScheduled(taskId, schedule ? [schedule] : []);
+  return schedule;
 }
 
 export async function updateTaskSchedule(
@@ -3098,11 +3121,16 @@ export async function updateTaskSchedule(
   scheduleId: number,
   data: TaskScheduleUpdate
 ): Promise<TaskSchedule> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
+  const schedule = await fetchJson<TaskSchedule>(
+    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }
+  );
+  voidBackupBannerSnoozeIfScheduled(taskId, schedule ? [schedule] : []);
+  return schedule;
 }
 
 export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {

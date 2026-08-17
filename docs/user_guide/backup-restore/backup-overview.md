@@ -38,13 +38,13 @@ A backup covers the following configuration categories. All are included by defa
 - **Live stream content**: a backup captures *definitions* (which streams are assigned to which channels), not the streams themselves.
 - **The SQLite WAL file**: ECM checkpoints the write-ahead log before building the artifact, so `journal.db` in the archive is self-contained, but the WAL itself is not included.
 - **Dispatcharr's own database**: ECM backs up the configuration it manages. Dispatcharr's internal database (viewer history, its own task state, etc.) is outside ECM's scope.
-- **Any part of a provider credential, in a standard backup**: not the password, and not the username either. See [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the complete list, and [Credentials and passphrase encryption](#credentials-and-passphrase-encryption) for the migration path that does carry credentials.
+- **Recognized provider credential fields and credential-bearing URL values, in a standard backup**: ECM replaces structured password and username fields and URLs whose userinfo or query parameters carry credentials. It cannot recognize an arbitrary secret typed into a free-text name or note. See [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the complete rules, and [Credentials and passphrase encryption](#credentials-and-passphrase-encryption) for the migration path that preserves the structured credentials.
 
 ---
 
 ## What a standard backup does not carry
 
-A **standard** backup is the default artifact: unencrypted, and the one the `dbas_backup` task produces on a schedule. It is built to be safe to hand to somebody else, so anything that identifies you or authenticates on your behalf is removed before the bytes reach the archive. That removal is not optional and there is no switch that turns it off.
+A **standard** backup is the default artifact: unencrypted, and the one the `dbas_backup` task produces on a schedule. It is built to replace recognized structured credentials and remove account data before the bytes reach the archive. That processing is not optional and there is no switch that turns it off. Operator-authored configuration is kept, so this is not a promise that every remaining value is suitable for public disclosure.
 
 Three rules do the work, and it takes all three because none of them alone is complete:
 
@@ -67,11 +67,11 @@ Alert methods themselves are kept, because they are configuration you authored, 
 
 One part of this applies to the **Full Backup (legacy `.zip`)** format on the same page as well: its copy of `journal.db` is built by the same code and carries the same fixed table list, so the legacy artifact no longer carries your ECM accounts either.
 
-That is the whole of what the legacy format guarantees, and it does not make the `.zip` a redacted backup. Its `settings.json` masks the credential-class fields but keeps your Dispatcharr username, and it is not scrubbed for credentials embedded in URL values. The archive also copies your `tls/` and `m3u_uploads/` directories verbatim, which means TLS private keys and uploaded playlists whose stream URLs carry provider credentials. The warning on the Full Backup card, that the backup contains sensitive data including passwords and certificates, is the accurate description: treat the file as a secret, and take a standard backup when you need something safe to hand to somebody else.
+That is the whole of what the legacy format guarantees, and it does not make the `.zip` a redacted backup. Its `settings.json` masks the credential-class fields but keeps your Dispatcharr username, and it is not scrubbed for credentials embedded in URL values. The archive also copies your `tls/` and `m3u_uploads/` directories verbatim, which means TLS private keys and uploaded playlists whose stream URLs carry provider credentials. The warning on the Full Backup card, that the backup contains sensitive data including passwords and certificates, is the accurate description: treat the file as a secret. Use a standard backup when you need the credential-redacted format, and still inspect its operator-authored content before sharing it.
 
 ### What this means in practice
 
-A standard backup is now safe to attach to a support ticket, post in a forum thread, or copy to a machine you do not control. It does not contain your provider subscription, your ECM login, your viewers, or your notification credentials.
+A standard backup replaces recognized provider and notification credential fields and credential-bearing URL values. It removes ECM login accounts and viewer history. Operator-authored free text, such as source names and rule notes, may still travel verbatim and could contain a secret ECM cannot recognize; credential-free provider addresses also remain. Inspect that content before attaching the artifact to a support ticket, posting it in a forum, or copying it to a machine you do not control.
 
 Two consequences follow, and both are expected behaviour rather than faults. Both concern `journal.db`, so they apply to a **Full Backup (legacy `.zip`)** restore and to the first-run "restore from backup" path. The **Restore DBAS Backup** flow never writes `journal.db` at all, so it does not touch your ECM accounts in either direction.
 
@@ -124,7 +124,7 @@ When restoring a backup produced by an older ECM onto a newer ECM, the schema ve
 
 ## Credentials and passphrase encryption
 
-By default, all backups are **redact-by-default**, and that now means fully redacted: no part of a provider credential travels in a standard artifact, the username included. Credential fields are replaced with a `REDACTED` sentinel; see [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the three rules and the complete list. A restore from this artifact re-uses whatever credentials are already configured on the destination, or leaves the credential unset on a fresh install. It never writes the sentinel into a credential field, and the restore report names each field that needs re-entering.
+By default, backups apply all three structured redaction rules: recognized credential fields, provider-identity fields such as usernames, and credential-bearing URL values are replaced in a standard artifact. See [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the complete rules and the free-text limitation. A restore from this artifact re-uses whatever credentials are already configured on the destination, or leaves the credential unset on a fresh install. It never writes the sentinel into a credential field, and the restore report names each field that needs re-entering.
 
 If you are migrating to a new install and want credentials to travel with the backup, use the **Encrypted Backup** option:
 
@@ -133,7 +133,7 @@ If you are migrating to a new install and want credentials to travel with the ba
 3. Set a passphrase of at least 12 characters. The passphrase is never stored, so keep it somewhere safe.
 4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials alongside the encrypted artifact.
 
-**A passphrase alone does not carry credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what decides whether there is anything to protect. An encrypted backup taken *without* **Include credentials** is redacted exactly like a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
+**A passphrase alone does not preserve the structured credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what preserves the recognized credential fields and credential-bearing URL values. An encrypted backup taken *without* **Include credentials** applies the same structured redaction rules as a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
 
 An encrypted backup uses scrypt (N=2¹⁵) for key derivation and ChaCha20-Poly1305 for authenticated encryption, applied as a chunked streaming pass over the whole artifact. The passphrase is never logged or stored.
 
