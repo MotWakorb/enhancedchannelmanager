@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+_SYNTHETIC_API_KEY = "<synthetic-mcp-api-key>"
+
 
 def _free_port() -> int:
     with socket.socket() as sock:
@@ -63,7 +65,7 @@ def uvicorn_h11_server(tmp_path: Path):
     env = {
         **os.environ,
         "ECM_MCP_DISPATCH_MARKER": str(marker),
-        "ECM_MCP_TEST_API_KEY": "integration-secret",
+        "ECM_MCP_TEST_API_KEY": _SYNTHETIC_API_KEY,
         "PYTHONPATH": str(Path(__file__).parents[1]),
     }
     process = subprocess.Popen(
@@ -144,7 +146,7 @@ def test_invalid_host_with_valid_key_never_reaches_tool_dispatch(
         port,
         b"POST /mcp HTTP/1.1\r\n"
         + b"Host: " + host + b"\r\n"
-        + b"Authorization: Bearer integration-secret\r\n"
+        + b"Authorization: Bearer " + _SYNTHETIC_API_KEY.encode() + b"\r\n"
         + b"Content-Type: application/json\r\n"
         + b"Content-Length: 2\r\n"
         + b"Connection: close\r\n\r\n{}",
@@ -161,7 +163,7 @@ def test_valid_default_host_with_key_reaches_dispatch(uvicorn_h11_server, host: 
         port,
         b"POST /mcp HTTP/1.1\r\n"
         + b"Host: " + host + b"\r\n"
-        + b"Authorization: Bearer integration-secret\r\n"
+        + b"Authorization: Bearer " + _SYNTHETIC_API_KEY.encode() + b"\r\n"
         + b"Content-Type: application/json\r\n"
         + b"Content-Length: 2\r\n"
         + b"Connection: close\r\n\r\n{}",
