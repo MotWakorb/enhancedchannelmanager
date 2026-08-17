@@ -350,7 +350,7 @@
 
 /* Merges recorded without a Dispatcharr update (bead
    enhancedchannelmanager-i5ic0). Warning, not error: the request succeeded and
-   the queue row resolved — what did not happen is the upstream write. Styled
+   was recorded; what did not happen is the upstream write. Styled
    here rather than reusing `.warning-banner`, which is SettingsTab-local; the
    shared catalogue in `src/shared/common.css` carries `.error-banner` only. */
 .pending-merges-unapplied {

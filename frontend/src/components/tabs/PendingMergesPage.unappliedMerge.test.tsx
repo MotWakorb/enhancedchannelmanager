@@ -218,8 +218,9 @@ describe('PendingMergesPage — a merge that was not applied upstream', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
 
     await screen.findByTestId('pending-merges-unapplied');
-    // Nothing failed — the request succeeded and the queue row resolved. An
-    // error banner would send the operator to retry an already-terminal row.
+    // Nothing failed: the request succeeded and the decision was recorded. An
+    // error banner would describe a request that did not do what it was asked,
+    // which is not this one.
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
