@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from datetime import date
-from typing import Any, Optional, Literal, Sequence, Union
+from typing import Any, Callable, Optional, Literal, Sequence, Union
 from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
@@ -22,6 +22,7 @@ from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
 from bulk_commit_accounting import (
+    SIDE_EFFECTS_LANDED_KEY,
     OperationLedger,
     finalize_bulk_commit_result,
     nothing_to_journal,
@@ -270,6 +271,147 @@ def write_journal_rows(
                 "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
             )
         raise
+
+
+def flush_journal_rows_on_exit(
+    flush: Callable[[], int],
+    *,
+    unwinding: bool,
+    context: str,
+    log_tag: str = "CHANNELS",
+) -> None:
+    """Drain a handler's queued rows from its ``finally``, without theft.
+
+    THE ONE MECHANISM, shared by every request handler that queues rows and
+    flushes them on the way out (fix round 3). The bulk-commit executor already
+    carried this precedence guard as `unwinding_base_exception`, and the
+    reasoning that a request handler had no analogue was wrong: the guard is
+    not about keeping ``task.cancelled()`` true, it is about which exception
+    reaches the caller.
+
+    ``write_journal_rows`` RE-RAISES ``BaseException`` by design — it logs
+    every row it has not resolved first, but it does not swallow. So a handler
+    already unwinding an ``asyncio.CancelledError`` from a client disconnect,
+    or an ``HTTPException`` it raised deliberately, whose synchronous journal
+    dependency then raises ``SystemExit`` or ``KeyboardInterrupt`` inside this
+    flush, had its original exception REPLACED. A disconnected request became
+    worker termination, and an operator-actionable 422 became a 500.
+
+    ``unwinding`` is therefore what the caller has already observed about its
+    own exit: ``True`` when something is on its way out of the ``try``,
+    ``False`` on the ordinary return. It is NOT a blanket ``except
+    BaseException: pass`` — that would be the same bug pointing the other way,
+    silently uncancelling a task when the flush on a clean return raised a
+    ``CancelledError`` of its own. Nothing is swallowed while nothing is
+    unwinding.
+    """
+    try:
+        unwritten = flush()
+    except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
+        logger.exception(
+            "[%s] Journal flush failed while leaving %s: %s",
+            log_tag, context, flush_err,
+        )
+    except BaseException as flush_base:
+        logger.exception(
+            "[%s] Journal flush raised a BaseException while leaving %s: %s",
+            log_tag, context, flush_base,
+        )
+        if not unwinding:
+            raise
+    else:
+        if unwritten:
+            logger.error(
+                "[%s] %s journal row(s) for %s could not be written and this "
+                "request is not returning a body to carry the count; the rows "
+                "are logged above", log_tag, unwritten, context,
+            )
+
+
+def finalise_bulk_merge_row(row: dict) -> dict:
+    """Rewrite one bulk-merge row's ACTION and PROSE from the facts it holds.
+
+    Called every time a fact about the group changes — after the target PATCH
+    returns, and after each source deletion returns — so the row sitting on the
+    flush queue is true at every ``await``, which is where a cancellation can
+    write it out.
+
+    Round 2 asserted ``Merged {n} channels into '{target}'`` at queue time and
+    then mutated ``deleted_ids`` by reference. That updates the id list and
+    corrects NEITHER the action nor the description, so a target PATCH that
+    landed with every source ``DELETE`` failing produced a row claiming a
+    completed merge while every source channel still existed.
+
+    A merge is COMPLETE only when the combined streams are on the target and
+    every source is gone. Anything else gets its own action type, so an
+    operator can filter for the merges that need attention instead of reading
+    every row's prose — and ``undeleted_ids`` names exactly which channels are
+    still upstream, counting the ones this request never reached alongside the
+    ones whose deletion failed, because both are still there.
+
+    Returns ``row`` for convenience; the mutation is the point.
+    """
+    after = row["after_value"]
+    deleted = after["deleted_ids"]
+    undeleted = after["undeleted_ids"]
+    target_patched = bool(after["streams_moved"])
+    target_name = row["entity_name"]
+    total = len(deleted) + len(undeleted)
+    complete = target_patched and not undeleted
+
+    row["action_type"] = "bulk_merge" if complete else "bulk_merge_incomplete"
+    if target_patched:
+        head = f"Moved {after['stream_count']} stream(s) into '{target_name}'"
+    else:
+        head = f"'{target_name}' needed no stream change"
+    if complete and not total:
+        # `source_channel_ids` has no minimum length, so a group naming no
+        # sources is reachable. "deleted all 0" is technically true and reads
+        # as a mistake.
+        tail = "and had no source channel to delete"
+    elif complete:
+        tail = f"and deleted all {total} source channel(s)"
+    elif deleted:
+        tail = (
+            f"and deleted {len(deleted)} of {total} source channel(s); "
+            f"{len(undeleted)} still exist"
+        )
+    else:
+        tail = f"and deleted none of the {total} source channel(s) — they all still exist"
+    row["description"] = f"{head}, {tail}."
+    return row
+
+
+def journal_rows_for(rows: list[dict], response: Any, *, context: str) -> Any:
+    """Write ``rows``, hang the residue on ``response``, and return ``response``.
+
+    The tail every single-mutation endpoint in this module shares (bead
+    ``enhancedchannelmanager-ftidn``). Ten of them called ``journal.log_entry``
+    for its effect and discarded the result, which is how ``log_entry`` reports
+    failure — by returning ``None``, never by raising. A read-only, unavailable
+    or full journal database therefore produced a landed Dispatcharr change, no
+    row, and a ``200`` that mentioned neither.
+
+    ``journalRowsUnwritten`` is ALWAYS set, so a caller checks a number rather
+    than probing for a key, and it rides on the ``2xx`` rather than becoming a
+    ``5xx``: the mutation LANDED, and telling a caller otherwise is what makes
+    an integrator retry a change that already applied.
+
+    When Dispatcharr answers with something that is not an object there is
+    nowhere to hang the advisory. ``write_journal_rows`` has already logged the
+    rows themselves; ``context`` is what names WHICH request could not be told,
+    so the omission is a sentence rather than something to be inferred.
+    """
+    unwritten = write_journal_rows(rows)
+    if isinstance(response, dict):
+        response["journalRowsUnwritten"] = unwritten
+    elif unwritten:
+        logger.error(
+            "[CHANNELS] %s journal row(s) unwritten for %s and the upstream "
+            "response is not an object, so the caller cannot be told: %r",
+            unwritten, context, type(response).__name__,
+        )
+    return response
 
 
 def validate_stream_permutation(
@@ -829,17 +971,17 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
                 "error": normalization_error,
             }
 
-        # Log to journal
-        journal.log_entry(
-            category="channel",
-            action_type="create",
-            entity_id=result.get("id"),
-            entity_name=result.get("name", "Unknown"),
-            description=f"Created channel '{result.get('name')}'" + (f" with number {result.get('channel_number')}" if result.get('channel_number') else ""),
-            after_value={"channel_number": result.get("channel_number"), "name": result.get("name")},
-        )
-
-        return result
+        # Through the shared writer, which CHECKS the return value — a create
+        # that landed with no row used to answer 200 saying nothing (bead
+        # enhancedchannelmanager-ftidn).
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "create",
+            "entity_id": result.get("id"),
+            "entity_name": result.get("name", "Unknown"),
+            "description": f"Created channel '{result.get('name')}'" + (f" with number {result.get('channel_number')}" if result.get('channel_number') else ""),
+            "after_value": {"channel_number": result.get("channel_number"), "name": result.get("name")},
+        }], result, context=f"created channel {result.get('id')}")
     except HTTPException:
         raise
     except Exception as e:
@@ -1568,6 +1710,32 @@ async def preview_csv(data: dict):
 # Static bulk routes — MUST be defined before /api/channels/{channel_id}
 # ---------------------------------------------------------------------------
 
+def _assignment_description(old_number, new_number, *, observed: bool) -> str:
+    """Prose for one channel's row in a bulk number assignment.
+
+    ``observed`` is what separates "Dispatcharr has not told us yet" from "the
+    number is genuinely absent". A request that omits ``starting_number`` asks
+    Dispatcharr to choose, and the assign endpoint returns no numbers, so the
+    row is queued the moment the assignment lands with nothing to say about the
+    new number and is finalised from a read-back. A row that has not been
+    finalised must say so rather than name a number nobody observed.
+    """
+    if not observed:
+        return (
+            f"Changed channel number from {format_channel_number(old_number)}; "
+            "Dispatcharr chose the new number and ECM has not read it back"
+        )
+    if new_number is None:
+        return (
+            f"Changed channel number from {format_channel_number(old_number)}; "
+            "the channel now carries no number"
+        )
+    return (
+        f"Changed channel number from {format_channel_number(old_number)} "
+        f"to {format_channel_number(new_number)}"
+    )
+
+
 @router.post("/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
     """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
@@ -1575,10 +1743,40 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
     client = get_client()
     settings = get_settings()
 
+    batch_id = str(uuid.uuid4())[:8]
+    # One row per channel, queued the moment the assignment lands and written
+    # as ONE batch under a shared batch id — the per-row loop already meant them
+    # as one action, and a several-hundred-channel renumber must not become
+    # several hundred transactions. Through the shared writer, which CHECKS both
+    # of `journal`'s return values (bead enhancedchannelmanager-ftidn).
+    #
+    # QUEUED BEFORE THE AUTO-RENAME LOOP, which is several further `await`s.
+    # Constructing them afterwards meant a cancellation during the first rename
+    # PATCH — `CancelledError` is a `BaseException`, so no `except Exception`
+    # here sees it — unwound with the renumber already landed upstream and not
+    # one row built. Same shape as the immediate group-delete path in
+    # `routers/channel_groups.py`.
+    pending_rows: list[dict] = []
+    # Set by the `except` clauses below, read by the `finally`. See the guard
+    # there: a flush that raises must never REPLACE an exception that is
+    # already on its way out.
+    unwinding = False
+
+    def flush_rows() -> int:
+        """Write what is queued and return how many could NOT be written.
+
+        Idempotent by construction — the queue is emptied before the write, so
+        the ``finally`` cannot write a row the success path already wrote.
+        """
+        if not pending_rows:
+            return 0
+        draining = list(pending_rows)
+        pending_rows.clear()
+        return write_journal_rows(draining, batch_id=batch_id)
+
     try:
         # Get current channel data for all affected channels (needed for journal and auto-rename)
         start = time.time()
-        batch_id = str(uuid.uuid4())[:8]
         channels_before = {}
         name_updates = {}
 
@@ -1611,42 +1809,131 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
             request.channel_ids, request.starting_number
         )
 
+        # The numbers are now true upstream, so the rows exist from here on.
+        # `after_value["name"]` carries the name the channel HAS — the rename
+        # below is a separate write that may never happen, and recording its
+        # planned result before it lands is the same false claim in the other
+        # direction. Each rename that returns updates its own row in place.
+        #
+        # `starting_number` IS OPTIONAL and omitting it is not an edge case: it
+        # is how a caller asks Dispatcharr to choose the numbers, and
+        # `DispatcharrClient.assign_channel_numbers` passes the `None` straight
+        # through by omitting the key. Round 2 computed `starting_number + idx`
+        # here, in front of the null check the auto-rename block still had, so
+        # an omitted starting number raised `TypeError` on `None + 0` AFTER the
+        # assignment had landed — a 500 with the queue empty and no row even
+        # attempted, which is the defect this whole branch removes.
+        #
+        # Dispatcharr's `POST /api/channels/channels/assign/` declares no
+        # response body beyond "Channels have been auto-assigned!"
+        # (`swagger.json`), so the numbers it chose are NOT in `result` and
+        # cannot be inferred from the request either. They are read back below.
+        # Until that read returns, the row says the number is not yet known
+        # rather than naming one, exactly as `name` does for an unlanded
+        # rename.
+        chose_numbers_upstream = request.starting_number is None
+        row_for_channel: dict[Any, dict] = {}
+        for idx, channel_id in enumerate(request.channel_ids):
+            before_data = channels_before.get(channel_id, {})
+            old_number = before_data.get("channel_number")
+            new_number = (
+                None if chose_numbers_upstream else request.starting_number + idx
+            )
+            channel_name = before_data.get("name", f"Channel {channel_id}")
+
+            row = {
+                "category": "channel",
+                "action_type": "reorder",
+                "entity_id": channel_id,
+                "entity_name": channel_name,
+                "description": _assignment_description(
+                    old_number, new_number, observed=not chose_numbers_upstream,
+                ),
+                "before_value": {"channel_number": old_number, "name": channel_name},
+                "after_value": {"channel_number": new_number, "name": channel_name},
+                "batch_id": batch_id,
+            }
+            row_for_channel[channel_id] = row
+            pending_rows.append(row)
+
+        # Read back what Dispatcharr chose, one channel at a time, and finalise
+        # each row from the observation. Only on the path where ECM did not
+        # specify the numbers — the specified path already knows them and must
+        # not pay N extra GETs for a several-hundred-channel renumber.
+        if chose_numbers_upstream:
+            for channel_id, row in row_for_channel.items():
+                try:
+                    observed = await client.get_channel(channel_id)
+                except Exception as e:
+                    # The assignment landed; only the read-back failed. The row
+                    # keeps saying the number has not been read back, which is
+                    # true, rather than acquiring one nothing observed.
+                    logger.warning(
+                        "[CHANNELS] Assigned channel %s but could not read its "
+                        "new number back: %s", channel_id, e,
+                    )
+                    continue
+                new_number = observed.get("channel_number")
+                row["after_value"]["channel_number"] = new_number
+                row["description"] = _assignment_description(
+                    row["before_value"]["channel_number"], new_number,
+                    observed=True,
+                )
+
         # Apply name updates if any
         for channel_id, new_name in name_updates.items():
             try:
                 await client.update_channel(channel_id, {"name": new_name})
             except Exception as e:
                 logger.warning("[CHANNELS] Failed to update name for channel %s: %s", channel_id, e)
+                continue
+            renamed = row_for_channel.get(channel_id)
+            if renamed is not None:
+                renamed["after_value"]["name"] = new_name
 
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Assigned numbers to %s channels in %.1fms", len(request.channel_ids), elapsed_ms)
 
-        # Log individual journal entries for each channel
-        for idx, channel_id in enumerate(request.channel_ids):
-            before_data = channels_before.get(channel_id, {})
-            old_number = before_data.get("channel_number")
-            new_number = request.starting_number + idx
-            channel_name = before_data.get("name", f"Channel {channel_id}")
-            new_name = name_updates.get(channel_id, channel_name)
-
-            journal.log_entry(
-                category="channel",
-                action_type="reorder",
-                entity_id=channel_id,
-                entity_name=channel_name,
-                description=(
-                    f"Changed channel number from {format_channel_number(old_number)} "
-                    f"to {format_channel_number(new_number)}"
-                ),
-                before_value={"channel_number": old_number, "name": channel_name},
-                after_value={"channel_number": new_number, "name": new_name},
-                batch_id=batch_id,
+        unwritten = flush_rows()
+        if isinstance(result, dict):
+            result["journalRowsUnwritten"] = unwritten
+        elif unwritten:
+            # `DispatcharrClient.assign_channel_numbers` is declared `-> dict`,
+            # so this is the defensive branch rather than an expected shape.
+            logger.error(
+                "[CHANNELS] %s journal row(s) unwritten for the assignment of "
+                "%s channel(s) and the upstream response is not an object, so "
+                "the caller cannot be told: %r",
+                unwritten, len(request.channel_ids), type(result).__name__,
             )
 
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to assign channel numbers: %s", e)
+        unwinding = True
         raise HTTPException(status_code=500, detail="Internal server error")
+    except BaseException:
+        # NOT an `Exception`, so the clause above never sees it: a
+        # `CancelledError` from a client disconnect or application shutdown,
+        # `SystemExit`, `KeyboardInterrupt`. Nothing to record and no envelope
+        # to return — this clause exists only to tell the `finally` that
+        # something is already on its way out.
+        unwinding = True
+        raise
+    finally:
+        # Every exit that is NOT the return above: the 500, a cancellation from
+        # application shutdown, a `SystemExit`. `asyncio.CancelledError`
+        # inherits from `BaseException`, so the `except Exception` above never
+        # saw it, and the renumber it interrupts has already landed.
+        # `flush_rows` has emptied the queue on the success path, so this
+        # writes only what that path never reached.
+        flush_journal_rows_on_exit(
+            flush_rows,
+            unwinding=unwinding,
+            context=(
+                f"the assignment of {len(request.channel_ids)} channel(s)"
+            ),
+        )
 
 
 #: The fields of :class:`BulkUpdateChannelOp` that describe the
@@ -2292,6 +2579,14 @@ async def _run_bulk_commit(
         "success": True,
         "operationsApplied": 0,
         "operationsFailed": 0,
+        # Operations counted in `operationsFailed` whose own upstream writes
+        # LANDED before they failed — a `deleteChannelGroup` whose reparent
+        # moved channels and whose delete then failed leaves those channels
+        # moved. Always present, so a caller checks the number rather than
+        # probing for a key. Non-zero means the caller has state to reconcile
+        # before retrying, and `errors[].sideEffectsLanded` names which
+        # operations (bead enhancedchannelmanager-1e4at).
+        "operationsPartiallyApplied": 0,
         "errors": [],
         "tempIdMap": {},  # temp channel ID -> real ID
         "groupIdMap": {},  # group name -> real ID
@@ -3258,7 +3553,13 @@ async def _run_bulk_commit(
                         logger.debug("[CHANNELS-BULK] Added stream %s to channel %s", op.streamId, channel_id)
                     else:
                         # No write happened, so no row — the single-channel
-                        # endpoint returns early here for the same reason.
+                        # endpoint returns early here for the same reason. Said
+                        # to the ledger rather than left as a silent fall
+                        # through, so this stays distinguishable from a branch
+                        # that wrote and forgot to say (bead …-jd3kn).
+                        ledger.applied_without_writing(
+                            f"stream {op.streamId} was already on channel {channel_id}"
+                        )
                         logger.debug("[CHANNELS-BULK] Stream %s already in channel %s, skipping", op.streamId, channel_id)
 
                 elif op.type == "removeStreamFromChannel":
@@ -3281,6 +3582,10 @@ async def _run_bulk_commit(
                         ))
                         logger.debug("[CHANNELS-BULK] Removed stream %s from channel %s", op.streamId, channel_id)
                     else:
+                        ledger.applied_without_writing(
+                            f"stream {op.streamId} was already absent from "
+                            f"channel {channel_id}"
+                        )
                         logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
 
                 elif op.type == "reorderChannelStreams":
@@ -3562,6 +3867,10 @@ async def _run_bulk_commit(
                         groups_created += 1
                         logger.debug("[CHANNELS-BULK] Created group '%s' -> ID %s", op.name, new_group['id'])
                     else:
+                        ledger.applied_without_writing(
+                            f"channel group '{op.name}' was already mapped to "
+                            f"id {result['groupIdMap'][op.name]} by this run"
+                        )
                         logger.debug("[CHANNELS-BULK] Group '%s' already exists with ID %s", op.name, result['groupIdMap'][op.name])
 
                 elif op.type == "deleteChannelGroup":
@@ -3779,6 +4088,21 @@ async def _run_bulk_commit(
                         "recorded; do not retry it: %s", op_id, e,
                     )
                 else:
+                    # The operation's own outcome did not happen — a group that
+                    # is still there, a channel that was never created — so it
+                    # is a failure. But writes of its own may already have
+                    # landed: `deleteChannelGroup` moves the group's channels
+                    # before it deletes it, and a move that landed stays landed.
+                    # Read BEFORE `record_failed`, which closes the operation
+                    # (bead enhancedchannelmanager-1e4at).
+                    if ledger.side_effects_landed:
+                        error_details[SIDE_EFFECTS_LANDED_KEY] = True
+                        logger.error(
+                            "[CHANNELS-BULK] Operation %s FAILED after landing "
+                            "upstream writes of its own; those writes stay "
+                            "landed and the caller has to reconcile before "
+                            "retrying: %s", op_id, e,
+                        )
                     ledger.record_failed()
                 result["errors"].append(error_details)
 
@@ -4166,27 +4490,26 @@ async def clear_auto_created_flag(request: ClearAutoCreatedRequest, _admin=Requi
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Updated %s channels (cleared auto_created) in %.1fms", len(updated_channels), elapsed_ms)
 
-        # Log to journal
-        journal.log_entry(
-            category="channel",
-            action_type="bulk_update",
-            entity_id=None,
-            entity_name="Clear Auto-Created Flag",
-            description=f"Cleared auto_created flag from {len(updated_channels)} channels in {len(group_ids)} group(s)",
-            after_value={
+        # Through the shared writer, which CHECKS the return value (bead
+        # enhancedchannelmanager-ftidn).
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "bulk_update",
+            "entity_id": None,
+            "entity_name": "Clear Auto-Created Flag",
+            "description": f"Cleared auto_created flag from {len(updated_channels)} channels in {len(group_ids)} group(s)",
+            "after_value": {
                 "group_ids": list(group_ids),
                 "updated_count": len(updated_channels),
                 "failed_count": len(failed_channels),
             },
-        )
-
-        return {
+        }], {
             "status": "ok",
             "message": f"Cleared auto_created flag from {len(updated_channels)} channel(s)",
             "updated_count": len(updated_channels),
             "updated_channels": updated_channels[:20],  # Limit response size
             "failed_channels": failed_channels,
-        }
+        }, context=f"clearing auto_created in group(s) {sorted(group_ids)}")
     except Exception as e:
         logger.exception("[CHANNELS] Failed to clear auto_created flags: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -4327,7 +4650,7 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         # enhancedchannelmanager-r9py9).
         changes, before_value, after_value = describe_channel_update(before_channel, data)
 
-        unwritten = 0
+        rows: list[dict] = []
         if changes:
             logger.info("[CHANNELS] Updated channel id=%s: %s", channel_id, ', '.join(changes))
             # Through the shared writer, which CHECKS the return value. Round 2
@@ -4337,7 +4660,7 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
             # journal database that was read-only, unavailable or full produced
             # a landed Dispatcharr change with no row and a 200 that said
             # nothing (fix round 5).
-            unwritten = write_journal_rows([{
+            rows.append({
                 "category": "channel",
                 "action_type": "update",
                 "entity_id": channel_id,
@@ -4345,24 +4668,14 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
                 "description": f"Updated channel: {', '.join(changes)}",
                 "before_value": before_value,
                 "after_value": after_value,
-            }])
+            })
         else:
             logger.debug("[CHANNELS] No changes detected for channel %s", channel_id)
 
-        if isinstance(result, dict):
-            result["journalRowsUnwritten"] = unwritten
-        elif unwritten:
-            # Dispatcharr answered with something that is not an object, so
-            # there is nowhere to hang the advisory. `write_journal_rows` has
-            # already logged the row itself; this names why the caller will not
-            # be told, rather than leaving the omission to be inferred.
-            logger.error(
-                "[CHANNELS] %s journal row(s) unwritten for channel %s and the "
-                "upstream response is not an object, so the caller cannot be "
-                "told: %r", unwritten, channel_id, type(result).__name__,
-            )
-
-        return result
+        # `journal_rows_for` is the same tail the other ten endpoints in this
+        # module now share (bead …-ftidn), including the "there is nowhere to
+        # hang the advisory" branch this handler pioneered.
+        return journal_rows_for(rows, result, context=f"channel {channel_id}")
     except HTTPException:
         raise
     except Exception as e:
@@ -4471,21 +4784,21 @@ async def merge_channels(request: "MergeChannelsRequest", _admin=RequireAdminIfE
         # 6. Fetch the final state of the merged channel
         result = await client.get_channel(new_channel_id)
 
-        # Log to journal
-        journal.log_entry(
-            category="channel",
-            action_type="merge",
-            entity_id=new_channel_id,
-            entity_name=request.target_name,
-            description=f"Merged {len(source_channels)} channels into '{request.target_name}'",
-            before_value={"source_channels": [{"id": ch.get("id"), "name": ch.get("name")} for ch in source_channels]},
-            after_value={"merged_channel_id": new_channel_id, "stream_count": len(all_streams), "deleted_source_ids": deleted_ids},
-        )
-
         logger.info("[CHANNELS] Merge complete: %d channels -> '%s' (id=%s, %d streams)",
                      len(source_channels), request.target_name, new_channel_id, len(all_streams))
 
-        return result
+        # Through the shared writer, which CHECKS the return value (bead
+        # enhancedchannelmanager-ftidn). A merge deletes the source channels, so
+        # this row is the only remaining record that they existed.
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "merge",
+            "entity_id": new_channel_id,
+            "entity_name": request.target_name,
+            "description": f"Merged {len(source_channels)} channels into '{request.target_name}'",
+            "before_value": {"source_channels": [{"id": ch.get("id"), "name": ch.get("name")} for ch in source_channels]},
+            "after_value": {"merged_channel_id": new_channel_id, "stream_count": len(all_streams), "deleted_source_ids": deleted_ids},
+        }], result, context=f"merged channel {new_channel_id}")
 
     except HTTPException:
         raise
@@ -4523,17 +4836,17 @@ async def delete_channel(channel_id: int, _admin=RequireAdminIfEnabled):
         logger.debug("[CHANNELS] Deleted channel %s via API in %.1fms", channel_id, elapsed_ms)
         logger.info("[CHANNELS] Deleted channel id=%s name=%s", channel_id, channel_name)
 
-        # Log to journal
-        journal.log_entry(
-            category="channel",
-            action_type="delete",
-            entity_id=channel_id,
-            entity_name=channel_name,
-            description=f"Deleted channel '{channel_name}'",
-            before_value={"name": channel_name, "channel_number": channel.get("channel_number")},
-        )
-
-        return {"success": True}
+        # Through the shared writer, which CHECKS the return value (bead
+        # enhancedchannelmanager-ftidn). The channel is gone upstream, so this
+        # row is the only remaining record of what it was.
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "delete",
+            "entity_id": channel_id,
+            "entity_name": channel_name,
+            "description": f"Deleted channel '{channel_name}'",
+            "before_value": {"name": channel_name, "channel_number": channel.get("channel_number")},
+        }], {"success": True}, context=f"deleted channel {channel_id}")
     except HTTPException:
         raise
     except Exception as e:
@@ -4568,19 +4881,22 @@ async def add_stream_to_channel(channel_id: int, request: AddStreamRequest, _adm
             logger.debug("[CHANNELS] Added stream to channel %s via API in %.1fms", channel_id, elapsed_ms)
             logger.info("[CHANNELS] Added stream %s to channel id=%s name=%s", request.stream_id, channel_id, channel_name)
 
-            # Log to journal
-            journal.log_entry(
-                category="channel",
-                action_type="stream_add",
-                entity_id=channel_id,
-                entity_name=channel_name,
-                description=f"Added stream to channel '{channel_name}'",
-                before_value={"streams": before_streams},
-                after_value={"streams": current_streams},
-            )
-
-            return result
+            # Through the shared writer, which CHECKS the return value (bead
+            # enhancedchannelmanager-ftidn).
+            return journal_rows_for([{
+                "category": "channel",
+                "action_type": "stream_add",
+                "entity_id": channel_id,
+                "entity_name": channel_name,
+                "description": f"Added stream to channel '{channel_name}'",
+                "before_value": {"streams": before_streams},
+                "after_value": {"streams": current_streams},
+            }], result, context=f"adding a stream to channel {channel_id}")
         logger.debug("[CHANNELS] Stream %s already in channel %s", request.stream_id, channel_id)
+        # No write happened, so no row — but the advisory carries the same shape
+        # on both exits, or a caller has to know which one it got.
+        if isinstance(channel, dict):
+            channel["journalRowsUnwritten"] = 0
         return channel
     except HTTPException:
         raise
@@ -4630,24 +4946,31 @@ async def add_streams_to_channel(channel_id: int, request: AddStreamsRequest, _a
         if not added:
             logger.debug("[CHANNELS] No new streams to add to channel %s (all %d already present)",
                          channel_id, len(request.stream_ids))
-            return {"channel": channel, "added": [], "skipped": skipped, "total_streams": len(current_streams)}
+            # No write, so no row — and the same shape on both exits.
+            return {
+                "channel": channel, "added": [], "skipped": skipped,
+                "total_streams": len(current_streams), "journalRowsUnwritten": 0,
+            }
 
         result = await client.update_channel(channel_id, {"streams": current_streams})
         elapsed_ms = (time.time() - start) * 1000
         logger.info("[CHANNELS] Added %d stream(s) to channel id=%s name=%s (%d skipped) in %.1fms",
                     len(added), channel_id, channel_name, len(skipped), elapsed_ms)
 
-        journal.log_entry(
-            category="channel",
-            action_type="stream_add",
-            entity_id=channel_id,
-            entity_name=channel_name,
-            description=f"Added {len(added)} stream(s) to channel '{channel_name}'",
-            before_value={"streams": before_streams},
-            after_value={"streams": current_streams},
-        )
-
-        return {"channel": result, "added": added, "skipped": skipped, "total_streams": len(current_streams)}
+        # Through the shared writer, which CHECKS the return value (bead
+        # enhancedchannelmanager-ftidn).
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "stream_add",
+            "entity_id": channel_id,
+            "entity_name": channel_name,
+            "description": f"Added {len(added)} stream(s) to channel '{channel_name}'",
+            "before_value": {"streams": before_streams},
+            "after_value": {"streams": current_streams},
+        }], {
+            "channel": result, "added": added, "skipped": skipped,
+            "total_streams": len(current_streams),
+        }, context=f"adding {len(added)} stream(s) to channel {channel_id}")
     except HTTPException:
         raise
     except Exception as e:
@@ -4682,19 +5005,21 @@ async def remove_stream_from_channel(channel_id: int, request: RemoveStreamReque
             logger.debug("[CHANNELS] Removed stream from channel %s via API in %.1fms", channel_id, elapsed_ms)
             logger.info("[CHANNELS] Removed stream %s from channel id=%s name=%s", request.stream_id, channel_id, channel_name)
 
-            # Log to journal
-            journal.log_entry(
-                category="channel",
-                action_type="stream_remove",
-                entity_id=channel_id,
-                entity_name=channel_name,
-                description=f"Removed stream from channel '{channel_name}'",
-                before_value={"streams": before_streams},
-                after_value={"streams": current_streams},
-            )
-
-            return result
+            # Through the shared writer, which CHECKS the return value (bead
+            # enhancedchannelmanager-ftidn).
+            return journal_rows_for([{
+                "category": "channel",
+                "action_type": "stream_remove",
+                "entity_id": channel_id,
+                "entity_name": channel_name,
+                "description": f"Removed stream from channel '{channel_name}'",
+                "before_value": {"streams": before_streams},
+                "after_value": {"streams": current_streams},
+            }], result, context=f"removing a stream from channel {channel_id}")
         logger.debug("[CHANNELS] Stream %s not in channel %s", request.stream_id, channel_id)
+        # No write happened, so no row — same shape on both exits.
+        if isinstance(channel, dict):
+            channel["journalRowsUnwritten"] = 0
         return channel
     except HTTPException:
         raise
@@ -4771,18 +5096,17 @@ async def reorder_channel_streams(channel_id: int, request: ReorderStreamsReques
         elapsed_ms = (time.time() - start) * 1000
         logger.debug("[CHANNELS] Reordered streams for channel %s via API in %.1fms", channel_id, elapsed_ms)
 
-        # Log to journal
-        journal.log_entry(
-            category="channel",
-            action_type="stream_reorder",
-            entity_id=channel_id,
-            entity_name=channel_name,
-            description=f"Reordered streams in channel '{channel_name}'",
-            before_value={"streams": before_streams},
-            after_value={"streams": request.stream_ids},
-        )
-
-        return result
+        # Through the shared writer, which CHECKS the return value (bead
+        # enhancedchannelmanager-ftidn).
+        return journal_rows_for([{
+            "category": "channel",
+            "action_type": "stream_reorder",
+            "entity_id": channel_id,
+            "entity_name": channel_name,
+            "description": f"Reordered streams in channel '{channel_name}'",
+            "before_value": {"streams": before_streams},
+            "after_value": {"streams": request.stream_ids},
+        }], result, context=f"reordering streams in channel {channel_id}")
     except HTTPException:
         # Validation rejections (e.g. the permutation guard above) are
         # intentional client errors — let them propagate unchanged rather than
@@ -4945,140 +5269,253 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
     results = []
     merged_count = 0
     failed_count = 0
+    batch_id = str(uuid.uuid4())[:8]
+    # One row per merge group, queued the moment that group's first write lands
+    # and written once below under one batch id: this is one operator action
+    # however many groups it names, and a 50-group bulk merge must not be 50
+    # transactions. Through the shared writer, which CHECKS both return values
+    # (bead enhancedchannelmanager-ftidn).
+    #
+    # QUEUED AT THE WRITE, not after the last deletion returns. This endpoint
+    # DELETES the source channels, so its rows are the only remaining record
+    # that they existed — and a cancellation during the second deletion
+    # (`CancelledError` is a `BaseException`, so neither handler below sees it)
+    # used to unwind with the target updated, one source already gone, and no
+    # row appended. Same shape as the immediate group-delete path in
+    # `routers/channel_groups.py`.
+    journal_rows: list[dict] = []
+    # Set by the `except BaseException` below, read by the `finally`: a flush
+    # that raises must never REPLACE an exception already on its way out.
+    unwinding = False
 
-    for item in request.merges:
-        try:
-            # Pre-validate the target ID the same way source IDs are validated
-            # below: if the target no longer exists upstream (e.g., a stale
-            # reference after a previous merge), surface 422 with the same
-            # refresh hint instead of falling through to the per-item catch-all
-            # (which returns 200 + a failed count). Consistent with the
-            # source-ID path added in bd-ozhkf (bd-4xxax).
+    def flush_rows() -> int:
+        """Write what is queued and return how many could NOT be written.
+
+        Idempotent by construction — the queue is emptied before the write, so
+        the ``finally`` cannot write a row the success path already wrote.
+        """
+        if not journal_rows:
+            return 0
+        draining = list(journal_rows)
+        journal_rows.clear()
+        return write_journal_rows(draining, batch_id=batch_id)
+
+    try:
+        for item in request.merges:
             try:
-                target = await client.get_channel(item.target_channel_id)
-            except httpx.HTTPStatusError as fetch_err:
-                if fetch_err.response.status_code == 404:
+                # Pre-validate the target ID the same way source IDs are validated
+                # below: if the target no longer exists upstream (e.g., a stale
+                # reference after a previous merge), surface 422 with the same
+                # refresh hint instead of falling through to the per-item catch-all
+                # (which returns 200 + a failed count). Consistent with the
+                # source-ID path added in bd-ozhkf (bd-4xxax).
+                try:
+                    target = await client.get_channel(item.target_channel_id)
+                except httpx.HTTPStatusError as fetch_err:
+                    if fetch_err.response.status_code == 404:
+                        logger.warning(
+                            "[CHANNELS] bulk-merge: rejected — stale target ID %s no longer exists",
+                            item.target_channel_id,
+                        )
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Target channel {item.target_channel_id} no longer exists — "
+                                "refresh the channels list and try again"
+                            ),
+                        )
+                    raise
+                target_name = target.get("name", f"Channel {item.target_channel_id}")
+
+                # Collect all streams from target + sources (deduplicated, target first).
+                # Pre-validate source IDs before mutating anything: if any source no longer
+                # exists upstream (e.g., stale ID from a previous merge), surface 422 with a
+                # refresh hint instead of silently calling DELETE on a ghost row and producing
+                # [DISPATCHARR] API request failed: DELETE 404 noise.  Mirror of the same
+                # pattern in merge_channels (bd-ct9wl); applied here for the bulk path
+                # (bd-ozhkf).
+                all_streams: list[int] = []
+                seen: set[int] = set()
+                for sid in target.get("streams", []):
+                    if sid not in seen:
+                        all_streams.append(sid)
+                        seen.add(sid)
+
+                source_names = []
+                missing_ids: list[int] = []
+                for src_id in item.source_channel_ids:
+                    try:
+                        src = await client.get_channel(src_id)
+                        source_names.append(src.get("name", f"Channel {src_id}"))
+                        for sid in src.get("streams", []):
+                            if sid not in seen:
+                                all_streams.append(sid)
+                                seen.add(sid)
+                    except httpx.HTTPStatusError as fetch_err:
+                        if fetch_err.response.status_code == 404:
+                            missing_ids.append(src_id)
+                            # Keep source_names complete — one entry per requested
+                            # source ID, in order. Harmless today because the 422
+                            # branch below raises before the journal entry is
+                            # written, but prevents a silently misaligned audit
+                            # record if this ever becomes a partial-success batch
+                            # (bd-4xxax).
+                            source_names.append(f"Channel {src_id}")
+                        else:
+                            raise
+
+                if missing_ids:
                     logger.warning(
-                        "[CHANNELS] bulk-merge: rejected — stale target ID %s no longer exists",
-                        item.target_channel_id,
+                        "[CHANNELS] bulk-merge: rejected — stale source IDs %s no longer exist",
+                        missing_ids,
                     )
                     raise HTTPException(
                         status_code=422,
                         detail=(
-                            f"Target channel {item.target_channel_id} no longer exists — "
+                            f"Source channels {missing_ids} no longer exist — "
                             "refresh the channels list and try again"
                         ),
                     )
-                raise
-            target_name = target.get("name", f"Channel {item.target_channel_id}")
 
-            # Collect all streams from target + sources (deduplicated, target first).
-            # Pre-validate source IDs before mutating anything: if any source no longer
-            # exists upstream (e.g., stale ID from a previous merge), surface 422 with a
-            # refresh hint instead of silently calling DELETE on a ghost row and producing
-            # [DISPATCHARR] API request failed: DELETE 404 noise.  Mirror of the same
-            # pattern in merge_channels (bd-ct9wl); applied here for the bulk path
-            # (bd-ozhkf).
-            all_streams: list[int] = []
-            seen: set[int] = set()
-            for sid in target.get("streams", []):
-                if sid not in seen:
-                    all_streams.append(sid)
-                    seen.add(sid)
+                # Built before the first write, QUEUED the moment one lands, and
+                # REWRITTEN from the outcome every time a fact about this group
+                # changes — so the row on the queue is true at every `await`,
+                # which is where a cancellation can flush it (bead
+                # …-ftidn round 3).
+                #
+                # Round 2 queued a row asserting `Merged {n} channels into
+                # '{target}'` at the moment the target PATCH landed, and source
+                # DELETE failures are swallowed with `continue` below. A target
+                # PATCH that succeeded with every delete failing therefore wrote
+                # a row claiming a completed merge while every source channel
+                # still existed — this branch's own defect, reintroduced by the
+                # fix for a different one. Mutating `deleted` by reference
+                # updated the id list and corrected neither the action nor the
+                # prose. `_finalise` is what corrects both; queueing early and
+                # describing accurately are not in tension.
+                #
+                # `deleted` and `undeleted` go into `after_value` BY REFERENCE,
+                # so the row holds the group's facts and
+                # `finalise_bulk_merge_row` needs nothing but the row to render
+                # the action and the prose from them.
+                deleted: list[int] = []
+                undeleted: list[int] = list(item.source_channel_ids)
+                item_row = {
+                    "category": "channel",
+                    "action_type": "bulk_merge",
+                    "entity_id": item.target_channel_id,
+                    "entity_name": target_name,
+                    "description": "",
+                    "before_value": {"source_names": source_names},
+                    "after_value": {
+                        "stream_count": len(all_streams),
+                        "deleted_ids": deleted,
+                        "undeleted_ids": undeleted,
+                        "streams_moved": False,
+                    },
+                    "batch_id": batch_id,
+                }
 
-            source_names = []
-            missing_ids: list[int] = []
-            for src_id in item.source_channel_ids:
-                try:
-                    src = await client.get_channel(src_id)
-                    source_names.append(src.get("name", f"Channel {src_id}"))
-                    for sid in src.get("streams", []):
-                        if sid not in seen:
-                            all_streams.append(sid)
-                            seen.add(sid)
-                except httpx.HTTPStatusError as fetch_err:
-                    if fetch_err.response.status_code == 404:
-                        missing_ids.append(src_id)
-                        # Keep source_names complete — one entry per requested
-                        # source ID, in order. Harmless today because the 422
-                        # branch below raises before the journal entry is
-                        # written, but prevents a silently misaligned audit
-                        # record if this ever becomes a partial-success batch
-                        # (bd-4xxax).
-                        source_names.append(f"Channel {src_id}")
-                    else:
-                        raise
+                finalise_bulk_merge_row(item_row)
+                row_queued = False
 
-            if missing_ids:
-                logger.warning(
-                    "[CHANNELS] bulk-merge: rejected — stale source IDs %s no longer exist",
-                    missing_ids,
-                )
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Source channels {missing_ids} no longer exist — "
-                        "refresh the channels list and try again"
-                    ),
-                )
+                # Update target with combined streams
+                if all_streams:
+                    await client.update_channel(item.target_channel_id, {"streams": all_streams})
+                    item_row["after_value"]["streams_moved"] = True
+                    finalise_bulk_merge_row(item_row)
+                    journal_rows.append(item_row)
+                    row_queued = True
 
-            # Update target with combined streams
-            if all_streams:
-                await client.update_channel(item.target_channel_id, {"streams": all_streams})
-
-            # Delete source channels
-            deleted = []
-            for src_id in item.source_channel_ids:
-                try:
-                    await client.delete_channel(src_id)
+                # Delete source channels
+                for src_id in item.source_channel_ids:
+                    try:
+                        await client.delete_channel(src_id)
+                    except Exception as e:
+                        logger.warning("[CHANNELS] bulk-merge: failed to delete source %s: %s", src_id, e)
+                        continue
                     deleted.append(src_id)
-                except Exception as e:
-                    logger.warning("[CHANNELS] bulk-merge: failed to delete source %s: %s", src_id, e)
+                    undeleted.remove(src_id)
+                    finalise_bulk_merge_row(item_row)
+                    if not row_queued:
+                        journal_rows.append(item_row)
+                        row_queued = True
 
-            journal.log_entry(
-                category="channel",
-                action_type="bulk_merge",
-                entity_id=item.target_channel_id,
-                entity_name=target_name,
-                description=f"Merged {len(item.source_channel_ids)} channels into '{target_name}'",
-                before_value={"source_names": source_names},
-                after_value={"stream_count": len(all_streams), "deleted_ids": deleted},
-            )
+                if not row_queued:
+                    # No write landed — nothing to move and no source deleted —
+                    # but the group is still one of the outcomes the envelope
+                    # reports, so it keeps its row rather than vanishing from
+                    # the trail while being counted as merged.
+                    # `finalise_bulk_merge_row` has already made that row say so.
+                    journal_rows.append(item_row)
 
-            merged_count += 1
-            results.append({
-                "target_channel_id": item.target_channel_id,
-                "target_name": target_name,
-                "sources_deleted": len(deleted),
-                "total_streams": len(all_streams),
-                "success": True,
-            })
+                merged_count += 1
+                results.append({
+                    "target_channel_id": item.target_channel_id,
+                    "target_name": target_name,
+                    "sources_deleted": len(deleted),
+                    # The same fact the row now carries, so a caller reading the
+                    # envelope and an operator reading the journal cannot reach
+                    # different conclusions about one group. Always present, so
+                    # a caller checks a number rather than probing for a key.
+                    "sources_failed": len(item.source_channel_ids) - len(deleted),
+                    "total_streams": len(all_streams),
+                    "success": True,
+                })
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            failed_count += 1
-            # If the per-item failure is an upstream client error (e.g. a bad
-            # target/source id), surface the actionable upstream detail so the
-            # caller can tell "does not exist" from a real server fault, instead
-            # of the bare exception type (bd-lq38l.4). For genuine server faults
-            # we keep CodeQL py/stack-trace-exposure (#1413) hygiene: log the
-            # full trace but only return the exception type name to the client.
-            logger.exception(
-                "[CHANNELS] bulk-merge: group failed (target=%s)",
-                item.target_channel_id,
-            )
-            mapped = upstream_http_exception(e)
-            error_detail = mapped.detail if mapped is not None else type(e).__name__
-            results.append({
-                "target_channel_id": item.target_channel_id,
-                "success": False,
-                "error": error_detail,
-            })
+            except HTTPException:
+                # A stale target or source id aborts the WHOLE request with a
+                # 422. Earlier items in the batch may already have merged and
+                # deleted their sources, and those rows are the only remaining
+                # record that those channels existed — they must not leave with
+                # the exception (bead …-ftidn, the same every-exit discipline as
+                # …-kz089 round 3). The `finally` below is what flushes them
+                # now, so this clause exists purely to keep a 422 from being
+                # swallowed by the per-item handler underneath it.
+                raise
+            except Exception as e:
+                failed_count += 1
+                # If the per-item failure is an upstream client error (e.g. a bad
+                # target/source id), surface the actionable upstream detail so the
+                # caller can tell "does not exist" from a real server fault, instead
+                # of the bare exception type (bd-lq38l.4). For genuine server faults
+                # we keep CodeQL py/stack-trace-exposure (#1413) hygiene: log the
+                # full trace but only return the exception type name to the client.
+                logger.exception(
+                    "[CHANNELS] bulk-merge: group failed (target=%s)",
+                    item.target_channel_id,
+                )
+                mapped = upstream_http_exception(e)
+                error_detail = mapped.detail if mapped is not None else type(e).__name__
+                results.append({
+                    "target_channel_id": item.target_channel_id,
+                    "success": False,
+                    "error": error_detail,
+                })
 
-    logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)
-    return {
-        "merged": merged_count,
-        "failed": failed_count,
-        "results": results,
-    }
+        logger.info("[CHANNELS] bulk-merge complete: %d merged, %d failed", merged_count, failed_count)
+        return {
+            "merged": merged_count,
+            "failed": failed_count,
+            "results": results,
+            # This endpoint deletes the source channels, so these rows are the only
+            # remaining record that they existed. Always present, so a caller checks
+            # the number rather than probing for a key.
+            "journalRowsUnwritten": flush_rows(),
+        }
+    except BaseException:
+        # Every way out that is not the return above — the 422 for a stale id,
+        # a per-item `Exception` that escaped, a cancellation, a `SystemExit`.
+        # Nothing to record and no envelope to return; this clause exists only
+        # to tell the `finally` that something is already on its way out, so
+        # the flush there cannot take its place.
+        unwinding = True
+        raise
+    finally:
+        # `asyncio.CancelledError` inherits from `BaseException`, so neither
+        # handler in the loop saw it, and the channels deleted before it
+        # arrived are gone. `flush_rows` has emptied the queue on the success
+        # path, so this writes only what that path never reached.
+        flush_journal_rows_on_exit(
+            flush_rows, unwinding=unwinding, context="a bulk merge",
+        )

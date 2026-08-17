@@ -26,11 +26,30 @@ The **Bulk Commit** summary rows are still there alongside them. They answer a d
 
 Any fields ECM *did* read still appear as normal under the same **Before** heading.
 
+**Deleting a channel group now leaves a trail whichever route deleted it.** Deleting a group moves its channels to **Default Group** first, because Dispatcharr refuses to delete a group that still holds channels. Through Edit Mode that always recorded both halves; through the direct route (an MCP agent, or any API client) it recorded nothing at all, so a channel that changed group overnight had no row explaining why. Both routes now write one **Update** row per moved channel, saying which group it came from and which it went to, plus one **Group Delete** row for the deletion, all sharing one **Batch** identifier. If you are chasing a channel that turned up in **Default Group** without explanation, search for the channel's name and look for that Update row.
+
+If the group deletion *failed* after the channels had already moved, the moves are still recorded, and they are still real: the channels stay moved and the group is still there. The error ECM returns in that case says so and tells you to check here for which channels before retrying.
+
+### Find a merge that was recorded but not applied
+
+Accepting a pending merge is meant to do two things: record your decision and add the stream to the candidate channel in Dispatcharr. The second can fail while the first still happens, and until recently nothing said so. It is now recorded here.
+
+1. Open **Journal**.
+2. Set the **All Actions** dropdown to **Merge Not Applied**.
+
+**Result:** one row per accepted merge that ECM recorded without updating Dispatcharr. Each row's **Description** names the stream, the channel it was meant to join, the reason the stream could not be resolved, and the fact that the merge is still in **Pending Merges** waiting to be retried. The badge on these rows reads **Merge Not Applied**, the same words as the filter.
+
+These rows are the durable record of something you also see in two other places while it is live: a notice above the Pending Merges list, which lasts as long as the page does, and the flagged queue row itself, which lasts until you retry it. Once you retry successfully the row leaves the queue, and this is where the history of the attempt remains. What to do about each reason is in [Stream Deduplication](stream-dedup.md#what-happens-when-a-merge-is-recorded-but-not-applied).
+
+There is no matching action type for the opposite case. A merge that *did* apply writes an ordinary **Stream Add** row, and a merge that applied because the stream was already on the channel writes nothing at all, because nothing changed.
+
 ### Understand what you are looking at
 
-Three things about these rows regularly trip operators up.
+Four things about these rows regularly trip operators up.
 
-**The Action dropdown does not list every action ECM records.** It offers Create, Update, Delete, Start, Stop, Refresh, Stream Add, Stream Remove, Stream Reorder and Reorder. Merges and Edit Mode's own commit are recorded under action types that have no entry in the list, so they show up in the table (as **Merge** and **Bulk Commit** badges) but cannot be filtered *to*. If you are hunting for a merge or for the moment a batch was applied, leave the dropdown on **All Actions** and use the search box instead.
+**The Action dropdown does not list every action ECM records.** It offers Create, Update, Delete, Start, Stop, Refresh, Stream Add, Stream Remove, Stream Reorder, Reorder, **Merge Not Applied** and **Bulk Merge Incomplete**. Merges that *did* apply, group deletions, bulk merges that finished, and Edit Mode's own commit are recorded under action types that have no entry in the list, so they show up in the table (as **Merge**, **Group Delete**, **Bulk Merge** and **Bulk Commit** badges) but cannot be filtered *to*. If you are hunting for a completed merge or for the moment a batch was applied, leave the dropdown on **All Actions** and use the search box instead.
+
+**Bulk Merge Incomplete is the badge worth reading for, and it is one you can filter to.** A bulk merge moves each group's streams onto the target channel and then deletes that group's source channels, and the deletions can fail on their own. A group that finished both halves gets a **Bulk Merge** badge; a group whose source channels are not all gone gets **Bulk Merge Incomplete**, and its description says how many of them are still there. Those channels are still in Dispatcharr, so a lineup that looks like it still has duplicates after a bulk merge is explained by these rows. Set the **All Actions** dropdown to **Bulk Merge Incomplete** to list only these rows; the filter entry uses the same words as the badge.
 
 **An Edit Mode session does not produce exactly one Bulk Commit row.** It used to, and the guidance to expect one was wrong even then for large sessions. **Apply All** does not send everything in a single request: it sends one request for the channels it is creating, and then one request per 200 remaining operations. Each of those requests writes its own **Bulk Commit** summary row, so a small session writes one or two and a large one writes several. Each summary's counters describe **its own request**, not the whole session, which is why the numbers in one row will not add up to what you did overall.
 

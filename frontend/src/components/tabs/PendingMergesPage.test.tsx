@@ -55,6 +55,7 @@ function makeRecord(overrides: Partial<PendingMergeRecord> = {}): PendingMergeRe
     resolved_at: null,
     resolution_source: null,
     trigger_context: 'm3u_refresh',
+    unapplied_reason: null,
     ...overrides,
   };
 }
@@ -493,6 +494,9 @@ describe('PendingMergesPage — per-row actions (BD-E accept/dismiss)', () => {
       source_stream_id: 'stream-uuid-xyz',
       confidence: 0.92,
       status: 'merged',
+      dispatcharr_updated: true,
+      unapplied_reason: null,
+      journal_rows_unwritten: 0,
     });
 
     render(<PendingMergesPage />);
@@ -526,6 +530,9 @@ describe('PendingMergesPage — per-row actions (BD-E accept/dismiss)', () => {
       source_stream_id: 'stream-uuid-xyz',
       confidence: 0.92,
       status: 'merged',
+      dispatcharr_updated: true,
+      unapplied_reason: null,
+      journal_rows_unwritten: 0,
     });
 
     render(<PendingMergesPage />);
@@ -673,6 +680,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
       source_stream_id: `stream-${id}`,
       confidence: 0.92,
       status: 'merged',
+      dispatcharr_updated: true,
+      unapplied_reason: null,
+      journal_rows_unwritten: 0,
     }));
 
     render(<PendingMergesPage />);
@@ -723,6 +733,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         source_stream_id: `stream-${id}`,
         confidence: 0.92,
         status: 'merged',
+        dispatcharr_updated: true,
+        unapplied_reason: null,
+        journal_rows_unwritten: 0,
       };
     });
 
@@ -788,6 +801,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
       source_stream_id: `stream-${id}`,
       confidence: 0.92,
       status: 'merged',
+      dispatcharr_updated: true,
+      unapplied_reason: null,
+      journal_rows_unwritten: 0,
     }));
 
     render(<PendingMergesPage />);
@@ -830,6 +846,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
           source_stream_id: `stream-${id}`,
           confidence: 0.92,
           status: 'merged',
+          dispatcharr_updated: true,
+          unapplied_reason: null,
+          journal_rows_unwritten: 0,
         };
       });
       vi.mocked(api.dismissPendingMerge).mockImplementation(async (id) => {
@@ -897,6 +916,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
                 source_stream_id: 'stream-1',
                 confidence: 0.92,
                 status: 'merged',
+                dispatcharr_updated: true,
+                unapplied_reason: null,
+                journal_rows_unwritten: 0,
               });
           }),
       )
@@ -906,6 +928,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
               source_stream_id: `stream-${id}`,
               confidence: 0.92,
               status: 'merged',
+              dispatcharr_updated: true,
+              unapplied_reason: null,
+              journal_rows_unwritten: 0,
       }));
 
     render(<PendingMergesPage />);
@@ -966,6 +991,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
                 source_stream_id: 'stream-1',
                 confidence: 0.92,
                 status: 'merged',
+                dispatcharr_updated: true,
+                unapplied_reason: null,
+                journal_rows_unwritten: 0,
               });
           }),
       )
@@ -975,6 +1003,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         source_stream_id: `stream-${id}`,
         confidence: 0.92,
         status: 'merged',
+        dispatcharr_updated: true,
+        unapplied_reason: null,
+        journal_rows_unwritten: 0,
       }));
 
     render(<PendingMergesPage />);
@@ -1023,6 +1054,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
               source_stream_id: 'stream-1',
               confidence: 0.92,
               status: 'merged',
+              dispatcharr_updated: true,
+              unapplied_reason: null,
+              journal_rows_unwritten: 0,
             });
         }),
       )
@@ -1032,6 +1066,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         source_stream_id: `stream-${id}`,
         confidence: 0.92,
         status: 'merged',
+        dispatcharr_updated: true,
+        unapplied_reason: null,
+        journal_rows_unwritten: 0,
       }));
 
     render(<PendingMergesPage />);
@@ -1064,6 +1101,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
                 source_stream_id: 'stream-1',
                 confidence: 0.92,
                 status: 'merged',
+                dispatcharr_updated: true,
+                unapplied_reason: null,
+                journal_rows_unwritten: 0,
               });
           }),
       )
@@ -1073,6 +1113,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         source_stream_id: `stream-${id}`,
         confidence: 0.92,
         status: 'merged',
+        dispatcharr_updated: true,
+        unapplied_reason: null,
+        journal_rows_unwritten: 0,
       }));
 
     render(<PendingMergesPage />);
@@ -1153,6 +1196,9 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
         source_stream_id: `stream-${id}`,
         confidence: 0.92,
         status: 'merged',
+        dispatcharr_updated: true,
+        unapplied_reason: null,
+        journal_rows_unwritten: 0,
       };
     });
 
@@ -1448,6 +1494,8 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
       return {
         merged_into_channel_id: 'channel-uuid-abc', journal_entry_id: id,
         source_stream_id: `stream-${id}`, confidence: 0.92, status: 'merged',
+        dispatcharr_updated: true, unapplied_reason: null,
+        journal_rows_unwritten: 0,
       };
     });
     render(<PendingMergesPage />);

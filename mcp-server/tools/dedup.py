@@ -104,11 +104,18 @@ def register(mcp: FastMCP):
             candidate_channel_id, candidate_channel_name,
             candidate_channel_number, candidate_channel_group_name,
             confidence, status, created_at, resolved_at,
-            resolution_source, trigger_context. The three
-            candidate_channel_* name/number/group fields are resolved
-            from Dispatcharr at list time and are None when the
+            resolution_source, trigger_context, unapplied_reason. The
+            three candidate_channel_* name/number/group fields are
+            resolved from Dispatcharr at list time and are None when the
             candidate channel could not be resolved (e.g. deleted since
             queuing) — bead enhancedchannelmanager-09x38.14.
+
+            A 'pending' row whose unapplied_reason is set is a merge an
+            operator or agent ALREADY ACCEPTED that ECM could not apply
+            to Dispatcharr. It is still queued on purpose, the reason
+            says what blocked it, and accepting it again is an ordinary
+            retry — not a duplicate decision. Distinguish it from a
+            fresh candidate before reporting the queue to a human.
         """
         client = get_ecm_client()
         query: dict = {}
@@ -151,15 +158,36 @@ def register(mcp: FastMCP):
         """Accept a pending channel merge — triggers the Dispatcharr merge.
 
         Confirms the dedup decision for the given merge row: adds the stream to
-        the candidate channel in Dispatcharr and transitions the pending row to
-        'merged' with a full audit trail entry.
+        the candidate channel in Dispatcharr and, when that lands, transitions
+        the queue row to 'merged' with a full audit trail entry.
 
         The merge is idempotent: calling accept on a row that is already merged
         returns the original outcome envelope without error.
 
+        CHECK `dispatcharr_updated` BEFORE reporting the merge as done, and
+        CHECK `status` before reporting the row as gone. They are two different
+        facts and neither implies the other:
+
+        - `dispatcharr_updated: true`, `status: 'merged'` — applied, and the
+          row has left the queue. This is the only "done".
+        - `dispatcharr_updated: false`, `status: 'pending'` — the decision was
+          recorded and NO upstream write happened, because the stream-name
+          lookup matched zero streams, matched several, matched one with no
+          usable id, was truncated at its page ceiling so uniqueness could not
+          be established, or failed outright. The merge stays in the queue,
+          flagged, with `unapplied_reason` saying why in operator-actionable
+          terms. Relay that reason rather than reporting success. Once the
+          cause clears, retry the same merge_id — that is an ordinary accept,
+          not a duplicate decision, and it clears the flag when it lands.
+        - `dispatcharr_updated: null`, `status: 'merged'` — an idempotent
+          replay of a row that was ALREADY terminal. It performed no
+          Dispatcharr call and has no evidence either way. Only a terminal row
+          answers null, so this never means "still queued".
+
         On success, returns:
             {merged_into_channel_id, journal_entry_id, source_stream_id,
-             confidence, status}
+             confidence, status, dispatcharr_updated, unapplied_reason,
+             journal_rows_unwritten}
 
         On 4xx (returns structured error envelope — does NOT raise):
             404 TARGET_NOT_FOUND: The candidate channel no longer exists in
@@ -181,11 +209,14 @@ def register(mcp: FastMCP):
                 ENDPOINTS["channel_merges_accept"],
                 path_args={"merge_id": merge_id},
             )
-            # Backend returns a flat outcome envelope (ADR-008 §D1 flat-outcome
-            # pattern).  Add status='merged' to match the declared return shape.
-            if isinstance(result, dict) and "status" not in result:
-                result = dict(result)
-                result["status"] = "merged"
+            # Relayed VERBATIM. This used to inject status='merged' whenever
+            # the backend omitted the field. `AcceptOutcome` always carries it,
+            # and since the PO decision of 2026-08-16 it is not always
+            # 'merged' — a merge ECM could not apply stays 'pending' in the
+            # queue. A manufactured default would relabel exactly that outcome
+            # as terminal, which is the false success claim bead
+            # enhancedchannelmanager-i5ic0 exists to stop, one layer out from
+            # where it was found.
             return result
         except Exception as e:
             status_code = _http_status_code(e)

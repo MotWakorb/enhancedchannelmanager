@@ -1061,9 +1061,23 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
         #                   (BD-G) when the operator opens the prompt and
         #                   then dismisses without choosing accept/reject.
         #                   BD-E does not emit this label itself.
+        #   * ``unapplied`` — accept succeeded and ECM could NOT apply it
+        #                   upstream, so the queue row deliberately stays
+        #                   ``pending``, flagged and retryable (bead
+        #                   enhancedchannelmanager-i5ic0, PO decision
+        #                   2026-08-16). NOT a resolution: SLI-10b's
+        #                   numerator is terminal-state transitions out of
+        #                   the queue, and this makes none, so counting it
+        #                   as ``success`` would have shown the queue being
+        #                   cleared while flagged rows accumulated and
+        #                   suppressed ECMDedupPendingMergeResolutionStale.
+        #                   Not dropped either: the request happened, and
+        #                   omitting it shrinks SLI-10c's DENOMINATOR.
         #
-        # Label cardinality is hard-bounded to those four values per the
-        # runbook contract (docs/runbooks/dedup-merge-api-error-rate-high.md).
+        # Label cardinality is hard-bounded to those five values per the
+        # runbook contract (docs/runbooks/dedup-merge-api-error-rate-high.md),
+        # which along with docs/sre/slos.md enumerates them and needs the
+        # fifth added.
         #
         # The SLI-10b denominator counter
         # ``pending_merges_queue_depth_added_total`` is declared earlier
@@ -1075,9 +1089,10 @@ def _build_metrics(registry: CollectorRegistry) -> Dict[str, Any]:
             "ecm_dedup_merge_requests_total",
             "Count of POST /api/channel-merges/{id}/accept and /dismiss "
             "outcomes, labeled by status (success|error|dismissed|"
-            "cancelled). SLI-10c numerator (status='error') and SLI-10b "
-            "numerator (status='success'|'dismissed' = terminal-state "
-            "transitions out of the pending queue). 4xx-by-design "
+            "cancelled|unapplied). SLI-10c numerator (status='error') and "
+            "SLI-10b numerator (status='success'|'dismissed' = terminal-state "
+            "transitions out of the pending queue; 'unapplied' is NOT one, "
+            "the row stays queued). 4xx-by-design "
             "responses (404 stale target, 409 invalid state) are NOT "
             "counted as 'error' per the bd-ct9wl / bd-ozhkf precedent.",
             ["status"],

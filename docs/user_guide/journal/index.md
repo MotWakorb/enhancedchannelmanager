@@ -7,7 +7,7 @@ Journal is ECM's forensic record of every channel, EPG, M3U, watch, task, Channe
 ### Narrow down to the change you're chasing
 
 1. Open **Journal**.
-2. Type into **Search entries...** for a name or description match, and/or pick from the **All Categories** (Channel, EPG, M3U, Task, Watch, Channel Pipeline, Event Sync), **All Actions** (Create, Update, Delete, Start, Stop, Refresh, Stream Add/Remove/Reorder, Reorder), and **All Sources** (UI, AI, Scheduler, Channel Pipeline) dropdowns.
+2. Type into **Search entries...** for a name or description match, and/or pick from the **All Categories** (Channel, EPG, M3U, Task, Watch, Channel Pipeline, Event Sync), **All Actions** (Create, Update, Delete, Start, Stop, Refresh, Stream Add/Remove/Reorder, Reorder, Merge Not Applied, Bulk Merge Incomplete), and **All Sources** (UI, AI, Scheduler, Channel Pipeline) dropdowns.
 3. Combine filters to ask a specific question. For example, Category **Channel** + Action **Delete** answers "what channels got deleted, and when."
 
 ![Journal's default entry list, with the search box, Category/Action/Source filter dropdowns, and the per-category count summary above the table](../../images/user_guide/journal/1-journal-overview.png)

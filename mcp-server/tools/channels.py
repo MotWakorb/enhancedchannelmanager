@@ -1347,12 +1347,21 @@ def register(mcp: FastMCP):
             errors = result.get("errors") or []
             applied = result.get("operationsApplied")
             failed = result.get("operationsFailed")
+            partially_applied = result.get("operationsPartiallyApplied") or 0
 
             lines = []
             status = "SUCCESS" if success else "FAILED"
             lines.append(f"Bulk commit {status}: {len(operations)} operations submitted.")
             if applied is not None or failed is not None:
-                lines.append(f"{applied or 0} applied, {failed or 0} failed.")
+                counts = f"{applied or 0} applied, {failed or 0} failed"
+                # A subset of the failures, not an extra category of operation
+                # — said in the same sentence so the numbers cannot be read as
+                # adding up to more than were submitted (bead …-1e4at).
+                if partially_applied:
+                    counts += (
+                        f" (of which {partially_applied} partially applied)"
+                    )
+                lines.append(counts + ".")
             if result.get("partial"):
                 lines.append(
                     "PARTIAL: some operations landed and some did not. Reconcile "
@@ -1375,7 +1384,21 @@ def register(mcp: FastMCP):
             # do: retrying it is what produces the duplicate channel. Kept
             # separate from the failures below for exactly that reason.
             applied_incomplete = [e for e in errors if e.get("applied") is True]
-            genuine_failures = [e for e in errors if e.get("applied") is not True]
+            # An entry carrying `sideEffectsLanded: true` names an operation
+            # that genuinely FAILED — the group it was asked to delete is still
+            # there — but which landed upstream writes of its own first. The
+            # channels a group delete reparents stay reparented. Presenting it
+            # beside a create that never happened reads as "retry me", and the
+            # retry acts on a precondition that has already changed (bead
+            # …-1e4at). Third bucket, because it is neither done nor unstarted.
+            side_effects_landed = [
+                e for e in errors
+                if e.get("applied") is not True and e.get("sideEffectsLanded") is True
+            ]
+            genuine_failures = [
+                e for e in errors
+                if e.get("applied") is not True and e.get("sideEffectsLanded") is not True
+            ]
 
             if applied_incomplete:
                 lines.append(
@@ -1386,6 +1409,21 @@ def register(mcp: FastMCP):
                 for entry in applied_incomplete[:10]:
                     lines.append(
                         f"  ! {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+            if side_effects_landed:
+                lines.append(
+                    f"PARTIALLY APPLIED ({len(side_effects_landed)}) — these "
+                    "operations did NOT achieve their outcome, but upstream "
+                    "writes they made first DID land and are still in place "
+                    "(e.g. a group delete that reparented the group's channels "
+                    "and then failed to delete the group). Reconcile the "
+                    "current Dispatcharr state before retrying:"
+                )
+                for entry in side_effects_landed[:10]:
+                    lines.append(
+                        f"  ~ {entry.get('operationId')} "
                         f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
                         f"{entry.get('error')}"
                     )

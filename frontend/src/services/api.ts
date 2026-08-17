@@ -4852,6 +4852,17 @@ export interface PendingMergeRecord {
   resolved_at: number | null;
   resolution_source: string | null;
   trigger_context: string;
+  /**
+   * Why the LAST accept on this row could not be applied to Dispatcharr, in
+   * operator-actionable prose; `null` when no accept has failed to apply.
+   *
+   * A `'pending'` row with this set is a merge the operator ALREADY accepted
+   * that ECM could not carry out. It deliberately stays in the queue, flagged,
+   * so the reason is on the row rather than only in the Journal, and accepting
+   * it again is an ordinary retry that clears the flag when it lands (bead
+   * enhancedchannelmanager-i5ic0, PO decision 2026-08-16).
+   */
+  unapplied_reason: string | null;
 }
 
 /** Paginated envelope for `GET /api/channel-merges`. */
@@ -4877,7 +4888,35 @@ export interface AcceptMergeOutcome {
   journal_entry_id: number;
   source_stream_id: string;
   confidence: number;
-  status: 'merged';
+  /**
+   * The QUEUE ROW's state, which is no longer always terminal. `'merged'` when
+   * the merge applied and the row left the queue; `'pending'` when ECM could
+   * not apply it, in which case the row STAYS queued carrying its
+   * `unapplied_reason` and remains retryable (PO decision 2026-08-16). Never a
+   * claim about Dispatcharr on its own — see `dispatcharr_updated`.
+   */
+  status: 'merged' | 'pending';
+  /**
+   * Whether the candidate channel ends the request holding the stream.
+   *
+   * THREE values, and each needs its own handling — `!== false` is not a test
+   * for success (bead enhancedchannelmanager-i5ic0):
+   *
+   * - `true`  — the channel holds the stream, whether this call PATCHed it or
+   *   it was already there.
+   * - `false` — no upstream write happened. The stream-name lookup matched
+   *   zero or several streams, matched one with no usable id, failed, or was
+   *   truncated at its page ceiling — a truncated search cannot establish
+   *   uniqueness even when exactly one match is visible on the page it saw.
+   * - `null`  — an idempotent replay. It made no Dispatcharr call and has no
+   *   evidence either way; treating it as success reports a certainty nothing
+   *   established.
+   */
+  dispatcharr_updated: boolean | null;
+  /** Operator-actionable prose whenever `dispatcharr_updated` is not `true`. */
+  unapplied_reason: string | null;
+  /** Journal rows this request could not write. Always present. */
+  journal_rows_unwritten: number;
 }
 
 /**

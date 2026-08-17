@@ -24,8 +24,10 @@ The property, stated as an invariant rather than as a reproduction:
        failure. Reporting one as a failure is what makes an integrator retry
        and create the entity a second time.
     4. ``success`` is true only when nothing failed and nothing applied
-       incompletely; ``partial`` is true exactly when something applied and
-       something else did not go cleanly.
+       incompletely; ``partial`` is true exactly when something landed and
+       something else did not go cleanly. "Something landed" includes an
+       operation that FAILED having already made an upstream write of its own
+       (rule 8) — the caller has something to reconcile either way.
     5. Every ``normalizationFailures`` entry names an operation counted as
        applied — the list is rendered by the MCP tool as channels "which were
        created", so an entry for an operation that failed is a claim about a
@@ -40,6 +42,14 @@ The property, stated as an invariant rather than as a reproduction:
        anywhere saying what had failed.
     7. Every upstream write that LANDS has its journal row queued at the moment
        it lands, whatever fails afterwards. See :meth:`OperationLedger.record_write`.
+    8. An operation reported as failed says so when upstream writes of its own
+       LANDED before it failed. ``deleteChannelGroup`` reparents the group's
+       channels and then deletes the group; a reparent that lands before a
+       failed delete leaves the channels moved, and they stay moved. See
+       :attr:`OperationLedger.partially_applied`.
+    9. Closing an operation as applied requires the ledger to have been told
+       something: a landed write, or :meth:`OperationLedger.applied_without_writing`
+       with a reason. See that method.
 
 Enforcement, not convention: :class:`OperationLedger` is the ONLY thing that
 writes the counters, and :func:`finalize_bulk_commit_result` derives ``success``
@@ -89,15 +99,47 @@ rules 1-6 over every cell, and by
 ``backend/tests/routers/test_kz089_journal_at_the_moment_of_the_write.py``,
 which pins rule 7 and the shape of the API that makes it structural.
 
-KNOWN LIMIT, deliberately not papered over: an operation with more than one
-upstream side effect can land the first and fail the second — the clearest case
-is ``deleteChannelGroup``, which reparents the group's channels and then deletes
-the group. The envelope has one outcome per operation and cannot express "the
-channels moved but the group is still there", so such an operation is reported
-as a failure. Marking it applied would be the worse lie, because the group still
-exists. What rule 7 fixes is the second half of that sentence: the partial side
-effect is now genuinely visible in the journal, per moved channel, which is what
-this docstring already claimed before anything made it true.
+That known limit is now closed, in bead ``enhancedchannelmanager-1e4at``. An
+operation with more than one upstream side effect can land the first and fail
+the second — the clearest case is ``deleteChannelGroup``, which reparents the
+group's channels and then deletes the group. The envelope had one outcome per
+operation and could not express "the channels moved but the group is still
+there", so such an operation was reported as a plain failure. That is the safer
+of the two available lies (marking it applied would say the group is gone when
+it is not) but the channels really did move, and an operator retrying the failed
+delete finds them already elsewhere with nothing in the envelope explaining why.
+
+THE SHAPE CHOSEN, recorded here because the alternative is reasonable and was
+rejected on a reason rather than a preference. The envelope gains a
+partial-outcome CATEGORY (:attr:`OperationLedger.partially_applied`, surfaced as
+``operationsPartiallyApplied`` and as ``sideEffectsLanded`` on the operation's
+own ``errors`` entry). It does NOT decompose a multi-side-effect operation into
+several separately-reported operations. Decomposition would break the identity
+between the operations a caller SUBMITTED and the operations the envelope
+REPORTS, and that identity is what rule 1 is written on and what
+``errors[].operationId`` correlates against: a caller who staged five things
+would read six outcomes, and ``operationsApplied + operationsFailed`` would stop
+being comparable to ``len(operations)`` for every consumer that does compare
+them today. The category costs one integer and one boolean and leaves rule 1
+exactly as it was.
+
+The category is DERIVED rather than declared, for the same reason rule 7 is
+structural. The ledger already sees the fact: a :meth:`OperationLedger.record_write`
+inside an open operation is BY DEFINITION an upstream write that is not that
+operation's own outcome — that is what :meth:`OperationLedger.record_persisted`
+is for. An operation that closes as failed having recorded one is partially
+applied, and no branch has to remember to say so.
+
+Rule 9 closes the last way rule 7 could be defeated from outside the ledger, named
+in bead ``enhancedchannelmanager-jd3kn``: ``record_applied`` used to accept an
+operation that had told the ledger nothing at all, so a branch that wrote upstream
+and forgot to say so was still expressible with every other mechanism intact — a
+required argument only binds a call somebody actually makes. Three branches
+legitimately apply WITHOUT writing (``createGroup`` on a name already in the map,
+add-stream and remove-stream when the stream is already in the desired state), so
+the fix is a second sentinel rather than a bare requirement:
+:meth:`OperationLedger.applied_without_writing` states the case in words, exactly
+as :func:`nothing_to_journal` does for a write with no row.
 """
 
 from __future__ import annotations
@@ -112,10 +154,16 @@ __all__ = [
     "JournalRowSpec",
     "NothingToJournal",
     "OperationLedger",
+    "SIDE_EFFECTS_LANDED_KEY",
     "bulk_commit_accounting_violations",
     "finalize_bulk_commit_result",
     "nothing_to_journal",
 ]
+
+#: Key on an ``errors`` entry marking the operation it names as one whose own
+#: upstream writes LANDED before it failed. Named once so the executor, the
+#: audit and every test agree on the spelling.
+SIDE_EFFECTS_LANDED_KEY = "sideEffectsLanded"
 
 
 class BulkCommitAccountingError(RuntimeError):
@@ -191,12 +239,15 @@ class OperationLedger:
         "applied",
         "failed",
         "incomplete",
+        "partially_applied",
         "setup_failures",
         "aborted",
         "applied_create_temp_ids",
         "journal_rows",
         "_open",
         "_persisted",
+        "_side_effects",
+        "_no_write_reason",
         "_pending_create_temp_id",
     )
 
@@ -204,6 +255,13 @@ class OperationLedger:
         self.total_operations = total_operations
         self.applied = 0
         self.failed = 0
+        #: Operations counted in ``failed`` whose OWN upstream writes landed
+        #: before they failed — the reparent that moved channels out of a group
+        #: whose delete then failed. Counted in addition to ``failed``, never
+        #: instead of it: the operation's own outcome did not happen, and the
+        #: caller still has something to reconcile (bead
+        #: ``enhancedchannelmanager-1e4at``).
+        self.partially_applied = 0
         #: Failures that are NOT one of the submitted operations: Phase 1 group
         #: creation, which runs before any operation, and the Phase 3 journal
         #: flush, which runs after all of them. Counting these in ``failed``
@@ -227,6 +285,11 @@ class OperationLedger:
         self.journal_rows: list[dict] = []
         self._open = False
         self._persisted = False
+        #: Upstream writes the OPEN operation has landed that are not its own
+        #: outcome. Reset by :meth:`begin`, so it cannot leak into the next one.
+        self._side_effects = 0
+        #: Why the OPEN operation applied without writing anything, if it said so.
+        self._no_write_reason: Optional[str] = None
         self._pending_create_temp_id: Optional[int] = None
 
     # -- reading -----------------------------------------------------------
@@ -246,6 +309,15 @@ class OperationLedger:
         """Whether the OPEN operation's upstream write has already landed."""
         return self._persisted
 
+    @property
+    def side_effects_landed(self) -> bool:
+        """Whether the OPEN operation has landed writes that are not its outcome.
+
+        Read by the executor while it builds the error entry, which happens
+        BEFORE :meth:`record_failed` closes the operation and clears this.
+        """
+        return self._side_effects > 0
+
     # -- writing -----------------------------------------------------------
 
     def begin(self) -> None:
@@ -257,6 +329,8 @@ class OperationLedger:
             )
         self._open = True
         self._persisted = False
+        self._side_effects = 0
+        self._no_write_reason = None
         self._pending_create_temp_id = None
 
     def record_write(self, *, journal_row: JournalRowSpec) -> None:
@@ -277,7 +351,16 @@ class OperationLedger:
         ``journal_row`` is required and has no default. That is the mechanism:
         rule 7 cannot be broken by forgetting, only by writing
         ``nothing_to_journal(reason)`` and being wrong out loud.
+
+        A call made while an operation is OPEN also makes that operation
+        partially applied should it go on to fail (rule 8), because a landed
+        write inside an operation that is not that operation's outcome is
+        exactly what the caller has to reconcile. ``nothing_to_journal`` does
+        not exempt it: that sentinel says the write left no readable row, not
+        that there was no write.
         """
+        if self._open:
+            self._side_effects += 1
         self._queue_journal(journal_row)
 
     def record_persisted(
@@ -302,6 +385,35 @@ class OperationLedger:
         self._persisted = True
         if create_temp_id is not None:
             self._pending_create_temp_id = create_temp_id
+
+    def applied_without_writing(self, reason: str) -> None:
+        """The OPEN operation is applied and made no upstream write. Say why.
+
+        The three branches that reach this are the ones whose requested end
+        state ALREADY held: ``createGroup`` for a name the run has already
+        mapped, and add-stream / remove-stream when the stream is already in
+        (or already out of) the channel's list. Nothing was written because
+        nothing needed to be, which is a different thing from a branch that
+        wrote and forgot to say so — and before rule 9 the two were
+        indistinguishable to the ledger.
+
+        The reason is mandatory for the same reason
+        :func:`nothing_to_journal`'s is: the absence of a write becomes a
+        sentence a reviewer can disagree with rather than an omission nobody
+        can see.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise BulkCommitAccountingError(
+                "applied_without_writing() needs a reason: an operation that "
+                "applied without writing anything upstream has to say in words "
+                "why there was nothing to write"
+            )
+        if not self._open:
+            raise BulkCommitAccountingError(
+                "applied_without_writing() was called with no operation open"
+            )
+        self._no_write_reason = reason
+        logger.debug("[LEDGER] Operation applied without writing: %s", reason)
 
     def drain_journal_rows(self) -> list[dict]:
         """Take the queued rows away. Idempotent by construction — a second
@@ -330,7 +442,27 @@ class OperationLedger:
         self.journal_rows.extend(rows)
 
     def record_applied(self, *, incomplete: bool = False) -> None:
-        """Close the open operation as applied."""
+        """Close the open operation as applied.
+
+        Rule 9: the operation must have told the ledger something first — a
+        landed write (:meth:`record_persisted` or :meth:`record_write`), or
+        :meth:`applied_without_writing` with a reason. An operation that
+        applied while saying nothing at all is either a branch that wrote and
+        forgot, or a branch whose no-op nobody has written down; both are
+        defects, and the ledger cannot tell them apart, so it refuses.
+        """
+        if (
+            not self._persisted
+            and self._side_effects == 0
+            and self._no_write_reason is None
+        ):
+            raise BulkCommitAccountingError(
+                "an operation was recorded as applied having told the ledger "
+                "nothing: it wrote nothing upstream and did not say why. Call "
+                "record_persisted(journal_row=...) for a write, or "
+                "applied_without_writing(reason) to say the requested state "
+                "already held"
+            )
         self._close()
         self.applied += 1
         if incomplete:
@@ -340,9 +472,18 @@ class OperationLedger:
             self._pending_create_temp_id = None
 
     def record_failed(self) -> None:
-        """Close the open operation as failed."""
+        """Close the open operation as failed.
+
+        An operation whose own upstream writes LANDED before it failed is
+        additionally counted as partially applied (rule 8). It stays in
+        ``failed`` — its outcome did not happen — and the extra count is what
+        stops a caller reading "failed" as "nothing to reconcile".
+        """
+        side_effects = self._side_effects
         self._close()
         self.failed += 1
+        if side_effects:
+            self.partially_applied += 1
         self._pending_create_temp_id = None
 
     def abort_remaining(self) -> None:
@@ -377,6 +518,8 @@ class OperationLedger:
                 "recorded without the operation being opened"
             )
         self._open = False
+        self._side_effects = 0
+        self._no_write_reason = None
 
 
 def bulk_commit_accounting_violations(
@@ -386,6 +529,7 @@ def bulk_commit_accounting_violations(
     aborted: bool,
     applied_create_temp_ids: frozenset[int] | set[int],
     setup_failures: int = 0,
+    partially_applied: int = 0,
 ) -> list[str]:
     """Return every way ``result`` contradicts itself, as readable sentences.
 
@@ -439,6 +583,33 @@ def bulk_commit_accounting_violations(
             "entries describe something that did not apply"
         )
 
+    # Rule 8. A partially-applied operation is one of the FAILURES — its own
+    # outcome did not happen — so it can never outnumber them, and each one
+    # names itself on its own ``errors`` entry. The count alone would say that
+    # somewhere in the batch something was left behind without saying where,
+    # which is most of the value of the category.
+    reported_partially_applied = result.get("operationsPartiallyApplied")
+    if reported_partially_applied != partially_applied:
+        violations.append(
+            f"operationsPartiallyApplied is {reported_partially_applied!r} but "
+            f"the ledger recorded {partially_applied} operation(s) whose "
+            "upstream writes landed before they failed"
+        )
+    if partially_applied > failed:
+        violations.append(
+            f"{partially_applied} operation(s) are partially applied but only "
+            f"{failed} failed; a partially applied operation is one of the "
+            "failures, not an extra one"
+        )
+    marked_errors = [e for e in errors if e.get(SIDE_EFFECTS_LANDED_KEY) is True]
+    if len(marked_errors) != partially_applied:
+        violations.append(
+            f"{partially_applied} operation(s) are partially applied but "
+            f"{len(marked_errors)} error entr(ies) carry "
+            f"{SIDE_EFFECTS_LANDED_KEY}; the envelope has to name WHICH "
+            "operation left work behind"
+        )
+
     expected_success = failed == 0 and not applied_errors and setup_failures == 0
     if result.get("success") is not expected_success:
         violations.append(
@@ -447,11 +618,16 @@ def bulk_commit_accounting_violations(
             f"incompletely and {setup_failures} setup step(s) failed"
         )
 
-    expected_partial = applied > 0 and (failed > 0 or bool(applied_errors))
+    # A run whose ONLY operation failed after landing a write has ``applied``
+    # of zero and still leaves the caller something to reconcile, so
+    # ``partial`` counts it as landed work (bead …-1e4at).
+    landed = applied > 0 or partially_applied > 0
+    expected_partial = landed and (failed > 0 or bool(applied_errors))
     if result.get("partial") is not expected_partial:
         violations.append(
             f"partial is {result.get('partial')!r} but {applied} applied, "
-            f"{failed} failed and {len(applied_errors)} applied incompletely"
+            f"{failed} failed, {partially_applied} partially applied and "
+            f"{len(applied_errors)} applied incompletely"
         )
 
     for entry in normalization_failures:
@@ -476,6 +652,10 @@ def finalize_bulk_commit_result(result: dict, ledger: OperationLedger) -> None:
     """
     result["operationsApplied"] = ledger.applied
     result["operationsFailed"] = ledger.failed
+    # Always present, so a caller checks the number rather than probing for a
+    # key — the same contract ``journalRowsUnwritten`` and
+    # ``normalizationFailures`` carry (bead …-1e4at).
+    result["operationsPartiallyApplied"] = ledger.partially_applied
 
     # A failed operation is a failure whatever ``continueOnError`` says (bead
     # …-ayfn9). ``incomplete`` joins it: an operation that landed upstream but
@@ -491,9 +671,15 @@ def finalize_bulk_commit_result(result: dict, ledger: OperationLedger) -> None:
     # failed" and the operator to reconcile via ``tempIdMap`` instead of
     # blindly retrying and piling up duplicates (bd-5xciq). An incomplete
     # create is precisely that situation, so it counts here too.
-    result["partial"] = ledger.applied > 0 and (
-        ledger.failed > 0 or ledger.incomplete > 0
-    )
+    #
+    # An operation that failed AFTER landing an upstream write of its own is
+    # the same situation with ``applied`` of zero: the channels a failed group
+    # delete moved are still moved, and a caller who reads "failed, nothing
+    # applied" and retries is reconciling against a state that has changed
+    # under them (bead …-1e4at).
+    result["partial"] = (
+        ledger.applied > 0 or ledger.partially_applied > 0
+    ) and (ledger.failed > 0 or ledger.incomplete > 0)
 
     violations = bulk_commit_accounting_violations(
         result,
@@ -501,6 +687,7 @@ def finalize_bulk_commit_result(result: dict, ledger: OperationLedger) -> None:
         aborted=ledger.aborted,
         applied_create_temp_ids=ledger.applied_create_temp_ids,
         setup_failures=ledger.setup_failures,
+        partially_applied=ledger.partially_applied,
     )
     if violations:
         message = "; ".join(violations)

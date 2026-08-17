@@ -23,6 +23,7 @@ The alert fires when the 24h resolution ratio drops below 95%: more than 5% of m
 
 - `ecm_pending_merges_queue_depth_added_total` (counter): denominator. Incremented on every queue insertion.
 - `ecm_dedup_merge_requests_total{status="success"|"dismissed"}` (counter): numerator. Terminal-state transitions out of the queue.
+- `ecm_dedup_merge_requests_total{status="unapplied"}` (counter): **not in either side of the ratio, and the first thing to check when this alert fires.** Added 2026-08-16 (bead `enhancedchannelmanager-i5ic0`) for an accept ECM recorded but could not apply to Dispatcharr. Under the same PO decision that row stays `pending` and flagged rather than transitioning, so it is not a terminal transition and does not belong in the numerator. It is what makes this alert able to fire on an install where operators are clicking Merge constantly: the clicks happen, the queue does not drain, and without this series the two facts look contradictory.
 
 ## Why this matters
 
@@ -45,9 +46,15 @@ The 24h horizon matches operator daily-attention patterns. A merge sitting longe
    ```
    If `NaN`, no merges entered the queue in 24h. The alert should not have fired (guard); treat as a false positive and capture for tuning.
 
-2. **Check the merge API error rate.** If `ECMDedupMergeApiErrorRateHigh` is firing concurrently, the modal is erroring before the operator can act. That's the root cause; go to [dedup-merge-api-error-rate-high.md](./dedup-merge-api-error-rate-high.md).
+2. **Check whether operators are accepting merges that never reach Dispatcharr.** This is the cheapest branch and the newest, so check it before the two below:
+   ```promql
+   sum(increase(ecm_dedup_merge_requests_total{status="unapplied"}[24h]))
+   ```
+   A non-trivial value means the accepts are happening and the queue still is not draining, because each of those rows stayed `pending` with an `unapplied_reason`. The reason text is on the row itself in **Pending Merges** and in the Journal under **Merge Not Applied**, so read one and it will name the cause: Dispatcharr unreachable during the stream lookup, a stream renamed or removed since it was queued, duplicate stream names ECM cannot choose between, or a catalogue large enough that the lookup's single page is truncating. The first is an outage to fix; the rest are operator data problems, and the rows are retryable once cleared.
 
-3. **Check the candidate-flood pattern.** If a recent bulk M3U import added many candidates at once, the operator may be overwhelmed rather than ignoring the modal.
+3. **Check the merge API error rate.** If `ECMDedupMergeApiErrorRateHigh` is firing concurrently, the modal is erroring before the operator can act. That's the root cause; go to [dedup-merge-api-error-rate-high.md](./dedup-merge-api-error-rate-high.md). Note that a high `unapplied` rate *depresses* that alert's ratio rather than raising it, so a green error-rate alert does not rule this branch out.
+
+4. **Check the candidate-flood pattern.** If a recent bulk M3U import added many candidates at once, the operator may be overwhelmed rather than ignoring the modal.
    ```bash
    # TODO: command to count recent candidates by source (drag_drop / add_stream / bulk_m3u).
    ```
@@ -69,6 +76,17 @@ A bulk M3U import produces 500 candidates in one batch; the operator can realist
 
 - TODO: command to inspect queue source breakdown.
 - Mitigation: introduce a queue-depth cap on the bulk-M3U source (deferred, see SRE position from team-plan).
+
+### Branch C: The operator is accepting, and the accepts are not landing upstream
+
+Added 2026-08-16 with the `status="unapplied"` label (bead `enhancedchannelmanager-i5ic0`). This branch looks exactly like Branch A from the metrics alone until you split by label, because in both cases the queue does not drain. The distinguishing query is step 2 of "First 10 minutes": a non-zero `{status="unapplied"}` rate means the accepts are reaching the backend and returning `200`, so the modal is not broken.
+
+The rows themselves carry the diagnosis. Each one stays in **Pending Merges** with a **Not applied** badge and an `unapplied_reason`, and the same text is in the Journal under **Merge Not Applied**. Read one row and the cause is named in prose. Two responses, depending on which cause it names:
+
+- **The stream lookup could not be completed** points at Dispatcharr reachability from the ECM container, not at the operator's catalogue. Fix that and the rows retry cleanly; nothing needs unpicking, because no upstream write was made.
+- **A name that resolves to zero or several streams, or a lookup truncated at its page ceiling,** is an operator data problem. These do not clear on their own. The queue can sit above the SLO indefinitely while everything is working as designed, which is a legitimate reason to acknowledge this alert rather than chase it.
+
+Either way the rows are retryable and nothing is lost: the accept is recorded, the row keeps its place, and re-accepting once the cause has cleared resolves it normally.
 
 ### Branch C: Dismiss path is broken
 

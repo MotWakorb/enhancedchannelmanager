@@ -15,11 +15,16 @@
  *
  * Per-row affordances:
  *   - "Merge" — accept the candidate. Idempotent on the backend per ADR-008
- *     §D1; on success we optimistically remove the row from the local list.
+ *     §D1; when it APPLIES we optimistically remove the row from the local
+ *     list. When ECM could not apply it upstream the backend deliberately
+ *     leaves the row in `pending` with an `unapplied_reason`, so the row stays
+ *     here too, flagged in place and retryable (bead
+ *     enhancedchannelmanager-i5ic0, PO decision 2026-08-16). Removing it would
+ *     put this list out of step with the queue and take the retry away.
  *   - "Create New" — dismiss the candidate (the actual channel-creation path
  *     is the operator's next trigger — drag-drop, Add Stream, or the next
  *     M3U refresh — and `dismiss` is a pure ECM-side state flip plus audit
- *     row per ADR-008 §D6). Same optimistic remove.
+ *     row per ADR-008 §D6). Always terminal, so always an optimistic remove.
  *
  * On error, the backend's `detail` string is surfaced verbatim in an inline
  * banner (matching the bd-7j6v1 / bd-9q9z0 pattern); the row stays in place
@@ -28,7 +33,7 @@
  * Bulk actions (GH #642 / bead enhancedchannelmanager-ixcf1) reuse those same
  * endpoints sequentially. Sequential execution prevents a bulk click from
  * amplifying concurrent Dispatcharr mutations; failures do not stop later
- * rows, and only successful rows are removed.
+ * rows, and a row is removed only when its outcome actually resolved it.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
@@ -55,7 +60,60 @@ interface BulkProgress {
   completed: number;
   total: number;
   failures: number;
+  /**
+   * Accepts that SUCCEEDED and left Dispatcharr untouched. Counted apart from
+   * `failures` because nothing failed — the request returned 200 and the queue
+   * row resolved — and apart from the plain completed count because the
+   * operator has work left to do (bead enhancedchannelmanager-i5ic0).
+   */
+  unapplied: number;
+  /**
+   * Accepts that obtained NO EVIDENCE about Dispatcharr — an idempotent replay
+   * of a merge an earlier request already resolved. Counted apart from
+   * `unapplied` because ECM is not saying the upstream write did not happen;
+   * it is saying this request cannot tell. Folding the two together would put
+   * a certainty on the screen that nothing established.
+   */
+  unknown: number;
   phase: 'running' | 'stopping' | 'stopped' | 'completed';
+}
+
+/**
+ * What an accept established about Dispatcharr, when it was not a plain apply.
+ *
+ * `dispatcharr_updated` is THREE values and each needs its own destination
+ * (bead enhancedchannelmanager-i5ic0, fix round):
+ *
+ * - `true`  — applied. No notice; there is nothing for the operator to do.
+ * - `false` — recorded and NOT applied upstream. `kind: 'unapplied'`.
+ * - `null`  — an idempotent replay, which made no Dispatcharr call and has no
+ *   evidence about what the original one did. `kind: 'unknown'`. Round 1
+ *   tested `!== false` and so consumed this through the success path: the row
+ *   was removed with no explanation and a bulk run counted it as a clean
+ *   apply, which is the only outcome that says "ECM does not know" being shown
+ *   as the one thing it is not.
+ *
+ * Held at page level because a `kind: 'unknown'` replay DOES remove its row —
+ * that row is terminal and a `status=pending` reload would not return it — so
+ * the notice is the only place its explanation can live.
+ *
+ * `kind: 'unapplied'` also keeps its notice, but it is no longer the only
+ * signal: since the PO decision of 2026-08-16 that row STAYS in the queue
+ * carrying `unapplied_reason`, flagged in place and retryable (bead
+ * enhancedchannelmanager-i5ic0). The notice is the summary of what a click or
+ * a bulk run just did; the row badge is where the operator finds it afterwards.
+ */
+interface AcceptOutcomeNotice {
+  rowId: number;
+  streamName: string;
+  reason: string;
+  kind: 'unapplied' | 'unknown';
+}
+
+/** What an accept established, and the prose that goes with it. */
+interface AcceptClassification {
+  kind: 'applied' | 'unapplied' | 'unknown';
+  reason: string | null;
 }
 
 /** Format a 0.0–1.0 confidence as an integer-percent badge string. */
@@ -77,6 +135,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   // single page-wide "submitting" flag.
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({});
+  const [outcomeNotices, setOutcomeNotices] = useState<AcceptOutcomeNotice[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const selectedIdsRef = useRef(selectedIds);
   const rowsRef = useRef(rows);
@@ -183,6 +242,92 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     loadRows();
   }, [loadRows]);
 
+  /**
+   * Classify what an accept established about Dispatcharr, and record it.
+   *
+   * A non-throwing response used to be taken as proof the merge had been
+   * applied. It is not: `status: 'merged'` describes the QUEUE ROW, and the
+   * backend says separately whether the upstream write happened (bead
+   * enhancedchannelmanager-i5ic0). Round 1 replaced "did not throw" with
+   * `!== false`, which is the same mistake with one value carved out: it left
+   * `null` — the replay that obtained no evidence — on the success path.
+   *
+   * The three values map onto three returns, so every caller has to decide
+   * what to do with each rather than inheriting a default. `undefined` is a
+   * fourth thing and deliberately NOT one of them: a dismiss outcome carries
+   * no such field, because dismissal makes no claim about Dispatcharr.
+   */
+  const noteAcceptOutcome = useCallback(
+    (
+      row: { id: number; stream_name: string },
+      outcome: unknown,
+    ): AcceptClassification => {
+      const result = outcome as Partial<api.AcceptMergeOutcome> | undefined;
+      if (!result) return { kind: 'applied', reason: null };
+      const updated = result.dispatcharr_updated;
+      if (updated !== false && updated !== null) {
+        return { kind: 'applied', reason: null };
+      }
+      const kind = updated === false ? 'unapplied' : 'unknown';
+      const reason =
+        result.unapplied_reason ??
+        (kind === 'unapplied'
+          ? 'ECM recorded this merge but did not update Dispatcharr.'
+          : 'This merge was already resolved by an earlier request, so this ' +
+            'one obtained no evidence about whether Dispatcharr was updated.');
+      setOutcomeNotices((previous) =>
+        previous.some((entry) => entry.rowId === row.id)
+          ? previous
+          : [
+              ...previous,
+              { rowId: row.id, streamName: row.stream_name, reason, kind },
+            ],
+      );
+      logger.warn(
+        'PendingMergesPage: merge %s returned outcome "%s": %s',
+        row.id,
+        kind,
+        reason,
+      );
+      return { kind, reason };
+    },
+    [],
+  );
+
+  /**
+   * Apply one accept outcome to the list.
+   *
+   * `unapplied` is the one outcome that KEEPS its row. The row never left
+   * `pending` server-side — that is the PO decision this implements — so
+   * removing it here would put the list out of step with the queue and lose
+   * the retry affordance the decision exists to provide. It is flagged in
+   * place with the reason the backend just gave, which is also what a reload
+   * would return on the row itself.
+   */
+  const applyOutcomeToRows = useCallback(
+    (rowId: number, classification: AcceptClassification) => {
+      if (classification.kind === 'unapplied') {
+        setRows((previous) =>
+          previous.map((item) =>
+            item.id === rowId
+              ? { ...item, unapplied_reason: classification.reason }
+              : item,
+          ),
+        );
+        return;
+      }
+      setRows((previous) => previous.filter((item) => item.id !== rowId));
+      setTotalRows((previous) => Math.max(0, previous - 1));
+      setSelectedIds((previous) => {
+        if (!previous.has(rowId)) return previous;
+        const next = new Set(previous);
+        next.delete(rowId);
+        return next;
+      });
+    },
+    [],
+  );
+
   const handleAction = useCallback(
     async (
       rowId: number,
@@ -196,19 +341,18 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
       });
       setRowBusy((prev) => ({ ...prev, [rowId]: true }));
       try {
-        await action(rowId);
-        // Optimistic remove — the backend has flipped the row to a terminal
-        // state and the list endpoint defaults to status='pending', so the
-        // row would not be returned on the next reload anyway. Removing it
-        // here avoids a round-trip and a UI flash.
-        setRows((prev) => prev.filter((r) => r.id !== rowId));
-        setTotalRows((prev) => Math.max(0, prev - 1));
-        setSelectedIds((prev) => {
-          if (!prev.has(rowId)) return prev;
-          const next = new Set(prev);
-          next.delete(rowId);
-          return next;
-        });
+        const outcome = await action(rowId);
+        const acted = rowsRef.current.find((item) => item.id === rowId);
+        // Optimistic update — the backend has already decided this row's fate
+        // and the list endpoint defaults to status='pending', so this mirrors
+        // what the next reload would return without a round-trip or a flash.
+        // A dismiss carries no outcome fields, so it classifies as `applied`
+        // and removes, which is correct: dismissal IS terminal.
+        applyOutcomeToRows(
+          rowId,
+          acted ? noteAcceptOutcome(acted, outcome)
+                : { kind: 'applied', reason: null },
+        );
       } catch (err) {
         const detail =
           err instanceof Error ? err.message : `${operationLabel} failed`;
@@ -222,7 +366,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         });
       }
     },
-    [],
+    [applyOutcomeToRows, noteAcceptOutcome],
   );
 
   const handleMerge = useCallback(
@@ -234,6 +378,20 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     (rowId: number) => handleAction(rowId, api.dismissPendingMerge, 'Dismiss'),
     [handleAction],
   );
+
+  // One state list, two notices. Derived rather than stored twice so a notice
+  // cannot end up in both, or in neither.
+  const unappliedNotices = outcomeNotices.filter(
+    (entry) => entry.kind === 'unapplied',
+  );
+  const unknownNotices = outcomeNotices.filter(
+    (entry) => entry.kind === 'unknown',
+  );
+  const dismissNotices = useCallback((kind: AcceptOutcomeNotice['kind']) => {
+    setOutcomeNotices((previous) =>
+      previous.filter((entry) => entry.kind !== kind),
+    );
+  }, []);
 
   const bulkBusy =
     bulkProgress?.phase === 'running' || bulkProgress?.phase === 'stopping';
@@ -427,12 +585,16 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     const count = targets.length;
     let completed = 0;
     let failures = 0;
+    let unappliedCount = 0;
+    let unknownCount = 0;
     setBulkProgress({
       scope,
       operation,
       completed,
       total: count,
       failures,
+      unapplied: unappliedCount,
+      unknown: unknownCount,
       phase: 'running',
     });
       setRowErrors((previous) => {
@@ -454,15 +616,17 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
             operation === 'Merge'
               ? api.acceptPendingMerge
               : api.dismissPendingMerge;
-          await action(row.id);
-          setRows((previous) => previous.filter((item) => item.id !== row.id));
-          setTotalRows((previous) => Math.max(0, previous - 1));
-          setSelectedIds((previous) => {
-            if (!previous.has(row.id)) return previous;
-            const next = new Set(previous);
-            next.delete(row.id);
-            return next;
-          });
+          const outcome = await action(row.id);
+          // Three outcomes, three counters. A replay is not a failure and not
+          // a skip — it is the request that cannot say — so it gets counted
+          // where it can be reported as itself.
+          const classified = noteAcceptOutcome(row, outcome);
+          if (classified.kind === 'unapplied') unappliedCount += 1;
+          else if (classified.kind === 'unknown') unknownCount += 1;
+          // Same rule as the single-row path, and it has to be the same rule:
+          // a bulk run that dropped the unapplied rows would leave the
+          // operator with a count and nothing to retry.
+          applyOutcomeToRows(row.id, classified);
         } catch (err) {
           failures += 1;
           const detail =
@@ -491,6 +655,8 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
           completed,
           total: count,
           failures,
+          unapplied: unappliedCount,
+          unknown: unknownCount,
           phase: stopRequestedRef.current ? 'stopping' : 'running',
         });
       }
@@ -513,13 +679,15 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         completed,
         total: count,
         failures,
+        unapplied: unappliedCount,
+        unknown: unknownCount,
         phase: stopped ? 'stopped' : 'completed',
       });
     } finally {
       confirmingRef.current = false;
       bulkLockRef.current = false;
     }
-  }, []);
+  }, [applyOutcomeToRows, noteAcceptOutcome]);
 
   const cancelBulkIntent = useCallback(() => {
     const previousView = preConfirmViewRef.current;
@@ -652,9 +820,9 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
             {bulkProgress.phase === 'stopping' &&
               `Stopping after the current item… ${bulkProgress.completed} of ${bulkProgress.total} processed.`}
             {bulkProgress.phase === 'stopped' &&
-              `Stopped after ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}. ${bulkProgress.total - bulkProgress.completed} remaining.`}
+              `Stopped after ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}${bulkProgress.unapplied ? ` and ${bulkProgress.unapplied} not applied to Dispatcharr` : ''}${bulkProgress.unknown ? ` and ${bulkProgress.unknown} already resolved by an earlier request` : ''}. ${bulkProgress.total - bulkProgress.completed} remaining.`}
             {bulkProgress.phase === 'completed' &&
-              `Completed ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}.`}
+              `Completed ${bulkProgress.completed} of ${bulkProgress.total}${bulkProgress.failures ? ` with ${bulkProgress.failures} failures` : ''}${bulkProgress.unapplied ? ` and ${bulkProgress.unapplied} not applied to Dispatcharr` : ''}${bulkProgress.unknown ? ` and ${bulkProgress.unknown} already resolved by an earlier request` : ''}.`}
           </span>
           {(bulkProgress.phase === 'running' ||
             bulkProgress.phase === 'stopping') && (
@@ -674,6 +842,92 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         <div className="error-banner" role="alert">
           <span className="material-icons">error</span>
           <span>{loadError}</span>
+        </div>
+      )}
+
+      {/* Merges the backend recorded WITHOUT updating Dispatcharr. A warning
+          rather than an error banner, and `role="status"` rather than
+          `role="alert"`: nothing failed — the request succeeded and was
+          recorded — so an error banner would misdescribe it. What is true is
+          that the upstream write did not happen and the merge is still
+          outstanding. The rows stay in the list flagged as not applied (PO
+          decision 2026-08-16); this notice is the summary of what the last
+          click or bulk run did, and names the streams so a bulk run of 200 is
+          readable without hunting for the flagged rows (bead
+          enhancedchannelmanager-i5ic0). */}
+      {unappliedNotices.length > 0 && (
+        <div
+          className="pending-merges-unapplied"
+          role="status"
+          aria-live="polite"
+          data-testid="pending-merges-unapplied"
+        >
+          <span className="material-icons" aria-hidden="true">warning</span>
+          <div className="pending-merges-unapplied-body">
+            <p className="pending-merges-unapplied-heading">
+              {unappliedNotices.length === 1
+                ? '1 merge was recorded but not applied to Dispatcharr.'
+                : `${unappliedNotices.length} merges were recorded but not applied to Dispatcharr.`}{' '}
+              They stay in the list below, flagged as not applied — retry them
+              once the cause has cleared. They are also in the Journal under
+              “Merge Not Applied”.
+            </p>
+            <ul className="pending-merges-unapplied-list">
+              {unappliedNotices.map((entry) => (
+                <li key={entry.rowId}>
+                  <strong>{entry.streamName}</strong>: {entry.reason}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => dismissNotices('unapplied')}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Merges an EARLIER request already resolved, replayed by this one.
+          Deliberately NOT folded into the notice above: that one states the
+          upstream write did not happen, and this request established no such
+          thing — it made no Dispatcharr call at all. Saying "not applied" here
+          would send the operator to add a stream that may already be on the
+          channel, which is the same false certainty the bead is about pointing
+          the other way (bead enhancedchannelmanager-i5ic0, fix round). */}
+      {unknownNotices.length > 0 && (
+        <div
+          className="pending-merges-unapplied pending-merges-unknown"
+          role="status"
+          aria-live="polite"
+          data-testid="pending-merges-unknown"
+        >
+          <span className="material-icons" aria-hidden="true">help</span>
+          <div className="pending-merges-unapplied-body">
+            <p className="pending-merges-unapplied-heading">
+              {unknownNotices.length === 1
+                ? '1 merge was already resolved by an earlier request, so this one could not tell whether Dispatcharr was updated.'
+                : `${unknownNotices.length} merges were already resolved by earlier requests, so this run could not tell whether Dispatcharr was updated.`}{' '}
+              The Journal against each channel records what the original
+              request did.
+            </p>
+            <ul className="pending-merges-unapplied-list">
+              {unknownNotices.map((entry) => (
+                <li key={entry.rowId}>
+                  <strong>{entry.streamName}</strong>: {entry.reason}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => dismissNotices('unknown')}
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 
@@ -795,6 +1049,18 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
                           {formatConfidencePercent(row.confidence)} match
                         </span>
                       )}
+                      {/* An accept the operator already made that ECM could
+                          not carry out. The row is still queued on purpose —
+                          this badge is what stops it reading as one nobody has
+                          touched (bead enhancedchannelmanager-i5ic0). */}
+                      {row.unapplied_reason && (
+                        <span
+                          className="confidence-badge pending-merges-unapplied-badge"
+                          data-testid="pending-merges-row-unapplied"
+                        >
+                          Not applied
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div className="pending-merges-actions">
@@ -820,6 +1086,24 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
                     </button>
                   </div>
                 </div>
+                {/* The reason travels WITH the row, so it survives a reload,
+                    a page change and this session. `role="status"`, not
+                    `role="alert"`: the accept succeeded and was recorded; what
+                    is outstanding is the upstream write. */}
+                {row.unapplied_reason && (
+                  <div
+                    className="pending-merges-row-unapplied-reason"
+                    role="status"
+                  >
+                    <span className="material-icons" aria-hidden="true">
+                      warning
+                    </span>
+                    <span>
+                      {row.unapplied_reason} Retry the merge once that has
+                      cleared.
+                    </span>
+                  </div>
+                )}
                 {rowError && (
                   <div
                     className="error-banner pending-merges-row-error"

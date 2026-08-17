@@ -527,7 +527,31 @@ class DispatcharrClient:
     async def assign_channel_numbers(
         self, channel_ids: list[int], starting_number: Optional[float] = None
     ) -> dict:
-        """Bulk assign channel numbers."""
+        """Bulk assign channel numbers.
+
+        A BODYLESS 2xx IS THE DOCUMENTED SUCCESS, not a fault. Dispatcharr's
+        ``POST /api/channels/channels/assign/`` declares no response body
+        beyond the string "Channels have been auto-assigned!"
+        (``swagger.json``) — which is exactly why ``routers/channels.py`` reads
+        the assigned numbers back one channel at a time when the caller lets
+        Dispatcharr choose them. A bare ``response.json()`` therefore raised
+        ``JSONDecodeError`` on the success this method exists to handle, the
+        router's ``except Exception`` turned it into a 500 **before the
+        read-back loop was entered**, and the landed renumber left no Journal
+        row at all — not the numbers, and not even the honest "ECM has not read
+        it back". Both sentences ``docs/api.md`` writes for this path were
+        false in precisely the case they describe.
+
+        The stand-in envelope says only that the call succeeded. It must not
+        name or imply a channel number: nothing observed one, and inventing one
+        here is the same false claim the read-back exists to avoid. Callers
+        rely on a dict coming back — the router stamps ``journalRowsUnwritten``
+        onto it, which is how a caller whose rows were lost is told.
+
+        Pinned by ``tests/unit/test_dispatcharr_client_bodyless_success.py``
+        and, across the router seam,
+        ``tests/routers/test_bodyless_assign_still_journals.py``.
+        """
         data = {"channel_ids": channel_ids}
         if starting_number is not None:
             data["starting_number"] = starting_number
@@ -536,7 +560,7 @@ class DispatcharrClient:
             "POST", "/api/channels/channels/assign/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        return response.json() if response.content else {"success": True}
 
     # -------------------------------------------------------------------------
     # Channel Groups

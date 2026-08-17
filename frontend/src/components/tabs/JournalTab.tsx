@@ -52,9 +52,42 @@ function getActionClass(actionType: JournalActionType): string {
   }
 }
 
+/**
+ * Action types whose title-cased identifier is not the words an operator is
+ * told to look for. The generic transform below turns `merge_unapplied` into
+ * "Merge Unapplied", while the filter dropdown and the Pending Merges notice
+ * both say "Merge Not Applied" — so an operator following the notice found a
+ * badge with different words and no way to know they were the same thing.
+ *
+ * One label per action type, defined once and used by both the badge and the
+ * filter option, so the two cannot drift again. Module-local rather than
+ * exported: this file exports a component, and a second export trips the
+ * react-refresh lint rule (see docs/frontend_lint.md).
+ */
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  merge_unapplied: 'Merge Not Applied',
+  // DELIBERATELY IDENTICAL to what the generic transform already produced.
+  // `docs/user_guide/channels-streams/the-journal.md` names this badge "Bulk
+  // Merge Incomplete" four times, once as the heading of the paragraph telling
+  // operators it is the badge worth reading for. Renaming it to something
+  // tidier would recreate, for this action type, precisely the defect the
+  // entry above exists to fix: documentation sending an operator to look for
+  // words the badge does not use.
+  //
+  // The entry still earns its place. Without it the filter option below would
+  // need its own string literal, leaving the badge and the option as two
+  // independent sources that agree only by coincidence — the drift condition.
+  // With it they are the same string by construction, so a future rewording
+  // moves both at once.
+  bulk_merge_incomplete: 'Bulk Merge Incomplete',
+};
+
 // Format action type for display
 function formatActionType(actionType: string): string {
-  return actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    ACTION_TYPE_LABELS[actionType] ??
+    actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
 // Format category for display
@@ -382,6 +415,14 @@ export function JournalTab() {
             { value: 'stream_remove', label: 'Stream Remove' },
             { value: 'stream_reorder', label: 'Stream Reorder' },
             { value: 'reorder', label: 'Reorder' },
+            {
+              value: 'merge_unapplied',
+              label: ACTION_TYPE_LABELS.merge_unapplied,
+            },
+            {
+              value: 'bulk_merge_incomplete',
+              label: ACTION_TYPE_LABELS.bulk_merge_incomplete,
+            },
           ]}
         />
         <CustomSelect

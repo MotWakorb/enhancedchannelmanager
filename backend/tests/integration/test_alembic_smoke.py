@@ -4349,16 +4349,50 @@ class TestFastPathDestructiveRevisions:
     def _db_at_0040_matching_head(self, tmp_path):
         """Upgrade a scratch DB to 0040 — the pre-0041 production shape.
 
-        A DB built by real migrations through 0040 contains every table and
-        column ``Base.metadata`` declares at head (0041 only *removes*
-        ``lookup_tables``, which head's models no longer declare), so
-        ``_schema_matches_head`` returns True. That is the trap.
+        The scenario under test is "``alembic_version`` lags, a DESTRUCTIVE
+        revision is pending, and the physical schema nonetheless satisfies
+        ``_schema_matches_head``". 0041 only *removes* ``lookup_tables``, which
+        head's models no longer declare, so 0040 reproduced that on its own —
+        until a later revision ADDED a column, at which point 0040 stopped
+        covering the model shape and the premise silently evaporated.
+
+        So the drift forward is now explicit: every nullable column head's
+        models declare that 0040 does not have is added here, which is exactly
+        the long-running-install shape ``create_all()`` produces and exactly
+        what ``_schema_matches_head`` inspects. Kept generic for the same
+        reason the revision literals below are head-agnostic — pinning the
+        specific columns made every later migration break this test.
         """
         from alembic import command
+        from sqlalchemy import text as sa_text
+
+        from models import Base
 
         db_file = tmp_path / "journal.db"
         db_url = f"sqlite:///{db_file}"
         command.upgrade(_make_alembic_config(db_url), "0040")
+
+        engine = create_engine(db_url, future=True)
+        try:
+            inspector = inspect(engine)
+            live_tables = set(inspector.get_table_names())
+            with engine.begin() as conn:
+                for table in Base.metadata.sorted_tables:
+                    if table.name not in live_tables:
+                        continue
+                    present = {
+                        col["name"]
+                        for col in inspector.get_columns(table.name)
+                    }
+                    for column in table.columns:
+                        if column.name in present or not column.nullable:
+                            continue
+                        conn.execute(sa_text(
+                            f'ALTER TABLE "{table.name}" ADD COLUMN '
+                            f'"{column.name}" {column.type.compile(engine.dialect)}'
+                        ))
+        finally:
+            engine.dispose()
         return db_file, db_url
 
     def test_pending_drop_only_revision_is_not_stamped_over(self, tmp_path):

@@ -1312,7 +1312,20 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/channel-merges/{merge_id}/accept",
         response_fields=frozenset(
-            {"merged_into_channel_id", "journal_entry_id", "source_stream_id", "confidence", "status"}
+            {
+                "merged_into_channel_id", "journal_entry_id", "source_stream_id",
+                "confidence", "status",
+                # Whether DISPATCHARR was actually updated, and why not when it
+                # was not. `status` describes the QUEUE ROW; an accept whose
+                # stream-name match was zero or ambiguous used to return
+                # `'merged'` with nothing anywhere saying the upstream write
+                # never happened (bead enhancedchannelmanager-i5ic0). `status`
+                # is now `'merged'` or `'pending'` — a merge ECM could not
+                # apply stays queued, flagged, and retryable (PO decision
+                # 2026-08-16).
+                "dispatcharr_updated", "unapplied_reason",
+                "journal_rows_unwritten",
+            }
         ),
     ),
     "channel_merges_dismiss": Endpoint(
