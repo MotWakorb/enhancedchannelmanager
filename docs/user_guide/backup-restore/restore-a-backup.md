@@ -90,13 +90,38 @@ When multiple destination streams match the same tier, the one with the lowest s
 
 ## User restore semantics
 
-Users are **opt-in**. They are not selected by default in the restore modal. This is intentional: restoring users onto a running instance can change login credentials and privilege flags for existing accounts.
+This category holds your **Dispatcharr** user accounts. ECM's own accounts are a different thing and are not restored here; see [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry).
+
+Users are **opt-in**. They are not selected by default in the restore modal. This is intentional: user accounts are a privilege surface, so the category is conservative in every direction.
 
 When you opt in to restoring users:
 
-- **The current admin is always preserved.** The account you are currently authenticated with is detected and skipped, so you cannot lock yourself out via a restore.
-- Existing users with matching usernames are updated, not duplicated.
-- Password hashes are restored if the destination supports the same hash algorithm. If there is a hash-algorithm mismatch, the user is reported as failed (with reason) rather than silently applied with a corrupted password.
+- **The current admin is always preserved.** ECM identifies the account its Dispatcharr credentials authenticate as and skips it, so you cannot lock yourself out via a restore. The check is on the authenticated identity, not on a username from the archive, so a colliding name in the backup cannot get past it.
+- **Existing users with matching usernames are skipped, not updated.** An account already on the destination is never overwritten.
+- **No password travels with the backup.** Dispatcharr never returns a password or a hash, so there is nothing to carry: a restored account is created with a random password that ECM discards immediately and never records. The account is unusable until you set a password yourself, and the report flags it as needing that.
+- **Restored accounts arrive without privileges.** Superuser, staff, and user-level flags in the backup are dropped, and every restored account is created non-privileged. Re-grant what you need by hand.
+
+---
+
+## What a standard backup cannot restore, and how ECM tells you
+
+A standard (non-encrypted) backup is fully redacted, so some things simply are not in it to restore. See [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry) for the complete list. The two that need action from you after a restore:
+
+- **Provider credentials.** Restored M3U accounts and EPG sources come back with the credential unset rather than wrong, username as well as password. The restore report names each account and field that needs re-entering. See [Step 6 of Migrate to a new install](migrate-to-a-new-install.md#step-6-re-enter-credentials-standard-backup-only).
+- **ECM's own accounts, and the settings that hold credentials.** These live in `journal.db`, which only the **Restore Full Backup** path writes. The **Restore DBAS Backup** flow on this page does not write `journal.db` at all, so it never changes your ECM accounts in either direction.
+
+### Notices after a Full Backup restore
+
+When you restore a **Full Backup (legacy `.zip`)**, or restore from a backup during first-run setup, ECM shows a warning notice for anything the artifact could not carry. The restore-complete panel counts the files that landed; it cannot, by its nature, report what was never there. The notices fill that gap.
+
+There are two, and both are read from your instance *after* the restore rather than guessed from the artifact, so they describe what actually happened:
+
+| Notice | When you see it | What to do |
+|-|-|-|
+| **First-run setup required** | The instance ends up with no ECM account, which is the normal outcome of restoring a standard backup onto a fresh instance. | Create your admin account through first-run setup, then sign in. To migrate accounts between instances instead, take an encrypted backup with **Include credentials**. |
+| **Re-establish configured surfaces** | Something you had configured before the restore is gone after it, because a standard backup omits credential stores and personal data. It names only what this instance actually lost: cloud storage targets, sync targets, M3U digest settings, or event-sync exclusions. | Re-create the named items. |
+
+If you restore onto an instance that already has ECM accounts, those accounts are preserved across the restore and you will not see the first notice. The restore does not sign you out.
 
 ---
 

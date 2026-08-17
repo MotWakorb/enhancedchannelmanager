@@ -69,6 +69,25 @@ with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
 
 If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact. Go to an older unencrypted backup.
 
+Note that encrypted does not imply credential-bearing. Only an artifact taken with **Include credentials** carries provider credentials and ECM accounts; an encrypted artifact taken without it is redacted exactly like a standard one, and nothing in the file distinguishes the two. If you are recovering onto a fresh instance and need credentials to travel, confirm which artifact you have before planning around it.
+
+### Step 5: Confirm the restoring build is not older than the artifact
+
+```bash
+docker exec ecm-ecm-1 python -c "import os,urllib.request,json; \
+print(json.load(urllib.request.urlopen('http://localhost:%s/api/health' % os.environ.get('ECM_PORT','6100'))))"
+```
+
+Compare that version against the `app_version` the artifact's manifest reports. **Restore only with the build that produced the artifact or a newer one.**
+
+`schema_version` did not move when full redaction shipped, so the version gate will **not** stop you from restoring a new artifact with an older ECM. That combination has three known problems, all of which arrive behind an apparently successful restore:
+
+1. **The restoring admin can be signed out of their own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a fully redacted artifact carries none of its own. During a DR rebuild this looks like the restore working and then dropping you at the setup wizard on an instance you were administering.
+2. Alert-method `username` and `chat_id` are written in as the literal text `***REDACTED***`.
+3. An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety and stops sending notifications until reconfigured.
+
+None is retroactively fixable. If you are rolling ECM back, roll back to an artifact taken before the upgrade instead of restoring a newer one onto the older build.
+
 ---
 
 ## Resolution
@@ -86,6 +105,26 @@ curl -s -X POST http://localhost:8080/api/backup/save \
 ```
 
 Or use the UI: **Settings → Backup & Restore → Back Up Now**.
+
+!!! danger "If this backup fails with a scrub error, that is the control working"
+    ECM removes its accounts, credentials, telemetry and history from the artifact's copy of
+    `journal.db` before writing anything. If it cannot open, read or rewrite that database, the
+    **whole backup fails and no artifact is written**. Earlier builds fell back to shipping the
+    database untouched behind a success, which is the outcome this replaces. Do not work around
+    it, and do not treat it as backup-system corruption.
+
+    In a DR context the cause is usually the incident itself: a truncated or damaged
+    `/config/journal.db`, a full or read-only `/config` volume, or an interrupted earlier restore.
+
+    ```bash
+    docker logs --since 30m ecm-ecm-1 2>&1 | grep BACKUP
+    docker exec ecm-ecm-1 sh -c 'ls -l /config/journal.db && df -h /config'
+    docker exec ecm-ecm-1 python -c "import sqlite3; sqlite3.connect('/config/journal.db').execute('PRAGMA integrity_check').fetchall()"
+    ```
+
+    If the database is damaged, skip the pre-restore snapshot and proceed. You are about to
+    replace that state anyway, and a failed snapshot must not stall the recovery. Record that you
+    have no pre-restore backup before you continue.
 
 **1.2 Open the Restore DBAS Backup modal.**
 
@@ -204,6 +243,16 @@ run. On builds before `0.18.1-0033` no refresh reattached anything, and
 recovery required re-running the whole restore after the refresh.
 
 **6.4** Run an EPG refresh if guide data is absent.
+
+**6.4a** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
+notices on the restore response before anything else. A standard artifact carries no ECM
+accounts, so a rebuilt instance lands at first-run setup and the notice says so; create the
+admin account and sign in. A second notice names any configured surface this instance had
+before the restore and does not have after, which for a standard artifact means cloud storage
+targets, sync targets, M3U digest settings, or event-sync exclusions. Those are read from the
+live instance on both sides of the restore, so the notice names only what you actually lost.
+Re-establish each one and record it in the incident. The DBAS artifact restore does not write
+`journal.db` and emits no notices.
 
 **6.5** Test playback on one channel per M3U provider to confirm stream assignment worked.
 

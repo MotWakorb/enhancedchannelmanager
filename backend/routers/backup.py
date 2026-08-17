@@ -15,12 +15,14 @@ import re
 import shutil
 import sqlite3
 import stat
+import string
 import tempfile
 import time
 import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -49,7 +51,7 @@ from config import (
     save_settings,
     clear_settings_cache,
 )
-from credential_sentinel import REDACTION_SENTINEL
+from credential_sentinel import REDACTION_SENTINEL, strip_redaction_sentinels
 from dbas import artifact_crypto
 from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, EPG_INDEX_MAX_ROWS, as_int
 from dbas.importers.logos import MAX_LOGO_BYTES, remote_logo_url, safe_logo_basename
@@ -101,7 +103,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0112"
+APP_VERSION = "0.18.1-0113"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -153,13 +155,33 @@ REDACTED = REDACTION_SENTINEL
 # edit in ``config`` now moves both surfaces. Do NOT re-inline these names.
 # ``dict.fromkeys`` dedupes the overlap (``telegram_bot_token`` is in both
 # halves) while keeping the historical order stable for the artifact contract.
+#
+# THIRD-PARTY BEARER CREDENTIALS THE EXACT-MATCH DENYLIST MISSED (bead …-gi4zn).
+# ``_REDACT_KEYS`` matches key names EXACTLY, which is the right RUNTIME rule —
+# a substring rule on "url" would rewrite the boolean ``show_stream_urls`` to a
+# string sentinel. Its cost is that a newly added ``<vendor>_api_key`` ships in
+# clear until someone remembers this list, and three of them had:
+# ``emby_api_key`` and ``jellyfin_api_key`` are admin API keys for the
+# operator's media server, and ``plex_token`` is a bearer credential for a Plex
+# ACCOUNT. All three were exported verbatim in every standard artifact.
+# ``smtp_user`` is the identity half of a pair whose secret half
+# (``smtp_password``) was already listed — the same asymmetry the M3U username
+# had. The class is closed by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_no_credential_shaped_settings_field_is_left_unredacted``, which reads the
+# live settings model, so the NEXT vendor field fails a required check rather
+# than a drill.
 _SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
     "password",
     "dispatcharr_api_key",
     "api_key",
     "smtp_password",
+    "smtp_user",
     "telegram_bot_token",
     "mcp_api_key",
+    "emby_api_key",
+    "jellyfin_api_key",
+    "plex_token",
     *sorted(ADMIN_ONLY_READ_REDACTED_FIELDS),
 )))
 
@@ -180,6 +202,322 @@ _SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
 # this comment goes false again and this tuple is the thing that silently
 # drifts.
 _ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+
+# The IDENTITY half of the same alert-method config blobs (bead …-gi4zn). An
+# SMTP alert method stores ``username`` beside its ``password`` and a Telegram
+# one stores ``chat_id`` beside its ``bot_token``; only the secret halves were
+# scrubbed, so the standard artifact's journal.db carried the relay account name
+# and the chat capability in clear. ``telegram_chat_id`` is already treated as a
+# bearer capability at the SETTINGS level
+# (``config.ADMIN_ONLY_READ_REDACTED_FIELDS``) — the identical value nested
+# inside alert_methods.config was not, which is the same
+# protected-beside-unprotected asymmetry the M3U username had.
+#
+# DELIBERATELY SEPARATE from :data:`_ALERT_METHOD_CREDENTIAL_KEYS` rather than
+# appended to it, for two reasons. That tuple's docstring asserts lock-step with
+# ``AlertMethod.to_dict``'s masking set, and that claim must stay literally true;
+# changing the API-response masking is a different decision on a different
+# surface. And it feeds :data:`_REDACT_KEYS`, which is matched against dict keys
+# in EVERY category — a global ``chat_id`` entry would be scope this bead did not
+# establish. These keys are therefore applied only where they were found
+# leaking: the journal.db alert_methods scrub, and its restore-side merge-back.
+_ALERT_METHOD_IDENTITY_KEYS = ("username", "chat_id")
+
+# Every alert_methods.config key the backup scrubs and the restore merges back.
+# One tuple so the two halves of that round-trip cannot drift: a key scrubbed on
+# the way out but not merged on the way back in would be silently DESTROYED by a
+# legacy-ZIP restore.
+_ALERT_METHOD_PROTECTED_KEYS = tuple(
+    dict.fromkeys(_ALERT_METHOD_CREDENTIAL_KEYS + _ALERT_METHOD_IDENTITY_KEYS)
+)
+
+# journal.db tables holding ECM's OWN authentication and identity state, emptied
+# out of the standard artifact (bead …-gi4zn, external security review findings
+# A-1 / A-2). Until this landed, the scrub visited ``alert_methods`` and nothing
+# else, so a standard artifact — the DEFAULT artifact, the one an operator
+# attaches to a support ticket — handed over, read straight out of the archived
+# ``journal.db`` with sqlite3:
+#
+#   * ``users.password_hash``   — the operator's own bcrypt admin hash, which is
+#     offline-crackable at the attacker's leisure. ``password_hash`` was never in
+#     :data:`_REDACT_KEYS` and no key denylist covers a DB COLUMN anyway.
+#   * ``users.username`` / ``email`` — the account names to crack it against.
+#   * ``user_sessions.refresh_token_hash`` / ``prior_refresh_token_hash`` — live
+#     session material; ``ip_address`` / ``user_agent`` — forensic metadata about
+#     where and with what the operator administers the instance.
+#   * ``password_reset_tokens.token_hash`` — an account-recovery credential.
+#   * ``user_identities.provider`` / ``external_id`` / ``identifier`` — the ECM
+#     admin correlated to their OIDC / SAML / LDAP identity at a THIRD-PARTY IdP.
+#     That is third-party identity, squarely inside this bead's own property, and
+#     the sixth instance of the protected-secret-beside-unprotected-identity
+#     asymmetry the rest of this bead removed.
+#
+# THE ROWS ARE DELETED, NOT MASKED, and that is a deliberate availability
+# decision rather than a maximalist one. ECM's first-run setup keys on
+# ``session.query(User).count() == 0`` (``auth/routes.py`` -> ``/auth/setup-
+# required`` and ``/auth/setup``, surfaced by ``ProtectedRoute.tsx``). A users
+# table left populated but stripped of usable ``password_hash`` values is
+# therefore the ONE state that is both unauthenticatable AND ineligible for the
+# setup wizard — a restored instance nobody can log into, which is a worse
+# outcome than the leak. Empty, the shipped first-run path takes over and the
+# operator creates a new admin. What the operator re-establishes on a
+# fresh-instance restore is exactly: their ECM account(s). Everything else in the
+# artifact restores unchanged.
+#
+# The DESTINATION's own accounts are never collateral: a restore into an instance
+# that already has users re-asserts them over the artifact
+# (:func:`_capture_existing_auth_rows` / :func:`_reassert_auth_rows_after_restore`),
+# so an admin restoring a backup is not logged out of their own instance.
+#
+# The ENCRYPTED cred-carrying artifact (``include_credentials``) is unaffected —
+# it returns before the scrub runs at all — so a migration still carries the
+# operator's accounts and restores login without re-entry.
+#
+# Order is DELETE order: dependents before ``users``. SQLite does not enforce the
+# FKs unless ``PRAGMA foreign_keys`` is on, but ordering it correctly means the
+# purge does not depend on that pragma being off.
+_AUTH_IDENTITY_TABLES: tuple[str, ...] = (
+    "user_sessions",
+    "password_reset_tokens",
+    "user_identities",
+    "users",
+)
+
+
+# ---------------------------------------------------------------------------
+# THE STANDARD ARTIFACT'S journal.db TABLE ALLOWLIST (bead …-gi4zn, round 3)
+#
+# WHY THIS IS AN ALLOWLIST. Three review rounds each found more tables that
+# should not ship, and each round fixed the tables it had found:
+# ``alert_methods`` first, then :data:`_AUTH_IDENTITY_TABLES`, then
+# ``session_telemetry`` (Emby / Plex / Jellyfin account names),
+# ``unique_client_connections`` (viewer IPs and usernames) and
+# ``m3u_digest_settings.email_recipients``. That is the same failure shape as
+# ``_REDACT_KEYS`` matching key names exactly, which is why ``emby_api_key``
+# shipped in cleartext: a denylist has to be COMPLETE, and it is maintained by
+# people who keep discovering it isn't.
+#
+# So the direction is inverted. This dict enumerates what a standard artifact is
+# ALLOWED to carry out of journal.db; :func:`_scrub_journal_db_in_place` DROPS
+# every other table. A table added to the schema later ships NOTHING until
+# someone deliberately permits it — absent by construction, not by remembering to
+# add it to a removal list. Same make-it-impossible shape the project already
+# uses for ``OperationLedger`` being the only writer of the operation counters.
+#
+# The measured cost of the old direction, from a real live database: it carried
+# EIGHT tables that no current model declares at all — ``services``,
+# ``health_checks``, ``incidents``, ``incident_updates``, ``maintenance_windows``,
+# ``service_alert_rules``, ``service_alert_history`` (the removed pre-v0.13
+# health-monitor subsystem, see docs/database_migrations.md) and
+# ``popularity_rules`` (removed in v0.11.0-0005). ``services.health_endpoint`` is
+# an operator URL and ``incidents.created_by`` / ``service_alert_history.
+# acknowledged_by`` are account names. No denylist maintained by reading
+# ``models.py`` could ever have seen them, because they are not in models.py.
+#
+# THE SELECTION RULE. A standard artifact is the redacted, shareable,
+# disaster-recovery artifact, and for the LEGACY ``_create_backup_zip`` path it is
+# the ONLY carrier of ECM's own configuration (that ZIP is settings.json +
+# journal.db; it has no categories/*.yaml). So a table is permitted when it is
+# CONFIGURATION the operator authored and a restore needs, and dropped when it is
+# history, telemetry, transient workflow state, credential material, or anything
+# whose contents are unbounded free text. The default is drop; each entry below
+# is a decision with its reason attached.
+#
+# Values are the reason the table is permitted. Keep them specific — this dict is
+# the documentation of record for what a shared artifact contains.
+_STANDARD_ARTIFACT_TABLES: dict[str, str] = {
+    "alembic_version": (
+        "Schema revision marker (one opaque revision hash). Dropping it makes a "
+        "restored database look like a legacy install to _bootstrap_alembic, "
+        "which then stamps or migrates against the wrong baseline. Carries no "
+        "operator or third-party value."
+    ),
+    "ecm_oneshot_migrations": (
+        "One-shot data-migration bookkeeping (name + applied_at). Dropping it "
+        "re-runs already-completed one-shot migrations against restored data. "
+        "Two opaque columns, no operator or third-party value."
+    ),
+    "alert_methods": (
+        "The operator's notification channels — configuration a restore needs. "
+        "The credential AND identity keys inside the config JSON are scrubbed "
+        "separately (_ALERT_METHOD_PROTECTED_KEYS), and a config that cannot be "
+        "parsed loses its whole blob to the sentinel."
+    ),
+    "auto_creation_rules": (
+        "Channel Pipeline rules — the most substantial hand-authored "
+        "configuration in ECM and the primary thing a disaster-recovery restore "
+        "exists to bring back. Columns are rule logic (conditions, actions, "
+        "regex, sort order); no credential or identity column."
+    ),
+    "normalization_rule_groups": "Normalization rule groups — operator-authored configuration.",
+    "normalization_rules": "Normalization rules — operator-authored configuration.",
+    "tag_groups": "Tag groups — the normalization vocabulary, operator-authored configuration.",
+    "tags": "Tags — the normalization vocabulary, operator-authored configuration.",
+    "ffmpeg_profiles": "FFmpeg profiles — operator-authored configuration (name + config).",
+    "dummy_epg_profiles": (
+        "Dummy EPG profiles — substantial hand-authored template and pattern "
+        "configuration. Its URL-template columns are free text, so the "
+        "value-level URL credential scrub applies (see "
+        ":func:`_scrub_permitted_table_cells`)."
+    ),
+    "dummy_epg_channel_assignments": (
+        "Binds Dummy EPG profiles to channels. The profiles are not usable "
+        "without it and it carries no identity — channel id/name and a tvg-id "
+        "override."
+    ),
+    "scheduled_tasks": (
+        "Task enable/schedule/alert configuration. The config JSON goes through "
+        "the same deep credential redaction the YAML categories get."
+    ),
+    "task_schedules": (
+        "The live schedule rows (task, cadence, parameters). Same deep "
+        "redaction over the parameters JSON."
+    ),
+    "hidden_channel_groups": (
+        "A small operator display preference (group id, group name, hidden_at). "
+        "No identity, no credential, and it is annoying to re-establish by hand."
+    ),
+}
+
+# Every other table a model declares, with the reason a STANDARD artifact drops
+# it. This dict changes NOTHING about what ships — the allowlist above is the
+# only thing the scrub reads, so an unclassified table is dropped either way.
+# Its job is to force a DECISION: ``test_every_journal_db_table_is_classified``
+# fails when a model declares a table that appears in neither dict, so a new
+# table cannot reach production unclassified. Safe-by-default AND deliberate.
+#
+# Grouped by the reason, which is also the argument for the grouping:
+_STANDARD_ARTIFACT_EXCLUDED: dict[str, str] = {
+    # (a) ECM's OWN authentication and identity state (findings A-1 / A-2).
+    "users": "Operator account rows — bcrypt password hash, username, email.",
+    "user_sessions": "Live session material plus the IP and user agent the operator administers from.",
+    # Value on a continuation line, not because it is long but because
+    # ``KeywordDetector`` matches PER LINE: a denylisted keyword in the key
+    # beside a quoted value on the same line is a detect-secrets finding, and
+    # ``scripts/check_secrets.py`` disables the inline ``allowlist secret``
+    # pragma on purpose so there is no way to annotate past it.
+    "password_reset_tokens": (
+        "An account-recovery credential (token_hash), and the rows are useless "
+        "without the accounts this artifact also does not carry."
+    ),
+    "user_identities": (
+        "The ECM admin correlated to their OIDC / SAML / LDAP identity at a "
+        "THIRD-PARTY IdP (provider, external_id, identifier)."
+    ),
+    # (b) Third-party and viewer identity.
+    "session_telemetry": (
+        "Third-party media-server account names and ids — emby_user_name, "
+        "plex_user_name, jellyfin_user_name, plus dispatcharr_username and "
+        "user_id. Squarely inside this bead's stated property."
+    ),
+    "session_telemetry_user_daily": "Per-viewer watch aggregates keyed by user_id.",
+    "unique_client_connections": (
+        "Viewer identities and network addresses — ip_address, username, user_id."
+    ),
+    # (c) Credential material of the operator's own.
+    "cloud_storage_targets": (
+        "A credential store. The credentials column is Fernet ciphertext at rest "
+        "(ADR-012 D3), and ciphertext is still credential material in an artifact "
+        "whose whole purpose is being safe to share. Re-establish after restore."
+    ),
+    "sync_targets": (
+        "Same: a credentials column plus the target base_url. Re-establish after "
+        "restore."
+    ),
+    # (d) Personal data of people who are not the operator.
+    "m3u_digest_settings": (
+        "email_recipients is a JSON list of personal email addresses. The rest of "
+        "the table is a handful of toggles and two pattern lists, which is a "
+        "cheaper thing to re-enter than a leak is to undo. Whole-table decisions "
+        "only — a per-column carve-out here would rebuild the denylist this "
+        "allowlist replaced."
+    ),
+    # (e) Unbounded free text, which can quote anything including credentials.
+    "journal_entries": (
+        "ECM's audit log. before_value / after_value are arbitrary JSON snapshots "
+        "of whatever entity was mutated, so no static reading of the schema can "
+        "bound what they contain. History, not configuration: a restored instance "
+        "is fully usable without it."
+    ),
+    "notifications": "Transient in-app feed; message / action_url / extra_data are free text.",
+    "task_executions": "Run history; error / message / details quote upstream failures verbatim.",
+    "auto_creation_executions": (
+        "Channel Pipeline run history; execution_log, error_message and the "
+        "created/modified entity blobs are unbounded."
+    ),
+    "auto_creation_snapshots": "Rollback snapshots of channel state tied to executions — history.",
+    "auto_creation_conflicts": "Per-execution conflict detail — history.",
+    "stream_stats": (
+        "Probe results. error_message quotes the probed URL, and an Xtream Codes "
+        "stream URL carries its credential in PATH segments "
+        "(/live/<user>/<pass>/<id>.ts) where no query-string rule can see it. "
+        "Derived data that re-probes."
+    ),
+    "rule_lint_findings": "Derived analyzer output; recomputed on demand.",
+    # (f) Derived or recomputable telemetry with no disaster-recovery value.
+    "bandwidth_daily": (
+        "Daily bandwidth aggregates. Observed history rather than configuration; "
+        "a restored instance starts accumulating its own."
+    ),
+    "channel_bandwidth": (
+        "Per-channel, per-day bandwidth and viewer counts. Observed history, not "
+        "configuration."
+    ),
+    "channel_popularity_scores": (
+        "Derived ranking scores, recomputed from telemetry the artifact also does "
+        "not carry."
+    ),
+    "channel_watch_stats": (
+        "Legacy per-channel watch counters, superseded by the session_telemetry "
+        "rollups. Observed history, not configuration."
+    ),
+    "session_telemetry_provider_daily": (
+        "Per-provider daily telemetry rollup. Observed history, and it is derived "
+        "from session_telemetry, which is dropped for carrying viewer identity."
+    ),
+    "telemetry_rollup_state": (
+        "Rollup cursor and last_run_error bookkeeping. Meaningless without the "
+        "telemetry tables it tracks, and it rebuilds itself on the next run."
+    ),
+    "m3u_snapshots": (
+        "Point-in-time snapshots of provider group and stream listings — history, "
+        "refetched wholesale on the next M3U refresh."
+    ),
+    "m3u_change_logs": (
+        "Provider add/remove change history, including stream name lists. Observed "
+        "history, not configuration."
+    ),
+    # (g) Transient workflow state that regenerates.
+    "pending_merges": "The merge review queue — transient, regenerates on the next run.",
+    "pending_merge_journal": "Merge review action history, keyed by actor_token_id.",
+    "event_sync_reviews": "The event-sync review queue — transient, regenerates.",
+    "event_sync_exclusions": (
+        "Operator never-attach decisions. Dropped rather than kept because the "
+        "evidence column is an unbounded blob and the rows are keyed by "
+        "actor_token_id; losing them re-surfaces a suppressed stream in the "
+        "review queue, which is recoverable rather than destructive."
+    ),
+}
+
+
+class BackupScrubError(RuntimeError):
+    """The journal.db scrub could not run to completion, so nothing ships.
+
+    Bead …-gi4zn, external security review finding A-3: every failure path in
+    :func:`_scrub_journal_db_to_temp` used to fail OPEN — an unopenable database,
+    an unreadable table and an unparseable ``alert_methods.config`` row each fell
+    back to shipping the RAW bytes. The reviewer seeded a truncated config blob
+    and read its SMTP secret straight out of the built artifact while valid rows
+    in the same database were correctly redacted.
+
+    A redactor that cannot redact must not ship. Raising fails the whole backup
+    rather than emitting a journal.db-less artifact, because a backup that
+    silently drops the operator's entire ECM state is data loss wearing a success
+    response; a loud failure is recoverable and cannot leak.
+    ``build_backup_artifact`` already unlinks its partial ZIP and sidecar on any
+    exception, and :func:`_create_backup_zip`'s caller turns this into a 500.
+    """
+
 
 # SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
 # D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
@@ -235,8 +573,236 @@ _REDACT_KEYS = frozenset(
 # for streams is therefore scoped to the producer that emits them.
 _STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
 
+# The IDENTITY half of a THIRD-PARTY provider credential (bead …-gi4zn).
+#
+# WHY A USERNAME IS A CREDENTIAL. The 2026-08-05 drill (run 3, finding F4) found
+# an Xtream Codes account's ``username`` in clear in a standard artifact beside a
+# correctly-redacted ``password``, in BOTH places it appears — the account row
+# and ``profiles[].custom_properties.user_info``. For an XC provider the username
+# is half the credential pair and the half that identifies the SUBSCRIPTION: ECM
+# renders XC stream URLs that contain it. A standard artifact is the DEFAULT
+# artifact, is described to operators simply as "redacted", and is what gets
+# attached to support tickets and forum posts. So the PO's 2026-08-05 decision is
+# that the standard artifact is FULLY redacted: it carries no value that
+# identifies OR authenticates against a third-party service.
+#
+# SEPARATE FROM :data:`_REDACT_KEYS` because ``username`` is the one key whose
+# meaning depends on WHOSE service it names — see
+# :data:`_IDENTITY_EXEMPT_CATEGORIES`. Every other consumer of the deep redactor
+# gets identity redaction by DEFAULT (fail-closed); a caller must name its
+# exemption to opt out.
+_PROVIDER_IDENTITY_KEYS = frozenset({"username"})
 
-def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
+# The ONLY categories exempt from :data:`_PROVIDER_IDENTITY_KEYS`.
+#
+# ``dispatcharr_users`` is the operator's OWN Dispatcharr instance's account
+# list, not a third-party subscription, so it is outside the property this bead
+# establishes. It is also load-bearing: ``dbas.importers.users`` CREATES each
+# user by ``username`` and uses it for the destination-collision check, so a
+# sentinel there would not merely degrade the category — it would delete the
+# restore path (every user would collide or be created named ``***REDACTED***``).
+#
+# Kept as a closed set rather than a per-call flag so the exemption is auditable
+# in one place, and pinned by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_identity_exemption_is_exactly_one_named_category`` so it cannot quietly
+# grow into a general escape hatch.
+_IDENTITY_EXEMPT_CATEGORIES: frozenset[str] = frozenset({"dispatcharr_users"})
+
+# Query-parameter names that make a URL credential-bearing. Providers routinely
+# put the whole credential in the query string (``get.php?username=…&password=…``
+# for a plain-M3U account, ``xmltv.php?username=…&password=…`` for an XC-derived
+# EPG source), where NO credential-named dict key carries it and a key denylist
+# is therefore blind. Short aliases are included because provider URLs use them.
+_URL_CREDENTIAL_QUERY_KEYS = frozenset(
+    _REDACT_KEYS
+    | _PROVIDER_IDENTITY_KEYS
+    | {"user", "pass", "pwd", "token", "apikey", "auth", "key", "sig", "signature"}
+)
+
+# Finds the ``://`` separator and the URL body after it. Needed because a
+# credential-bearing URL is not always the WHOLE value: Dispatcharr echoes
+# upstream failures into ``last_message``, and an upstream error body can quote
+# the request URL it failed on.
+#
+# The SCHEME is deliberately NOT matched here — :func:`_find_urls_in_text` walks
+# backwards for it instead. Matching it forward, as this did until CodeQL alert
+# #1879 (``py/polynomial-redos``, HIGH)::
+#
+#     re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s\"'<>]+")
+#
+# is quadratic: the scheme repetition is unbounded over a class that excludes
+# ``:``, so a long run of scheme-legal characters NOT followed by ``://`` is
+# re-scanned from every position inside it. Measured on the pattern above, 4x
+# the input cost 16x the time — 128k characters took 10.2 s. That input is
+# operator-controlled and unbounded: this scrub visits every string cell of
+# every table :data:`_STANDARD_ARTIFACT_TABLES` permits, and
+# ``ffmpeg_profiles.config`` and ``dummy_epg_profiles.description_template`` are
+# ``Column(Text)`` with no ``max_length`` on their request models.
+#
+# This pattern has a literal prefix and one repetition over a negated class, so
+# it carries no such ambiguity. Pinned by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_the_url_scan_cost_grows_linearly_with_the_input_length``.
+_URL_TAIL_IN_TEXT_RE = re.compile(r"://[^\s\"'<>]+")
+
+# RFC 3986 ``scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )``.
+_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+-.")
+
+
+def _find_urls_in_text(value: str) -> list[str]:
+    """Return every URL-shaped substring of ``value``, in the order they appear.
+
+    Equivalent to the forward-matching regex this replaced — same substrings, in
+    the same order — but linear rather than quadratic in ``len(value)``. Each
+    ``://`` is located by a literal scan, the scheme is recovered by walking
+    BACK over the scheme-legal run in front of it, and the URL body is taken
+    only once a scheme is actually there. Equivalence was checked by
+    differential fuzzing against the old pattern over 1,030,000 random strings
+    drawn from a URL-flavoured alphabet, and is pinned shape-by-shape by
+    ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+    test_every_url_shape_the_scrub_caught_before_is_still_caught``.
+
+    Three details carry that equivalence, and getting any of them wrong is a
+    silent credential leak or a return to quadratic cost rather than a visible
+    failure:
+
+    * **Skip forward to the first ASCII LETTER of the run.** The old pattern's
+      leftmost match began there, not at the run's first character, because RFC
+      3986 — and :func:`urlsplit`, which decides the outcome downstream —
+      require a scheme to start on a letter. ``1https://<username>:<password>@host``
+      yielded ``https://<username>:<password>@host`` and was scrubbed. Anchoring
+      at the run's first
+      CHARACTER instead hands :func:`urlsplit` a scheme starting on a digit,
+      gets an empty scheme back, and silently stops scrubbing that URL — a data
+      leak traded for a linear scan.
+    * **A scheme-less ``://`` hides nothing.**
+      ``+://https://<username>:<password>@host`` has a ``://`` with no scheme in
+      front of it, and the real URL sits INSIDE
+      what a greedy body match from that first separator would swallow. So a
+      separator that fails resumes the search one character later rather than
+      past the body it would have taken.
+    * **The body is only measured after the scheme is found.** Measuring it
+      first would re-scan the same span at every failing separator, which is the
+      quadratic behaviour this function exists to remove (``"://" * n``).
+
+    Cost is O(len(value)): ``str.find`` advances monotonically, accepted bodies
+    are disjoint by construction, and two separators can never share a scheme
+    run because neither ``:`` nor ``/`` is scheme-legal.
+
+    Args:
+        value: Any string value from a gathered payload.
+
+    Returns:
+        The URL-shaped substrings, in the order they appear.
+    """
+    urls: list[str] = []
+    pos = 0
+    while True:
+        separator = value.find("://", pos)
+        if separator < 0:
+            return urls
+        start = separator
+        while start > 0 and value[start - 1] in _SCHEME_CHARS:
+            start -= 1
+        # Skip the leading digits / ``+`` / ``-`` / ``.`` a scheme may not start
+        # on. A run of nothing but those carries no scheme and is not a URL.
+        while start < separator and not (
+            "a" <= value[start] <= "z" or "A" <= value[start] <= "Z"
+        ):
+            start += 1
+        body = (
+            None if start == separator else _URL_TAIL_IN_TEXT_RE.match(value, separator)
+        )
+        if body is None:
+            pos = separator + 1
+            continue
+        urls.append(value[start:body.end()])
+        pos = body.end()
+
+
+def _url_carries_credentials(candidate: str) -> bool:
+    """True when a URL embeds a credential in its userinfo or query string.
+
+    A URL with neither is left ALONE — the restore needs the address to recreate
+    the account or source at all, and blanket-redacting URL fields would leave
+    every restored provider with nowhere to point.
+
+    WHAT THIS DOES NOT COVER, stated so the next reader does not read it as
+    exhaustive: an Xtream Codes STREAM url carries its credential in PATH
+    SEGMENTS (``/live/<user>/<pass>/<id>.ts``), which no general rule can
+    distinguish from an ordinary path without guessing — and guessing here costs
+    the operator a URL the restore needs. That shape is handled at the producer
+    instead: the channels producer never emits a stream url at all
+    (:data:`_STREAM_CREDENTIAL_FIELDS` / ``_safe_embedded_stream``, bead
+    …-7i8rf), pinned by
+    ``tests/routers/test_0i2vt_backup_artifact.py::
+    test_embedded_stream_url_never_in_artifact``. No other producer emits one.
+
+    Args:
+        candidate: A single URL-shaped string.
+
+    Returns:
+        True when the URL carries a credential and must not enter a standard
+        artifact.
+    """
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        # Unparseable is not a URL; other rules still apply to the raw string.
+        return False
+    if not parts.scheme or not parts.netloc:
+        return False
+    if "@" in parts.netloc:
+        # RFC 3986 userinfo: everything before the ``@`` in the authority.
+        return True
+    # Blank values are dropped (parse_qsl default): ``?username=`` with nothing
+    # after it carries no credential and must not cost the operator the address.
+    return any(
+        key.lower() in _URL_CREDENTIAL_QUERY_KEYS for key, _ in parse_qsl(parts.query)
+    )
+
+
+def _scrub_credential_urls(value: str):
+    """Remove credentials embedded in URL VALUES, or return ``None`` if clean.
+
+    Two shapes, because the right restore-side behaviour differs:
+
+    * The value IS a credential-bearing URL (an M3U ``server_url``, an EPG
+      ``url``). The WHOLE value becomes the sentinel, so the restore recognizes
+      it, leaves the field unset rather than writing a half-URL that silently
+      fails to authenticate, and names the field in
+      ``credential_reentry_details``.
+    * The value CONTAINS one (a status message quoting a failed request). Only
+      the URL substring is replaced, so the operator keeps the diagnostic.
+
+    Args:
+        value: Any string value from a gathered payload.
+
+    Returns:
+        The scrubbed string, or ``None`` when the value carries no URL
+        credential and must be left byte-identical.
+    """
+    if "://" not in value:
+        return None
+    found = _find_urls_in_text(value)
+    dirty = [url for url in found if _url_carries_credentials(url)]
+    if not dirty:
+        return None
+    if len(dirty) == 1 and value.strip() == dirty[0]:
+        return REDACTED
+    scrubbed = value
+    for url in dirty:
+        scrubbed = scrubbed.replace(url, REDACTED)
+    return scrubbed
+
+
+def _redact_credentials_deep(
+    obj,
+    preserve_keys: frozenset = frozenset(),
+    exempt_identity_keys: frozenset = frozenset(),
+    scrub_credential_urls: bool = True,
+):
     """Recursively replace any value whose key (case-insensitive) is in the
     shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
 
@@ -244,6 +810,19 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     switch. Walks dicts and lists in place-safe fashion (returns a new
     structure) so credential-class values never enter the archive regardless of
     which category/source produced them. Non-credential values are untouched.
+
+    Three things are redacted, and the second and third exist because the first
+    is not sufficient on its own (bead …-gi4zn):
+
+    1. A value under a :data:`_REDACT_KEYS` key — the credential itself.
+    2. A value under a :data:`_PROVIDER_IDENTITY_KEYS` key — the IDENTITY half of
+       a third-party credential pair. Applied by DEFAULT; ``exempt_identity_keys``
+       is how a caller names an exemption (see
+       :data:`_IDENTITY_EXEMPT_CATEGORIES`), so a new caller fails closed.
+    3. A credential embedded in a URL VALUE, under any key at all
+       (:func:`_scrub_credential_urls`). A plain-M3U account's whole provider
+       credential lives in ``server_url``'s query string, where rules 1 and 2 —
+       which look only at KEY names — cannot see it.
 
     ``preserve_keys`` is the opt-in ``include_credentials`` re-injection
     allowlist (ADR-012 D12 / u81kh): a key in this set is NOT redacted — its real
@@ -254,12 +833,22 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
     ever non-empty — see :func:`build_backup_artifact`). Keys NOT in this set
     (and never approved — e.g. ``password_hash``, never in :data:`_REDACT_KEYS`)
     stay redacted regardless.
+
+    ``scrub_credential_urls`` is the URL-rule counterpart of ``preserve_keys``
+    and is set False on that SAME cred-carrying path: an encrypted migration
+    artifact is the one artifact allowed to carry credentials, and a provider URL
+    with its query-string credential intact is exactly what makes it restorable
+    without re-entry. It is a separate parameter rather than derived from
+    ``preserve_keys`` because rule 3 does not key off names at all, so there is
+    no key set that could express it.
     """
+    identity_keys = _PROVIDER_IDENTITY_KEYS - exempt_identity_keys
+    denied = _REDACT_KEYS | identity_keys
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
             klower = key.lower() if isinstance(key, str) else key
-            if isinstance(key, str) and klower in _REDACT_KEYS and klower not in preserve_keys:
+            if isinstance(key, str) and klower in denied and klower not in preserve_keys:
                 # Only redact truthy values — preserve None/"" so restore-side
                 # preserve-on-omit semantics still distinguish "unset".
                 out[key] = REDACTED if value not in (None, "") else value
@@ -268,10 +857,21 @@ def _redact_credentials_deep(obj, preserve_keys: frozenset = frozenset()):
                 # a credential value is a scalar, not a nested structure).
                 out[key] = value
             else:
-                out[key] = _redact_credentials_deep(value, preserve_keys)
+                out[key] = _redact_credentials_deep(
+                    value, preserve_keys, exempt_identity_keys, scrub_credential_urls
+                )
         return out
     if isinstance(obj, list):
-        return [_redact_credentials_deep(item, preserve_keys) for item in obj]
+        return [
+            _redact_credentials_deep(
+                item, preserve_keys, exempt_identity_keys, scrub_credential_urls
+            )
+            for item in obj
+        ]
+    if scrub_credential_urls and isinstance(obj, str):
+        scrubbed = _scrub_credential_urls(obj)
+        if scrubbed is not None:
+            return scrubbed
     return obj
 
 
@@ -291,80 +891,364 @@ def _build_manifest(files: list[str]) -> dict:
 
 
 def _scrub_journal_db_to_temp(src: Path, include_credentials: bool = False) -> Path:
-    """Copy journal.db to a temp file and redact credential-class keys in
-    alert_methods.config rows. Returns the temp file path; caller must unlink.
+    """Copy journal.db to a temp file and scrub it. Caller must unlink the path.
 
-    Per bd-l0nhi: PR #163 began storing SMTP password (and other creds) inside
-    alert_methods.config JSON, so the live DB cannot be zipped raw without
-    leaking credentials.
+    Three things happen, and ALL of them happen or the copy is destroyed and the
+    backup fails (:class:`BackupScrubError` — no fail-open path survives):
 
-    ``include_credentials`` (ADR-012 D12 / u81kh) preserves those
-    alert_methods.config creds (the SMTP password an operator would otherwise
-    re-enter on migration) instead of redacting them. It is only ever True from
-    :func:`build_backup_artifact` when a passphrase is set, so the cleartext-on-
-    disk default copy is always scrubbed. NOTE: any CloudStorageTarget /
-    SyncTarget credential columns in journal.db remain Fernet-ciphertext at rest
-    (ADR-012 D3) regardless of this flag; they are usable on the target only with
-    the same export key, else treated as absent on restore (checklist 19).
+    1. Every table that is not a key of :data:`_STANDARD_ARTIFACT_TABLES` is
+       DROPPED. That allowlist, not a list of tables to remove, is what decides
+       what ships: ECM's own account tables, third-party and viewer identity,
+       credential stores, history and telemetry are all absent by construction
+       rather than by having been enumerated. See that dict's comment.
+    2. Every string cell of every PERMITTED table goes through the JSON
+       deep-redaction and URL-credential rules
+       (:func:`_scrub_permitted_table_cells`), because the property applies to
+       the tables that are kept as much as to the ones that are dropped.
+    3. The credential- and identity-class keys inside ``alert_methods.config``
+       JSON (bd-l0nhi: PR #163 began storing the SMTP password there, so the live
+       DB cannot be zipped raw). A row whose config does not parse as a JSON
+       OBJECT has its whole ``config`` value replaced with the sentinel — see
+       :func:`_scrub_journal_db_in_place`.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) is the approved cred-carrying
+    migration path and returns the byte-for-byte copy: that artifact is
+    whole-passphrase-encrypted and its entire value is that a migration restores
+    every credential — including the operator's accounts — without re-entry. It
+    is only ever True from :func:`build_backup_artifact` when a passphrase is
+    set, so the cleartext-on-disk default copy is always scrubbed. NOTE: any
+    CloudStorageTarget / SyncTarget credential columns in journal.db remain
+    Fernet-ciphertext at rest (ADR-012 D3) regardless of this flag; they are
+    usable on the target only with the same export key, else treated as absent on
+    restore (checklist 19).
     """
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-backup-journal-", suffix=".db")
     os.close(fd)
     tmp_path = Path(tmp_name)
     shutil.copyfile(src, tmp_path)
     if include_credentials:
-        # Approved cred-carrying migration path: do NOT scrub alert_methods creds.
+        # Approved cred-carrying migration path: do NOT scrub.
         return tmp_path
 
+    try:
+        _scrub_journal_db_in_place(tmp_path)
+    except BaseException:
+        # This temp is an UNSCRUBBED copy of the live database sitting in the
+        # system temp dir. A failed scrub must not leave it there — the caller
+        # only unlinks paths this function RETURNED, and it is about to receive
+        # an exception instead. BaseException, not Exception: a cancellation or
+        # a KeyboardInterrupt mid-scrub leaves exactly the same file behind.
+        try:
+            tmp_path.unlink()
+        except OSError as e:
+            logger.warning(
+                "[BACKUP] Could not remove the unscrubbed journal.db temp copy "
+                "%s after a failed scrub: %s",
+                tmp_path, e,
+            )
+        raise
+    return tmp_path
+
+
+def _scrub_cell_value(value: str) -> Optional[str]:
+    """Scrub one TEXT cell of a PERMITTED table, or return ``None`` if it is clean.
+
+    Invariant 2 of this bead applies to the tables the allowlist KEEPS, not only
+    to the ones it drops, so the kept tables get the same two VALUE-level rules
+    the YAML categories get — and they are applied to every string cell rather
+    than to a list of columns, because a column list is the denylist shape this
+    round exists to remove.
+
+    * A cell that parses as a JSON object or array goes through
+      :func:`_redact_credentials_deep`, so a credential- or identity-named key
+      nested anywhere inside it is redacted exactly as it would be in a category
+      YAML.
+    * Any other string goes through :func:`_scrub_credential_urls`, which catches
+      a credential embedded in a URL value under any key at all.
+
+    A JSON cell is rewritten only when the redacted STRUCTURE differs from the
+    parsed one — never merely because ``json.dumps`` would re-space it — so a
+    clean cell stays byte-identical and the artifact stays diffable.
+
+    Args:
+        value: The raw string held in the cell.
+
+    Returns:
+        The replacement string, or ``None`` when the cell carries nothing this
+        rule redacts and must be left exactly as it is.
+    """
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        redacted = _redact_credentials_deep(parsed)
+        return json.dumps(redacted) if redacted != parsed else None
+    return _scrub_credential_urls(value)
+
+
+def _scrub_permitted_table_cells(cur, table: str) -> int:
+    """Apply :func:`_scrub_cell_value` to every string cell of one kept table.
+
+    Every column is visited and the decision is made on the PYTHON type of each
+    value rather than on the column's declared type. SQLite is dynamically typed
+    — a TEXT value can sit in a column declared INTEGER — so ``isinstance(v,
+    str)`` is the complete test and a declared-type filter would not be.
+
+    Addressed by ``rowid``, which every table here has (none is WITHOUT ROWID),
+    so this does not depend on any table having an integer primary key.
+
+    Raises:
+        BackupScrubError: if the table cannot be read or rewritten. Fails closed
+            like every other step — a cell that could not be scrubbed must not
+            ship.
+
+    Returns:
+        The number of cells rewritten.
+    """
+    try:
+        columns = [row[1] for row in cur.execute('PRAGMA table_info("%s")' % table)]
+    except sqlite3.DatabaseError as e:
+        raise BackupScrubError(
+            "could not inspect the permitted table %s: %s" % (table, e)
+        ) from e
+    if not columns:
+        return 0
+    selected = ", ".join('"%s"' % c for c in columns)
+    try:
+        rows = cur.execute(
+            'SELECT rowid, %s FROM "%s"' % (selected, table)  # noqa: S608 — names read from PRAGMA table_info
+        ).fetchall()
+    except sqlite3.DatabaseError as e:
+        raise BackupScrubError(
+            "could not read the permitted table %s: %s" % (table, e)
+        ) from e
+
+    changed_cells = 0
+    for row in rows:
+        rowid = row[0]
+        updates: dict[str, str] = {}
+        for column, value in zip(columns, row[1:]):
+            if not isinstance(value, str):
+                continue
+            scrubbed = _scrub_cell_value(value)
+            if scrubbed is not None:
+                updates[column] = scrubbed
+        if not updates:
+            continue
+        statement = 'UPDATE "%s" SET %s WHERE rowid=?' % (  # noqa: S608 — same
+            table,
+            ", ".join('"%s"=?' % c for c in updates),
+        )
+        try:
+            cur.execute(statement, (*updates.values(), rowid))
+        except sqlite3.DatabaseError as e:
+            raise BackupScrubError(
+                "could not rewrite a scrubbed cell in %s rowid=%s: %s"
+                % (table, rowid, e)
+            ) from e
+        changed_cells += len(updates)
+    return changed_cells
+
+
+def _scrub_journal_db_in_place(tmp_path: Path) -> None:
+    """Scrub a temp COPY of journal.db in place, or raise :class:`BackupScrubError`.
+
+    FAILS CLOSED at every step (bead …-gi4zn, review finding A-3). Each of the
+    three ``return tmp_path`` fallbacks this replaced shipped the raw database:
+    an unopenable file, an unreadable table, and an unparseable
+    ``alert_methods.config`` row. The reviewer proved the third by seeding a
+    truncated blob and reading its SMTP secret out of a built artifact while
+    valid rows in the SAME database were correctly redacted.
+
+    The two decisions inside that fail-closed rule:
+
+    * **A row whose ``config`` is not a JSON object loses the whole blob** to the
+      sentinel, rather than being dropped. Dropping the row would delete the
+      operator's alert method outright — its name, type and enabled flag are not
+      credentials and the restore wants them — and it would do so invisibly,
+      since nothing downstream can report a row that is not there. Replacing the
+      blob keeps the row present and visibly needing re-entry, and it cannot ship
+      a byte that was never parsed. The restore side treats a whole-blob
+      sentinel the same way it treats a per-key one (see
+      :func:`_merge_alert_method_creds_after_restore`), so a restore into an
+      instance that still holds the real config repairs it.
+    * **A missing table is not a failure.** A freshly bootstrapped database has
+      no ``alert_methods`` and may predate the auth tables; nothing to scrub is
+      not the same as a scrub that could not run. Failing to LIST the tables IS
+      a failure, because then we do not know what is in there.
+
+    THE TABLE PASS IS AN ALLOWLIST (bead …-gi4zn round 3). Every table that is
+    not a key of :data:`_STANDARD_ARTIFACT_TABLES` is DROPPED, so a table added
+    to the schema later carries nothing until someone permits it. Read that
+    dict's comment for why the direction is inverted and for the per-table
+    reasons. Three consequences worth stating here:
+
+    * **DROP, not DELETE.** The property is "the artifact contains exactly the
+      permitted tables", which is mechanically checkable; "the artifact contains
+      these tables and they are empty" is not the same statement and does not
+      close the class. ``init_db()`` recreates every model-declared table empty
+      via ``Base.metadata.create_all`` before anything queries it, so a dropped
+      table heals on restore — see the RESTORE BEHAVIOUR notes in
+      ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py``.
+    * **``sqlite_%`` internal tables are neither dropped nor required to be
+      permitted.** ``sqlite_sequence`` is SQLite's own AUTOINCREMENT bookkeeping,
+      cannot be dropped, and holds table names and counters rather than data.
+    * **VIEWS ARE LEFT ALONE, deliberately.** ``channel_watch_stats_v`` is a
+      saved query over ``session_telemetry``, which this allowlist drops. A view
+      whose backing table is missing is resolved LAZILY by SQLite, and nothing
+      queries it between the restore and ``init_db()``'s ``create_all``, which
+      puts the table back. Dropping the view instead would be permanent: it is
+      created by an Alembic revision, and a restored database stamped at head
+      re-runs no revisions, so nothing would ever recreate it.
+
+    Kept tables are not merely trusted. Every string cell of every permitted
+    table goes through :func:`_scrub_permitted_table_cells`, which applies the
+    same JSON deep-redaction and URL-credential rules the YAML categories get.
+    That is what makes the allowlist safe for tables like
+    ``dummy_epg_profiles``, whose URL templates are operator free text.
+
+    VACUUM at the end is load-bearing, not hygiene: SQLite's ``DELETE`` unlinks
+    cells into the freelist and leaves their bytes in the page file, so a purged
+    password hash is still recoverable with a substring scan of the shipped
+    member. ``PRAGMA secure_delete`` zeroes freed content as it goes and the
+    VACUUM rebuilds the file from live rows only. Pinned by the whole-archive
+    decompressed byte scan in
+    ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py``, which reads
+    the archived bytes rather than the query results and so fails if either is
+    dropped.
+    """
     try:
         conn = sqlite3.connect(str(tmp_path))
     except sqlite3.Error as e:
-        # Source isn't a usable SQLite DB — log and ship the byte-for-byte copy
-        # so the backup doesn't fail outright. The validator will still reject
-        # it on restore if it's truly malformed.
-        logger.warning("[BACKUP] Could not open journal.db for scrub, shipping as-is: %s", e)
-        return tmp_path
+        raise BackupScrubError(
+            "could not open the journal.db copy to scrub it: %s" % e
+        ) from e
 
     try:
         cur = conn.cursor()
-        # alert_methods table may not exist on freshly-bootstrapped DBs.
         try:
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
-            )
-            if cur.fetchone() is None:
-                return tmp_path
-            cur.execute("SELECT id, config FROM alert_methods")
-            rows = cur.fetchall()
+            # secure_delete BEFORE any DELETE so freed pages are zeroed rather
+            # than merely unlinked.
+            cur.execute("PRAGMA secure_delete = ON")
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            present = {row[0] for row in cur.fetchall()}
         except sqlite3.DatabaseError as e:
-            logger.warning("[BACKUP] alert_methods scrub skipped (DB read failed): %s", e)
-            return tmp_path
+            raise BackupScrubError(
+                "could not list the tables in the journal.db copy: %s" % e
+            ) from e
 
-        for row_id, raw_config in rows:
-            if not raw_config:
+        # Everything not explicitly permitted leaves the copy entirely. Sorted so
+        # the security log line below is stable and diffable between runs.
+        dropped: dict[str, int] = {}
+        for table in sorted(present):
+            if table in _STANDARD_ARTIFACT_TABLES or table.startswith("sqlite_"):
                 continue
             try:
-                cfg = json.loads(raw_config)
-            except (json.JSONDecodeError, TypeError):
-                # Leave malformed rows alone — restore-side will refuse to
-                # parse them anyway, and we don't want to silently rewrite.
-                continue
-            if not isinstance(cfg, dict):
-                continue
-            changed = False
-            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
-                if key in cfg and cfg[key]:
-                    cfg[key] = REDACTED
-                    changed = True
-            if changed:
-                cur.execute(
-                    "UPDATE alert_methods SET config=? WHERE id=?",
-                    (json.dumps(cfg), row_id),
-                )
-        conn.commit()
-        logger.info("[BACKUP] Scrubbed alert_methods.config in %d rows", len(rows))
+                # COUNT BEFORE DROP. This is the one record that says the
+                # operator's accounts and telemetry left the artifact, and a
+                # security log line that under-reports is worse than one that is
+                # absent because it reads as proof nothing was there.
+                before = cur.execute(
+                    'SELECT COUNT(*) FROM "%s"' % table  # noqa: S608 — name read from sqlite_master
+                ).fetchone()[0]
+                cur.execute('DROP TABLE "%s"' % table)  # noqa: S608 — same
+            except sqlite3.DatabaseError as e:
+                raise BackupScrubError(
+                    "could not drop the non-permitted table %s from the "
+                    "journal.db copy: %s" % (table, e)
+                ) from e
+            dropped[table] = before
+
+        scrubbed_cells = 0
+        for table in sorted(present & set(_STANDARD_ARTIFACT_TABLES)):
+            scrubbed_cells += _scrub_permitted_table_cells(cur, table)
+
+        scrubbed_rows = 0
+        if "alert_methods" in present:
+            try:
+                cur.execute("SELECT id, config FROM alert_methods")
+                rows = cur.fetchall()
+            except sqlite3.DatabaseError as e:
+                raise BackupScrubError(
+                    "could not read alert_methods from the journal.db copy: %s" % e
+                ) from e
+
+            for row_id, raw_config in rows:
+                if not raw_config:
+                    continue
+                try:
+                    cfg = json.loads(raw_config)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    cfg = None
+                if not isinstance(cfg, dict):
+                    # FAIL CLOSED. Nothing here was parsed, so nothing here can
+                    # be shown to be free of credentials.
+                    new_config = REDACTED
+                    logger.warning(
+                        "[BACKUP] alert_methods row id=%s has a config that is "
+                        "not a JSON object; replacing the whole blob with the "
+                        "redaction sentinel rather than shipping it unread",
+                        row_id,
+                    )
+                else:
+                    changed = False
+                    for key in _ALERT_METHOD_PROTECTED_KEYS:
+                        if key in cfg and cfg[key]:
+                            cfg[key] = REDACTED
+                            changed = True
+                    new_config = json.dumps(cfg) if changed else None
+                if new_config is None:
+                    continue
+                try:
+                    cur.execute(
+                        "UPDATE alert_methods SET config=? WHERE id=?",
+                        (new_config, row_id),
+                    )
+                except sqlite3.DatabaseError as e:
+                    raise BackupScrubError(
+                        "could not rewrite alert_methods row id=%s: %s" % (row_id, e)
+                    ) from e
+                scrubbed_rows += 1
+
+        try:
+            conn.commit()
+            # VACUUM cannot run inside a transaction; the commit above closes the
+            # implicit one sqlite3 opened for the DML.
+            cur.execute("VACUUM")
+        except sqlite3.DatabaseError as e:
+            raise BackupScrubError(
+                "could not commit and compact the scrubbed journal.db copy: %s" % e
+            ) from e
+
+        # Only when rows actually left. A table that was already empty says
+        # nothing, and a WARNING that fires on every backup regardless is a
+        # WARNING nobody reads by the time it is true.
+        non_empty = {t: n for t, n in dropped.items() if n}
+        if non_empty:
+            logger.warning(
+                "[BACKUP] Dropped %d non-permitted table(s) carrying %d row(s) "
+                "from the standard artifact's journal.db (%s). A standard "
+                "artifact carries only the configuration tables in "
+                "_STANDARD_ARTIFACT_TABLES; account state, telemetry and history "
+                "do not travel in it. A restore onto an instance with no accounts "
+                "leaves first-run setup required; the operator re-creates their "
+                "ECM login. Use an encrypted backup with credentials included to "
+                "migrate accounts.",
+                len(non_empty),
+                sum(non_empty.values()),
+                ", ".join("%s=%d rows" % (t, n) for t, n in sorted(non_empty.items())),
+            )
+        logger.info(
+            "[BACKUP] Standard artifact journal.db: kept %d permitted table(s), "
+            "dropped %d, scrubbed %d cell(s) and alert_methods.config in %d row(s)",
+            len(present & set(_STANDARD_ARTIFACT_TABLES)),
+            len(dropped),
+            scrubbed_cells,
+            scrubbed_rows,
+        )
     finally:
         conn.close()
-    return tmp_path
 
 
 def _create_backup_zip() -> io.BytesIO:
@@ -766,12 +1650,21 @@ async def _gather_redacted_categories(
       intermediate. Informational only: it never adds a degraded category.
     """
     # include_credentials (D12) preserves the approved migration-cred allowlist
-    # (== _REDACT_KEYS; password_hash is never in that set and so is never
-    # carried). Redaction STILL runs over every key — only the explicitly
-    # approved creds are preserved — so this is re-injection, not a redaction
-    # bypass (checklist 28). preserve_keys is empty unless the caller opted in
-    # AND set a passphrase (enforced in build_backup_artifact).
-    preserve_keys = _REDACT_KEYS if include_credentials else frozenset()
+    # (== _REDACT_KEYS plus the provider IDENTITY keys; password_hash is in
+    # neither and so is never carried). Redaction STILL runs over every key —
+    # only the explicitly approved creds are preserved — so this is
+    # re-injection, not a redaction bypass (checklist 28). preserve_keys is
+    # empty unless the caller opted in AND set a passphrase (enforced in
+    # build_backup_artifact).
+    #
+    # The identity keys MUST be in the preserve set (bead …-gi4zn): the whole
+    # point of the encrypted cred-carrying artifact is that a migration does not
+    # have to re-enter the provider credential, and half a credential pair is
+    # not a credential. Omitting them here would have widened redaction into the
+    # one artifact the constraint says must be left alone.
+    preserve_keys = (
+        (_REDACT_KEYS | _PROVIDER_IDENTITY_KEYS) if include_credentials else frozenset()
+    )
     out: dict[str, str] = {}
     degraded: list[str] = []
     unresolved_epg_links = 0
@@ -783,9 +1676,26 @@ async def _gather_redacted_categories(
         # category's gathered payload passes through the shared NON-BYPASSABLE
         # deep redactor before it is serialized into the archive — one denylist,
         # every category, no plaintext path.
-        yaml_text = await build_yaml_export({key}, include_credentials=include_credentials)
+        #
+        # ``exempt_identity_keys`` is per-CATEGORY because ``username`` is the
+        # one key whose meaning depends on whose service it names (see
+        # :data:`_IDENTITY_EXEMPT_CATEGORIES`). Absent from the map means "no
+        # exemption", so a category added later is redacted by default.
+        exempt = (
+            _PROVIDER_IDENTITY_KEYS if key in _IDENTITY_EXEMPT_CATEGORIES else frozenset()
+        )
+        yaml_text = await build_yaml_export(
+            {key},
+            include_credentials=include_credentials,
+            exempt_identity_keys=exempt,
+        )
         parsed = yaml.safe_load(yaml_text)
-        redacted = _redact_credentials_deep(parsed, preserve_keys)
+        redacted = _redact_credentials_deep(
+            parsed,
+            preserve_keys,
+            exempt_identity_keys=exempt,
+            scrub_credential_urls=not include_credentials,
+        )
         dispatcharr_blob = redacted.get("dispatcharr") if isinstance(redacted, dict) else None
         if isinstance(dispatcharr_blob, dict):
             section_value = dispatcharr_blob.get(key)
@@ -2072,6 +2982,15 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
     credential-class values from the prior snapshot when the restored value
     is the REDACTED sentinel. Match by row id.
 
+    A restored ``config`` that is the sentinel AS A WHOLE (rather than a JSON
+    object with sentinel values inside it) is the producer's fail-closed
+    treatment of a row it could not parse — see
+    :func:`_scrub_journal_db_in_place`. It is merged the same way, wholesale: the
+    destination's own config for that row id is authoritative and is restored
+    intact. Without this branch the fail-closed producer change would DESTROY a
+    working alert method on every restore, which is exactly the round-trip
+    asymmetry :data:`_ALERT_METHOD_PROTECTED_KEYS` exists to prevent.
+
     Backward-compat: legacy non-redacted ZIPs carry no sentinel — every value
     survives the merge unchanged.
     """
@@ -2099,6 +3018,17 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
         for row_id, raw in rows:
             if not raw:
                 continue
+            if raw == REDACTED:
+                # Whole-blob sentinel: the producer could not parse this row and
+                # refused to ship it. Reinstate the destination's own config.
+                prior_cfg = prior.get(row_id)
+                if prior_cfg:
+                    cur.execute(
+                        "UPDATE alert_methods SET config=? WHERE id=?",
+                        (json.dumps(prior_cfg), row_id),
+                    )
+                    merged_count += 1
+                continue
             try:
                 cfg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
@@ -2107,7 +3037,7 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
                 continue
             prior_cfg = prior.get(row_id, {})
             changed = False
-            for key in _ALERT_METHOD_CREDENTIAL_KEYS:
+            for key in _ALERT_METHOD_PROTECTED_KEYS:
                 if cfg.get(key) == REDACTED and prior_cfg.get(key) not in (None, "", REDACTED):
                     cfg[key] = prior_cfg[key]
                     changed = True
@@ -2127,6 +3057,310 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
         conn.close()
 
 
+# The operator-facing half of the account purge (bead …-gi4zn, finding A-1).
+# ``restored_files`` alone reports what landed, never what an artifact could not
+# carry, and an operator whose disaster-recovery restore returns 200 and then
+# shows a first-run setup wizard has to guess whether that is correct.
+FIRST_RUN_SETUP_NOTICE = (
+    "This instance has no ECM user account. A standard (non-encrypted) backup "
+    "carries no account credentials by design, so accounts are not restored from "
+    "one — create your admin account through first-run setup. To migrate accounts "
+    "between instances instead, take an encrypted backup with credentials included."
+)
+
+
+def _capture_existing_auth_rows() -> dict[str, tuple[list[str], list[tuple]]]:
+    """Snapshot this instance's OWN account rows before journal.db is replaced.
+
+    Returns ``{table: (column_names, rows)}`` for :data:`_AUTH_IDENTITY_TABLES`.
+
+    A standard artifact carries these tables EMPTY (see that tuple's comment), so
+    without this snapshot a restore would log the admin out of their own live
+    instance and drop them at the setup wizard — an availability regression the
+    redaction fix does not need and must not cause. Paired with
+    :func:`_reassert_auth_rows_after_restore`; same capture-then-merge shape as
+    :func:`_capture_existing_alert_method_configs`.
+
+    Best-effort by design: an unreadable live database yields an empty snapshot,
+    which degrades to the restored artifact's own contents rather than failing the
+    restore. That is the safe direction here — the worst case is the operator
+    running first-run setup, and unlike the PRODUCER side (where an unrunnable
+    scrub means a leak) nothing confidential turns on it.
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return {}
+    out: dict[str, tuple[list[str], list[tuple]]] = {}
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning("[BACKUP] Could not open journal.db to capture accounts: %s", e)
+        return {}
+    try:
+        cur = conn.cursor()
+        for table in _AUTH_IDENTITY_TABLES:
+            try:
+                cur.execute("SELECT * FROM %s" % table)  # noqa: S608 — name from a module-level literal tuple
+                rows = cur.fetchall()
+            except sqlite3.DatabaseError as e:
+                # Missing on a pre-auth-schema database; unreadable is logged and
+                # skipped for the same reason the docstring gives.
+                logger.warning(
+                    "[BACKUP] Could not capture %s before restore: %s", table, e
+                )
+                continue
+            if not rows:
+                continue
+            out[table] = ([d[0] for d in cur.description], rows)
+    finally:
+        conn.close()
+    return out
+
+
+def _create_missing_auth_table(cur, table: str) -> list[str]:
+    """Recreate one auth table in the restored journal.db from its MODEL.
+
+    Needed because a standard artifact drops these tables outright, and
+    :func:`_reassert_auth_rows_after_restore` has to put the destination's own
+    accounts back BEFORE ``init_db()`` runs ``create_all``.
+
+    Compiling ``CreateTable`` against the SQLite dialect keeps the recreated
+    table in lock-step with the model that produced the captured rows, so this
+    cannot drift the way hand-written DDL would.
+
+    Args:
+        cur: An open cursor on the restored journal.db.
+        table: The table name, always one of :data:`_AUTH_IDENTITY_TABLES`.
+
+    Returns:
+        The created table's column names, or ``[]`` if it could not be created —
+        best-effort like the rest of the restore side, where the worst case is
+        the operator running first-run setup.
+    """
+    try:
+        from sqlalchemy.dialects import sqlite as sqlite_dialect
+        from sqlalchemy.schema import CreateTable
+
+        from models import Base
+
+        model_table = Base.metadata.tables[table]
+        cur.execute(str(CreateTable(model_table).compile(dialect=sqlite_dialect.dialect())))
+    except Exception as e:  # noqa: BLE001 — best-effort; the fallback is first-run setup
+        logger.warning(
+            "[BACKUP] Could not recreate the %s table to reinstate this "
+            "instance's accounts: %s", table, e,
+        )
+        return []
+    logger.info(
+        "[BACKUP] Recreated the %s table, which the restored artifact did not "
+        "carry, to reinstate this instance's own accounts", table,
+    )
+    return [row[1] for row in cur.execute("PRAGMA table_info(%s)" % table)]
+
+
+def _reassert_auth_rows_after_restore(
+    prior: dict[str, tuple[list[str], list[tuple]]],
+) -> None:
+    """Put this instance's own account rows back over the restored journal.db.
+
+    Runs ONLY when the destination actually had accounts. That condition is what
+    keeps a legacy (pre-…-gi4zn) ZIP's disaster-recovery path intact: restoring
+    an old artifact that still carries ``users`` onto an EMPTY instance installs
+    those users exactly as it always did, because there is nothing here to
+    re-assert. Restoring onto an OWNED instance, by contrast, keeps the owner —
+    which is both the availability guarantee and a tightening, since an artifact's
+    ``users`` table can no longer silently replace the live one.
+
+    Columns are intersected with the restored schema so a snapshot taken on a
+    different ECM version cannot fail the insert on a column that moved.
+
+    THE TABLE IS CREATED IF THE ARTIFACT DID NOT SHIP IT (bead …-gi4zn round 3).
+    Since the allowlist DROPS the auth tables rather than emptying them, a
+    standard artifact no longer contains ``users`` at all, and this function runs
+    BEFORE ``init_db()`` — so without this step ``PRAGMA table_info`` would come
+    back empty, the re-assert would silently skip, and an admin restoring a backup
+    onto their OWN instance would be logged out and dropped at the setup wizard.
+    That is precisely the availability regression the capture/re-assert pair
+    exists to prevent, and it would have failed silently behind a 200.
+
+    The DDL is compiled from the model rather than hand-written, so the recreated
+    table cannot drift from the columns the snapshot holds.
+    """
+    if not prior.get("users"):
+        return
+    if not JOURNAL_DB_FILE.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning(
+            "[BACKUP] Could not open the restored journal.db to reinstate "
+            "accounts: %s", e,
+        )
+        return
+    try:
+        cur = conn.cursor()
+        # Reverse of the DELETE order: parents before dependents.
+        for table in reversed(_AUTH_IDENTITY_TABLES):
+            captured = prior.get(table)
+            try:
+                cur.execute("PRAGMA table_info(%s)" % table)
+                dest_columns = [row[1] for row in cur.fetchall()]
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not inspect restored %s: %s", table, e
+                )
+                continue
+            if not dest_columns and captured:
+                dest_columns = _create_missing_auth_table(cur, table)
+            if not dest_columns:
+                continue
+            try:
+                cur.execute("DELETE FROM %s" % table)  # noqa: S608 — name from a module-level literal tuple
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not clear restored %s before reinstating "
+                    "this instance's accounts: %s", table, e,
+                )
+                continue
+            if not captured:
+                continue
+            columns, rows = captured
+            shared = [c for c in columns if c in dest_columns]
+            if not shared:
+                continue
+            index = [columns.index(c) for c in shared]
+            statement = "INSERT INTO %s (%s) VALUES (%s)" % (  # noqa: S608 — same
+                table,
+                ", ".join('"%s"' % c for c in shared),
+                ", ".join("?" for _ in shared),
+            )
+            try:
+                cur.executemany(statement, [tuple(r[i] for i in index) for r in rows])
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not reinstate %d %s row(s) after restore: %s",
+                    len(rows), table, e,
+                )
+        conn.commit()
+        logger.info(
+            "[BACKUP] Reinstated this instance's own account rows over the "
+            "restored journal.db (%d users)", len(prior["users"][1]),
+        )
+    finally:
+        conn.close()
+
+
+# Operator-configured surfaces that a STANDARD artifact does not carry, mapped to
+# what the operator has to do about it (bead …-gi4zn round 3, invariant 4). Only
+# tables whose loss needs an ACTION belong here — the allowlist also drops history
+# and telemetry, and telling an operator to "re-establish" their audit log would
+# be noise that trains them to ignore the notice.
+_REESTABLISH_ON_RESTORE: dict[str, str] = {
+    "cloud_storage_targets": "cloud storage target(s) (Settings -> Export/Publish)",
+    "sync_targets": "sync target(s) (Settings -> Export/Publish)",
+    "m3u_digest_settings": "M3U digest settings, including the email recipient list",
+    "event_sync_exclusions": "event-sync never-attach exclusion(s)",
+}
+
+# Set by :func:`_restore_from_zip`, read and cleared by
+# :func:`_post_restore_account_notices`.
+#
+# A module-level handoff rather than a return value because the three restore
+# endpoints call those two functions independently, and widening
+# ``_restore_from_zip``'s return arity would break silently in the tests that
+# patch it with a ``MagicMock``. It is written at the START of every restore and
+# CLEARED when read, so a failed restore cannot leak a notice into the next one.
+# Restores hold the database closed and are human-admin gated, so they do not
+# overlap.
+_LAST_RESTORE_CONFIG_LOSSES: dict[str, int] = {}
+
+
+def _count_reestablish_rows() -> dict[str, int]:
+    """Row counts for :data:`_REESTABLISH_ON_RESTORE`, read off the live database.
+
+    Used on BOTH sides of the file swap so the notice names only what this
+    instance ACTUALLY lost. Counting after the restore alone would tell an
+    operator who never configured cloud storage to go re-establish it, and a
+    notice that cries wolf is one nobody reads by the time it is true.
+
+    Best-effort: a table that cannot be read is omitted rather than guessed at.
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error:
+        return {}
+    counts: dict[str, int] = {}
+    try:
+        for table in _REESTABLISH_ON_RESTORE:
+            try:
+                counts[table] = conn.execute(
+                    'SELECT COUNT(*) FROM "%s"' % table  # noqa: S608 — name from a module-level literal dict
+                ).fetchone()[0]
+            except sqlite3.DatabaseError:
+                # Absent on this schema version — nothing to lose, nothing to say.
+                continue
+    finally:
+        conn.close()
+    return counts
+
+
+def _post_restore_account_notices() -> list[str]:
+    """Notices for the restore response, read off the LIVE post-restore database.
+
+    Derived from the instance's actual state rather than predicted from what the
+    artifact contained, so it cannot claim a lockout that did not happen or miss
+    one that did. Empty in the ordinary case (accounts present, nothing lost).
+
+    Two notices, both live-derived:
+
+    1. The first-run-setup notice, when the instance ends up with no accounts.
+    2. The re-establish notice, when a configured surface that a standard
+       artifact does not carry HAD rows before the restore and has none after
+       (:data:`_REESTABLISH_ON_RESTORE`). This is the operator-facing half of
+       the allowlist: ``restored_files`` reports what landed and structurally
+       cannot report what the artifact could not carry.
+    """
+    notices: list[str] = []
+
+    lost = {t: n for t, n in _LAST_RESTORE_CONFIG_LOSSES.items() if n}
+    _LAST_RESTORE_CONFIG_LOSSES.clear()
+    if lost:
+        detail = "; ".join(
+            "%d %s" % (n, _REESTABLISH_ON_RESTORE[t]) for t, n in sorted(lost.items())
+        )
+        notice = (
+            "This backup did not carry every configured surface, because a "
+            "standard (non-encrypted) backup omits credential stores and "
+            "personal data by design. Re-establish: %s. To carry these between "
+            "instances instead, take an encrypted backup with credentials "
+            "included." % detail
+        )
+        logger.warning("[BACKUP] %s", notice)
+        notices.append(notice)
+
+    if not JOURNAL_DB_FILE.exists():
+        return notices
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error:
+        return notices
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    except sqlite3.DatabaseError:
+        # No users table at all (pre-auth-schema database) — the setup wizard is
+        # this instance's normal state, not a notice-worthy outcome.
+        return notices
+    finally:
+        conn.close()
+    if count:
+        return notices
+    logger.warning("[BACKUP] %s", FIRST_RUN_SETUP_NOTICE)
+    notices.append(FIRST_RUN_SETUP_NOTICE)
+    return notices
+
+
 def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     """Restore files from a validated backup zip."""
     restored = []
@@ -2134,6 +3368,16 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     # Capture existing alert_methods.config BEFORE we close/replace the DB so
     # we can merge real creds back where the restored ZIP has REDACTED.
     prior_alert_configs = _capture_existing_alert_method_configs()
+    # Same, for this instance's own account rows: a standard artifact carries
+    # those tables EMPTY (bead …-gi4zn), and a restore must not log the operator
+    # out of the instance they are restoring.
+    prior_auth_rows = _capture_existing_auth_rows()
+    # Row counts for the configured surfaces a standard artifact cannot carry, so
+    # the restore response can name what THIS instance actually lost rather than
+    # what an artifact might not have held. Cleared first: a previous failed
+    # restore must not leak its losses into this one's notices.
+    _LAST_RESTORE_CONFIG_LOSSES.clear()
+    prior_reestablish_counts = _count_reestablish_rows()
 
     # Close database before replacing files
     close_db()
@@ -2155,6 +3399,8 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             # Merge any REDACTED alert_methods.config creds back from the
             # pre-restore snapshot so existing rows aren't degraded.
             _merge_alert_method_creds_after_restore(prior_alert_configs)
+            # Same for this instance's own accounts (bead …-gi4zn).
+            _reassert_auth_rows_after_restore(prior_auth_rows)
 
         # Restore directories — clear existing before writing
         for dir_rel in BACKUP_DIRS:
@@ -2180,6 +3426,18 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
         # Always reinitialize database
         init_db()
         logger.info("[BACKUP] Database reinitialized after restore")
+
+    # Compare the same live counts across the swap. init_db() has already run, so
+    # every model-declared table the artifact dropped is back and empty — a table
+    # that went from N rows to 0 is a real loss this operator has to act on.
+    post_counts = _count_reestablish_rows()
+    _LAST_RESTORE_CONFIG_LOSSES.update(
+        {
+            table: before
+            for table, before in prior_reestablish_counts.items()
+            if before and not post_counts.get(table, 0)
+        }
+    )
 
     # Clear settings cache and reset client
     clear_settings_cache()
@@ -2247,6 +3505,9 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        # Additive (bead …-gi4zn): names what a standard artifact could NOT
+        # carry, which restored_files structurally cannot.
+        "notices": _post_restore_account_notices(),
     }
 
 
@@ -2408,6 +3669,8 @@ async def restore_backup_initial(
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        # The disaster-recovery case this notice exists for (bead …-gi4zn).
+        "notices": _post_restore_account_notices(),
     }
 
 
@@ -3343,7 +4606,9 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
 
 
 async def build_yaml_export(
-    sections: Optional[set[str]] = None, include_credentials: bool = False
+    sections: Optional[set[str]] = None,
+    include_credentials: bool = False,
+    exempt_identity_keys: frozenset = frozenset(),
 ) -> str:
     """Build a YAML export string, optionally limited to specific sections.
 
@@ -3355,6 +4620,22 @@ async def build_yaml_export(
     passphrase-encrypted migration path; it is only ever True from
     :func:`build_backup_artifact`. The user-facing ``/export`` endpoint never
     sets it (always redacts).
+
+    WHY THE DEEP REDACTOR RUNS HERE and not only in the artifact builder (bead
+    …-gi4zn). This function is the shared gather for TWO operator-shareable
+    artifacts: the DBAS artifact (via :func:`_gather_redacted_categories`) and
+    the legacy ``GET /api/backup/export`` YAML. Only the first passed its
+    payload through :func:`_redact_credentials_deep`, so the second scrubbed
+    settings-class fields and nothing else — a Dispatcharr-sourced M3U or EPG
+    record went out with whatever the upstream returned. Redacting at the gather
+    makes ONE authority cover both surfaces; the artifact builder still runs the
+    deep redactor afterwards (idempotent: a sentinel re-redacts to itself) so its
+    NON-BYPASSABLE-stage property is unchanged even if a future caller reaches
+    the gather another way.
+
+    ``exempt_identity_keys`` names the provider-identity keys this particular
+    gather must NOT redact — see :data:`_IDENTITY_EXEMPT_CATEGORIES`. Defaulting
+    to empty means a caller that says nothing gets full redaction.
 
     The default set (``sections=None``) excludes ``artifact_only`` categories
     (channels / dispatcharr_users — 7i8rf): those are restorable only via the
@@ -3389,6 +4670,11 @@ async def build_yaml_export(
     dispatcharr_data = await _gather_dispatcharr_sections(selected)
     if dispatcharr_data:
         export_data["dispatcharr"] = dispatcharr_data
+
+    if not include_credentials:
+        export_data = _redact_credentials_deep(
+            export_data, exempt_identity_keys=exempt_identity_keys
+        )
 
     return yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
@@ -4168,6 +5454,22 @@ _SECTION_RESTORERS = {
 # Dispatcharr section restore functions (async — use Dispatcharr API)
 # ---------------------------------------------------------------------------
 
+def _warn_credential_reentry(entity: str, label, removed: list[str]) -> list[str]:
+    """The legacy YAML restore's credential-re-entry warning — field NAMES only.
+
+    The DBAS restore reports this structurally (``credential_reentry_details``);
+    this path has only a warnings list, so it says the same thing in prose. Bead
+    …-gi4zn: silence here is what lets an operator believe a restored provider is
+    configured when it cannot authenticate.
+    """
+    if not removed:
+        return []
+    return [
+        "%s '%s': %s could not be carried by a redacted export and must be "
+        "re-entered before it will refresh." % (entity, label, ", ".join(removed))
+    ]
+
+
 async def _restore_m3u_accounts(items: list) -> dict:
     """Delete all M3U accounts and recreate from YAML via Dispatcharr API."""
     client = get_client()
@@ -4184,10 +5486,22 @@ async def _restore_m3u_accounts(items: list) -> dict:
     # Recreate
     for item in items:
         create_data = {k: v for k, v in item.items() if k not in ("id", "channel_groups", "streams_count")}
+        # Never write ECM's own placeholder into a destination credential field
+        # (bead …-6pilh, applied to this legacy path by …-gi4zn). A sentinel
+        # written through produces an account that LOOKS configured — the field
+        # is populated and every truthiness probe says yes — and fails at the
+        # provider, which is strictly worse than a visibly-unset field. The DBAS
+        # importer has stripped sentinels since 6pilh; this path did not, and
+        # became reachable for the IDENTITY half once the export redacted it.
+        create_data, removed = strip_redaction_sentinels(create_data)
         try:
             await client.create_m3u_account(create_data)
         except Exception as e:
             warnings.append("Failed to create M3U account %s: %s" % (item.get("name"), e))
+            continue
+        warnings.extend(
+            _warn_credential_reentry("M3U account", item.get("name"), removed)
+        )
     return {"warnings": warnings}
 
 
@@ -4205,10 +5519,16 @@ async def _restore_epg_sources(items: list) -> dict:
             warnings.append("Failed to delete EPG source %s: %s" % (src.get("name"), e))
     for item in items:
         create_data = {k: v for k, v in item.items() if k not in ("id",)}
+        # Same rule as the M3U path above — see its comment.
+        create_data, removed = strip_redaction_sentinels(create_data)
         try:
             await client.create_epg_source(create_data)
         except Exception as e:
             warnings.append("Failed to create EPG source %s: %s" % (item.get("name"), e))
+            continue
+        warnings.extend(
+            _warn_credential_reentry("EPG source", item.get("name"), removed)
+        )
     return {"warnings": warnings}
 
 
@@ -4451,6 +5771,7 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        "notices": _post_restore_account_notices(),
     }
 
 

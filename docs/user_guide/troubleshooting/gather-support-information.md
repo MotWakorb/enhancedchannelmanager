@@ -99,6 +99,34 @@ Kept deliberately:
 The bundle does not know which of your channel and group names you consider
 private. Skim it if that matters to you.
 
+### Attaching a backup artifact
+
+A **standard** backup, meaning an unencrypted one, is safe to attach to a
+support ticket. It is built to be: it carries no part of a provider
+credential (not the password and not the username), none of your ECM
+accounts, no journal or telemetry, and no notification or cloud-storage
+credentials. See
+[What a standard backup does not carry](../backup-restore/backup-overview.md#what-a-standard-backup-does-not-carry)
+for the full account of what is removed and what is kept.
+
+What it does still carry is your configuration itself: channel and group
+names, rule definitions, and any provider address that did not have a
+credential in it. An address that did carry one, in its userinfo or its
+query string, is replaced whole rather than trimmed, so it is not there to
+leak. If a provider hostname is something you would rather not post
+publicly, say so and ask where to send the artifact privately.
+
+!!! danger "Never attach an encrypted backup taken with Include credentials"
+    That artifact is the migration path and it deliberately carries
+    everything: provider passwords, your ECM accounts and their password
+    hashes, cloud-storage credentials. The passphrase is the only thing
+    protecting it. Send a standard backup instead.
+
+    An artifact taken with a passphrase but **without** Include credentials
+    is redacted like a standard one, but nobody can tell the two apart from
+    the filename. If you are not certain which you have, take a fresh
+    standard backup and send that.
+
 ## 4. A log slice
 
 If you are not sending a bundle, send logs. Bound them to the window in which the

@@ -7,6 +7,7 @@ Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache
 """
 import io
 import json
+import sqlite3
 import zipfile
 
 import pytest
@@ -25,6 +26,21 @@ from models import (
     TagGroup,
     Tag,
 )
+
+
+def _write_empty_journal_db(path):
+    """A REAL, empty SQLite database at ``path``.
+
+    The magic-byte stub these tests used to write is not a database — sqlite3
+    opens it and then fails on the first query. That was invisible while the
+    journal.db scrub failed OPEN and shipped the raw copy; it fails the backup
+    now (bead …-gi4zn, finding A-3), and a live instance always has a real
+    database here, so the faithful fixture is the one that matches production.
+
+    ``_make_backup_zip`` below keeps the magic-byte stub on purpose: that is a
+    ZIP MEMBER, and ``_validate_backup_zip`` checks exactly those bytes.
+    """
+    sqlite3.connect(str(path)).close()
 
 
 def _make_backup_zip(
@@ -78,7 +94,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "http://test:9191"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -115,7 +131,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "test"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Create logo directory with a file
         logos_dir = tmp_path / "uploads" / "logos"
@@ -144,7 +160,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -165,7 +181,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_engine.connect.side_effect = Exception("WAL error")
@@ -197,7 +213,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Mock the engine.connect() chain so the PRAGMA returns (1, 0, 0).
         mock_engine = MagicMock()
@@ -905,7 +921,16 @@ class TestExportYaml:
 
     @pytest.mark.asyncio
     async def test_redacts_passwords(self, async_client, test_session):
-        """Export redacts sensitive fields from settings."""
+        """Export redacts sensitive fields from settings.
+
+        ``username`` used to be asserted PRESENT here, which recorded the
+        defect bead …-gi4zn fixes rather than a decision: it is the identity
+        half of the Dispatcharr connection credential whose secret half two
+        lines above is redacted, and the debug-bundle redactor
+        (``routers/channel_pipeline.py``) had already been redacting it for the
+        whole time this assertion said it should survive. The export is
+        described to operators as redacted, so it carries neither half.
+        """
         mock_settings = MagicMock()
         mock_settings.model_dump.return_value = {
             "url": "http://test:9191",
@@ -922,7 +947,9 @@ class TestExportYaml:
         data = yaml.safe_load(response.text)
         assert data["settings"]["password"] == "***REDACTED***"
         assert data["settings"]["smtp_password"] == "***REDACTED***"
-        assert data["settings"]["username"] == "admin"
+        assert data["settings"]["username"] == "***REDACTED***"
+        # Not a credential, and the operator needs it to reconnect.
+        assert data["settings"]["url"] == "http://test:9191"
 
     @pytest.mark.asyncio
     async def test_exports_db_tables(self, async_client, test_session):
@@ -1965,7 +1992,13 @@ class TestZipExportRedaction:
         assert configs[1]["host"] == "smtp.example.com"  # non-cred preserved
         assert configs[2]["webhook_url"] == "***REDACTED***"
         assert configs[3]["bot_token"] == "***REDACTED***"
-        assert configs[3]["chat_id"] == "1234"  # non-cred preserved
+        # ``chat_id`` was asserted here as "non-cred preserved". Bead …-gi4zn
+        # reclassifies it: a Telegram chat id is a bearer capability to post
+        # into a chat, which is why the SETTINGS-level ``telegram_chat_id`` is
+        # already in ``config.ADMIN_ONLY_READ_REDACTED_FIELDS`` and withheld
+        # from a non-admin read. The identical value nested inside
+        # alert_methods.config was the unprotected half of that pair.
+        assert configs[3]["chat_id"] == "***REDACTED***"
 
 
 class TestZipRestoreRedactionAware:

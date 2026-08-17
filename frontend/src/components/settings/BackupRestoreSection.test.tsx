@@ -58,11 +58,12 @@ vi.mock('../DbasRestoreSavedModal', () => ({
 // Mock notification context
 const mockSuccess = vi.fn();
 const mockError = vi.fn();
+const mockWarning = vi.fn();
 vi.mock('../../contexts/NotificationContext', () => ({
   useNotifications: () => ({
     success: mockSuccess,
     error: mockError,
-    warning: vi.fn(),
+    warning: mockWarning,
     info: vi.fn(),
   }),
 }));
@@ -168,9 +169,21 @@ describe('BackupRestoreSection', () => {
       });
     });
 
-    it('shows sensitive data warning on YAML export', async () => {
+    // Bead enhancedchannelmanager-gi4zn. The previous assertion matched
+    // /redacted in the export/i, which the SUPERSEDED copy ("sensitive data
+    // (passwords, API keys) are redacted in the export") satisfied — so it
+    // could not fail while the panel described the old, narrower contract.
+    // These assert the two rules that copy omitted (provider identity, and
+    // credentials inside a URL value) plus the re-entry consequence, so
+    // reverting to a credentials-only sentence fails the test.
+    it('tells the operator the YAML export drops provider identity and URL credentials too', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText(/redacted in the export/i)).toBeInTheDocument();
+      const warning = screen.getByText(/No working credentials leave in this file/i)
+        .closest('.backup-sensitive-warning') as HTMLElement;
+      expect(warning).not.toBeNull();
+      expect(warning.textContent).toMatch(/provider usernames/i);
+      expect(warning.textContent).toMatch(/inside a URL/i);
+      expect(warning.textContent).toMatch(/re-enter/i);
 
       // Let mount-time fetches settle.
       await waitFor(() => {
@@ -411,6 +424,57 @@ describe('BackupRestoreSection', () => {
       await waitFor(() => {
         expect(mockError).toHaveBeenCalledWith('Server error', 'Restore Failed');
       });
+    });
+
+    // Bead enhancedchannelmanager-gi4zn. A standard artifact carries no ECM
+    // account credentials, so a restore can report success and still leave
+    // nobody able to log in until first-run setup runs. The success toast
+    // counts FILES and structurally cannot say that; the server's `notices`
+    // can, and are worthless if nothing renders them.
+    it('surfaces the server notices a restore returns', async () => {
+      const notice =
+        'This instance has no ECM user account. Create your admin account ' +
+        'through first-run setup.';
+      vi.mocked(api.restoreBackup).mockResolvedValue({
+        status: 'ok',
+        backup_version: '0.18.1',
+        backup_date: '2026-08-17T00:00:00Z',
+        restored_files: ['settings.json', 'journal.db'],
+        notices: [notice],
+      });
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      const file = new File(['zip-content'], 'backup.zip', { type: 'application/zip' });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.click(screen.getByText('Restore'));
+
+      await waitFor(() => {
+        expect(mockWarning).toHaveBeenCalledWith(notice, 'Account Setup Required');
+      });
+      expect(await screen.findByText(notice)).toBeInTheDocument();
+    });
+
+    // The same restore against a backend that predates the field: `notices` is
+    // absent, not empty, and the component must not warn or throw on it.
+    it('warns about nothing when the response carries no notices', async () => {
+      vi.mocked(api.restoreBackup).mockResolvedValue({
+        status: 'ok',
+        backup_version: '0.18.1',
+        backup_date: '2026-08-17T00:00:00Z',
+        restored_files: ['settings.json'],
+      });
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      const file = new File(['zip-content'], 'backup.zip', { type: 'application/zip' });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.click(screen.getByText('Restore'));
+
+      await waitFor(() => {
+        expect(mockSuccess).toHaveBeenCalledWith('Restored 1 files from backup');
+      });
+      expect(mockWarning).not.toHaveBeenCalled();
     });
   });
 

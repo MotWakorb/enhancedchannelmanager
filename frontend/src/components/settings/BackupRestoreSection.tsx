@@ -46,6 +46,21 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [legacySavedBusy, setLegacySavedBusy] = useState(false);
   const [dbasSavedTarget, setDbasSavedTarget] = useState<string | null>(null);
 
+  /**
+   * Surface what the artifact could NOT carry (bead
+   * enhancedchannelmanager-gi4zn). A standard backup carries no ECM account
+   * credentials, so a restore can succeed and still leave nobody able to log
+   * in until first-run setup runs. The success toast counts restored files and
+   * so can never say that; these come from the server, read off the live
+   * post-restore instance. `?? []` because a backend predating the field omits
+   * it entirely.
+   */
+  const announceRestoreNotices = useCallback((result: api.RestoreResult) => {
+    for (const notice of result.notices ?? []) {
+      notifications.warning(notice, 'Account Setup Required');
+    }
+  }, [notifications]);
+
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
     try {
@@ -166,6 +181,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       const result = await api.restoreBackup(file);
       setRestoreResult(result);
       notifications.success(`Restored ${result.restored_files.length} files from backup`);
+      announceRestoreNotices(result);
 
       setTimeout(() => {
         window.location.reload();
@@ -183,6 +199,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     try {
       const result = await api.restoreSavedBackup(restoringLegacySaved);
       notifications.success(`Restored ${result.restored_files.length} files from ${restoringLegacySaved}`);
+      announceRestoreNotices(result);
       setRestoringLegacySaved(null);
       setTimeout(() => {
         window.location.reload();
@@ -260,9 +277,26 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         <p className="backup-card-description">
           Export ECM configuration as a single YAML file. Choose which sections to include.
         </p>
+        {/* The export's redaction contract, restated for the operator (bead
+            enhancedchannelmanager-gi4zn). This box used to say "sensitive data
+            (passwords, API keys) are redacted", which is the exact reading that
+            made the defect plausible: it names only the secret half of a
+            credential, so an operator reasonably concluded the whole provider
+            sign-in was covered when the username was not. The gather is now the
+            single redaction authority for both this YAML export and the DBAS
+            artifact, so all three rules — credential keys, provider identity,
+            and credentials inside a URL value — apply here too. Says what the
+            file carries and what the operator re-enters, not an inventory of
+            redacted key names; docs/user_guide/backup-restore/backup-overview.md
+            carries the full list. */}
         <div className="backup-sensitive-warning">
           <span className="material-icons">info</span>
-          <span>Sensitive data (passwords, API keys) are redacted in the export.</span>
+          <span>
+            <strong>No working credentials leave in this file.</strong> Passwords, API keys,
+            provider usernames, and credentials carried inside a URL are all replaced with a
+            placeholder. Your configuration restores; your provider sign-ins do not — re-enter
+            those on each M3U account and EPG source.
+          </span>
         </div>
 
         {exportSections.length > 0 && (
@@ -526,6 +560,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
               <strong>Files restored:</strong> {restoreResult.restored_files.length}<br />
               Reloading page...
             </div>
+            {(restoreResult.notices ?? []).map((notice) => (
+              <div className="warning-message" key={notice} role="status">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                {notice}
+              </div>
+            ))}
           </div>
         )}
       </div>

@@ -29,6 +29,7 @@ All DB access goes through an in-memory SQLite engine wired into the
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -370,7 +371,15 @@ async def test_total_client_unavailability_reaches_warning_level_end_to_end(
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     journal = config_dir / "journal.db"
-    journal.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+    # A REAL, empty SQLite database. The magic-byte stub this used to write is
+    # not a database: sqlite3 opens it and then fails on the first query. That
+    # was invisible while the journal.db scrub failed OPEN and shipped the raw
+    # copy; since bead …-gi4zn the scrub fails CLOSED and an unreadable source
+    # fails the whole backup, which is not what this test is about. A live
+    # instance always has a real database here, so the faithful fixture is the
+    # one that matches production. Same change, same reason, as
+    # ``tests/routers/test_backup.py::_write_empty_journal_db``.
+    sqlite3.connect(str(journal)).close()
     settings_file = config_dir / "settings.json"
     settings_file.write_text("{}")
 

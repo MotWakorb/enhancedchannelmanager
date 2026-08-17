@@ -19,7 +19,15 @@ This walkthrough assumes:
 
     - **A standard (redacted) backup needs a recovery sequence** before
       playback works: re-enter credentials, then refresh the M3U account.
-      Those two steps are the whole recovery. See Step 6.
+      Those two steps are the whole recovery. See Step 6. Note that a
+      standard artifact now removes the provider **username** as well as
+      the password, so Step 6 re-enters both.
+
+    - **A standard backup does not migrate your ECM accounts.** Only an
+      encrypted backup with **Include credentials** carries them. Without
+      it, the new install starts at first-run setup and you create an
+      admin account there. See
+      [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry).
 
     EPG links round-trip correctly (9 of 9 seeded links survived on
     `0.18.1`, on both artifact variants). See Step 7 below to verify
@@ -142,12 +150,14 @@ The restore applies categories in the fixed hard order: M3U accounts → EPG sou
 
 ## Step 6: Re-enter credentials (standard backup only)
 
-If you used a standard (unencrypted) backup, M3U account passwords, EPG passwords, and similar credentials were redacted. On the new install:
+If you used a standard (unencrypted) backup, the whole provider credential was removed, **username as well as password**, along with EPG credentials and similar secrets. On the new install:
 
-!!! success "The password field is empty after a redacted restore"
-    After a redacted restore, the M3U account's password field is
-    correctly **empty**. This is expected; it still needs the real
-    credential entered before the account will authenticate.
+!!! success "The credential fields are empty after a redacted restore"
+    After a redacted restore, the M3U account's username and password
+    fields are correctly **empty**, not filled with a placeholder. This
+    is expected; both need the real values entered before the account
+    will authenticate. If a provider URL carried the credential in its
+    query string, that URL is blank too and needs re-entering with it.
 
 !!! success "Two steps: re-enter the credential, then refresh"
     A redacted restore leaves every channel on a placeholder stream,
@@ -169,12 +179,12 @@ If you used a standard (unencrypted) backup, M3U account passwords, EPG password
     channels are still on placeholders, refresh the individual account.
 
 1. Go to **Settings → M3U Accounts**.
-2. Edit each M3U account and enter the real password. The restore report
-   and the post-restore UI both name the exact account and field that
-   needs it, for example an account named `Infinity` needing
-   `profiles[0].custom_properties.user_info.password`.
+2. Edit each M3U account and enter the real username and password. The
+   restore report and the post-restore UI both name the exact account and
+   fields that need it, for example an account named `Infinity` needing
+   `username` and `profiles[0].custom_properties.user_info.password`.
 3. Go to **Settings → EPG Sources**.
-4. Edit each EPG source and re-enter the password (if applicable).
+4. Edit each EPG source and re-enter the username and password (if applicable).
 5. Refresh the M3U account (**Save & Refresh**). Confirm real streams
    populate. Channel-group selection survives the restore as-is (a
    round-trip drill measured this preserved exactly). If the account

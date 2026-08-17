@@ -16,8 +16,8 @@ A backup covers the following configuration categories. All are included by defa
 
 | Category | What is included |
 |-|-|
-| **M3U accounts** | Source URLs and account settings. Credentials are redacted by default (see [Credentials and passphrase encryption](#credentials-and-passphrase-encryption)). |
-| **EPG sources** | Source URLs and refresh settings. Credentials are redacted by default. |
+| **M3U accounts** | Source URLs and account settings. The whole provider credential, username as well as password, is removed by default (see [Credentials and passphrase encryption](#credentials-and-passphrase-encryption)). |
+| **EPG sources** | Source URLs and refresh settings. The whole provider credential, username as well as password, is removed by default. |
 | **Channel groups** | Group names and structure. |
 | **Channel profiles** | All channel profile definitions. |
 | **Stream profiles** | All stream profile definitions. |
@@ -38,7 +38,47 @@ A backup covers the following configuration categories. All are included by defa
 - **Live stream content**: a backup captures *definitions* (which streams are assigned to which channels), not the streams themselves.
 - **The SQLite WAL file**: ECM checkpoints the write-ahead log before building the artifact, so `journal.db` in the archive is self-contained, but the WAL itself is not included.
 - **Dispatcharr's own database**: ECM backs up the configuration it manages. Dispatcharr's internal database (viewer history, its own task state, etc.) is outside ECM's scope.
-- **Credentials in a standard backup**: M3U/EPG passwords and similar secrets are replaced with a `REDACTED` placeholder. See [Credentials and passphrase encryption](#credentials-and-passphrase-encryption) for the migration path that does carry credentials.
+- **Any part of a provider credential, in a standard backup**: not the password, and not the username either. See [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the complete list, and [Credentials and passphrase encryption](#credentials-and-passphrase-encryption) for the migration path that does carry credentials.
+
+---
+
+## What a standard backup does not carry
+
+A **standard** backup is the default artifact: unencrypted, and the one the `dbas_backup` task produces on a schedule. It is built to be safe to hand to somebody else, so anything that identifies you or authenticates on your behalf is removed before the bytes reach the archive. That removal is not optional and there is no switch that turns it off.
+
+Three rules do the work, and it takes all three because none of them alone is complete:
+
+1. **Credential-class field names.** Any field named like a secret (`password`, `api_key`, `smtp_password`, `plex_token`, `emby_api_key`, `jellyfin_api_key`, `telegram_bot_token`, and the rest of the same class) becomes `***REDACTED***`.
+2. **Provider identity, not just provider secrets.** `username` is removed too, everywhere it appears: on the M3U account row, inside `profiles[].custom_properties.user_info`, on EPG sources, and in core settings. For an Xtream Codes provider the username is half the credential pair and the half that names your subscription, so a backup that kept it was not a redacted backup. The one deliberate exception is the **Dispatcharr users** category, which lists your own Dispatcharr accounts rather than a third party's. The restore creates each of those accounts by username and checks for collisions on it, so replacing it would break the restore rather than protect anything.
+3. **Credentials hidden inside URLs.** A URL that carries a credential in its userinfo (`https://<username>:<password>@host/...`) or in a query parameter (`get.php?username=...&password=...`) is caught by its *value*, not by the name of the field holding it. A URL that carries no credential is left alone, because the restore needs the address.
+
+On top of that, the copy of ECM's own database (`journal.db`) inside the artifact is reduced to a fixed list of tables that hold configuration a restore needs. Everything else is dropped outright rather than filtered. So a standard artifact carries **none** of the following:
+
+- **Your ECM accounts.** Usernames, email addresses, password hashes, live sessions, password-reset tokens, and any linked OIDC / SAML / LDAP identity.
+- **Your journal and history.** Journal entries, notifications, task run history, Channel Pipeline execution history and snapshots, M3U change logs and snapshots.
+- **Telemetry.** Session telemetry (which includes Emby, Plex, Jellyfin and Dispatcharr account names), unique client connections (viewer IP addresses and usernames), bandwidth and popularity data.
+- **Notification and storage targets that hold credentials.** Cloud storage targets and sync targets are dropped whole, even though their stored credentials are already encrypted at rest.
+- **Personal data belonging to other people.** M3U digest settings are dropped because they hold an email recipient list.
+
+Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs) are removed.
+
+!!! warning "A backup now fails rather than shipping an unscrubbed database"
+    If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).
+
+One part of this applies to the **Full Backup (legacy `.zip`)** format on the same page as well: its copy of `journal.db` is built by the same code and carries the same fixed table list, so the legacy artifact no longer carries your ECM accounts either.
+
+That is the whole of what the legacy format guarantees, and it does not make the `.zip` a redacted backup. Its `settings.json` masks the credential-class fields but keeps your Dispatcharr username, and it is not scrubbed for credentials embedded in URL values. The archive also copies your `tls/` and `m3u_uploads/` directories verbatim, which means TLS private keys and uploaded playlists whose stream URLs carry provider credentials. The warning on the Full Backup card, that the backup contains sensitive data including passwords and certificates, is the accurate description: treat the file as a secret, and take a standard backup when you need something safe to hand to somebody else.
+
+### What this means in practice
+
+A standard backup is now safe to attach to a support ticket, post in a forum thread, or copy to a machine you do not control. It does not contain your provider subscription, your ECM login, your viewers, or your notification credentials.
+
+Two consequences follow, and both are expected behaviour rather than faults. Both concern `journal.db`, so they apply to a **Full Backup (legacy `.zip`)** restore and to the first-run "restore from backup" path. The **Restore DBAS Backup** flow never writes `journal.db` at all, so it does not touch your ECM accounts in either direction.
+
+- **Restoring onto an instance with no accounts leaves you at first-run setup**, because the artifact carries no accounts to restore. Create your admin account, then sign in. To carry accounts between instances instead, use an encrypted backup with **Include credentials** enabled.
+- **Restoring onto an instance that already has accounts leaves those accounts alone.** ECM snapshots the destination's own accounts before it replaces the database and puts them back afterwards, so restoring a backup never signs you out of the instance you are restoring.
+
+The restore response carries a **notice** for each of these when it applies, and ECM shows it after the restore finishes. The notices are read from your instance after the restore rather than predicted from the artifact, so they name only what this instance actually lost. If you never configured a cloud storage target, you are not told to go re-establish one.
 
 ---
 
@@ -48,7 +88,7 @@ Each backup is a `.zip` file containing:
 
 - `manifest.json`: a cleartext header with `schema_version`, `app_version`, creation timestamp, and a per-member SHA-256 hash list.
 - `categories/<name>.yaml`: one YAML file per configuration category.
-- `journal.db`: a scrubbed copy of the ECM SQLite database (alert-method credential fields redacted).
+- `journal.db`: a reduced copy of the ECM SQLite database. In a standard backup it carries only the fixed list of configuration tables described in [What a standard backup does not carry](#what-a-standard-backup-does-not-carry); everything else is dropped, and the file is compacted so the dropped rows are not recoverable from it.
 - `binary/logos/<file>`: per-image logo files, streamed one at a time.
 - `binary/metadata.json`: logo inventory.
 - `binary/url-mappings.json`: logo filename to source-URL map.
@@ -67,11 +107,24 @@ The `manifest.json` contains a `schema_version` integer (distinct from the ECM a
 
 When restoring a backup produced by an older ECM onto a newer ECM, the schema version is accepted (older ≤ current = accepted). This means backups are forward-compatible: an artifact from ECM v0.18.0 can be restored onto a later ECM build.
 
+### Restore a new backup with this ECM build or a newer one, never an older one
+
+!!! danger "Read this before you roll ECM back, or restore onto an older instance"
+    The full-redaction change described above did **not** move `schema_version`, because the artifact's structure is unchanged. Nothing therefore refuses the combination below, and you have to avoid it yourself.
+
+    **A backup taken by an ECM build that has full redaction should only be restored by that build or a newer one.** Restoring one with an older ECM has three known problems, none of which can be fixed retroactively, and all three arrive behind an apparently successful restore:
+
+    1. **You can be signed out of your own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a new artifact carries none of its own. Restoring a new artifact onto an older instance that *has* accounts can therefore leave it with none, dropping you at first-run setup on an instance you were administering.
+    2. **Alert-method usernames and chat IDs are written as the literal text `***REDACTED***`.** Older ECM restores the password half of an alert method's configuration correctly but does not know the identity half was ever removed, so it writes the placeholder in as if it were the value.
+    3. **An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety**, and stops sending notifications until you reconfigure it. Newer ECM recognises that case and keeps the destination's own configuration for that method instead.
+
+    If you need to roll ECM back, roll back to a backup taken **before** the upgrade rather than restoring a newer artifact onto the older build.
+
 ---
 
 ## Credentials and passphrase encryption
 
-By default, all backups are **redact-by-default**: credential fields (M3U passwords, EPG passwords, API keys, SMTP passwords, etc.) are replaced with a `REDACTED` sentinel. A restore from this artifact re-uses whatever credentials are already configured on the destination, or leaves the credential blank on a fresh install.
+By default, all backups are **redact-by-default**, and that now means fully redacted: no part of a provider credential travels in a standard artifact, the username included. Credential fields are replaced with a `REDACTED` sentinel; see [What a standard backup does not carry](#what-a-standard-backup-does-not-carry) for the three rules and the complete list. A restore from this artifact re-uses whatever credentials are already configured on the destination, or leaves the credential unset on a fresh install. It never writes the sentinel into a credential field, and the restore report names each field that needs re-entering.
 
 If you are migrating to a new install and want credentials to travel with the backup, use the **Encrypted Backup** option:
 
@@ -79,6 +132,8 @@ If you are migrating to a new install and want credentials to travel with the ba
 2. Check the **"I understand a lost passphrase makes this artifact permanently unrecoverable"** acknowledgement.
 3. Set a passphrase of at least 12 characters. The passphrase is never stored, so keep it somewhere safe.
 4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials alongside the encrypted artifact.
+
+**A passphrase alone does not carry credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what decides whether there is anything to protect. An encrypted backup taken *without* **Include credentials** is redacted exactly like a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
 
 An encrypted backup uses scrypt (N=2¹⁵) for key derivation and ChaCha20-Poly1305 for authenticated encryption, applied as a chunked streaming pass over the whole artifact. The passphrase is never logged or stored.
 
@@ -101,10 +156,15 @@ The newest-N floor is always respected: even if a backup is older than 30 days, 
 
 ## User restore semantics
 
+!!! note "These are Dispatcharr's accounts, not ECM's"
+    The **Users** category holds your **Dispatcharr** user accounts. Usernames are kept in a standard backup for this category alone, because the restore creates each account by username and checks for collisions on it. Your **ECM** accounts are a different thing entirely and are never in a standard backup; see [What a standard backup does not carry](#what-a-standard-backup-does-not-carry).
+
 Restoring user accounts is **opt-in**. Users are not selected by default in the restore modal. When you do restore users:
 
-- The **current admin account** is never overwritten. ECM detects the currently authenticated admin and skips it during restore, so you cannot lock yourself out via a restore.
-- A user account that already exists on the destination with the same username is updated (not duplicated).
+- The **current admin account** is never overwritten. ECM identifies the account its own Dispatcharr credentials authenticate as and skips it, so you cannot lock yourself out via a restore.
+- A user account that already exists on the destination with the same username is **skipped, not updated**. An existing account is never overwritten by a restore.
+- **No password travels with the backup.** Dispatcharr never hands out a password or a hash to begin with, so a restored account is created with a random password that ECM discards immediately and is unusable until you set one yourself. The restore report flags each restored account as needing that reset.
+- **Every restored account is created without privileges**, whatever the backup claims. Superuser, staff, and user-level flags are not carried. Re-grant them by hand if you need them.
 
 See [Restore a backup](restore-a-backup.md) for the full restore flow.
 
