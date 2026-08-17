@@ -2056,3 +2056,329 @@ async def test_a_restored_standard_artifact_leaves_first_run_setup_available(
         engine.dispose()
 
     assert result.required is True
+
+
+# ---------------------------------------------------------------------------
+# THE URL SCAN IS LINEAR IN THE LENGTH OF THE VALUE
+# ---------------------------------------------------------------------------
+#
+# CodeQL alert #1879 (``py/polynomial-redos``, HIGH) against the scheme-matching
+# regex this bead introduced at ``routers/backup.py``:
+#
+#     _URL_IN_TEXT_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s\"'<>]+")
+#
+# The scheme prefix is an UNBOUNDED repetition over a character class that does
+# not contain ``:``, so on a long run of scheme-legal characters that is not
+# followed by ``://`` the engine re-scans the remainder of the run from every
+# starting position inside it — quadratic in the length of the run. Measured on
+# the pattern as committed: 1k chars 0.63 ms, 8k 42 ms, 32k 639 ms, 128k 10.2 s,
+# a clean x4 per doubling.
+#
+# The input is unbounded and operator-controlled. ``_scrub_credential_urls``
+# runs over every string cell of every table
+# ``routers.backup._STANDARD_ARTIFACT_TABLES`` permits, and two of those carry
+# free text with no length bound anywhere in the stack:
+# ``ffmpeg_profiles.config`` and ``dummy_epg_profiles.description_template`` are
+# both ``Column(Text)`` (``models.py``), their request models declare
+# ``Optional[str] = None`` with no ``max_length`` (``routers/dummy_epg.py``),
+# and SQLite does not enforce ``String(n)`` widths at all. So ADR-005's
+# false-positive dismissal path (b) is unavailable — there is no sanitizer to
+# reference — and (c) does not apply because this is production code. The
+# resolution is (a) remediation.
+#
+# The scheme is now recovered by walking BACKWARDS from the ``://`` separator
+# (``routers.backup._find_urls_in_text``) instead of being matched forward, so
+# each run is visited once and the scan is linear. Both halves of that are
+# pinned below, because either one alone is satisfiable by a broken fix: the
+# shape corpus pins that every URL the scrub caught before it still catches,
+# and the cost tests pin that it got cheaper without doing so.
+
+_URL_SCAN_IDENT = "urlident" + "QQQAAA"
+_URL_SCAN_OPAQUE = "urlopaque" + "QQQBBB"
+
+
+def _url_scan_shapes() -> dict:
+    """Every URL shape the scrub caught before the ReDoS fix, and its result.
+
+    Captured by running each value through ``_scrub_credential_urls`` as it
+    stood at commit ``0b3aeafb`` (the last commit carrying the quadratic
+    pattern) and recording the output verbatim. Pinning the recorded output —
+    rather than re-deriving it from the pattern — is what makes this an
+    equivalence test: the fix is only correct if every one of these still holds.
+
+    ``None`` means "carries no URL credential, leave the value byte-identical".
+    """
+    ident, opaque = _URL_SCAN_IDENT, _URL_SCAN_OPAQUE
+    return {
+        # --- The whole value IS a credential-bearing URL -> whole sentinel ---
+        "whole value, get.php query creds": (
+            f"http://prov.example.test/get.php?username={ident}&password={opaque}",
+            backup_mod.REDACTED,
+        ),
+        "whole value, xmltv.php query creds": (
+            f"http://prov.example.test/xmltv.php?username={ident}&password={opaque}",
+            backup_mod.REDACTED,
+        ),
+        "whole value, RFC 3986 userinfo": (
+            f"http://{ident}:{opaque}@epg.example.test/guide.xml",
+            backup_mod.REDACTED,
+        ),
+        "whole value, short query aliases": (
+            f"http://h.example.test/a?user={ident}&pass={opaque}",
+            backup_mod.REDACTED,
+        ),
+        "whole value, apikey query": (
+            f"https://img.example.test/t.png?apikey={opaque}",
+            backup_mod.REDACTED,
+        ),
+        "whole value, surrounded by whitespace": (
+            f"  http://{ident}:{opaque}@h.example.test/x  ",
+            backup_mod.REDACTED,
+        ),
+        # --- Schemes other than http/https, and schemes with +/-/. in them ---
+        "uppercase scheme": (
+            f"HTTP://{ident}:{opaque}@h.example.test/x",
+            backup_mod.REDACTED,
+        ),
+        "compound scheme svn+ssh": (
+            f"svn+ssh://{ident}:{opaque}@h.example.test/x",
+            backup_mod.REDACTED,
+        ),
+        "rtsp scheme": (
+            f"rtsp://{ident}:{opaque}@h.example.test/live",
+            backup_mod.REDACTED,
+        ),
+        "rtmp scheme": (
+            f"rtmp://{ident}:{opaque}@h.example.test/live",
+            backup_mod.REDACTED,
+        ),
+        "ftp scheme": (
+            f"ftp://{ident}:{opaque}@h.example.test/f",
+            backup_mod.REDACTED,
+        ),
+        # --- The scheme run does not start on a letter -------------------
+        #
+        # The old pattern's leftmost match began at the first ASCII LETTER of
+        # the run, not at the run's first character, so these were caught. A
+        # naive ReDoS fix — forbidding a match start whose previous character is
+        # scheme-legal — silently stops catching every one of them, which is why
+        # they are pinned individually.
+        "digit-prefixed scheme": (
+            f"1https://{ident}:{opaque}@h.example.test/x",
+            "1" + backup_mod.REDACTED,
+        ),
+        "dot-prefixed scheme": (
+            f".https://{ident}:{opaque}@h.example.test/x",
+            "." + backup_mod.REDACTED,
+        ),
+        "dash-prefixed scheme": (
+            f"-https://{ident}:{opaque}@h.example.test/x",
+            "-" + backup_mod.REDACTED,
+        ),
+        "plus-prefixed scheme": (
+            f"+https://{ident}:{opaque}@h.example.test/x",
+            "+" + backup_mod.REDACTED,
+        ),
+        "dash inside a run that starts on a letter": (
+            f"for-https://{ident}:{opaque}@h.example.test/x",
+            backup_mod.REDACTED,
+        ),
+        # --- A scheme-less ``://`` in front of the real URL ---------------
+        #
+        # The credential-bearing URL sits INSIDE the span a greedy body match
+        # from the FIRST ``://`` would swallow. A scan that measures the body
+        # from every separator and then skips past it never sees the real URL
+        # and silently ships the credential — the first attempt at this
+        # remediation did exactly that and passed every other shape here.
+        "letterless separator then a real url": (
+            f"+://https://{ident}:{opaque}@h.example.test/x",
+            "+://" + backup_mod.REDACTED,
+        ),
+        "bare separator then a real url": (
+            f"://https://{ident}:{opaque}@h.example.test/x",
+            "://" + backup_mod.REDACTED,
+        ),
+        "letterless separator, real url, inside a message": (
+            f"saw +://https://{ident}:{opaque}@h.example.test/x once",
+            f"saw +://{backup_mod.REDACTED} once",
+        ),
+        # --- The value CONTAINS a URL -> only the URL substring goes ------
+        "embedded in a status message": (
+            f"fetch failed for http://{ident}:{opaque}@h.example.test/x after 3 tries",
+            f"fetch failed for {backup_mod.REDACTED} after 3 tries",
+        ),
+        "embedded, one dirty and one clean": (
+            f"tried https://clean.example.test/a then http://{ident}:{opaque}@h.example.test/b",
+            f"tried https://clean.example.test/a then {backup_mod.REDACTED}",
+        ),
+        "embedded in double quotes": (
+            f'upstream said "http://{ident}:{opaque}@h.example.test/x" was bad',
+            f'upstream said "{backup_mod.REDACTED}" was bad',
+        ),
+        "embedded in single quotes": (
+            f"upstream said 'http://{ident}:{opaque}@h.example.test/x' was bad",
+            f"upstream said '{backup_mod.REDACTED}' was bad",
+        ),
+        "embedded in angle brackets": (
+            f"<http://{ident}:{opaque}@h.example.test/x>",
+            f"<{backup_mod.REDACTED}>",
+        ),
+        "two dirty urls in one value": (
+            f"a http://{ident}:{opaque}@h1.example.test/x "
+            f"b http://{ident}:{opaque}@h2.example.test/y",
+            f"a {backup_mod.REDACTED} b {backup_mod.REDACTED}",
+        ),
+        "dirty url, newline, clean url": (
+            f"http://{ident}:{opaque}@h1.example.test/x\nhttps://clean.example.test/y",
+            f"{backup_mod.REDACTED}\nhttps://clean.example.test/y",
+        ),
+        "trailing punctuation is part of the match": (
+            f"see http://{ident}:{opaque}@h.example.test/x.",
+            f"see {backup_mod.REDACTED}",
+        ),
+        "a second :// inside the path": (
+            f"http://{ident}:{opaque}@h.example.test/a://b",
+            backup_mod.REDACTED,
+        ),
+        # --- Clean values must stay BYTE-IDENTICAL (None) -----------------
+        "clean url, whole value": ("https://cdn.epg.example.test/us.xml.gz", None),
+        "clean url, blank query value": (
+            "http://h.example.test/get.php?username=",
+            None,
+        ),
+        "clean Dispatcharr internal url": ("http://dispatcharr:9191", None),
+        "clean Plex url with a port": ("http://plex.example.test:32400", None),
+        "no url at all": ("just a plain message", None),
+        ":// with no scheme letter before it": ("://nope.example.test/x", None),
+        "scheme separator with nothing after it": ("http://", None),
+    }
+
+
+@pytest.mark.parametrize("shape", sorted(_url_scan_shapes()))
+def test_every_url_shape_the_scrub_caught_before_is_still_caught(shape):
+    """The ReDoS remediation changes cost, not coverage.
+
+    Invariant, not reproduction: the scan must return exactly what it returned
+    before for EVERY shape — the sentinel for a credential-bearing URL, the
+    original bytes for a clean one. A cheaper scan that stops recognising a
+    credential-bearing URL trades a performance finding for a data leak, which
+    is the worse bargain.
+    """
+    value, expected = _url_scan_shapes()[shape]
+    assert backup_mod._scrub_credential_urls(value) == expected
+
+
+def test_the_url_scan_does_not_degrade_on_a_long_scheme_legal_run():
+    """A long run of scheme-legal characters costs linear time, not quadratic.
+
+    RED WITHOUT THE FIX: this is the CodeQL ``py/polynomial-redos`` alert
+    reproduced through the production entry point rather than against the bare
+    pattern. The value below is a 200,000-character run of scheme-legal
+    characters that is never followed by ``://``, plus one real URL so the
+    ``"://" not in value`` early-out does not short-circuit the scan. Against
+    the quadratic pattern this takes ~25 s; against the backward-walk scan it
+    takes well under a millisecond.
+
+    An operator reaches this with one ``dummy_epg_profiles.description_template``
+    or ``ffmpeg_profiles.config`` value — both ``Column(Text)``, neither bounded
+    by a request model — and the cost is paid on every standard backup from then
+    on, because the scrub visits every string cell of every permitted table.
+
+    The budget is deliberately loose (2 s against a ~25 s break and a ~0.05 ms
+    pass) so it cannot flake on a loaded runner, while still being unable to
+    pass while the quadratic pattern is in place.
+    """
+    import time as _time
+
+    payload = "a" * 200_000 + " https://clean.example.test/x"
+
+    started = _time.perf_counter()
+    result = backup_mod._scrub_credential_urls(payload)
+    elapsed = _time.perf_counter() - started
+
+    # The value carries no credential, so it must come back untouched...
+    assert result is None
+    # ...and it must have got there without a quadratic scan.
+    assert elapsed < 2.0, (
+        "the URL scan took %.2f s on a 200k-character scheme-legal run; the "
+        "scheme prefix is being matched forward from every position in the run "
+        "again (CodeQL py/polynomial-redos)" % elapsed
+    )
+
+
+# Input families that a scheme-scanning bug degrades to quadratic on. Each is
+# built from a length so the SAME family can be measured at two sizes.
+#
+# The first family is CodeQL alert #1879 itself. The rest are here because the
+# first one alone is NOT a sufficient guard — plausible fixes exist that pass it
+# and are still quadratic on another shape. Each family below was mutation-
+# tested: a variant of the fix was written, and the family that catches it was
+# confirmed to trip (>= x8 growth for a x4 input, against ~x4 for the shipped
+# scan). Measured 2026-08-17 at 50k -> 200k:
+#
+#   family                        | variant it catches         | measured
+#   ------------------------------|----------------------------|----------------
+#   scheme-legal run              | the old forward-matching    | 1.6s -> 24.7s
+#                                 | pattern (alert #1879)       | x15.9  TRIPS
+#   alternating letters/digits    | a lookbehind forbidding a   | 0.8s -> 12.5s
+#                                 | preceding LETTER only       | x16.0  TRIPS
+#   separators with no scheme     | measuring the URL body      | 1.5s -> 23.7s
+#                                 | before checking the scheme  | x15.9  TRIPS
+#   letterless-prefixed separators| the same, independently     | 1.1s -> 17.8s
+#                                 |                             | x15.6  TRIPS
+#
+# Two more variants are quadratic-clean but WRONG, and are caught by
+# ``test_every_url_shape_the_scrub_caught_before_is_still_caught`` instead: a
+# lookbehind forbidding any preceding scheme-legal character loses the
+# ``digit-prefixed scheme`` shape, and a ``finditer`` scan that skips past each
+# body loses the ``letterless separator then a real url`` shapes.
+_URL_SCAN_COST_FAMILIES = {
+    "scheme-legal run": lambda n: "a" * n + " https://clean.example.test/x",
+    "alternating letters and digits": (
+        lambda n: "a1" * (n // 2) + " https://clean.example.test/x"
+    ),
+    "separators with no scheme": lambda n: "://" * (n // 3),
+    "separators with a scheme-legal but letterless prefix": (
+        lambda n: "+://" * (n // 4)
+    ),
+}
+
+
+@pytest.mark.parametrize("family", sorted(_URL_SCAN_COST_FAMILIES))
+def test_the_url_scan_cost_grows_linearly_with_the_input_length(family):
+    """Quadrupling the input must not multiply the cost by ~16.
+
+    The companion to the budget test above, stated as the complexity property
+    rather than as a wall-clock number: the quadratic pattern grew by a clean x4
+    per doubling (measured 1k/2k/4k/8k/16k/32k/64k/128k), so a x4 input growth
+    cost x16. The threshold is x8 — above the linear x4 plus interpreter noise,
+    below the quadratic x16.
+    """
+    import time as _time
+
+    build = _URL_SCAN_COST_FAMILIES[family]
+
+    def cost(length: int) -> float:
+        payload = build(length)
+        samples = []
+        for _ in range(3):
+            started = _time.perf_counter()
+            backup_mod._scrub_credential_urls(payload)
+            samples.append(_time.perf_counter() - started)
+        # Best of three: the floor is the signal, scheduler noise is not.
+        return min(samples)
+
+    small = cost(50_000)
+    large = cost(200_000)
+
+    # The linear scan finishes these in tens of MICROseconds, where a x8 ratio
+    # is scheduler noise rather than signal, so a negligible absolute cost also
+    # passes. Every quadratic variant measured on these families took >1 s at
+    # 200k — three orders of magnitude above the floor — so the floor cannot
+    # rescue a broken scan.
+    assert large < max(small * 8, 0.05), (
+        "quadrupling the %r input multiplied the scan cost by %.1fx "
+        "(%.4f s -> %.4f s); a linear scan multiplies it by ~4x and a "
+        "quadratic one by ~16x"
+        % (family, large / small if small else 0, small, large)
+    )

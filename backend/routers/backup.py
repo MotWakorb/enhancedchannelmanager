@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import string
 import tempfile
 import time
 import zipfile
@@ -619,11 +620,105 @@ _URL_CREDENTIAL_QUERY_KEYS = frozenset(
     | {"user", "pass", "pwd", "token", "apikey", "auth", "key", "sig", "signature"}
 )
 
-# Finds URL-shaped substrings inside an arbitrary string. Needed because a
+# Finds the ``://`` separator and the URL body after it. Needed because a
 # credential-bearing URL is not always the WHOLE value: Dispatcharr echoes
 # upstream failures into ``last_message``, and an upstream error body can quote
 # the request URL it failed on.
-_URL_IN_TEXT_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s\"'<>]+")
+#
+# The SCHEME is deliberately NOT matched here — :func:`_find_urls_in_text` walks
+# backwards for it instead. Matching it forward, as this did until CodeQL alert
+# #1879 (``py/polynomial-redos``, HIGH)::
+#
+#     re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s\"'<>]+")
+#
+# is quadratic: the scheme repetition is unbounded over a class that excludes
+# ``:``, so a long run of scheme-legal characters NOT followed by ``://`` is
+# re-scanned from every position inside it. Measured on the pattern above, 4x
+# the input cost 16x the time — 128k characters took 10.2 s. That input is
+# operator-controlled and unbounded: this scrub visits every string cell of
+# every table :data:`_STANDARD_ARTIFACT_TABLES` permits, and
+# ``ffmpeg_profiles.config`` and ``dummy_epg_profiles.description_template`` are
+# ``Column(Text)`` with no ``max_length`` on their request models.
+#
+# This pattern has a literal prefix and one repetition over a negated class, so
+# it carries no such ambiguity. Pinned by
+# ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+# test_the_url_scan_cost_grows_linearly_with_the_input_length``.
+_URL_TAIL_IN_TEXT_RE = re.compile(r"://[^\s\"'<>]+")
+
+# RFC 3986 ``scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )``.
+_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+-.")
+
+
+def _find_urls_in_text(value: str) -> list[str]:
+    """Return every URL-shaped substring of ``value``, in the order they appear.
+
+    Equivalent to the forward-matching regex this replaced — same substrings, in
+    the same order — but linear rather than quadratic in ``len(value)``. Each
+    ``://`` is located by a literal scan, the scheme is recovered by walking
+    BACK over the scheme-legal run in front of it, and the URL body is taken
+    only once a scheme is actually there. Equivalence was checked by
+    differential fuzzing against the old pattern over 1,030,000 random strings
+    drawn from a URL-flavoured alphabet, and is pinned shape-by-shape by
+    ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py::
+    test_every_url_shape_the_scrub_caught_before_is_still_caught``.
+
+    Three details carry that equivalence, and getting any of them wrong is a
+    silent credential leak or a return to quadratic cost rather than a visible
+    failure:
+
+    * **Skip forward to the first ASCII LETTER of the run.** The old pattern's
+      leftmost match began there, not at the run's first character, because RFC
+      3986 — and :func:`urlsplit`, which decides the outcome downstream —
+      require a scheme to start on a letter. ``1https://<username>:<password>@host``
+      yielded ``https://<username>:<password>@host`` and was scrubbed. Anchoring
+      at the run's first
+      CHARACTER instead hands :func:`urlsplit` a scheme starting on a digit,
+      gets an empty scheme back, and silently stops scrubbing that URL — a data
+      leak traded for a linear scan.
+    * **A scheme-less ``://`` hides nothing.**
+      ``+://https://<username>:<password>@host`` has a ``://`` with no scheme in
+      front of it, and the real URL sits INSIDE
+      what a greedy body match from that first separator would swallow. So a
+      separator that fails resumes the search one character later rather than
+      past the body it would have taken.
+    * **The body is only measured after the scheme is found.** Measuring it
+      first would re-scan the same span at every failing separator, which is the
+      quadratic behaviour this function exists to remove (``"://" * n``).
+
+    Cost is O(len(value)): ``str.find`` advances monotonically, accepted bodies
+    are disjoint by construction, and two separators can never share a scheme
+    run because neither ``:`` nor ``/`` is scheme-legal.
+
+    Args:
+        value: Any string value from a gathered payload.
+
+    Returns:
+        The URL-shaped substrings, in the order they appear.
+    """
+    urls: list[str] = []
+    pos = 0
+    while True:
+        separator = value.find("://", pos)
+        if separator < 0:
+            return urls
+        start = separator
+        while start > 0 and value[start - 1] in _SCHEME_CHARS:
+            start -= 1
+        # Skip the leading digits / ``+`` / ``-`` / ``.`` a scheme may not start
+        # on. A run of nothing but those carries no scheme and is not a URL.
+        while start < separator and not (
+            "a" <= value[start] <= "z" or "A" <= value[start] <= "Z"
+        ):
+            start += 1
+        body = (
+            None if start == separator else _URL_TAIL_IN_TEXT_RE.match(value, separator)
+        )
+        if body is None:
+            pos = separator + 1
+            continue
+        urls.append(value[start:body.end()])
+        pos = body.end()
 
 
 def _url_carries_credentials(candidate: str) -> bool:
@@ -690,7 +785,7 @@ def _scrub_credential_urls(value: str):
     """
     if "://" not in value:
         return None
-    found = _URL_IN_TEXT_RE.findall(value)
+    found = _find_urls_in_text(value)
     dirty = [url for url in found if _url_carries_credentials(url)]
     if not dirty:
         return None
