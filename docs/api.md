@@ -373,6 +373,34 @@ Two key-level checks exist, and they are the only ones:
 
 This is a documented residual rather than an unexamined default, tracked as open bead `enhancedchannelmanager-t683u`. The reasoning for leaving it open is recorded there: an allowlist guessed too narrow would silently refuse an Apply All that used to work. The mitigating change already made is that the journal's change describer is now total over the payload, so the surface is auditable even though it is unconstrained.
 
+### `POST /api/channels/bulk-merge`: `sources_failed` and the incomplete-merge action type
+
+A bulk merge moves each group's combined streams onto the target channel and then deletes that group's source channels. **Those are separate Dispatcharr calls, and the deletions can fail while the stream move succeeds.** A per-group result therefore reports both halves (bead `enhancedchannelmanager-ftidn`):
+
+```json
+{
+  "target_channel_id": 812,
+  "target_name": "BBC One",
+  "sources_deleted": 1,
+  "sources_failed": 2,
+  "total_streams": 6,
+  "success": true
+}
+```
+
+`sources_failed` (int, always present) is the number of source channels named for this group that are **still in Dispatcharr** when the group finishes: it counts the deletions that errored and the ones the request never reached, because both leave the channel there. It is always present, so a caller checks a number rather than probing for a key. `success: true` on the group means the group was processed, not that it completed: read `sources_failed` for that.
+
+**The Journal row for the group carries the same fact under its own action type.** A group whose streams moved and whose source channels are all gone writes a `bulk_merge` row. Anything else writes **`bulk_merge_incomplete`**, and its `after_value.undeleted_ids` names the channels that are still upstream. The row's action and prose are finalised from the outcome as each fact lands rather than asserted when the group starts, so a run cancelled mid-flight still leaves a row that describes what actually happened. Filter the Journal on the action type to find the merges that need attention instead of reading every row's description. The envelope and the Journal are built from the same counts, so they cannot tell a caller and an operator different things about one group.
+
+### `POST /api/channels/assign-numbers`: omitting `starting_number` costs N extra reads
+
+`starting_number` is optional, and omitting it is a distinct request rather than an edge case: it asks **Dispatcharr** to choose the numbers. Dispatcharr's assign endpoint declares no response body beyond a confirmation string, so the numbers it chose are not in the response and cannot be inferred from the request either. ECM therefore issues one read-back `GET` per channel on that path and finalises each Journal row from what it observes.
+
+Two consequences for a caller:
+
+- **The path where you supply `starting_number` pays none of that cost.** ECM already knows those numbers, so it does not spend N extra round-trips on a several-hundred-channel renumber. Supply the starting number when you can.
+- **A read-back that fails does not invent a number.** The assignment landed; only the read failed. That channel's Journal row says the number has not been read back rather than naming one nobody observed, and the failure is logged at WARN. The row is still written.
+
 ## Channel Groups
 
 | Endpoint | Description |
@@ -507,7 +535,7 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
 
 ```json
 {
-  "items": [
+  "merges": [
     {
       "id": 42,
       "stream_name": "ESPN HD",
@@ -518,7 +546,8 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
       "trigger_context": "m3u_refresh",
       "created_at": 1747497600000,
       "resolved_at": null,
-      "resolution_source": null
+      "resolution_source": null,
+      "unapplied_reason": null
     }
   ],
   "total": 1,
@@ -529,6 +558,8 @@ Returns the paginated list of channel merge rows. Use the `status` query paramet
 ```
 
 `trigger_context` is one of `drag_drop`, `add_stream`, `m3u_refresh`, `mcp_tool`. `created_at` and `resolved_at` are epoch milliseconds (UTC). Terminal-state rows (`merged`, `dismissed`) have `resolved_at` populated and `resolution_source` set to `operator`, `auto`, `bulk_m3u_hook`, or `mcp_tool`.
+
+**`unapplied_reason` (str | null) is how a `pending` row says it has already been accepted once.** It carries, in operator-actionable prose, why the last accept on that row could not be applied to Dispatcharr; `null` means no accept on this row has failed to apply. A row with `status: "pending"` **and** a non-null `unapplied_reason` is a merge the operator accepted that ECM could not carry out: it stays in the queue on purpose, `resolved_at` and `resolution_source` stay `null` because the row never left, and re-accepting it is an ordinary accept rather than an idempotent replay. A retry that lands clears the column. See [`POST /api/channel-merges/{id}/accept`](#post-apichannel-mergesidaccept) for how the flag is set and cleared. A client that renders the queue should treat it as a per-row flag, not as a fourth `status` value: `status` still takes exactly `pending`, `merged`, `dismissed`.
 
 ---
 
@@ -564,12 +595,15 @@ enrichment fields.
       "trigger_context": "m3u_refresh",
       "created_at": 1747497600000,
       "resolved_at": null,
-      "resolution_source": null
+      "resolution_source": null,
+      "unapplied_reason": null
     }
   ],
   "total": 1
 }
 ```
+
+`unapplied_reason` carries the same meaning here as on the paginated list: a non-null value on a `pending` row marks a merge the operator already accepted that ECM could not apply. Because the snapshot is what a bulk action targets, those rows are in the target set like any other pending row, and re-accepting one is a retry.
 
 The safety ceiling is 20,000 pending records. If the queue exceeds it, ECM
 returns **`409 Conflict`** with `detail` stating the limit and that nothing was
@@ -602,14 +636,30 @@ Accept the dedup candidate: merge the incoming stream into the candidate channel
 }
 ```
 
+The same envelope for an accept ECM could not apply. Note `status`, which is the queue row's real state and not a constant:
+
+```json
+{
+  "merged_into_channel_id": "a1b2c3d4-e5f6-...",
+  "journal_entry_id": 308,
+  "source_stream_id": "ESPN HD",
+  "confidence": 0.87,
+  "status": "pending",
+  "dispatcharr_updated": false,
+  "unapplied_reason": "No Dispatcharr stream is named \"ESPN HD\", so this merge was recorded but NOT applied upstream. The stream may have been renamed or removed since it was queued.",
+  "journal_rows_unwritten": 0
+}
+```
+
 `source_stream_id` is the resolved Dispatcharr stream ID when the name lookup is unambiguous; falls back to the raw `stream_name` string when the lookup is ambiguous (audit-first contract per ADR-008 §D6). `journal_entry_id` is the `pending_merge_journal` row ID.
 
-#### `status: "merged"` describes the queue row, not Dispatcharr
+#### `status` describes the queue row, and it is not a constant
 
-This is the distinction the whole envelope turns on. `status` is the `pending_merges` row's own state machine (§D3), and that transition genuinely happened: the row went terminal, the audit row was written, and the row left the queue. **It is not a claim that Dispatcharr was updated.** Until bead `enhancedchannelmanager-i5ic0` it was the only outcome field the response carried, so an accept whose stream-name lookup matched nothing at all returned exactly the same body as one that added the stream. Three fields now carry the upstream fact separately.
+This is the distinction the whole envelope turns on. `status` is the `pending_merges` row's own state machine (§D3), **not a claim that Dispatcharr was updated**. Until bead `enhancedchannelmanager-i5ic0` it was hardcoded to `merged` and was the only outcome field the response carried, so an accept whose stream-name lookup matched nothing at all returned exactly the same body as one that added the stream. Four fields now carry the outcome, and `status` is one of them.
 
 | Field | Type | Meaning |
 |-|-|-|
+| `status` | `"merged"` \| `"pending"` | The queue row's state after this request. `"merged"` when the merge was applied and the row left the queue; `"pending"` when ECM could not apply it and the row stayed |
 | `dispatcharr_updated` | bool \| null | Whether the candidate channel ends this request holding the stream |
 | `unapplied_reason` | str \| null | Operator-actionable prose for anything other than a clean apply. `null` when applied |
 | `journal_rows_unwritten` | int | Operator-journal rows this request could not write. Always present |
@@ -620,11 +670,23 @@ This is the distinction the whole envelope turns on. `status` is the `pending_me
 - **`false`** means no upstream write happened. Five paths reach it: the lookup matched nothing, it matched several streams, it matched exactly one that carries no usable id, the lookup itself failed, or the search filled its single page. That last one is the subtle one. **A truncated search cannot establish uniqueness even when exactly one exact match is visible on the page it saw**, because further matches may sit on pages nobody asked for, and adding one of several possible streams is not the merge that was requested.
 - **`null`** means an idempotent replay: the row was already `merged`, so this request made no Dispatcharr call and has **no evidence either way** about what the original one did. Reporting `true` there would be the same false success claim one branch over. `unapplied_reason` on this path says so and points at the journal against the candidate channel.
 
-A `dispatcharr_updated` of `false` or `null` still returns `200`. Nothing failed: the request succeeded and the queue row resolved. What did not happen is the upstream write, and only the caller can finish it.
+**The three values map one-to-one onto the queue state** (PO decision 2026-08-16), rather than varying independently of it:
 
-**Finding these afterwards.** The queue row is removed on accept whatever the outcome, which is correct (its state is terminal and a `status=pending` reload would not return it) and is exactly what made the defect invisible. So the outcome is recorded in the operator-facing Journal as well as in `pending_merge_journal`: an accept that did not apply writes a `merge_unapplied` row under the **Channel** category naming the stream, the channel and the reason. See [Stream Deduplication](user_guide/channels-streams/stream-dedup.md#what-happens-when-a-merge-is-recorded-but-not-applied).
+| `dispatcharr_updated` | `status` | `pending_merges.unapplied_reason` | What the row did |
+|-|-|-|-|
+| `true` | `"merged"` | cleared | Left the queue. `resolved_at` and `resolution_source` are set |
+| `false` | `"pending"` | set to the same prose the response carries | Stayed in the queue, flagged. `resolved_at` and `resolution_source` stay `null` |
+| `null` | `"merged"` | untouched | Nothing. This request only replayed an earlier one |
 
-This endpoint is **idempotent** on the `merged` terminal state: calling `/accept` on a row already in `merged` returns `200` with the prior outcome envelope, and `dispatcharr_updated: null`. Calling `/accept` on a `dismissed` row returns `409 INVALID_STATE`.
+Read the table in both directions. A row deliberately still queued can never answer `null`, because **only an already-terminal row produces a replay**; that is what keeps "this request obtained no upstream evidence" and "still queued on purpose" from collapsing into one value.
+
+A `dispatcharr_updated` of `false` or `null` still returns `200`. Nothing failed: the request succeeded and was recorded. What did not happen is the upstream write, and only the caller can finish it.
+
+**Finding these afterwards.** A merge ECM could not apply **keeps its queue row**, so a `status=pending` reload returns it with `unapplied_reason` populated, and the ECM UI flags it in place as **Not applied**. Re-accepting it is the retry. The outcome is *also* recorded in the operator-facing Journal alongside `pending_merge_journal`, so it survives the row being resolved later: an accept that did not apply writes a `merge_unapplied` row under the **Channel** category naming the stream, the channel and the reason, with `after_value.pending_merge_status` recording the queue state that outcome left behind. See [Stream Deduplication](user_guide/channels-streams/stream-dedup.md#what-happens-when-a-merge-is-recorded-but-not-applied).
+
+**Idempotency, and what is not idempotent.** This endpoint is idempotent on the `merged` terminal state: calling `/accept` on a row already in `merged` returns `200` with the prior outcome envelope, and `dispatcharr_updated: null`. **A flagged `pending` row is not terminal, so calling `/accept` on it is a real retry, not a replay.** It re-runs the stream lookup, may send the PATCH, and clears `unapplied_reason` if it lands. A client that treated any second accept as a no-op would skip the one call that finishes the work. Calling `/accept` on a `dismissed` row returns `409 INVALID_STATE`.
+
+**Metric note for operators scraping Prometheus.** An accept ECM could not apply increments `ecm_dedup_merge_requests_total{status="unapplied"}`, a label value added with the same PO decision. It is deliberately not counted as `success`, because SLI-10b counts terminal transitions out of the queue and a flagged row makes none. See [`docs/sre/slos.md`](sre/slos.md) SLO-10.
 
 **Audit fields:** the `pending_merge_journal` row records `actor_token_id` (the JWT session's underlying API token ID), `action_type='merge_confirmed'`, `trigger_context` carried from the queue row, and `confidence_score` captured at action time.
 
@@ -1124,6 +1186,8 @@ See [`docs/normalization.md` §Re-normalize existing channels](normalization.md#
 | `DELETE /api/journal/purge` | Purge old journal entries |
 
 `GET /api/journal` accepts `page` (>= 1), `page_size` (1-250), `category`, `action_type`, `date_from`, `date_to`, `search`, `user_initiated`, and `batch_id`. Out-of-range `page`/`page_size` values return `422` rather than being silently clamped or passed through. Each result row carries `batch_id` in the response body: bulk operations (e.g. `POST /api/channel-pipeline/rules/bulk-update`, channel renumber) write **N per-entity rows sharing one `batch_id`** so callers can stitch a forensic view of a single batch. The `batch_id` query parameter (added in bd-s4sph) is an exact-match filter that hits `idx_journal_batch_id` directly. Pass the 8-character `batch_id` returned by a bulk handler to retrieve only that batch's rows. An unknown `batch_id` returns an empty result set (not `422`); the parameter is purely a filter. See the Channel Pipeline `bulk-update` notes above for a worked example.
+
+Two `action_type` values under the `channel` category name outcomes that used to be indistinguishable from their successful counterparts, and both are worth filtering on: **`merge_unapplied`** for a pending merge the operator accepted that ECM could not apply to Dispatcharr (see [`POST /api/channel-merges/{id}/accept`](#post-apichannel-mergesidaccept)), and **`bulk_merge_incomplete`** for a bulk-merge group whose source channels are not all gone (see [`POST /api/channels/bulk-merge`](#post-apichannelsbulk-merge-sources_failed-and-the-incomplete-merge-action-type)). Neither is in the ECM UI's Action dropdown as of this writing except `merge_unapplied`; both are filterable through this endpoint.
 
 ## Notifications
 

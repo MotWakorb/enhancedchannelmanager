@@ -121,9 +121,9 @@ The page lists all pending rows with:
 
 **Merge** (merge into existing channel)
 
-Clicking **Merge** for a row triggers the same Dispatcharr-side operation as the interactive modal. ECM looks the stream up in Dispatcharr by name, adds it to the candidate channel, and the row transitions from `pending` to `merged` and is removed from the active queue.
+Clicking **Merge** for a row triggers the same Dispatcharr-side operation as the interactive modal. ECM looks the stream up in Dispatcharr by name and adds it to the candidate channel. **When that works**, the row transitions from `pending` to `merged` and is removed from the active queue.
 
-**The row leaves the queue whether or not the stream was added.** Those are two separate things: resolving the queue row is ECM's own bookkeeping, and adding the stream is a write to Dispatcharr that depends on ECM finding exactly one stream with that name. When it cannot, ECM still records your decision, because your decision is a fact about you and it stays true. What it no longer does is let that be mistaken for the merge having happened. See [What happens when a merge is recorded but not applied](#what-happens-when-a-merge-is-recorded-but-not-applied).
+**When it does not work, the row stays where it is.** Those are two separate things: resolving the queue row is ECM's own bookkeeping, and adding the stream is a write to Dispatcharr that depends on ECM finding exactly one stream with that name. When it cannot find one, the merge did not happen, so the row is not finished business and does not leave the list. It stays in place, flagged **Not applied**, carrying the reason on the row itself, and pressing **Merge** again once the cause has cleared is an ordinary retry. Your decision is still recorded either way, because your decision is a fact about you and it stays true. What ECM no longer does is let that be mistaken for the merge having happened. See [What happens when a merge is recorded but not applied](#what-happens-when-a-merge-is-recorded-but-not-applied).
 
 If the candidate channel was deleted in Dispatcharr between when the row was queued and when you click **Merge**, ECM returns an error: "Target channel no longer exists — dismiss this pending merge and refresh." Click **Create New** or dismiss the row, then re-run the M3U refresh to get a fresh candidate.
 
@@ -134,10 +134,25 @@ Accepting a merge ends in one of three states, and only the first is finished bu
 | State | What you see | Is anything left to do |
 |-|-|-|
 | Applied | Nothing. The row disappears | No |
-| Recorded, not applied | A warning notice above the list: *"N merges were recorded but not applied to Dispatcharr. Look for them in the Journal under Merge Not Applied."* | Yes. Only you can finish it |
-| Outcome unknown | A separate informational notice: *"N merges were already resolved by earlier requests, so this run could not tell whether Dispatcharr was updated."* | Probably not, but check |
+| Recorded, not applied | The row **stays in the list** with a **Not applied** badge and the reason underneath it, plus a warning notice above the list: *"N merges were recorded but not applied to Dispatcharr. They stay in the list below, flagged as not applied"* | Yes, and you can do it from here. Retry the row |
+| Outcome unknown | A separate informational notice: *"N merges were already resolved by earlier requests, so this run could not tell whether Dispatcharr was updated."* Nothing is left in the list | Probably not, but check |
 
-Both notices list the affected stream names with the reason for each, and both have a **Dismiss** button. **They have to carry the stream name themselves, because the row they refer to is already gone from the list.** That removal is correct, the queue row really is resolved, and it is also exactly what used to make this invisible: the merge was confirmed, the row left, and there was no signal anywhere that anything had been skipped. Dismissing a notice only clears it from the screen. The record outlives it, in the Journal under **Merge Not Applied**.
+#### The "Not applied" badge, and retrying
+
+A row ECM could not apply is not a row nobody has touched, and the badge is what says so. You will see, on the row itself:
+
+- A **Not applied** badge next to the confidence score.
+- The reason underneath the row, in the same words the notice uses, ending with "Retry the merge once that has cleared."
+
+The reason travels with the row, so it survives a page reload, a move to another page of the queue, and the end of your session. The row also stays counted by the **Pending Merges** badge in the subnav, and it keeps its place against a later M3U refresh queuing a second row for the same stream and channel, so you get one row to deal with rather than a growing pile.
+
+**To retry, press Merge on that row again.** It is an ordinary accept: ECM looks the stream up afresh, and if it resolves this time the row merges, leaves the queue, and the flag goes with it. If it still cannot resolve, the row stays and the reason is rewritten to whatever is true now. There is no separate retry control and no limit on attempts. If the cause is one you cannot clear (duplicate stream names you do not want to rename, for instance), add the stream to the channel by hand in Dispatcharr and then use **Create New** to take the row out of the queue.
+
+#### About the notices
+
+Both notices list the affected stream names with the reason for each, and both have a **Dismiss** button. **The notice is a summary of what your last click or bulk run did**, which is why it names the streams: after **Merge all** over a long queue the flagged rows are not necessarily on the page you are looking at. Dismissing a notice only clears it from the screen. It changes nothing about the rows, which stay flagged until you retry them, and the record outlives both, in the Journal under **Merge Not Applied**.
+
+The "outcome unknown" notice is the one exception, and it is the reason the two notices are separate rather than combined. A replay is a second accept of a merge that already resolved, so there is no row left in the list to flag and the notice is the only place its explanation can live.
 
 #### "Recorded but not applied"
 
@@ -162,6 +177,8 @@ Telling you "not applied" here would send you off to add a stream that is very l
 #### In a bulk run
 
 **Merge all** and **Merge selected** count these separately from failures, because nothing failed. Three counters, not one: the progress line reads, for example, "Completed 40 of 40 and 3 not applied to Dispatcharr." on a run with no failures, and adds "with N failures" ahead of it when there were any. The notices above the list then name every affected stream.
+
+**The rows that were not applied are still in the queue when the run ends**, flagged, so a **Merge all** over 200 rows that could apply 197 of them leaves you a list of 3 to work through rather than an empty list and a notice you have to act on before you lose it. Re-running **Merge all** retries them along with anything new.
 
 **Create New**
 
@@ -188,7 +205,7 @@ If a **Merge** action fails, an error message appears inline next to the row. Th
 | Target channel no longer exists | Candidate channel was deleted after the row was queued | Dismiss the row; re-run M3U refresh |
 | Invalid state | Row was already resolved (merged or dismissed) by another session | Refresh the page |
 
-Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely as a historical record; there is currently no UI that lists them. The one exception is an accept that did not reach Dispatcharr, which also writes a row you *can* see, in the Journal under **Merge Not Applied**.
+Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely as a historical record; there is currently no UI that lists them. An accept that did not reach Dispatcharr is **not** a resolved row: it is still in the pending queue, flagged, and visible on this page. It also writes a Journal row under **Merge Not Applied**, which is what makes it findable after you eventually retry it and the queue row goes.
 
 ---
 
@@ -231,7 +248,7 @@ If you use the ECM MCP server with an AI agent, the dedup surface is exposed thr
 
 MCP-driven accepts and dismisses are recorded in the audit log with `trigger_context='mcp_tool'` and attributed to the MCP token, so the journal distinguishes AI-agent decisions from operator decisions.
 
-**An agent has to read one more field than it used to before reporting a merge as done.** `accept_channel_merge` returns `dispatcharr_updated` alongside the rest of the outcome. `status: 'merged'` describes the ECM queue row, which always reaches a terminal state; `dispatcharr_updated` is what says whether the stream actually reached the channel. It is `false` for the five unresolvable-name cases above, with `unapplied_reason` carrying the same operator-actionable sentence the notice shows, and `null` on a replay of a merge an earlier request already resolved. The tool's own docstring instructs the agent to relay the reason rather than report success, but an agent driving the REST API directly should check the field itself. Field-by-field semantics are in [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#post-apichannel-mergesidaccept).
+**An agent has to read two more fields than it used to before reporting a merge as done.** `accept_channel_merge` returns `dispatcharr_updated` alongside the rest of the outcome, and `status` is no longer always `'merged'`. `status` describes the ECM queue row: `'merged'` when the merge applied and the row left the queue, `'pending'` when it did not and the row stayed, flagged. `dispatcharr_updated` is what says whether the stream actually reached the channel. It is `false` for the five unresolvable-name cases above, with `unapplied_reason` carrying the same operator-actionable sentence the notice shows, and `null` on a replay of a merge an earlier request already resolved. **A `'pending'` result is retryable**: calling `accept_channel_merge` on that id again once the cause has cleared is a fresh accept, not a no-op, and `list_pending_channel_merges` returns the row with its `unapplied_reason` set so an agent can find its own unfinished work. The tool's own docstring instructs the agent to relay the reason rather than report success, but an agent driving the REST API directly should check the fields itself. Field-by-field semantics are in [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#post-apichannel-mergesidaccept).
 
 ---
 

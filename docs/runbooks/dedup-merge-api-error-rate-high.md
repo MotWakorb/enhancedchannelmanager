@@ -21,10 +21,17 @@
 
 The `status` label on `ecm_dedup_merge_requests_total`:
 
-- `success`: accept completed end-to-end.
+- `success`: accept completed end-to-end. The stream reached the candidate channel in Dispatcharr and the queue row went terminal.
 - `error`: 5xx response or unhandled exception (the alert numerator).
 - `dismissed`: operator dismissed instead of accepting (not an error, not a numerator event).
+- `unapplied`: the accept was recorded but ECM could **not** apply it to Dispatcharr, so the queue row stayed `pending` and flagged (added 2026-08-16, bead `enhancedchannelmanager-i5ic0`). **Not an error.** The endpoint returned `200`, nothing failed, and the operator can retry the row. It is separated from `success` because SLI-10b counts terminal transitions out of the queue and this makes none.
 - `cancelled`: operator started accept but cancelled mid-flow.
+
+**`unapplied` is in this alert's denominator, not its numerator**, so a burst of unapplied accepts *lowers* the computed error rate rather than paging you. That is correct: the requests really did succeed. If you are here because the error rate looks suppressed while operators are complaining, check `unapplied` separately and go to [dedup-pending-merge-resolution-stale.md](./dedup-pending-merge-resolution-stale.md):
+
+```promql
+sum(rate(ecm_dedup_merge_requests_total{status="unapplied"}[5m]))
+```
 
 4xx responses are **explicitly excluded** from `status="error"`. A 422 on stale source IDs (the bd-ct9wl / bd-ozhkf pattern) is correct backend behavior, not service unreliability: that response correctly tells the frontend "refresh the channels list and try again."
 

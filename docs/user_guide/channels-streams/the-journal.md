@@ -32,24 +32,24 @@ If the group deletion *failed* after the channels had already moved, the moves a
 
 ### Find a merge that was recorded but not applied
 
-Accepting a pending merge does two separate things: it resolves the queue row, and it adds the stream to the candidate channel in Dispatcharr. The second one can fail to happen while the first still succeeds, and until recently nothing said so. It is now recorded.
+Accepting a pending merge is meant to do two things: record your decision and add the stream to the candidate channel in Dispatcharr. The second can fail while the first still happens, and until recently nothing said so. It is now recorded here.
 
 1. Open **Journal**.
 2. Set the **All Actions** dropdown to **Merge Not Applied**.
 
-**Result:** one row per accepted merge that ECM recorded without updating Dispatcharr. Each row's **Description** names the stream, the channel it was meant to join, and the reason the stream could not be resolved. The badge on these rows reads **Merge Unapplied**.
+**Result:** one row per accepted merge that ECM recorded without updating Dispatcharr. Each row's **Description** names the stream, the channel it was meant to join, the reason the stream could not be resolved, and the fact that the merge is still in **Pending Merges** waiting to be retried. The badge on these rows reads **Merge Not Applied**, the same words as the filter.
 
-These rows are the durable record of the notice the Pending Merges page shows you at the time. That notice lasts as long as the page does, and the queue row itself is gone either way, so this is where to look afterwards. What to do about each reason is in [Stream Deduplication](stream-dedup.md#what-happens-when-a-merge-is-recorded-but-not-applied).
+These rows are the durable record of something you also see in two other places while it is live: a notice above the Pending Merges list, which lasts as long as the page does, and the flagged queue row itself, which lasts until you retry it. Once you retry successfully the row leaves the queue, and this is where the history of the attempt remains. What to do about each reason is in [Stream Deduplication](stream-dedup.md#what-happens-when-a-merge-is-recorded-but-not-applied).
 
 There is no matching action type for the opposite case. A merge that *did* apply writes an ordinary **Stream Add** row, and a merge that applied because the stream was already on the channel writes nothing at all, because nothing changed.
 
 ### Understand what you are looking at
 
-Three things about these rows regularly trip operators up.
+Four things about these rows regularly trip operators up.
 
-**The Action dropdown does not list every action ECM records.** It offers Create, Update, Delete, Start, Stop, Refresh, Stream Add, Stream Remove, Stream Reorder, Reorder and **Merge Not Applied**. Merges that *did* apply, group deletions, and Edit Mode's own commit are recorded under action types that have no entry in the list, so they show up in the table (as **Merge**, **Group Delete** and **Bulk Commit** badges) but cannot be filtered *to*. If you are hunting for a completed merge or for the moment a batch was applied, leave the dropdown on **All Actions** and use the search box instead.
+**The Action dropdown does not list every action ECM records.** It offers Create, Update, Delete, Start, Stop, Refresh, Stream Add, Stream Remove, Stream Reorder, Reorder and **Merge Not Applied**. Merges that *did* apply, group deletions, bulk merges, and Edit Mode's own commit are recorded under action types that have no entry in the list, so they show up in the table (as **Merge**, **Group Delete**, **Bulk Merge**, **Bulk Merge Incomplete** and **Bulk Commit** badges) but cannot be filtered *to*. If you are hunting for a completed merge or for the moment a batch was applied, leave the dropdown on **All Actions** and use the search box instead.
 
-**One label appears twice under two different names, which is worth knowing before you go looking.** The filter entry reads **Merge Not Applied**; the badge on the rows it finds reads **Merge Unapplied**. They are the same action type. Filter by the first, expect to see the second.
+**Bulk Merge Incomplete is the one of those badges worth reading for.** A bulk merge moves each group's streams onto the target channel and then deletes that group's source channels, and the deletions can fail on their own. A group that finished both halves gets a **Bulk Merge** badge; a group whose source channels are not all gone gets **Bulk Merge Incomplete**, and its description says how many of them are still there. Those channels are still in Dispatcharr, so a lineup that looks like it still has duplicates after a bulk merge is explained by these rows. There is no filter entry for it yet, so search for the target channel's name.
 
 **An Edit Mode session does not produce exactly one Bulk Commit row.** It used to, and the guidance to expect one was wrong even then for large sessions. **Apply All** does not send everything in a single request: it sends one request for the channels it is creating, and then one request per 200 remaining operations. Each of those requests writes its own **Bulk Commit** summary row, so a small session writes one or two and a large one writes several. Each summary's counters describe **its own request**, not the whole session, which is why the numbers in one row will not add up to what you did overall.
 

@@ -72,15 +72,28 @@ Pagination follows the existing list-endpoint pattern (`page`, `page_size` query
 
 **Response envelope follows the existing ECM flat-outcome pattern.** No top-level `data` wrapper — the `POST /api/channels/merge` endpoint (`backend/routers/channels.py:1961`, established in bd-ct9wl) is the precedent: it returns the merged channel object directly. The `/accept` endpoint mirrors that, returning `{merged_into_channel_id, journal_entry_id, source_stream_id, confidence, ...}` flat. The `/dismiss` endpoint returns `{journal_entry_id, dismissed_at, ...}` flat. The `GET` endpoints return list/object payloads directly.
 
-**Addendum (bead `enhancedchannelmanager-i5ic0`): the accept envelope carries the upstream outcome separately from the queue-row state.** The flat shape above is unchanged; three fields join it, all additive.
+**Addendum (bead `enhancedchannelmanager-i5ic0`): the accept envelope carries the upstream outcome separately from the queue-row state, and `status` is no longer a constant.** The flat shape above is unchanged; three fields join it, all additive, and the existing `status` field widens its domain.
 
 | Field | Type | Meaning |
 |-|-|-|
+| `status` | `'merged' \| 'pending'` | The queue row's state after the request. Was hardcoded `'merged'` |
 | `dispatcharr_updated` | bool \| null | Whether the candidate channel ends the request holding the stream |
 | `unapplied_reason` | str \| null | Operator-actionable prose for any outcome other than a clean apply |
 | `journal_rows_unwritten` | int | Operator-journal rows the request could not write. Always present |
 
-`status: "merged"` was, until this addendum, the only outcome field on the envelope, and it describes the **`pending_merges` row's own state machine** (§D3), not Dispatcharr. That transition really happens on every accept the endpoint answers `200` to. The upstream write does not: §D6's audit-first contract deliberately records the operator's decision even when the stream-name lookup resolves nothing, and the response said nothing about the difference. An accept whose lookup matched zero streams therefore returned a body byte-identical to one that added the stream.
+`status` was, until this addendum, the only outcome field on the envelope, and it describes the **`pending_merges` row's own state machine** (§D3), not Dispatcharr. The upstream write is a separate fact: §D6's audit-first contract deliberately records the operator's decision even when the stream-name lookup resolves nothing, and the response said nothing about the difference. An accept whose lookup matched zero streams therefore returned a body byte-identical to one that added the stream.
+
+**PO decision 2026-08-16 changed what the transition itself is.** The first fix for this bead left the `pending -> merged` transition happening on every accept the endpoint answered `200` to, and let the row leave the queue carrying its reason. That was internally consistent, and an external reviewer confirmed as much, but it put the reason where only an operator who went looking in the Journal would find it. **An accept ECM could not apply now makes no transition at all.** The row stays `pending` with `pending_merges.unapplied_reason` set (§D8), stays counted by the queue badge, keeps its §D5 uniqueness slot, and stays retryable. `resolved_at` and `resolution_source` describe a row that left the queue, so they stay NULL. The operator's decision is still recorded, as the `merge_confirmed` audit row, which is exactly what §D6's audit-first contract is for.
+
+The three outcome values map one-to-one onto that state rather than varying independently of it:
+
+| `dispatcharr_updated` | `status` | `pending_merges.unapplied_reason` | Queue row |
+|-|-|-|-|
+| `true` | `'merged'` | cleared | Left the queue; `resolved_at` / `resolution_source` set |
+| `false` | `'pending'` | set | Stayed, flagged and retryable; `resolved_at` / `resolution_source` NULL |
+| `null` | `'merged'` | untouched | Unchanged; the request only replayed an earlier one |
+
+**A row deliberately still queued can never answer `null`**, because only an already-terminal row produces a replay (§D3). That is what keeps "this request obtained no upstream evidence" and "still queued on purpose" from collapsing into one value, and it is why the pre-existing three-valued `dispatcharr_updated` was mapped onto the queue state rather than duplicated by a fourth `status`.
 
 `dispatcharr_updated` is **three-valued** because the honest answers are three, not two. `true` when the channel holds the stream (whether this call PATCHed it or it was already there). `false` when no upstream write happened, which includes any lookup whose completeness is unknown: a search truncated at its page ceiling cannot establish uniqueness even with exactly one exact match visible, so it is not conclusive in either direction. `null` on an idempotent replay, which by §D1's own design performs no Dispatcharr call and therefore has no evidence about what the original request did. Guessing `true` there would reintroduce the same false claim one branch over. A consumer testing `!== false` collapses two of the three.
 
@@ -116,11 +129,22 @@ The matcher service (BD-A) enforces a **hard floor of 60%** below which it refus
 
 Each `pending_merges` row carries `status` ∈ {`pending`, `merged`, `dismissed`}. Transitions:
 
-- `pending → merged` — via `POST /api/channel-merges/{id}/accept`. Writes a journal entry per §D6 and triggers the actual channel merge through the Dispatcharr client.
+- `pending → merged`, via `POST /api/channel-merges/{id}/accept`, **when ECM applied the merge to Dispatcharr**. Writes a journal entry per §D6 and triggers the actual channel merge through the Dispatcharr client.
+- `pending → pending`, via the same `/accept`, when ECM could **not** apply the merge. See the accepted-but-not-applied state below.
 - `pending → dismissed` — via `POST /api/channel-merges/{id}/dismiss`. Writes a journal entry per §D6.
 - `merged → (terminal)` — no transition out. A subsequent `/accept` on the same id is a no-op that returns the prior outcome envelope (idempotency, §D1).
 - `dismissed → (terminal)` — no transition out. A subsequent `/dismiss` on the same id is a no-op.
 - A pending row whose `candidate_channel_id` no longer resolves in Dispatcharr at `/accept` time returns 404 with detail `"target channel no longer exists — dismiss this pending merge and refresh"`. See §D4.
+
+**The accepted-but-not-applied state (PO decision 2026-08-16, bead `enhancedchannelmanager-i5ic0`).** A row is in it when `status = 'pending'` **and** `unapplied_reason IS NOT NULL` (§D8). It is a flag on `pending`, deliberately not a fourth `status` value: every consumer of the queue already keys off `status='pending'` (the list endpoint, the admin snapshot a bulk accept targets, the queue-depth gauge behind the subnav count badge, and §D5's partial unique index), and a fourth value would have to be threaded through all of them, plus the `ck_pending_merges_status` CHECK, purely to re-derive behaviour they already have. `status` answers "has this left the queue"; `unapplied_reason` answers "did the last accept land upstream". The two are orthogonal.
+
+Three properties follow, and they are what the decision is for:
+
+- **The row is not terminal.** A subsequent `/accept` is a genuine retry, not the §D1 idempotent replay: it re-runs the stream lookup and may send the PATCH. A consumer that treats any second accept as a no-op skips the one call that finishes the work.
+- **A retry that lands clears the flag** and takes the ordinary `pending → merged` transition, so a resolved row carries no stale reason and reads exactly like a first-time accept.
+- **`resolved_at` and `resolution_source` stay NULL** while the flag is set. They describe a row that left the queue, and this one did not.
+
+All four unapplied reasons behave identically: no match, a lookup that failed, a page-truncated search whose uniqueness is unknown, and a single match with no usable id. None of them is a special case of the others.
 
 **Retention: indefinite for terminal rows in v0.17.1.** Merged and dismissed rows are kept so operators can review historical decisions. No automatic pruning, no cron sweep. This is deliberate for v1: the row volume is bounded by operator action (every row exists because a real M3U import or drag-drop happened), and the audit value is real ("when did we merge stream X into channel Y, and on whose authority?"). If the table grows large enough to matter, the **deferred retention reaper** (`enhancedchannelmanager-5136e`, P3) is the additive cleanup path — it lands only when SLO-10's queue-depth alert (BD-M) gives DBA a concrete signal that the table is becoming a problem. ADR-007's framing applies: bound-by-construction is preferable to bound-by-pruning, but here the bound (`operator-merge events × deployment lifetime`) is already small enough to defer.
 
@@ -141,6 +165,8 @@ A reconciliation job that pre-detects orphan candidates is **not** built for v0.
 Prevents duplicate **pending** rows from repeated bulk-M3U imports of the same stream against the same target channel. The constraint is partial (SQLite-supported via `CREATE UNIQUE INDEX ... WHERE`) so it does **not** conflict with terminal-state history rows — an operator can have a `merged` row for `(stream "ESPN HD", target channel UUID-A)` from last week's import and a fresh `pending` row for the same pair from this week's import without an `IntegrityError`. This is the right semantics for both "an operator un-merged manually and re-imports" and "a stream re-appears in the M3U after a provider hiccup".
 
 If the bulk-M3U hook (BD-F) tries to enqueue a row that would collide with an existing `pending` row, the hook treats the existing row as the source of truth (oldest `created_at` wins) and does not overwrite. Logged at DEBUG so the operator can see in trace why a stream they expected to re-prompt did not.
+
+**A row in the §D3 accepted-but-not-applied state keeps its slot in this index**, and that is load-bearing rather than incidental. The index predicate is `WHERE status = 'pending'`, and a flagged row is still `pending`, so a later M3U refresh of the same stream against the same candidate collides with it and returns the existing row instead of queuing a second one. The operator therefore sees one flagged row to retry, not a growing pile of duplicates for the same unresolvable name. This is the concrete cost of the alternative shape: a fourth `status` value would have fallen outside the predicate and lost the guarantee unless the index were widened to match.
 
 ### D6 — Audit field set (`pending_merge_journal` table)
 
@@ -164,14 +190,18 @@ The `pending_merge_journal` row above records the **decision**. It is written wh
 
 An accept now also writes to the **operator-facing `journal_entries` table**, which records the **outcome**:
 
-| Outcome | `journal_entries` row | Written when |
-|-|-|-|
-| Applied, PATCH sent | `stream_add` | The PATCH returns, before the queue-row commit |
-| Applied, stream already on the channel | none | Nothing changed, so there is nothing to trace |
-| Recorded and not applied | `merge_unapplied` | After the decision is committed |
-| Idempotent replay | none | The request made no Dispatcharr call and observed nothing |
+| Outcome | Queue row after (§D3) | `journal_entries` row | Written when |
+|-|-|-|-|
+| Applied, PATCH sent | `merged`, flag clear | `stream_add` | The PATCH returns, before the queue-row commit |
+| Applied, stream already on the channel | `merged`, flag clear | none | Nothing changed, so there is nothing to trace |
+| Recorded and not applied | stays `pending`, flag set | `merge_unapplied` | After the decision is committed |
+| Idempotent replay | unchanged, already `merged` | none | The request made no Dispatcharr call and observed nothing |
 
 **These two substrates cannot logically disagree**, and an external reviewer confirmed that during the fix round: the decision row and the outcome row describe different propositions, so neither can contradict the other. What consumers must understand is precisely that they are different propositions. A `merge_confirmed` audit row is not a statement that Dispatcharr was updated, and the absence of a `merge_unapplied` journal row is not a statement that it was, because the replay path writes neither.
+
+**The `merge_unapplied` row records the queue state its outcome left behind.** Its `after_value` carries `pending_merge_status` alongside `channel_id`, `pending_merge_id`, `stream_name` and `dispatcharr_updated: false`, so a reader of the row cannot infer the wrong queue state from the outcome, and a future change to that state cannot silently reinterpret old rows. Its description says the merge stays in Pending Merges, flagged and retryable, which is the operator's next action rather than a restatement of the failure.
+
+Because the row now stays in the queue, the Journal is no longer the *only* place the reason survives: `pending_merges.unapplied_reason` puts the same prose on the row itself, where the operator is already looking. The Journal row is what makes it survive the row eventually being resolved, and what makes the affected merges findable by filter across a queue that has since been cleared. Both surfaces are written from the same string, so they cannot drift.
 
 This does not violate the PO decision recorded above that the audit fields cannot land on `journal_entries`. The audit field set stays in `pending_merge_journal` exactly as specified; what `journal_entries` gains is an outcome row in the same category and vocabulary as every other channel mutation, so an operator tracing a channel's history by name (which `docs/user_guide/channels-streams/the-journal.md` tells them to do) finds the merge that did not happen. It has its own action type so those merges are findable by filter rather than by reading every row's prose.
 
@@ -182,7 +212,7 @@ This does not violate the PO decision recorded above that the audit fields canno
 MCP tool names are encoded here verbatim so BD-O / BD-P engineers do not invent variants. All tools live in `mcp-server/tools/dedup.py` (BD-O) except the `add_stream` extension (BD-P), which lives alongside the existing `add_stream` implementation.
 
 - `mcp__ecm__list_pending_channel_merges(group_id?, status?)` — paginated read; mirrors `GET /api/channel-merges?status=pending`. Both args optional; `status` defaults to `pending`.
-- `mcp__ecm__accept_channel_merge(merge_id)` — mirrors `POST /api/channel-merges/{id}/accept`. The acting MCP-token id is recorded in the journal per §D6 (`actor_token_id`); `trigger_context` is `mcp_tool`.
+- `mcp__ecm__accept_channel_merge(merge_id)` mirrors `POST /api/channel-merges/{id}/accept`. The acting MCP-token id is recorded in the journal per §D6 (`actor_token_id`); `trigger_context` is `mcp_tool`. **The accept contract returns `status: 'merged' | 'pending'`**, not a constant (§D1 addendum): `'pending'` means the agent's accept was recorded but not applied, the row is still in the queue flagged with its `unapplied_reason`, and calling the tool again once the cause has cleared is a retry that can resolve it. An agent must read `dispatcharr_updated` and `status` before reporting a merge as done; the tool relays `unapplied_reason` rather than reporting success.
 - `mcp__ecm__dismiss_channel_merge(merge_id)` — mirrors `POST /api/channel-merges/{id}/dismiss`. Same audit shape.
 - `mcp__ecm__add_stream(stream_name, group_id, dedup_action?)` — **extends** the existing `add_stream` MCP tool, does not replace it. The new `dedup_action` enum:
   - `prompt` (default) — async-queue the merge candidate and return the candidate list to the AI agent for the agent to decide-and-call-back via `accept_channel_merge` / `dismiss_channel_merge`. Mirrors the operator UI's modal prompt at MCP scale.
@@ -215,6 +245,11 @@ Columns:
 | `resolved_at` | INTEGER | nullable | Epoch-ms when the row left `pending`; NULL while pending |
 | `resolution_source` | TEXT | nullable | One of `operator`, `auto`, `bulk_m3u_hook`, `mcp_tool`; NULL while pending |
 | `trigger_context` | TEXT | NOT NULL, CHECK in ('drag_drop','add_stream','m3u_refresh','mcp_tool') | The surface that enqueued the row; mirrors the journal field of the same name (§D6) |
+| `unapplied_reason` | TEXT | nullable | Added by **migration 0043**. Why the LAST accept on this row could not be applied to Dispatcharr, in operator-actionable prose; NULL when no accept has failed to apply. With `status='pending'` this is the §D3 accepted-but-not-applied state |
+
+**Migration 0043 (`20260816_1200_0043_pending_merges_unapplied_reason.py`), additive and reversible.** One nullable TEXT column, no `server_default` and no backfill: every pre-existing row correctly reads "no accept has failed to apply", which is also what a row whose retry succeeded reads, because the accept path clears the column when it resolves. SQLite adds a nullable column to a populated table directly, so no table rebuild. The ADD COLUMN follows the house idempotency pattern (0040 / 0024) with a column-presence guard, so a database that drifted forward through `create_all()` passes as a no-op instead of raising `duplicate column`. `downgrade()` drops the column via `batch_alter_table`; dropping it loses only the reason text, leaves the queue rows untouched, and a re-accept recomputes the reason.
+
+Adding the column rather than a fourth `status` value is what keeps this migration additive. A new `status` value would have meant rewriting the `ck_pending_merges_status` CHECK, which on SQLite is a table rebuild, and auditing every consumer that keys off `status='pending'` (see §D3 and §D5).
 
 Indexes:
 

@@ -456,6 +456,17 @@ sum(increase(ecm_pending_merges_queue_depth_added_total[24h]))
 
 **SLO-10b target:** **95% resolution within 24h** of the merge request entering the pending queue, evaluated weekly.
 
+**`status="unapplied"` is deliberately outside the numerator (added 2026-08-16, bead `enhancedchannelmanager-i5ic0`, PO-ratified).** An accept that ECM could not apply to Dispatcharr no longer transitions the queue row at all: the row stays `pending`, flagged with an `unapplied_reason`, and remains retryable. It is therefore not a terminal-state transition out of the queue, which is exactly what this SLI's numerator counts, so it gets its own label value rather than being folded into `success`.
+
+Counting it as `success` would have reported the queue as clearing while flagged rows accumulated in it, and would have suppressed `ECMDedupPendingMergeResolutionStale` on precisely the installs that most need it. Dropping the emit entirely was the alternative and is worse: the request happened, and omitting it shrinks SLI-10c's error-rate **denominator** instead. Two properties to rely on when reading dashboards:
+
+- **Additive for every existing query.** `{status=~"success|dismissed"}` and `{status="error"}` are unchanged in meaning and become more accurate. Nothing that was counted before is counted differently now.
+- **A rising `unapplied` rate against a flat `success` rate is a real signal**, not noise: operators are accepting merges that Dispatcharr never receives. Read `unapplied` alongside the resolution ratio rather than instead of it, then go to [`dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md).
+
+```promql
+sum(rate(ecm_dedup_merge_requests_total{status="unapplied"}[1h]))
+```
+
 **SLI-10c: Merge API error rate.** Ratio of failed `POST /api/channel-merges/{id}/accept` calls to total accept calls over a rolling 5m window. The error mode is the merge endpoint returning 5xx (a Dispatcharr proxy failure, a database lock, an internal exception) or the merge body raising an unhandled exception that gets logged with `status="error"`. 4xx responses are explicitly excluded: a 422 on stale source IDs (bd-ozhkf / bd-ct9wl pattern) is correct backend behavior, not service unreliability.
 
 **Prometheus expression (SLI-10c):**
@@ -491,7 +502,7 @@ sum(rate(ecm_dedup_merge_requests_total[5m]))
 **Cardinality discipline:**
 
 - `ecm_dedup_candidate_lookup_duration_seconds`: no labels beyond `le`. The trigger source belongs in a separate counter (`ecm_dedup_candidate_lookup_total{trigger}`): splitting cardinality across two series keeps the histogram cheap.
-- `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~4 values (`success`, `error`, `dismissed`, `cancelled`).
+- `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~5 values (`success`, `error`, `dismissed`, `unapplied`, `cancelled`).
 - `ecm_pending_merges_queue_depth_added_total`: label-free counter. Per-source attribution belongs in structured logs (`[DEDUP] merge_request_queued source=drag_drop target_channel=...`), not the metric.
 
 **Companion gauge (bd-wvr1d): NOT a contract SLI:**
@@ -631,6 +642,8 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, Channel Pipeline runs) but has no metric today. Separate bead.
 
 ## Changelog
+
+- **2026-08-16 (bead `enhancedchannelmanager-i5ic0`):** `ecm_dedup_merge_requests_total` gained the label value **`status="unapplied"`**, PO-ratified against the standing BD-M locked contract. It is emitted when an accept is recorded but could not be applied to Dispatcharr, which under the same day's PO decision leaves the queue row `pending` and flagged rather than transitioning it. SLI-10b's numerator counts terminal transitions out of the queue, so such an accept is not one; counting it as `success` would have reported the queue clearing while flagged rows accumulated and suppressed `ECMDedupPendingMergeResolutionStale`. Additive: `{status=~"success|dismissed"}` and `{status="error"}` are unaffected, no alert rule or recording rule changed, and the cardinality bound in SLO-10 moves from ~4 to ~5. Documented in the SLI-10b entry above and in [`dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md) / [`dedup-merge-api-error-rate-high.md`](../runbooks/dedup-merge-api-error-rate-high.md).
 
 - **2026-05-25 (bd-31u6u / bd-zppgx):** SLO-4 (Readiness Sub-check Latency) moved to its numeric position between SLO-3 and SLO-5 (was appended after Capacity planning sections; cosmetic order fix, no contract change). New runbook `stats-v2-query-latency.md` authored for SLO-9 query-latency failure modes (table growth, WAL stall, missing index, N+1 pattern). `ECMStatsQueryLatencyHigh` and `ECMStatsQueryLatencyP99High` alerts in `prometheus_rules.yaml` updated to point at the new runbook (previously pointed at `stats-v2-write-failures.md` by mistake). SLO-9 runbook reference in this file updated accordingly.
 
