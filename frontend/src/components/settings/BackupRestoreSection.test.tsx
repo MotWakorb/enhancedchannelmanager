@@ -149,6 +149,49 @@ describe('BackupRestoreSection', () => {
       });
     });
 
+    // Bead enhancedchannelmanager-pui76. Seven action buttons on this page and
+    // exactly one produced a DBAS artifact — the encrypted one, behind a
+    // 12-character passphrase and an unrecoverable-loss acknowledgement. The
+    // page's own "Which one do I need?" helper recommends the DBAS format for
+    // disaster recovery and then offered no control that produced it.
+    it('offers a one-click configuration backup, placed above the encrypted card (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const configCard = screen.getByTestId('configuration-backup-card');
+      const encryptedHeading = screen.getByRole('heading', { name: 'Encrypted Backup (Migration)' });
+      expect(configCard).toBeInTheDocument();
+      expect(
+        configCard.compareDocumentPosition(encryptedHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-e4iok. The caption called the card YAML-only
+    // while the list beneath it renders DBAS .zip artifacts with restore,
+    // download and delete actions, and the empty state named a "YAML Backup"
+    // scheduled task as the way to get one — which is not the task that writes
+    // what this card shows.
+    it('describes Saved Backups by what it actually lists (bead e4iok)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const savedCard = screen
+        .getByRole('heading', { name: 'Saved Backups' })
+        .closest('.backup-card') as HTMLElement;
+      expect(savedCard).not.toBeNull();
+      expect(savedCard).not.toHaveTextContent(/YAML backups saved on the server/i);
+      expect(savedCard).not.toHaveTextContent(/Enable the YAML Backup scheduled task/i);
+
+      await waitFor(() => {
+        expect(within(savedCard).getByText(/No saved backups yet/i)).toBeInTheDocument();
+      });
+      // The empty state points at the two things that actually produce one.
+      expect(within(savedCard).getByText(/Configuration Backup/i)).toBeInTheDocument();
+      expect(within(savedCard).getByText(/DBAS Backup/i)).toBeInTheDocument();
+    });
+
     it('renders YAML export button', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
       expect(screen.getByText('Export YAML')).toBeInTheDocument();

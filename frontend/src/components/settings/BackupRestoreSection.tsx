@@ -6,6 +6,7 @@ import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
 import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import { ConfigurationBackupCard } from './ConfigurationBackupCard';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
 import { CloudTargetsCard } from './CloudTargetsCard';
@@ -374,8 +375,17 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <span className="material-icons">folder</span>
           <h3>Saved Backups</h3>
         </div>
+        {/* Both strings in this card described a card that no longer exists
+            (bead enhancedchannelmanager-e4iok). The caption called the list
+            YAML-only while list_saved_backups globs ecm-backup-*.yaml AND
+            *.zip, and the rows below render restore / download / delete for
+            DBAS .zip artifacts; the empty state named a "YAML Backup"
+            scheduled task, which is not the task that writes what this card
+            shows. Both now name what actually lands here and what produces
+            it. */}
         <p className="backup-card-description">
-          YAML backups saved on the server by the scheduled backup task.
+          Backups saved on the server, in /config/backups/ — DBAS .zip artifacts and YAML
+          exports alike, however they were produced.
         </p>
         {loadingSaved ? (
           <div className="backup-loading">
@@ -384,7 +394,8 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </div>
         ) : savedBackups.length === 0 ? (
           <div className="saved-backups-empty empty-inline">
-            No saved backups. Enable the YAML Backup scheduled task to create automatic backups.
+            No saved backups yet. Use Configuration Backup below to take one now, or enable a
+            schedule on the DBAS Backup task to have them taken automatically.
           </div>
         ) : (
           <div className="saved-backups-list">
@@ -475,6 +486,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </button>
         )}
       </div>
+
+      {/* One-click standard DBAS artifact (bead enhancedchannelmanager-pui76).
+          Placed immediately above the encrypted card so the two DBAS producers
+          are adjacent and this card's "use Encrypted Backup below" pointer
+          lands on the next thing the operator sees. */}
+      <ConfigurationBackupCard />
 
       {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
       <EncryptedBackupCard />
